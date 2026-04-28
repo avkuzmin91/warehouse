@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { me } from '../api'
+import { AccessDeniedPage } from '../pages/AccessDeniedPage'
 
 type AdminRouteProps = {
   children: ReactNode
@@ -41,7 +42,7 @@ export function AdminRoute({ children }: AdminRouteProps) {
   }
 
   if (!isAllowed) {
-    return <Navigate to="/dashboard" replace />
+    return <AccessDeniedPage />
   }
 
   return children

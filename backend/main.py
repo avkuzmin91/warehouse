@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import bcrypt
 import jwt
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +25,8 @@ bearer_scheme = HTTPBearer()
 app = FastAPI(title="Auth Module API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Локальная разработка: любой порт на localhost / 127.0.0.1 (Vite, preview, другой порт)
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -105,6 +106,13 @@ class ProductItem(BaseModel):
     creator: str | None
     updated_at: str | None = None
     editor: str | None = None
+
+
+class ProductListResponse(BaseModel):
+    items: list[ProductItem]
+    total: int
+    page: int
+    limit: int
 
 
 class ProductCreateRequest(BaseModel):
@@ -784,10 +792,18 @@ def delete_size(item_id: str, admin=Depends(get_current_admin)):
     return _delete_dictionary_item("sizes", item_id)
 
 
-@app.get("/products", response_model=list[ProductItem])
-def list_products(admin=Depends(get_current_admin)):
+@app.get("/products", response_model=ProductListResponse)
+def list_products(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
     _ = admin
+    offset = (page - 1) * limit
     with get_connection() as connection:
+        total = int(
+            connection.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+        )
         rows = connection.execute(
             """
             SELECT
@@ -805,25 +821,32 @@ def list_products(admin=Depends(get_current_admin)):
             FROM products p
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
-            ORDER BY p.created_at ASC
-            """
+            ORDER BY p.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
         ).fetchall()
-    return [
-        ProductItem(
-            id=row["id"],
-            name=row["name"],
-            type=row["type"],
-            sku=row["sku"],
-            supplier=row["supplier"],
-            image_url=row["image_url"],
-            is_active=bool(row["is_active"]),
-            created_at=row["created_at"],
-            creator=row["creator"],
-            updated_at=row["updated_at"],
-            editor=row["editor"],
-        )
-        for row in rows
-    ]
+    return ProductListResponse(
+        items=[
+            ProductItem(
+                id=row["id"],
+                name=row["name"],
+                type=row["type"],
+                sku=row["sku"],
+                supplier=row["supplier"],
+                image_url=row["image_url"],
+                is_active=bool(row["is_active"]),
+                created_at=row["created_at"],
+                creator=row["creator"],
+                updated_at=row["updated_at"],
+                editor=row["editor"],
+            )
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
 
 
 @app.get("/products/{item_id}", response_model=ProductItem)

@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthLayout } from './components/AuthLayout'
 import { DashboardPage } from './pages/DashboardPage'
+import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
@@ -33,6 +34,14 @@ function App() {
         }
       />
       <Route
+        path="/dictionaries"
+        element={
+          <AdminRoute>
+            <DictionariesListPage />
+          </AdminRoute>
+        }
+      />
+      <Route
         path="/dictionaries/:section"
         element={
           <AdminRoute>
@@ -55,10 +64,6 @@ function App() {
             <DictionariesPage />
           </AdminRoute>
         }
-      />
-      <Route
-        path="/dictionaries"
-        element={<Navigate to="/dictionaries/clients" replace />}
       />
       <Route path="*" element={<Navigate to="/auth" replace />} />
     </Routes>

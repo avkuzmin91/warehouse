@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  API_BASE_URL,
   createDictionaryItem,
   createProduct,
   deleteDictionaryItem,
@@ -59,6 +60,16 @@ const dictionaryMeta: Record<
   },
 }
 
+function formatDateDdMmYyyy(iso: string) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+}
+
 export function DictionariesPage() {
   const navigate = useNavigate()
   const { section = 'clients', itemId } = useParams<{ section: DictionaryKind; itemId?: string }>()
@@ -69,6 +80,9 @@ export function DictionariesPage() {
 
   const [items, setItems] = useState<DictionaryItem[]>([])
   const [products, setProducts] = useState<ProductItem[]>([])
+  const [productsTotal, setProductsTotal] = useState(0)
+  const [productPage, setProductPage] = useState(1)
+  const [productLimit, setProductLimit] = useState<20 | 50 | 100>(20)
   const [error, setError] = useState('')
 
   const [dictForm, setDictForm] = useState({ name: '', is_not_actual: false })
@@ -106,8 +120,15 @@ export function DictionariesPage() {
             setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
           )
       } else {
-        getProducts()
-          .then(setProducts)
+        getProducts({ page: productPage, limit: productLimit })
+          .then((res) => {
+            setProducts(res.items)
+            setProductsTotal(res.total)
+            const lastPage = Math.max(1, Math.ceil(res.total / productLimit) || 1)
+            if (res.total > 0 && productPage > lastPage) {
+              setProductPage(lastPage)
+            }
+          })
           .catch((requestError) =>
             setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
           )
@@ -157,7 +178,7 @@ export function DictionariesPage() {
           setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
         )
     }
-  }, [activeSection, isProducts, isCreateMode, isEditMode, itemId])
+  }, [activeSection, isProducts, isCreateMode, isEditMode, itemId, productPage, productLimit])
 
   async function onSaveDictionary(event: FormEvent) {
     event.preventDefault()
@@ -243,9 +264,156 @@ export function DictionariesPage() {
     }
   }
 
+  const isProductListMode = isProducts && !isCreateMode && !isEditMode
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(productsTotal / productLimit) || 1),
+    [productsTotal, productLimit],
+  )
+
   return (
-    <main className="page">
-      <section className="auth-card users-card">
+    <main className={isProductListMode ? 'page page--center' : 'page'}>
+      <section
+        className={
+          isProductListMode
+            ? 'auth-card users-card product-dict-card'
+            : 'auth-card users-card'
+        }
+      >
+        {isProductListMode ? (
+          <>
+            <nav className="dict-breadcrumbs product-dict-breadcrumbs" aria-label="Навигация">
+              <Link className="dict-breadcrumbs__link" to="/dashboard">
+                Главная
+              </Link>
+              <span className="dict-breadcrumbs__sep" aria-hidden>
+                {' '}
+                /{' '}
+              </span>
+              <Link className="dict-breadcrumbs__link" to="/dictionaries">
+                Справочники
+              </Link>
+              <span className="dict-breadcrumbs__sep" aria-hidden>
+                {' '}
+                /{' '}
+              </span>
+              <span className="dict-breadcrumbs__current">Справочник товаров</span>
+            </nav>
+
+            <div className="product-list-toolbar">
+              <h1 className="auth-card__title product-dict-page-title">Справочник товаров</h1>
+              <Link className="btn btn--primary product-list-create-btn" to="/dictionaries/products/new">
+                Создать
+              </Link>
+            </div>
+
+            <div className="table-wrap product-table-wrap">
+              <table className="users-table users-table--interactive">
+                <thead>
+                  <tr>
+                    <th>Название товара</th>
+                    <th>Тип</th>
+                    <th>Артикул товара</th>
+                    <th>Поставщик</th>
+                    <th>Фото товара</th>
+                    <th>Не актуален</th>
+                    <th>Дата создания</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.map((item) => (
+                    <tr
+                      key={item.id}
+                      onClick={() => navigate(`/dictionaries/products/${item.id}`)}
+                    >
+                      <td>{item.name}</td>
+                      <td>{item.type}</td>
+                      <td>{item.sku}</td>
+                      <td>{item.supplier || '—'}</td>
+                      <td>
+                        {item.image_url ? (
+                          <img
+                            className="product-thumb"
+                            src={`${API_BASE_URL}${item.image_url}`}
+                            alt=""
+                            width={40}
+                            height={40}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="product-thumb product-thumb--empty" />
+                        )}
+                      </td>
+                      <td>
+                        <span className="product-na" title={item.is_active ? 'Да' : 'Нет'}>
+                          <span
+                            className={
+                              item.is_active
+                                ? 'product-na__box product-na__box--on'
+                                : 'product-na__box'
+                            }
+                            aria-hidden
+                          />
+                          <span className="product-na__label">
+                            {item.is_active ? 'Да' : 'Нет'}
+                          </span>
+                        </span>
+                      </td>
+                      <td>{formatDateDdMmYyyy(item.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="product-pagination">
+              <div className="product-pagination__nav">
+                <button
+                  className="btn btn--secondary product-pagination__btn"
+                  type="button"
+                  disabled={productPage <= 1}
+                  onClick={() => setProductPage((p) => Math.max(1, p - 1))}
+                >
+                  Назад
+                </button>
+                <span className="product-pagination__info">
+                  {productsTotal === 0
+                    ? '0'
+                    : `${(productPage - 1) * productLimit + 1}–${Math.min(
+                        productPage * productLimit,
+                        productsTotal,
+                      )}`}{' '}
+                  из {productsTotal} (стр. {productPage} / {totalPages})
+                </span>
+                <button
+                  className="btn btn--secondary product-pagination__btn"
+                  type="button"
+                  disabled={productPage >= totalPages}
+                  onClick={() => setProductPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Вперёд
+                </button>
+              </div>
+              <label className="product-pagination__limit">
+                <span className="product-pagination__limit-label">Записей на странице</span>
+                <select
+                  className="field-input product-pagination__select"
+                  value={productLimit}
+                  onChange={(event) => {
+                    setProductLimit(Number(event.target.value) as 20 | 50 | 100)
+                    setProductPage(1)
+                  }}
+                >
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </label>
+            </div>
+
+            {error ? <p className="error-text">{error}</p> : null}
+          </>
+        ) : (
+          <>
         <h1 className="auth-card__title">Справочники</h1>
         <p className="auth-card__subtitle">
           {!isCreateMode && !isEditMode
@@ -267,7 +435,7 @@ export function DictionariesPage() {
           ))}
         </div>
 
-        {!isCreateMode && !isEditMode ? (
+        {!isCreateMode && !isEditMode && !isProducts ? (
           <>
             <div className="dashboard-actions">
               <button
@@ -279,54 +447,32 @@ export function DictionariesPage() {
               </button>
             </div>
             <div className="table-wrap">
-              <table className="users-table">
+              <table className="users-table users-table--interactive">
                 <thead>
                   <tr>
-                    <th>{isProducts ? 'Название товара' : 'Название'}</th>
-                    {isProducts ? <th>Тип</th> : null}
-                    {isProducts ? <th>Артикул</th> : null}
-                    {isProducts ? <th>Поставщик</th> : null}
-                    {isProducts ? <th>Фото</th> : null}
+                    <th>Название</th>
                     <th>Не актуален</th>
                     <th>Дата создания</th>
                     <th>Создал</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {!isProducts
-                    ? items.map((item) => (
-                        <tr
-                          key={item.id}
-                          onClick={() => navigate(`/dictionaries/${activeSection}/${item.id}`)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <td>{item.name}</td>
-                          <td>{item.is_active ? 'Да' : 'Нет'}</td>
-                          <td>{new Date(item.created_at).toLocaleString('ru-RU')}</td>
-                          <td>{item.creator || '-'}</td>
-                        </tr>
-                      ))
-                    : products.map((item) => (
-                        <tr
-                          key={item.id}
-                          onClick={() => navigate(`/dictionaries/products/${item.id}`)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <td>{item.name}</td>
-                          <td>{item.type}</td>
-                          <td>{item.sku}</td>
-                          <td>{item.supplier || '-'}</td>
-                          <td>{item.image_url ? 'Есть' : 'Нет'}</td>
-                          <td>{item.is_active ? 'Да' : 'Нет'}</td>
-                          <td>{new Date(item.created_at).toLocaleString('ru-RU')}</td>
-                          <td>{item.creator || '-'}</td>
-                        </tr>
-                      ))}
+                  {items.map((item) => (
+                    <tr
+                      key={item.id}
+                      onClick={() => navigate(`/dictionaries/${activeSection}/${item.id}`)}
+                    >
+                      <td>{item.name}</td>
+                      <td>{item.is_active ? 'Да' : 'Нет'}</td>
+                      <td>{new Date(item.created_at).toLocaleString('ru-RU')}</td>
+                      <td>{item.creator || '-'}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </>
-        ) : !isProducts ? (
+        ) : !isCreateMode && !isEditMode ? null : !isProducts ? (
           <form className="auth-form" onSubmit={onSaveDictionary}>
             <label className="field-label" htmlFor="dict-name">{currentMeta.nameLabel}</label>
             <input
@@ -413,7 +559,7 @@ export function DictionariesPage() {
             {isEditMode && productForm.image_url ? (
               <a
                 className="dict-image-link"
-                href={`http://127.0.0.1:8000${productForm.image_url}`}
+                href={`${API_BASE_URL}${productForm.image_url}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -490,6 +636,8 @@ export function DictionariesPage() {
         ) : null}
 
         {error ? <p className="error-text">{error}</p> : null}
+          </>
+        )}
       </section>
 
       {confirmDialog ? (

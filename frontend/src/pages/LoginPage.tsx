@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { login, saveToken } from '../api'
+import { login, me, saveToken } from '../api'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -23,6 +23,7 @@ export function LoginPage() {
       setIsLoading(true)
       const response = await login(email, password)
       saveToken(response.token)
+      await me()
       navigate('/dashboard')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Ошибка входа')

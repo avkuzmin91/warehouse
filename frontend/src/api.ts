@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://127.0.0.1:8000'
+export const API_BASE_URL = 'http://127.0.0.1:8000'
 
 export type User = {
   id: string
@@ -41,16 +41,34 @@ export type ProductItem = {
   editor: string | null
 }
 
+export type ProductListResponse = {
+  items: ProductItem[]
+  total: number
+  page: number
+  limit: number
+}
+
 function getToken() {
   return localStorage.getItem('token')
 }
 
+const ME_CACHE_MS = 15_000
+let meCache: { user: User; token: string; expires: number } | null = null
+let meInFlight: Promise<User> | null = null
+
+export function clearProfileCache() {
+  meCache = null
+  meInFlight = null
+}
+
 export function saveToken(token: string) {
   localStorage.setItem('token', token)
+  clearProfileCache()
 }
 
 export function clearToken() {
   localStorage.removeItem('token')
+  clearProfileCache()
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -64,13 +82,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (token) {
-    headers.Authorization = `Bearer ${token}`
+    const publicAuth = path === '/auth/login' || path === '/auth/register'
+    if (!publicAuth) {
+      headers.Authorization = `Bearer ${token}`
+    }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    })
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn main:app --host 127.0.0.1 --port 8000',
+      )
+    }
+    throw error
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
@@ -88,13 +119,26 @@ async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
     Object.assign(headers, init.headers as Record<string, string>)
   }
   if (token) {
-    headers.Authorization = `Bearer ${token}`
+    const publicAuth = path === '/auth/login' || path === '/auth/register'
+    if (!publicAuth) {
+      headers.Authorization = `Bearer ${token}`
+    }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    })
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn main:app --host 127.0.0.1 --port 8000',
+      )
+    }
+    throw error
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
     const detail = typeof body?.detail === 'string' ? body.detail : 'Ошибка запроса'
@@ -117,8 +161,33 @@ export function login(email: string, password: string) {
   })
 }
 
-export function me() {
-  return request<User>('/auth/me')
+export function me(): Promise<User> {
+  const token = getToken()
+  if (!token) {
+    return Promise.reject(new Error('Недействительный токен'))
+  }
+  if (meCache && meCache.token === token && Date.now() < meCache.expires) {
+    return Promise.resolve(meCache.user)
+  }
+  if (meInFlight) {
+    return meInFlight
+  }
+  meInFlight = request<User>('/auth/me')
+    .then((user) => {
+      const t = getToken()
+      if (t) {
+        meCache = { user, token: t, expires: Date.now() + ME_CACHE_MS }
+      }
+      return user
+    })
+    .catch((e) => {
+      clearProfileCache()
+      throw e
+    })
+    .finally(() => {
+      meInFlight = null
+    })
+  return meInFlight
 }
 
 export function getUsers() {
@@ -173,8 +242,12 @@ export function deleteDictionaryItem(kind: 'clients' | 'colors' | 'sizes', id: s
   })
 }
 
-export function getProducts() {
-  return request<ProductItem[]>('/products')
+export function getProducts(params?: { page?: number; limit?: number }) {
+  const sp = new URLSearchParams()
+  if (params?.page != null) sp.set('page', String(params.page))
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<ProductListResponse>(q ? `/products?${q}` : '/products')
 }
 
 export function getProduct(id: string) {

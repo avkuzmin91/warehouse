@@ -49,6 +49,11 @@ body {
   overflow: hidden;
 }
 
+.page--center {
+  justify-content: center;
+  align-items: center;
+}
+
 .auth-card {
   width: 100%;
   max-width: 756px;
@@ -336,6 +341,222 @@ body {
   display: inline-block;
   margin: 0 0 12px;
   color: var(--primary-soft);
+  font-size: 15px;
+}
+
+/* Хаб справочников: /dictionaries (только навигация) */
+.dict-hub-card {
+  max-width: 520px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.dict-breadcrumbs {
+  margin: 0 0 20px;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
+.dict-breadcrumbs__link {
+  color: var(--primary-soft);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.dict-breadcrumbs__link:hover {
+  text-decoration: underline;
+}
+
+.dict-breadcrumbs__current {
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.dict-breadcrumbs__sep {
+  color: var(--text-muted);
+}
+
+.dict-hub__title {
+  margin-bottom: 24px;
+}
+
+.dict-hub-list {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dict-hub-list__item {
+  margin: 0;
+}
+
+.dict-hub-list__link {
+  display: block;
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(145, 106, 255, 0.35);
+  background: rgba(17, 10, 42, 0.35);
+  color: var(--text-main);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.dict-hub-list__link:hover {
+  border-color: rgba(177, 143, 255, 0.75);
+  background: rgba(40, 28, 90, 0.45);
+  box-shadow: 0 0 0 1px rgba(123, 63, 255, 0.15);
+}
+
+.dict-hub-actions {
+  margin-top: 4px;
+}
+
+/* Список товаров /dictionaries/products */
+.product-dict-card {
+  max-width: 1100px;
+  width: 100%;
+}
+
+.product-dict-breadcrumbs {
+  margin-bottom: 16px;
+}
+
+.product-dict-page-title {
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+}
+
+.product-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.product-list-create-btn {
+  width: auto;
+  min-width: 160px;
+  height: 52px;
+  flex-shrink: 0;
+}
+
+.product-table-wrap {
+  margin-bottom: 16px;
+}
+
+.users-table--interactive tbody tr {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.users-table--interactive tbody tr:hover {
+  background: rgba(123, 63, 255, 0.12);
+}
+
+.users-table--interactive td {
+  white-space: normal;
+  vertical-align: middle;
+}
+
+.product-thumb {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(147, 110, 255, 0.25);
+}
+
+.product-thumb--empty {
+  background: rgba(35, 24, 73, 0.5);
+  border: 1px dashed rgba(147, 110, 255, 0.35);
+}
+
+.product-na {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.product-na__box {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid rgba(145, 106, 255, 0.55);
+  background: rgba(25, 16, 56, 0.5);
+  flex-shrink: 0;
+}
+
+.product-na__box--on {
+  background: linear-gradient(135deg, var(--primary-2), var(--primary));
+  border-color: rgba(177, 143, 255, 0.85);
+}
+
+.product-na__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.product-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.product-pagination__nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.product-pagination__btn {
+  width: auto;
+  min-width: 100px;
+  height: 44px;
+  font-size: 14px;
+}
+
+.product-pagination__info {
+  font-size: 14px;
+  color: var(--text-soft);
+}
+
+.product-pagination__limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.product-pagination__limit-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.product-pagination__select {
+  width: auto;
+  min-width: 88px;
+  height: 44px;
+  margin-bottom: 0;
+  padding: 0 12px;
   font-size: 15px;
 }
 
