@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   API_BASE_URL,
+  PRODUCT_TYPE_LABELS,
   createDictionaryItem,
   createProduct,
   deleteDictionaryItem,
@@ -14,7 +15,7 @@ import {
   updateDictionaryItem,
   updateProduct,
 } from '../api'
-import type { DictionaryItem, ProductItem } from '../api'
+import type { DictionaryItem, ProductItem, ProductType } from '../api'
 
 type DictionaryKind = 'clients' | 'colors' | 'sizes' | 'products'
 type BasicKind = 'clients' | 'colors' | 'sizes'
@@ -86,12 +87,13 @@ export function DictionariesPage() {
   const [error, setError] = useState('')
 
   const [dictForm, setDictForm] = useState({ name: '', is_not_actual: false })
+  /** true = товар актуален (is_active) */
   const [productForm, setProductForm] = useState({
     name: '',
-    type: 'одежда' as 'одежда' | 'техника',
+    type: 'clothes' as ProductType,
     sku: '',
     supplier: '',
-    is_not_actual: false,
+    is_actual: true,
     image: null as File | null,
     image_url: null as string | null,
   })
@@ -137,16 +139,9 @@ export function DictionariesPage() {
     }
 
     if (isCreateMode) {
-      setDictForm({ name: '', is_not_actual: false })
-      setProductForm({
-        name: '',
-        type: 'одежда',
-        sku: '',
-        supplier: '',
-        is_not_actual: false,
-        image: null,
-        image_url: null,
-      })
+      if (!isProducts) {
+        setDictForm({ name: '', is_not_actual: false })
+      }
       return
     }
 
@@ -168,7 +163,7 @@ export function DictionariesPage() {
             type: item.type,
             sku: item.sku,
             supplier: item.supplier || '',
-            is_not_actual: item.is_active,
+            is_actual: item.is_active,
             image: null,
             image_url: item.image_url,
           })
@@ -215,7 +210,7 @@ export function DictionariesPage() {
               type: productForm.type,
               sku: productForm.sku,
               supplier: productForm.supplier,
-              is_active: productForm.is_not_actual,
+              is_active: productForm.is_actual,
               image: productForm.image,
             })
             navigate('/dictionaries/products')
@@ -229,7 +224,7 @@ export function DictionariesPage() {
         sku: productForm.sku,
         supplier: productForm.supplier,
         image: productForm.image,
-        is_active: productForm.is_not_actual,
+        is_active: productForm.is_actual,
       })
       navigate('/dictionaries/products')
     } catch (requestError) {
@@ -315,7 +310,7 @@ export function DictionariesPage() {
                     <th>Артикул товара</th>
                     <th>Поставщик</th>
                     <th>Фото товара</th>
-                    <th>Не актуален</th>
+                    <th>Актуален</th>
                     <th>Дата создания</th>
                   </tr>
                 </thead>
@@ -326,7 +321,7 @@ export function DictionariesPage() {
                       onClick={() => navigate(`/dictionaries/products/${item.id}`)}
                     >
                       <td>{item.name}</td>
-                      <td>{item.type}</td>
+                      <td>{PRODUCT_TYPE_LABELS[item.type]}</td>
                       <td>{item.sku}</td>
                       <td>{item.supplier || '—'}</td>
                       <td>
@@ -344,7 +339,10 @@ export function DictionariesPage() {
                         )}
                       </td>
                       <td>
-                        <span className="product-na" title={item.is_active ? 'Да' : 'Нет'}>
+                        <span
+                          className="product-na"
+                          title={item.is_active ? 'Актуален' : 'Не актуален'}
+                        >
                           <span
                             className={
                               item.is_active
@@ -515,7 +513,7 @@ export function DictionariesPage() {
               ) : null}
             </div>
           </form>
-        ) : (
+        ) : isEditMode ? (
           <form className="auth-form" onSubmit={onSaveProduct}>
             <label className="field-label" htmlFor="product-name">Название товара</label>
             <input
@@ -533,12 +531,12 @@ export function DictionariesPage() {
               onChange={(event) =>
                 setProductForm((prev) => ({
                   ...prev,
-                  type: event.target.value as 'одежда' | 'техника',
+                  type: event.target.value as ProductType,
                 }))
               }
             >
-              <option value="одежда">Одежда</option>
-              <option value="техника">Техника</option>
+              <option value="clothes">{PRODUCT_TYPE_LABELS.clothes}</option>
+              <option value="tech">{PRODUCT_TYPE_LABELS.tech}</option>
             </select>
             <label className="field-label" htmlFor="product-sku">Артикул товара</label>
             <input
@@ -555,7 +553,7 @@ export function DictionariesPage() {
               value={productForm.supplier}
               onChange={(event) => setProductForm((prev) => ({ ...prev, supplier: event.target.value }))}
             />
-            <label className="field-label" htmlFor="product-image">Фото товара (jpg/png)</label>
+            <label className="field-label" htmlFor="product-image">Фото товара (JPG, PNG, HEIC)</label>
             {isEditMode && productForm.image_url ? (
               <a
                 className="dict-image-link"
@@ -570,7 +568,7 @@ export function DictionariesPage() {
               id="product-image"
               className="field-input"
               type="file"
-              accept=".png,.jpg,.jpeg"
+              accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,.heic,.heif"
               onChange={(event) =>
                 setProductForm((prev) => ({ ...prev, image: event.target.files?.[0] || null }))
               }
@@ -578,13 +576,13 @@ export function DictionariesPage() {
             <label className="remember">
               <input
                 type="checkbox"
-                checked={productForm.is_not_actual}
+                checked={productForm.is_actual}
                 onChange={(event) =>
-                  setProductForm((prev) => ({ ...prev, is_not_actual: event.target.checked }))
+                  setProductForm((prev) => ({ ...prev, is_actual: event.target.checked }))
                 }
               />
               <span className="remember__box"></span>
-              <span className="remember__text">Не актуален</span>
+              <span className="remember__text">Актуален</span>
             </label>
             <div className="dashboard-actions">
               <button className="btn btn--primary" type="submit">
@@ -608,7 +606,7 @@ export function DictionariesPage() {
               ) : null}
             </div>
           </form>
-        )}
+        ) : null}
 
         {meta ? (
           <div className="table-wrap">

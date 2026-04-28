@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
 import { LoginPage } from './pages/LoginPage'
+import { ProductCreatePage } from './pages/ProductCreatePage'
 import { RegisterPage } from './pages/RegisterPage'
 import { UsersPage } from './pages/UsersPage'
 import { AdminRoute } from './routes/AdminRoute'
@@ -30,6 +31,14 @@ function App() {
         element={
           <AdminRoute>
             <UsersPage />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/dictionaries/products/new"
+        element={
+          <AdminRoute>
+            <ProductCreatePage />
           </AdminRoute>
         }
       />

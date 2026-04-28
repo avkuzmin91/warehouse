@@ -27,13 +27,22 @@ export type DictionaryItem = {
   editor: string | null
 }
 
+/** ТЗ: enum одежда/техника; в API: clothes / tech */
+export const PRODUCT_TYPE_LABELS = {
+  clothes: 'Одежда',
+  tech: 'Техника',
+} as const
+
+export type ProductType = keyof typeof PRODUCT_TYPE_LABELS
+
 export type ProductItem = {
   id: string
   name: string
-  type: 'одежда' | 'техника'
+  type: ProductType
   sku: string
   supplier: string | null
   image_url: string | null
+  /** Product: true = товар актуален, false = не актуален; по умолчанию true */
   is_active: boolean
   created_at: string
   creator: string | null
@@ -256,7 +265,7 @@ export function getProduct(id: string) {
 
 export function createProduct(payload: {
   name: string
-  type: 'одежда' | 'техника'
+  type: ProductType
   sku: string
   supplier: string
   is_active: boolean
@@ -281,7 +290,7 @@ export function updateProduct(
   id: string,
   payload: {
     name?: string
-    type?: 'одежда' | 'техника'
+    type?: ProductType
     sku?: string
     supplier?: string
     is_active?: boolean

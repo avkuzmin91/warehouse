@@ -9,6 +9,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -18,7 +20,11 @@ TOKEN_TTL_MINUTES = 60
 DB_PATH = Path(__file__).parent / "auth.db"
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 DICTIONARY_TABLES = {"clients", "colors", "sizes"}
-PRODUCT_TYPES = ("одежда", "техника")
+# ТЗ: тип товара — «Одежда» / «Техника»; в API и в БД: clothes / tech (пример JSON в п.6)
+ProductType = Literal["clothes", "tech"]
+PRODUCT_TYPE_CLOTHES: Literal["clothes"] = "clothes"
+PRODUCT_TYPE_TECH: Literal["tech"] = "tech"
+PRODUCT_TYPES: tuple[str, str] = (PRODUCT_TYPE_CLOTHES, PRODUCT_TYPE_TECH)
 
 bearer_scheme = HTTPBearer()
 
@@ -97,11 +103,13 @@ class DictionaryUpdateRequest(BaseModel):
 class ProductItem(BaseModel):
     id: str
     name: str
-    type: str
+    type: ProductType
     sku: str
     supplier: str | None
     image_url: str | None
-    is_active: bool
+    is_active: bool = Field(
+        description="Актуален: true — товар в ассортименте, false — не актуален; по умолчанию true.",
+    )
     created_at: str
     creator: str | None
     updated_at: str | None = None
@@ -117,19 +125,25 @@ class ProductListResponse(BaseModel):
 
 class ProductCreateRequest(BaseModel):
     name: str = Field(min_length=1)
-    type: str
+    type: ProductType
     sku: str = Field(min_length=1)
     supplier: str | None = None
-    is_active: bool = False
+    is_active: bool = Field(
+        default=True,
+        description="Актуален; по умолчанию true.",
+    )
 
 
 class ProductUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
-    type: str | None = None
+    type: ProductType | None = None
     sku: str | None = Field(default=None, min_length=1)
     supplier: str | None = None
     image_url: str | None = None
-    is_active: bool | None = None
+    is_active: bool | None = Field(
+        default=None,
+        description="Актуален: false — снят с ассортимента.",
+    )
 
 
 def get_connection():
@@ -206,7 +220,7 @@ def init_db():
                 sku TEXT UNIQUE NOT NULL,
                 supplier TEXT,
                 image_url TEXT,
-                is_active INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 creator_id TEXT,
                 updated_at TEXT,
@@ -250,8 +264,24 @@ def init_db():
                 "updated_by_id": "TEXT",
             },
         )
-        connection.execute("UPDATE products SET type = 'одежда' WHERE type = 'clothes'")
-        connection.execute("UPDATE products SET type = 'техника' WHERE type = 'electronics'")
+        # Канон товарного типа (ТЗ, п.2 / JSON п.6): clothes, tech
+        connection.execute(
+            """
+            UPDATE products
+            SET type = ?
+            WHERE LOWER(type) IN ('одежда', 'clothes')
+            """,
+            (PRODUCT_TYPE_CLOTHES,),
+        )
+        connection.execute(
+            """
+            UPDATE products
+            SET type = ?
+            WHERE LOWER(type) IN ('техника', 'tech', 'electronics', 'электроника')
+            """,
+            (PRODUCT_TYPE_TECH,),
+        )
+        _migrate_products_is_active_aktualen(connection)
         connection.commit()
 
 
@@ -264,6 +294,27 @@ def _ensure_columns(connection: sqlite3.Connection, table_name: str, columns: di
             connection.execute(
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
             )
+
+
+def _migrate_products_is_active_aktualen(connection: sqlite3.Connection) -> None:
+    """Однократно: старая семантика is_active у товара (1 = «не актуален») → новая (1 = «актуален»)."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'products_is_active_aktualen_v1'"
+    ).fetchone():
+        return
+    connection.execute(
+        "UPDATE products SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END"
+    )
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('products_is_active_aktualen_v1')"
+    )
 
 
 def seed_admin():
@@ -412,14 +463,43 @@ def _normalize_sku(sku: str) -> str:
     return normalized
 
 
+def _product_image_extension(
+    content_type: str | None, original_filename: str | None
+) -> str | None:
+    if not content_type and not original_filename:
+        return None
+    if content_type:
+        ct = content_type.split(";", 1)[0].strip().lower()
+        if ct in ("image/jpeg", "image/jpg"):
+            return ".jpg"
+        if ct == "image/png":
+            return ".png"
+        if ct in ("image/heic", "image/heif"):
+            return ".heic"
+    if original_filename:
+        ext = original_filename.rsplit(".", 1)
+        if len(ext) == 2 and ext[1].lower() in ("heic", "heif"):
+            return f".{ext[1].lower()}"
+    return None
+
+
 def _validate_product_type(product_type: str) -> str:
     normalized = product_type.strip().lower()
-    if normalized not in PRODUCT_TYPES:
+    mapping: dict[str, str] = {
+        PRODUCT_TYPE_CLOTHES: PRODUCT_TYPE_CLOTHES,
+        "одежда": PRODUCT_TYPE_CLOTHES,
+        PRODUCT_TYPE_TECH: PRODUCT_TYPE_TECH,
+        "техника": PRODUCT_TYPE_TECH,
+        "electronics": PRODUCT_TYPE_TECH,
+        "электроника": PRODUCT_TYPE_TECH,
+    }
+    out = mapping.get(normalized)
+    if out is None or out not in PRODUCT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Тип должен быть: одежда или техника",
+            detail="Тип товара: одежда (clothes) или техника (tech).",
         )
-    return normalized
+    return out
 
 
 def _get_dictionary_items(table_name: str):
@@ -897,7 +977,7 @@ async def create_product(
     type: str = Form(...),
     sku: str = Form(...),
     supplier: str | None = Form(default=None),
-    is_active: bool = Form(default=False),
+    is_active: bool = Form(default=True),
     image: UploadFile | None = File(default=None),
     admin=Depends(get_current_admin),
 ):
@@ -911,10 +991,13 @@ async def create_product(
 
     image_url: str | None = None
     if image:
-        if not image.content_type or image.content_type not in ("image/jpeg", "image/png"):
-            raise HTTPException(status_code=400, detail="Поддерживаются только jpg и png")
-        extension = ".png" if image.content_type == "image/png" else ".jpg"
-        filename = f"{uuid4()}{extension}"
+        ext = _product_image_extension(image.content_type, image.filename)
+        if not ext:
+            raise HTTPException(
+                status_code=400,
+                detail="Допустимы изображения: jpg, png, heic",
+            )
+        filename = f"{uuid4()}{ext}"
         file_path = UPLOADS_DIR / filename
         file_path.write_bytes(await image.read())
         image_url = f"/uploads/{filename}"
@@ -942,7 +1025,7 @@ async def create_product(
         except sqlite3.IntegrityError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="Товар с таким артикулом уже существует",
+                detail="SKU уже существует",
             ) from exc
     return MessageResponse(message="Создано")
 
@@ -973,10 +1056,13 @@ async def update_product(
         fields.append("supplier = ?")
         values.append(supplier.strip() or None)
     if image is not None:
-        if not image.content_type or image.content_type not in ("image/jpeg", "image/png"):
-            raise HTTPException(status_code=400, detail="Поддерживаются только jpg и png")
-        extension = ".png" if image.content_type == "image/png" else ".jpg"
-        filename = f"{uuid4()}{extension}"
+        ext = _product_image_extension(image.content_type, image.filename)
+        if not ext:
+            raise HTTPException(
+                status_code=400,
+                detail="Допустимы изображения: jpg, png, heic",
+            )
+        filename = f"{uuid4()}{ext}"
         file_path = UPLOADS_DIR / filename
         file_path.write_bytes(await image.read())
         fields.append("image_url = ?")
@@ -1008,7 +1094,7 @@ async def update_product(
         except sqlite3.IntegrityError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="Товар с таким артикулом уже существует",
+                detail="SKU уже существует",
             ) from exc
     return MessageResponse(message="Обновлено")
 
