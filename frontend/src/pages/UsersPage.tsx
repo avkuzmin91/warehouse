@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Breadcrumbs } from '../components/Breadcrumbs'
 import { deleteUser, getUsers, me, updateUserRole } from '../api'
 import type { User, UserListItem } from '../api'
 
@@ -65,7 +66,7 @@ export function UsersPage() {
   return (
     <main className="page">
       <section className="auth-card users-card">
-        <h1 className="auth-card__title">Список пользователей</h1>
+        <Breadcrumbs />
         <p className="auth-card__subtitle">Доступно только для admin</p>
 
         {error ? <p className="error-text">{error}</p> : null}

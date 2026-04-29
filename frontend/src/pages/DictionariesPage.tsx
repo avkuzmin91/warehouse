@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Breadcrumbs } from '../components/Breadcrumbs'
 import {
   API_BASE_URL,
   PRODUCT_TYPE_LABELS,
@@ -276,26 +277,9 @@ export function DictionariesPage() {
       >
         {isProductListMode ? (
           <>
-            <nav className="dict-breadcrumbs product-dict-breadcrumbs" aria-label="Навигация">
-              <Link className="dict-breadcrumbs__link" to="/home">
-                Главная
-              </Link>
-              <span className="dict-breadcrumbs__sep" aria-hidden>
-                {' '}
-                /{' '}
-              </span>
-              <Link className="dict-breadcrumbs__link" to="/dictionaries">
-                Справочники
-              </Link>
-              <span className="dict-breadcrumbs__sep" aria-hidden>
-                {' '}
-                /{' '}
-              </span>
-              <span className="dict-breadcrumbs__current">Справочник товаров</span>
-            </nav>
+            <Breadcrumbs />
 
-            <div className="product-list-toolbar">
-              <h1 className="auth-card__title product-dict-page-title">Справочник товаров</h1>
+            <div className="product-list-toolbar product-list-toolbar--create-only">
               <Link className="btn btn--primary product-list-create-btn" to="/dictionaries/products/new">
                 Создать
               </Link>
@@ -412,7 +396,7 @@ export function DictionariesPage() {
           </>
         ) : (
           <>
-        <h1 className="auth-card__title">Справочники</h1>
+        <Breadcrumbs />
         <p className="auth-card__subtitle">
           {!isCreateMode && !isEditMode
             ? currentMeta.listTitle

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Breadcrumbs } from '../components/Breadcrumbs'
 import { me } from '../api'
 import type { User } from '../api'
 
@@ -44,7 +45,7 @@ export function HomePage() {
   return (
     <main className="page page--center">
       <section className="auth-card home-card">
-        <h1 className="auth-card__title">Главная</h1>
+        <Breadcrumbs />
 
         {loading ? <p className="auth-card__subtitle home-card__status">Загрузка...</p> : null}
         {error ? <p className="error-text home-card__status">{error}</p> : null}

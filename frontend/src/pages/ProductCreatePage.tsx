@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
+import { Breadcrumbs } from '../components/Breadcrumbs'
 import { createProduct, PRODUCT_TYPE_LABELS } from '../api'
 import type { ProductType } from '../api'
 
@@ -79,32 +80,7 @@ export function ProductCreatePage() {
   return (
     <main className="page page--center">
       <section className="auth-card product-create-card">
-        <nav className="dict-breadcrumbs product-dict-breadcrumbs" aria-label="Навигация">
-          <Link className="dict-breadcrumbs__link" to="/home">
-            Главная
-          </Link>
-          <span className="dict-breadcrumbs__sep" aria-hidden>
-            {' '}
-            /{' '}
-          </span>
-          <Link className="dict-breadcrumbs__link" to="/dictionaries">
-            Справочники
-          </Link>
-          <span className="dict-breadcrumbs__sep" aria-hidden>
-            {' '}
-            /{' '}
-          </span>
-          <Link className="dict-breadcrumbs__link" to="/dictionaries/products">
-            Справочник товаров
-          </Link>
-          <span className="dict-breadcrumbs__sep" aria-hidden>
-            {' '}
-            /{' '}
-          </span>
-          <span className="dict-breadcrumbs__current">Создание товара</span>
-        </nav>
-
-        <h1 className="auth-card__title">Создание товара</h1>
+        <Breadcrumbs />
 
         <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
           <label className="field-label" htmlFor={`${formId}-name`}>

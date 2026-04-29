@@ -565,6 +565,49 @@ body {
   font-size: 15px;
 }
 
+/* Глобальные хлебные крошки (тж. 8.4) */
+.breadcrumbs {
+  margin: 0 0 20px;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
+.breadcrumbs__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  row-gap: 4px;
+}
+
+.breadcrumbs__item {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+.breadcrumbs__link {
+  color: var(--primary-soft);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.breadcrumbs__link:hover {
+  text-decoration: underline;
+}
+
+.breadcrumbs__current {
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.breadcrumbs__sep {
+  color: var(--text-muted);
+  white-space: pre;
+}
+
 /* Хаб справочников: /dictionaries (только навигация) */
 .dict-hub-card {
   max-width: 520px;
@@ -664,6 +707,10 @@ body {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
+}
+
+.product-list-toolbar--create-only {
+  justify-content: flex-end;
 }
 
 .product-list-create-btn {

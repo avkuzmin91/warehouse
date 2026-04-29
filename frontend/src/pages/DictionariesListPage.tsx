@@ -1,4 +1,5 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
+import { Breadcrumbs } from '../components/Breadcrumbs'
 
 const entries: { label: string; to: string }[] = [
   { label: 'Пользователи', to: '/users' },
@@ -9,23 +10,10 @@ const entries: { label: string; to: string }[] = [
 ]
 
 export function DictionariesListPage() {
-  const navigate = useNavigate()
-
   return (
     <main className="page page--center">
       <section className="auth-card dict-hub-card">
-        <nav className="dict-breadcrumbs" aria-label="Навигация по ссылкам">
-          <Link className="dict-breadcrumbs__link" to="/home">
-            Главная
-          </Link>
-          <span className="dict-breadcrumbs__sep" aria-hidden>
-            {' '}
-            /{' '}
-          </span>
-          <span className="dict-breadcrumbs__current">Справочники</span>
-        </nav>
-
-        <h1 className="auth-card__title dict-hub__title">Справочники</h1>
+        <Breadcrumbs />
 
         <ul className="dict-hub-list">
           {entries.map((item) => (
@@ -36,12 +24,6 @@ export function DictionariesListPage() {
             </li>
           ))}
         </ul>
-
-        <div className="dict-hub-actions">
-          <button className="btn btn--secondary" type="button" onClick={() => navigate(-1)}>
-            Назад
-          </button>
-        </div>
       </section>
     </main>
   )
