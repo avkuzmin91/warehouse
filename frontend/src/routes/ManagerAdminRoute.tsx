@@ -4,11 +4,11 @@ import { Navigate } from 'react-router-dom'
 import { me } from '../api'
 import { AccessDeniedPage } from '../pages/AccessDeniedPage'
 
-type AdminRouteProps = {
+type ManagerAdminRouteProps = {
   children: ReactNode
 }
 
-export function AdminRoute({ children }: AdminRouteProps) {
+export function ManagerAdminRoute({ children }: ManagerAdminRouteProps) {
   const token = localStorage.getItem('token')
   const [isAllowed, setIsAllowed] = useState<boolean | null>(null)
 
@@ -20,7 +20,7 @@ export function AdminRoute({ children }: AdminRouteProps) {
 
     me()
       .then((user) => {
-        setIsAllowed(user.role === 'admin')
+        setIsAllowed(user.role === 'admin' || user.role === 'manager')
       })
       .catch(() => {
         setIsAllowed(false)

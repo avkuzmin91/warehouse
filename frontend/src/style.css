@@ -40,6 +40,119 @@ body {
   min-height: 100vh;
 }
 
+/* Глобальная шапка (ТЗ: Header) */
+.app-shell {
+  --app-header-height: 56px;
+  min-height: 100vh;
+}
+
+.app-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  height: var(--app-header-height);
+  display: flex;
+  align-items: center;
+  /* небольшой отступ слева у логотипа, справа — для блока пользователя */
+  padding: 0 12px 0 14px;
+  background: linear-gradient(180deg, rgba(8, 2, 28, 0.95) 0%, rgba(5, 0, 20, 0.85) 100%);
+  border-bottom: 1px solid var(--card-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+}
+
+.app-header__inner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 0;
+  line-height: 0;
+  border-radius: 8px;
+  transition: opacity 0.2s ease;
+}
+
+.app-header__brand:hover {
+  opacity: 0.9;
+}
+
+.app-header__logo {
+  display: block;
+  max-height: 40px;
+  width: auto;
+  vertical-align: middle;
+}
+
+.app-header__right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.app-header__user {
+  color: var(--text-soft);
+  font-size: 14px;
+  font-weight: 500;
+  max-width: min(46vw, 280px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.app-header__logout {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--field-border);
+  border-radius: 12px;
+  background: var(--field-bg);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.app-header__logout:hover {
+  border-color: rgba(145, 106, 255, 0.55);
+  color: #f1edff;
+  background: rgba(35, 24, 73, 0.6);
+}
+
+.app-header__logout:focus-visible {
+  outline: 2px solid var(--primary-soft);
+  outline-offset: 2px;
+}
+
+.app-header__logout-icon {
+  display: block;
+}
+
+.app-shell__outlet {
+  padding-top: var(--app-header-height);
+  min-height: 100vh;
+}
+
+.app-shell__outlet .page {
+  min-height: calc(100vh - var(--app-header-height));
+}
+
 .page {
   min-height: 100vh;
   display: flex;
@@ -316,12 +429,65 @@ body {
   font-size: 15px;
 }
 
-.dashboard-card {
+.lk-card {
   max-width: 680px;
 }
 
-.dashboard-link {
+.lk-link {
   margin-bottom: 18px;
+}
+
+.home-card {
+  max-width: 520px;
+  margin: 0 auto;
+  width: 100%;
+  text-align: center;
+}
+
+.home-card__status {
+  margin: 0 0 20px;
+}
+
+.home-card__empty {
+  margin: 0;
+  text-align: center;
+}
+
+.home-nav {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  align-items: stretch;
+}
+
+.home-nav__item {
+  margin: 0;
+}
+
+.home-nav__link {
+  display: block;
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
+  color: var(--text-main);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.home-nav__link:hover {
+  border-color: rgba(145, 106, 255, 0.55);
+  background: rgba(35, 24, 73, 0.55);
+  box-shadow: 0 4px 18px rgba(80, 40, 180, 0.2);
+  color: #fff;
 }
 
 .users-card {
@@ -371,7 +537,7 @@ body {
   color: #ffd6e1;
 }
 
-.dashboard-actions {
+.lk-actions {
   display: grid;
   gap: 12px;
 }

@@ -80,7 +80,7 @@ export function ProductCreatePage() {
     <main className="page page--center">
       <section className="auth-card product-create-card">
         <nav className="dict-breadcrumbs product-dict-breadcrumbs" aria-label="Навигация">
-          <Link className="dict-breadcrumbs__link" to="/dashboard">
+          <Link className="dict-breadcrumbs__link" to="/home">
             Главная
           </Link>
           <span className="dict-breadcrumbs__sep" aria-hidden>

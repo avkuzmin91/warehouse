@@ -24,7 +24,7 @@ export function LoginPage() {
       const response = await login(email, password)
       saveToken(response.token)
       await me()
-      navigate('/dashboard')
+      navigate('/home')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Ошибка входа')
     } finally {

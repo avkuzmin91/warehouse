@@ -16,7 +16,7 @@
 
 ## user (default)
 - регистрация и вход
-- доступ к /dashboard
+- доступ к /home
 - нет доступа к управлению пользователями
 
 ---
@@ -251,7 +251,7 @@ Response:
 # 8. Protected Routes
 
 - /users доступен только admin
-- если role != admin → редирект на /dashboard
+- если role != admin → редирект на /home
 
 ------
 

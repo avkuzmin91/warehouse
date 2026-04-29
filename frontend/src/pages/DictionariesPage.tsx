@@ -277,7 +277,7 @@ export function DictionariesPage() {
         {isProductListMode ? (
           <>
             <nav className="dict-breadcrumbs product-dict-breadcrumbs" aria-label="Навигация">
-              <Link className="dict-breadcrumbs__link" to="/dashboard">
+              <Link className="dict-breadcrumbs__link" to="/home">
                 Главная
               </Link>
               <span className="dict-breadcrumbs__sep" aria-hidden>
@@ -435,7 +435,7 @@ export function DictionariesPage() {
 
         {!isCreateMode && !isEditMode && !isProducts ? (
           <>
-            <div className="dashboard-actions">
+            <div className="lk-actions">
               <button
                 className="btn btn--primary"
                 type="button"
@@ -491,7 +491,7 @@ export function DictionariesPage() {
               <span className="remember__box"></span>
               <span className="remember__text">Не актуален</span>
             </label>
-            <div className="dashboard-actions">
+            <div className="lk-actions">
               <button className="btn btn--primary" type="submit">
                 {isCreateMode ? 'Создать' : 'Сохранить'}
               </button>
@@ -584,7 +584,7 @@ export function DictionariesPage() {
               <span className="remember__box"></span>
               <span className="remember__text">Актуален</span>
             </label>
-            <div className="dashboard-actions">
+            <div className="lk-actions">
               <button className="btn btn--primary" type="submit">
                 {isCreateMode ? 'Создать' : 'Сохранить'}
               </button>

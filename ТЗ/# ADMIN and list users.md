@@ -11,14 +11,14 @@
 \## user (default)
 \- регистрация
 \- вход
-\- доступ к /dashboard
+\- доступ к /home
 \- НЕ имеет доступа к списку пользователей
 
 \---
 
 \## admin
 \- вход в систему
-\- доступ к /dashboard
+\- доступ к /home
 \- доступ к списку всех пользователей
 \- может вызывать endpoint /users
 
@@ -120,7 +120,7 @@ email: admin@example.com
 
 ------
 
-## ## 7.1 Dashboard
+## ## 7.1 ЛК
 
 Если пользователь admin:
 
@@ -156,7 +156,7 @@ email: admin@example.com
 
 ## ## 7.4 Protected Route
 
-- если role !== admin → редирект на /dashboard
+- если role !== admin → редирект на /home
 
 ------
 

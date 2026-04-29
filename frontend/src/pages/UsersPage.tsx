@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { clearToken, deleteUser, getUsers, me, updateUserRole } from '../api'
+import { deleteUser, getUsers, me, updateUserRole } from '../api'
 import type { User, UserListItem } from '../api'
 
 export function UsersPage() {
@@ -62,11 +62,6 @@ export function UsersPage() {
     }
   }
 
-  function handleLogout() {
-    clearToken()
-    navigate('/auth')
-  }
-
   return (
     <main className="page">
       <section className="auth-card users-card">
@@ -116,12 +111,9 @@ export function UsersPage() {
           </table>
         </div>
 
-        <div className="dashboard-actions">
-          <button className="btn btn--secondary" type="button" onClick={() => navigate('/dashboard')}>
-            Назад в кабинет
-          </button>
-          <button className="btn btn--secondary" type="button" onClick={handleLogout}>
-            Выйти
+        <div className="lk-actions">
+          <button className="btn btn--secondary" type="button" onClick={() => navigate('/home')}>
+            На главную
           </button>
         </div>
       </section>

@@ -15,7 +15,7 @@ export function DictionariesListPage() {
     <main className="page page--center">
       <section className="auth-card dict-hub-card">
         <nav className="dict-breadcrumbs" aria-label="Навигация по ссылкам">
-          <Link className="dict-breadcrumbs__link" to="/dashboard">
+          <Link className="dict-breadcrumbs__link" to="/home">
             Главная
           </Link>
           <span className="dict-breadcrumbs__sep" aria-hidden>
