@@ -1,0 +1,14 @@
+
+cd /d z:\Проекты\backend
+pip install -r requirements.txt
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+Если cd /d не сработает (в PowerShell), используйте:
+Set-Location "z:\Проекты\backend"
+
+Потом во втором терминале:
+
+cd /d z:\Проекты\frontend
+npm install
+npm run dev
+И открывайте http://localhost:5173
