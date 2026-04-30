@@ -26,6 +26,33 @@ PRODUCT_TYPE_CLOTHES: Literal["clothes"] = "clothes"
 PRODUCT_TYPE_TECH: Literal["tech"] = "tech"
 PRODUCT_TYPES: tuple[str, str] = (PRODUCT_TYPE_CLOTHES, PRODUCT_TYPE_TECH)
 
+CLIENT_LIST_SORT_COLUMNS: dict[str, str] = {
+    "name": "d.name COLLATE NOCASE",
+    "created_at": "d.created_at",
+    "is_active": "d.is_active",
+}
+PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
+    "name": "p.name COLLATE NOCASE",
+    "type": "p.type",
+    "sku": "p.sku COLLATE NOCASE",
+    "supplier": "p.supplier COLLATE NOCASE",
+    "created_at": "p.created_at",
+    "is_active": "p.is_active",
+}
+
+
+def _order_sql_from_sort_param(sort: str | None, allowed: dict[str, str]) -> str | None:
+    if not sort or not str(sort).strip():
+        return None
+    head, sep, tail = str(sort).strip().rpartition("_")
+    if not sep or tail.lower() not in ("asc", "desc"):
+        return None
+    field_key = head
+    if field_key not in allowed:
+        return None
+    return f"{allowed[field_key]} {tail.upper()}"
+
+
 bearer_scheme = HTTPBearer()
 
 app = FastAPI(title="Auth Module API")
@@ -111,13 +138,26 @@ class ProductItem(BaseModel):
         description="Актуален: true — товар в ассортименте, false — не актуален; по умолчанию true.",
     )
     created_at: str
-    creator: str | None
+    created_by: str | None = Field(
+        default=None,
+        description="Кто создал: email из users (creator_id).",
+    )
     updated_at: str | None = None
-    editor: str | None = None
+    updated_by: str | None = Field(
+        default=None,
+        description="Кто менял последним: email из users (updated_by_id).",
+    )
 
 
 class ProductListResponse(BaseModel):
     items: list[ProductItem]
+    total: int
+    page: int
+    limit: int
+
+
+class DictionaryListResponse(BaseModel):
+    items: list[DictionaryBaseItem]
     total: int
     page: int
     limit: int
@@ -788,10 +828,94 @@ def delete_user(user_id: str, admin=Depends(get_current_admin)):
     return MessageResponse(message="User deleted")
 
 
-@app.get("/clients", response_model=list[DictionaryBaseItem])
-def list_clients(admin=Depends(get_current_admin)):
+def _list_dictionary_items_page(
+    table_name: str,
+    page: int,
+    limit: int,
+    *,
+    search: str | None,
+    is_active: bool | None,
+    sort: str | None,
+    sort_columns: dict[str, str],
+    default_order: str,
+) -> DictionaryListResponse:
+    _ensure_dictionary_table(table_name)
+    offset = (page - 1) * limit
+    conds = ["1=1"]
+    params: list = []
+    if search is not None and str(search).strip():
+        conds.append("LOWER(d.name) LIKE LOWER(?)")
+        params.append(f"%{str(search).strip()}%")
+    if is_active is not None:
+        conds.append("d.is_active = ?")
+        params.append(1 if is_active else 0)
+    where_sql = " AND ".join(conds)
+    order_sql = _order_sql_from_sort_param(sort, sort_columns) or default_order
+    with get_connection() as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM {table_name} d WHERE {where_sql}",
+                params,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                d.id,
+                d.name,
+                d.is_active,
+                d.created_at,
+                d.updated_at,
+                creator.email AS creator,
+                editor.email AS editor
+            FROM {table_name} d
+            LEFT JOIN users creator ON creator.id = d.creator_id
+            LEFT JOIN users editor ON editor.id = d.updated_by_id
+            WHERE {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return DictionaryListResponse(
+        items=[
+            DictionaryBaseItem(
+                id=row["id"],
+                name=row["name"],
+                is_active=bool(row["is_active"]),
+                created_at=row["created_at"],
+                creator=row["creator"],
+                updated_at=row["updated_at"],
+                editor=row["editor"],
+            )
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.get("/clients", response_model=DictionaryListResponse)
+def list_clients(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    is_active: bool | None = Query(None),
+    sort: str | None = Query(None),
+):
     _ = admin
-    return _get_dictionary_items("clients")
+    return _list_dictionary_items_page(
+        "clients",
+        page,
+        limit,
+        search=search,
+        is_active=is_active,
+        sort=sort,
+        sort_columns=CLIENT_LIST_SORT_COLUMNS,
+        default_order="d.created_at DESC",
+    )
 
 
 @app.post("/clients", response_model=MessageResponse)
@@ -877,15 +1001,43 @@ def list_products(
     admin=Depends(get_current_admin),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    sku: str | None = Query(None),
+    supplier: str | None = Query(None),
+    product_type: ProductType | None = Query(None, alias="type"),
+    is_active: bool | None = Query(None),
+    sort: str | None = Query(None),
 ):
     _ = admin
     offset = (page - 1) * limit
+    conds = ["1=1"]
+    params: list = []
+    if search is not None and str(search).strip():
+        conds.append("LOWER(p.name) LIKE LOWER(?)")
+        params.append(f"%{str(search).strip()}%")
+    if sku is not None and str(sku).strip():
+        conds.append("LOWER(p.sku) LIKE LOWER(?)")
+        params.append(f"%{str(sku).strip()}%")
+    if supplier is not None and str(supplier).strip():
+        conds.append("LOWER(IFNULL(p.supplier, '')) LIKE LOWER(?)")
+        params.append(f"%{str(supplier).strip()}%")
+    if product_type is not None:
+        conds.append("p.type = ?")
+        params.append(product_type)
+    if is_active is not None:
+        conds.append("p.is_active = ?")
+        params.append(1 if is_active else 0)
+    where_sql = " AND ".join(conds)
+    order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "p.created_at DESC"
     with get_connection() as connection:
         total = int(
-            connection.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+            connection.execute(
+                f"SELECT COUNT(*) FROM products p WHERE {where_sql}",
+                params,
+            ).fetchone()[0]
         )
         rows = connection.execute(
-            """
+            f"""
             SELECT
                 p.id,
                 p.name,
@@ -896,15 +1048,16 @@ def list_products(
                 p.is_active,
                 p.created_at,
                 p.updated_at,
-                creator.email AS creator,
-                editor.email AS editor
+                creator.email AS created_by,
+                editor.email AS updated_by
             FROM products p
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
-            ORDER BY p.created_at DESC
+            WHERE {where_sql}
+            ORDER BY {order_sql}
             LIMIT ? OFFSET ?
             """,
-            (limit, offset),
+            [*params, limit, offset],
         ).fetchall()
     return ProductListResponse(
         items=[
@@ -917,9 +1070,9 @@ def list_products(
                 image_url=row["image_url"],
                 is_active=bool(row["is_active"]),
                 created_at=row["created_at"],
-                creator=row["creator"],
+                created_by=row["created_by"],
                 updated_at=row["updated_at"],
-                editor=row["editor"],
+                updated_by=row["updated_by"],
             )
             for row in rows
         ],
@@ -945,8 +1098,8 @@ def get_product(item_id: str, admin=Depends(get_current_admin)):
                 p.is_active,
                 p.created_at,
                 p.updated_at,
-                creator.email AS creator,
-                editor.email AS editor
+                creator.email AS created_by,
+                editor.email AS updated_by
             FROM products p
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
@@ -965,9 +1118,9 @@ def get_product(item_id: str, admin=Depends(get_current_admin)):
         image_url=row["image_url"],
         is_active=bool(row["is_active"]),
         created_at=row["created_at"],
-        creator=row["creator"],
+        created_by=row["created_by"],
         updated_at=row["updated_at"],
-        editor=row["editor"],
+        updated_by=row["updated_by"],
     )
 
 

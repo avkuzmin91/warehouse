@@ -28,6 +28,28 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
   if (segment === 'edit') {
     return 'Редактирование'
   }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'products' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s !== 'edit' && s.length > 0) {
+      return 'Редактирование товара'
+    }
+  }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'clients' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s !== 'edit' && s.length > 0) {
+      return 'Редактирование клиента'
+    }
+  }
   if (segment === 'new') {
     const prev = index > 0 ? parts[index - 1] : null
     if (prev && CREATE_BY_PREV[prev]) {

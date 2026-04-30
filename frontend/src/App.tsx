@@ -4,8 +4,12 @@ import { HomePage } from './pages/HomePage'
 import { InventoryPage } from './pages/InventoryPage'
 import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
+import { ClientCreatePage } from './pages/ClientCreatePage'
+import { ClientEditPage } from './pages/ClientEditPage'
+import { ClientsListPage } from './pages/ClientsListPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProductCreatePage } from './pages/ProductCreatePage'
+import { ProductEditPage } from './pages/ProductEditPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { UsersPage } from './pages/UsersPage'
 import { AdminRoute } from './routes/AdminRoute'
@@ -47,10 +51,42 @@ function App() {
           }
         />
         <Route
+          path="/dictionaries/products/:id"
+          element={
+            <AdminRoute>
+              <ProductEditPage />
+            </AdminRoute>
+          }
+        />
+        <Route
           path="/dictionaries"
           element={
             <AdminRoute>
               <DictionariesListPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/clients"
+          element={
+            <AdminRoute>
+              <ClientsListPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/clients/new"
+          element={
+            <AdminRoute>
+              <ClientCreatePage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/clients/:id"
+          element={
+            <AdminRoute>
+              <ClientEditPage />
             </AdminRoute>
           }
         />

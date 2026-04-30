@@ -501,6 +501,63 @@ body {
   margin: 0 auto 20px;
 }
 
+/* COMPONENT: Table — загрузка, пустое состояние */
+.data-table-shell {
+  position: relative;
+}
+
+.data-table-shell__inner {
+  width: 100%;
+}
+
+.data-table-shell--loading .data-table-shell__inner {
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.42;
+}
+
+.data-table-shell--empty-loading {
+  min-height: 120px;
+}
+
+.data-table-loader-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(5, 0, 20, 0.52);
+  z-index: 2;
+}
+
+.data-table-loader__spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(180, 155, 255, 0.22);
+  border-top-color: rgba(200, 175, 255, 0.95);
+  border-radius: 50%;
+  animation: data-table-spin 0.75s linear infinite;
+}
+
+.data-table-loader__text {
+  font-size: 14px;
+  color: var(--text-soft);
+}
+
+@keyframes data-table-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.data-table-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 20px 12px !important;
+}
+
 .users-table {
   width: 100%;
   border-collapse: collapse;
@@ -828,6 +885,305 @@ body {
   font-size: 15px;
 }
 
+/* Query state: фильтры над таблицей (компактнее основных полей формы) */
+.list-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 14px;
+  /* Нативный select/dropdown ближе к тёмной теме приложения (Windows / Chromium) */
+  color-scheme: dark;
+}
+
+.list-filters__field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.list-filters__field--text {
+  flex: 1 1 120px;
+  min-width: 100px;
+  max-width: 200px;
+}
+
+.list-filters__select-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.list-filters__select-wrap .list-filters__select.field-input {
+  width: 100%;
+}
+
+.list-filters__select-clear {
+  position: absolute;
+  left: 7px;
+  right: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(18, 12, 36, 0.55);
+  color: rgba(210, 200, 250, 0.7);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.list-filters__select-clear:hover {
+  color: var(--text-main);
+  background: rgba(127, 56, 255, 0.28);
+}
+
+.list-filters__select-clear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+.list-filters__select-clear-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.list-filters .list-filters__input.field-input,
+.list-filters .list-filters__select.field-input {
+  margin-bottom: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 10px;
+  line-height: 1.2;
+}
+
+.list-filters .list-filters__input.field-input::placeholder {
+  font-size: 14px;
+  color: rgba(214, 202, 255, 0.42);
+}
+
+/* Селекты — тот же «тихий» тон, что и placeholder у текстовых полей */
+.list-filters .list-filters__select.field-input {
+  color: rgba(214, 202, 255, 0.5);
+  accent-color: var(--primary);
+}
+
+/* Выпадающий список: тёмный фиолетовый фон и высокий контраст текста (Chromium, Firefox; Safari частично) */
+.list-filters .list-filters__select.field-input option {
+  background-color: #100818;
+  color: #f2ecff;
+  font-weight: 500;
+}
+
+.list-filters .list-filters__select.field-input option:checked {
+  background-color: rgba(110, 55, 195, 0.75);
+  color: #fff;
+}
+
+.list-filters .list-filters__select.field-input option:hover {
+  background-color: rgba(90, 45, 160, 0.55);
+  color: #fff;
+}
+
+.list-filters .list-filters__select.field-input:focus {
+  color: rgba(232, 226, 255, 0.78);
+}
+
+/* Отступ слева под крестик, не перебивается общим padding селекта */
+.list-filters .list-filters__select-wrap--has-value .list-filters__select.field-input {
+  padding-left: 36px;
+  padding-right: 10px;
+}
+
+.list-filters__actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Действия списка справочника: «Создать», «Сбросить фильтры» (в строке фильтров) */
+.collection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.collection-actions__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.collection-actions__svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .list-filters__actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .collection-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* Пагинация списков (URL = источник истины) */
+.list-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.list-pagination__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.list-pagination__nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.list-pagination__btn {
+  width: auto;
+  min-width: 100px;
+  height: 44px;
+  font-size: 14px;
+}
+
+.list-pagination__pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.list-pagination__page {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(147, 110, 255, 0.35);
+  background: rgba(25, 16, 56, 0.45);
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.list-pagination__page:hover {
+  border-color: rgba(177, 143, 255, 0.65);
+  background: rgba(123, 63, 255, 0.15);
+}
+
+.list-pagination__page--current {
+  border-color: rgba(177, 143, 255, 0.9);
+  background: linear-gradient(135deg, rgba(123, 63, 255, 0.35), rgba(90, 40, 200, 0.35));
+  cursor: default;
+}
+
+.list-pagination__ellipsis {
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: 14px;
+  user-select: none;
+}
+
+.list-pagination__info {
+  font-size: 14px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.list-pagination__limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.list-pagination__limit-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.list-pagination__select {
+  width: auto;
+  min-width: 88px;
+  height: 44px;
+  margin-bottom: 0;
+  padding: 0 12px;
+  font-size: 15px;
+}
+
+/* Сортируемые заголовки таблицы */
+.sortable-th {
+  vertical-align: middle;
+}
+
+.sortable-th--active {
+  color: var(--text-main);
+}
+
+.sortable-th__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sortable-th__btn:hover {
+  color: var(--primary-2);
+}
+
+.sortable-th__icon {
+  font-size: 12px;
+  opacity: 0.95;
+}
+
 /* /dictionaries/products/new */
 .product-create-card {
   max-width: 640px;
@@ -961,6 +1317,152 @@ body {
   align-items: center;
   gap: 12px;
   margin-top: 6px;
+}
+
+/* Редактирование товара: загрузка + fieldset */
+.product-edit-loading-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--field-border);
+  background: rgba(25, 16, 56, 0.35);
+  font-size: 15px;
+  color: var(--text-main);
+}
+
+.product-edit-loading-back {
+  margin-left: auto;
+  color: var(--primary-soft);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.product-edit-loading-back:hover {
+  text-decoration: underline;
+}
+
+.product-edit-spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(214, 202, 255, 0.2);
+  border-top-color: var(--primary-soft);
+  border-radius: 50%;
+  animation: product-edit-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes product-edit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.product-edit-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.product-meta-block--record {
+  margin-top: 4px;
+}
+
+.product-record-meta {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 15px;
+  color: var(--text-main);
+}
+
+.product-record-meta__k {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(214, 202, 255, 0.45);
+}
+
+.product-record-meta__v {
+  user-select: text;
+  font-weight: 500;
+  color: var(--text-soft);
+}
+
+.product-meta-block {
+  margin: 22px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--field-border);
+  border-radius: 14px;
+  background: rgba(25, 16, 56, 0.25);
+}
+
+.product-meta-block__title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-muted, rgba(214, 202, 255, 0.7));
+  letter-spacing: 0.02em;
+}
+
+.product-meta-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--text-main);
+}
+
+.product-meta-dates__label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(214, 202, 255, 0.45);
+}
+
+.product-meta-dates__value {
+  user-select: text;
+}
+
+/* Карточка товара: только чтение + переход на /edit */
+.product-readonly {
+  text-align: left;
+}
+
+.product-readonly__text {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-main);
+  line-height: 1.45;
+}
+
+.product-readonly__thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.product-readonly__img {
+  max-width: 200px;
+  max-height: 200px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--field-border);
+  background: rgba(25, 16, 56, 0.45);
 }
 
 .btn--form-action {

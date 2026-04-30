@@ -2,21 +2,18 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
-import {
-  API_BASE_URL,
-  PRODUCT_TYPE_LABELS,
-  createDictionaryItem,
-  createProduct,
-  deleteDictionaryItem,
-  deleteProduct,
-  getDictionary,
-  getDictionaryItem,
-  getProduct,
-  getProducts,
-  updateDictionaryItem,
-  updateProduct,
-} from '../api'
-import type { DictionaryItem, ProductItem, ProductType } from '../api'
+import { createDictionaryItem, deleteDictionaryItem, getDictionary, getDictionaryItem, updateDictionaryItem } from '../api'
+import type { DictionaryItem } from '../api'
+import { Table, type TableColumn } from '../components/Table'
+import { ProductsDictionaryListBlock } from './ProductsDictionaryListBlock'
+
+function authorCreated(item: DictionaryItem): string | null {
+  return item.creator
+}
+
+function authorUpdated(item: DictionaryItem): string | null {
+  return item.editor
+}
 
 type DictionaryKind = 'clients' | 'colors' | 'sizes' | 'products'
 type BasicKind = 'clients' | 'colors' | 'sizes'
@@ -62,16 +59,6 @@ const dictionaryMeta: Record<
   },
 }
 
-function formatDateDdMmYyyy(iso: string) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  })
-}
-
 export function DictionariesPage() {
   const navigate = useNavigate()
   const { section = 'clients', itemId } = useParams<{ section: DictionaryKind; itemId?: string }>()
@@ -81,30 +68,12 @@ export function DictionariesPage() {
   const isEditMode = Boolean(itemId && itemId !== 'new')
 
   const [items, setItems] = useState<DictionaryItem[]>([])
-  const [products, setProducts] = useState<ProductItem[]>([])
-  const [productsTotal, setProductsTotal] = useState(0)
-  const [productPage, setProductPage] = useState(1)
-  const [productLimit, setProductLimit] = useState<20 | 50 | 100>(20)
   const [error, setError] = useState('')
+  const [listLoading, setListLoading] = useState(false)
 
   const [dictForm, setDictForm] = useState({ name: '', is_not_actual: false })
-  /** true = товар актуален (is_active) */
-  const [productForm, setProductForm] = useState({
-    name: '',
-    type: 'clothes' as ProductType,
-    sku: '',
-    supplier: '',
-    is_actual: true,
-    image: null as File | null,
-    image_url: null as string | null,
-  })
 
-  const [meta, setMeta] = useState<{
-    created_at: string
-    creator: string | null
-    updated_at: string | null
-    editor: string | null
-  } | null>(null)
+  const [meta, setMeta] = useState<DictionaryItem | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     text: string
     onConfirm: () => Promise<void>
@@ -112,69 +81,87 @@ export function DictionariesPage() {
 
   const currentMeta = useMemo(() => dictionaryMeta[activeSection], [activeSection])
 
+  const dictionaryListColumns: TableColumn<DictionaryItem>[] = useMemo(
+    () => [
+      { key: 'name', title: 'Название' },
+      { key: 'is_active', title: 'Не актуален', render: (v) => ((v as boolean) ? 'Да' : 'Нет') },
+      {
+        key: 'created_at',
+        title: 'Дата создания',
+        render: (_, row) => new Date(row.created_at).toLocaleString('ru-RU'),
+      },
+      { key: 'creator', title: 'Создал', render: (v) => (v ? String(v) : '-') },
+    ],
+    [],
+  )
+
   useEffect(() => {
+    let cancelled = false
     setError('')
     setMeta(null)
     if (!isCreateMode && !isEditMode) {
-      if (!isProducts) {
-        getDictionary(activeSection as BasicKind)
-          .then(setItems)
-          .catch((requestError) =>
-            setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
-          )
-      } else {
-        getProducts({ page: productPage, limit: productLimit })
-          .then((res) => {
-            setProducts(res.items)
-            setProductsTotal(res.total)
-            const lastPage = Math.max(1, Math.ceil(res.total / productLimit) || 1)
-            if (res.total > 0 && productPage > lastPage) {
-              setProductPage(lastPage)
+      if (isProducts) {
+        return () => {
+          cancelled = true
+        }
+      }
+      if (activeSection === 'colors' || activeSection === 'sizes') {
+        setListLoading(true)
+        setItems([])
+        getDictionary(activeSection)
+          .then((rows) => {
+            if (!cancelled) setItems(rows)
+          })
+          .catch((requestError) => {
+            if (!cancelled) {
+              setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки')
             }
           })
-          .catch((requestError) =>
-            setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
-          )
+          .finally(() => {
+            if (!cancelled) setListLoading(false)
+          })
       }
-      return
+      return () => {
+        cancelled = true
+      }
     }
 
     if (isCreateMode) {
       if (!isProducts) {
         setDictForm({ name: '', is_not_actual: false })
       }
-      return
+      return () => {
+        cancelled = true
+      }
     }
 
-    if (!itemId) return
-    if (!isProducts) {
-      getDictionaryItem(activeSection as BasicKind, itemId)
-        .then((item) => {
+    if (!itemId) {
+      return () => {
+        cancelled = true
+      }
+    }
+    if (isProducts) {
+      return () => {
+        cancelled = true
+      }
+    }
+    getDictionaryItem(activeSection as BasicKind, itemId)
+      .then((item) => {
+        if (!cancelled) {
           setDictForm({ name: item.name, is_not_actual: item.is_active })
           setMeta(item)
-        })
-        .catch((requestError) =>
-          setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
-        )
-    } else {
-      getProduct(itemId)
-        .then((item) => {
-          setProductForm({
-            name: item.name,
-            type: item.type,
-            sku: item.sku,
-            supplier: item.supplier || '',
-            is_actual: item.is_active,
-            image: null,
-            image_url: item.image_url,
-          })
-          setMeta(item)
-        })
-        .catch((requestError) =>
-          setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки'),
-        )
+        }
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : 'Ошибка загрузки')
+        }
+      })
+
+    return () => {
+      cancelled = true
     }
-  }, [activeSection, isProducts, isCreateMode, isEditMode, itemId, productPage, productLimit])
+  }, [activeSection, isProducts, isCreateMode, isEditMode, itemId])
 
   async function onSaveDictionary(event: FormEvent) {
     event.preventDefault()
@@ -198,52 +185,14 @@ export function DictionariesPage() {
     }
   }
 
-  async function onSaveProduct(event: FormEvent) {
-    event.preventDefault()
-    setError('')
-    try {
-      if (isEditMode && itemId) {
-        setConfirmDialog({
-          text: 'Данные в карточках будут заменены',
-          onConfirm: async () => {
-            await updateProduct(itemId, {
-              name: productForm.name,
-              type: productForm.type,
-              sku: productForm.sku,
-              supplier: productForm.supplier,
-              is_active: productForm.is_actual,
-              image: productForm.image,
-            })
-            navigate('/dictionaries/products')
-          },
-        })
-        return
-      }
-      await createProduct({
-        name: productForm.name,
-        type: productForm.type,
-        sku: productForm.sku,
-        supplier: productForm.supplier,
-        image: productForm.image,
-        is_active: productForm.is_actual,
-      })
-      navigate('/dictionaries/products')
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Ошибка сохранения')
-    }
-  }
-
   async function onDelete() {
     if (!itemId) return
+    if (isProducts) return
     setError('')
     setConfirmDialog({
       text: 'Данные в карточках могут быть утеряны',
       onConfirm: async () => {
-        if (!isProducts) {
-          await deleteDictionaryItem(activeSection as BasicKind, itemId)
-        } else {
-          await deleteProduct(itemId)
-        }
+        await deleteDictionaryItem(activeSection as BasicKind, itemId)
         navigate(`/dictionaries/${activeSection}`)
       },
     })
@@ -261,10 +210,6 @@ export function DictionariesPage() {
   }
 
   const isProductListMode = isProducts && !isCreateMode && !isEditMode
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(productsTotal / productLimit) || 1),
-    [productsTotal, productLimit],
-  )
 
   return (
     <main className={isProductListMode ? 'page page--center' : 'page'}>
@@ -276,124 +221,7 @@ export function DictionariesPage() {
         }
       >
         {isProductListMode ? (
-          <>
-            <Breadcrumbs />
-
-            <div className="product-list-toolbar product-list-toolbar--create-only">
-              <Link className="btn btn--primary product-list-create-btn" to="/dictionaries/products/new">
-                Создать
-              </Link>
-            </div>
-
-            <div className="table-wrap product-table-wrap">
-              <table className="users-table users-table--interactive">
-                <thead>
-                  <tr>
-                    <th>Название товара</th>
-                    <th>Тип</th>
-                    <th>Артикул товара</th>
-                    <th>Поставщик</th>
-                    <th>Фото товара</th>
-                    <th>Актуален</th>
-                    <th>Дата создания</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.map((item) => (
-                    <tr
-                      key={item.id}
-                      onClick={() => navigate(`/dictionaries/products/${item.id}`)}
-                    >
-                      <td>{item.name}</td>
-                      <td>{PRODUCT_TYPE_LABELS[item.type]}</td>
-                      <td>{item.sku}</td>
-                      <td>{item.supplier || '—'}</td>
-                      <td>
-                        {item.image_url ? (
-                          <img
-                            className="product-thumb"
-                            src={`${API_BASE_URL}${item.image_url}`}
-                            alt=""
-                            width={40}
-                            height={40}
-                            loading="lazy"
-                          />
-                        ) : (
-                          <span className="product-thumb product-thumb--empty" />
-                        )}
-                      </td>
-                      <td>
-                        <span
-                          className="product-na"
-                          title={item.is_active ? 'Актуален' : 'Не актуален'}
-                        >
-                          <span
-                            className={
-                              item.is_active
-                                ? 'product-na__box product-na__box--on'
-                                : 'product-na__box'
-                            }
-                            aria-hidden
-                          />
-                          <span className="product-na__label">
-                            {item.is_active ? 'Да' : 'Нет'}
-                          </span>
-                        </span>
-                      </td>
-                      <td>{formatDateDdMmYyyy(item.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="product-pagination">
-              <div className="product-pagination__nav">
-                <button
-                  className="btn btn--secondary product-pagination__btn"
-                  type="button"
-                  disabled={productPage <= 1}
-                  onClick={() => setProductPage((p) => Math.max(1, p - 1))}
-                >
-                  Назад
-                </button>
-                <span className="product-pagination__info">
-                  {productsTotal === 0
-                    ? '0'
-                    : `${(productPage - 1) * productLimit + 1}–${Math.min(
-                        productPage * productLimit,
-                        productsTotal,
-                      )}`}{' '}
-                  из {productsTotal} (стр. {productPage} / {totalPages})
-                </span>
-                <button
-                  className="btn btn--secondary product-pagination__btn"
-                  type="button"
-                  disabled={productPage >= totalPages}
-                  onClick={() => setProductPage((p) => Math.min(totalPages, p + 1))}
-                >
-                  Вперёд
-                </button>
-              </div>
-              <label className="product-pagination__limit">
-                <span className="product-pagination__limit-label">Записей на странице</span>
-                <select
-                  className="field-input product-pagination__select"
-                  value={productLimit}
-                  onChange={(event) => {
-                    setProductLimit(Number(event.target.value) as 20 | 50 | 100)
-                    setProductPage(1)
-                  }}
-                >
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                </select>
-              </label>
-            </div>
-
-            {error ? <p className="error-text">{error}</p> : null}
-          </>
+          <ProductsDictionaryListBlock />
         ) : (
           <>
         <Breadcrumbs />
@@ -428,31 +256,12 @@ export function DictionariesPage() {
                 Создать
               </button>
             </div>
-            <div className="table-wrap">
-              <table className="users-table users-table--interactive">
-                <thead>
-                  <tr>
-                    <th>Название</th>
-                    <th>Не актуален</th>
-                    <th>Дата создания</th>
-                    <th>Создал</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item) => (
-                    <tr
-                      key={item.id}
-                      onClick={() => navigate(`/dictionaries/${activeSection}/${item.id}`)}
-                    >
-                      <td>{item.name}</td>
-                      <td>{item.is_active ? 'Да' : 'Нет'}</td>
-                      <td>{new Date(item.created_at).toLocaleString('ru-RU')}</td>
-                      <td>{item.creator || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table<DictionaryItem>
+              columns={dictionaryListColumns}
+              data={items}
+              loading={listLoading}
+              onRowClick={(item) => navigate(`/dictionaries/${activeSection}/${item.id}`)}
+            />
           </>
         ) : !isCreateMode && !isEditMode ? null : !isProducts ? (
           <form className="auth-form" onSubmit={onSaveDictionary}>
@@ -497,99 +306,6 @@ export function DictionariesPage() {
               ) : null}
             </div>
           </form>
-        ) : isEditMode ? (
-          <form className="auth-form" onSubmit={onSaveProduct}>
-            <label className="field-label" htmlFor="product-name">Название товара</label>
-            <input
-              id="product-name"
-              className="field-input"
-              value={productForm.name}
-              onChange={(event) => setProductForm((prev) => ({ ...prev, name: event.target.value }))}
-              required
-            />
-            <label className="field-label" htmlFor="product-type">Тип</label>
-            <select
-              id="product-type"
-              className="field-input"
-              value={productForm.type}
-              onChange={(event) =>
-                setProductForm((prev) => ({
-                  ...prev,
-                  type: event.target.value as ProductType,
-                }))
-              }
-            >
-              <option value="clothes">{PRODUCT_TYPE_LABELS.clothes}</option>
-              <option value="tech">{PRODUCT_TYPE_LABELS.tech}</option>
-            </select>
-            <label className="field-label" htmlFor="product-sku">Артикул товара</label>
-            <input
-              id="product-sku"
-              className="field-input"
-              value={productForm.sku}
-              onChange={(event) => setProductForm((prev) => ({ ...prev, sku: event.target.value }))}
-              required
-            />
-            <label className="field-label" htmlFor="product-supplier">Поставщик</label>
-            <input
-              id="product-supplier"
-              className="field-input"
-              value={productForm.supplier}
-              onChange={(event) => setProductForm((prev) => ({ ...prev, supplier: event.target.value }))}
-            />
-            <label className="field-label" htmlFor="product-image">Фото товара (JPG, PNG, HEIC)</label>
-            {isEditMode && productForm.image_url ? (
-              <a
-                className="dict-image-link"
-                href={`${API_BASE_URL}${productForm.image_url}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Открыть текущее фото
-              </a>
-            ) : null}
-            <input
-              id="product-image"
-              className="field-input"
-              type="file"
-              accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,.heic,.heif"
-              onChange={(event) =>
-                setProductForm((prev) => ({ ...prev, image: event.target.files?.[0] || null }))
-              }
-            />
-            <label className="remember">
-              <input
-                type="checkbox"
-                checked={productForm.is_actual}
-                onChange={(event) =>
-                  setProductForm((prev) => ({ ...prev, is_actual: event.target.checked }))
-                }
-              />
-              <span className="remember__box"></span>
-              <span className="remember__text">Актуален</span>
-            </label>
-            <div className="lk-actions">
-              <button className="btn btn--primary" type="submit">
-                {isCreateMode ? 'Создать' : 'Сохранить'}
-              </button>
-              <button
-                className="btn btn--secondary"
-                type="button"
-                onClick={() => navigate(`/dictionaries/${activeSection}`)}
-              >
-                {isCreateMode ? 'Отмена' : 'Назад'}
-              </button>
-              {isEditMode ? (
-                <button
-                  className="btn btn--secondary users-action-btn--danger"
-                  type="button"
-                  onClick={onDelete}
-                >
-                  Удалить
-                </button>
-              ) : null}
-            </div>
-          </form>
         ) : null}
 
         {meta ? (
@@ -602,7 +318,7 @@ export function DictionariesPage() {
                 </tr>
                 <tr>
                   <th>Создал</th>
-                  <td>{meta.creator || '-'}</td>
+                  <td>{authorCreated(meta) || '-'}</td>
                 </tr>
                 <tr>
                   <th>Дата изменения</th>
@@ -610,7 +326,7 @@ export function DictionariesPage() {
                 </tr>
                 <tr>
                   <th>Редактировал</th>
-                  <td>{meta.editor || '-'}</td>
+                  <td>{authorUpdated(meta) || '-'}</td>
                 </tr>
               </tbody>
             </table>
