@@ -1,37 +1,64 @@
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { DateRangeFilter, type DateRangeFilterModel } from './DateRangeFilter'
+import { DictionaryFilterCombobox } from './DictionaryFilterCombobox'
+import { FieldDropdownChevron } from './FieldDropdownChevron'
 
 /** Текстовые поля с debounce (поиск по названию / артикулу / поставщику). */
-export type TextFilterFieldKey = 'search' | 'sku' | 'supplier'
+export type TextFilterFieldKey = 'search' | 'name' | 'sku' | 'supplier'
+
+export type SelectFilterFieldKey = 'type' | 'type_id' | 'client_id' | 'supplier_id'
+
+export type DictionaryAutocompleteFilterKey =
+  | 'type_id'
+  | 'client_id'
+  | 'supplier_id'
+  | 'actuality_id'
+  | 'users_role'
+
+/** Ключ селекта / комбобокса в панели фильтров (native select или dictionary autocomplete). */
+export type FilterPanelSelectKey = SelectFilterFieldKey | DictionaryAutocompleteFilterKey
 
 export type FilterFieldConfig =
   | { name: TextFilterFieldKey; type: 'text'; placeholder?: string }
+  | { type: 'date_range'; placeholder: string }
   | {
-      name: 'type'
+      name: SelectFilterFieldKey
       type: 'select'
       options: { value: string; label: string }[]
     }
   | {
-      name: 'is_active'
-      type: 'select'
+      name: DictionaryAutocompleteFilterKey
+      type: 'dictionary_autocomplete'
       options: { value: string; label: string }[]
     }
 
 type FilterValues = {
   search?: string
+  name?: string
   sku?: string
   supplier?: string
   type?: string
-  is_active?: boolean
+  type_id?: string
+  client_id?: string
+  supplier_id?: string
+  actuality_id?: string
+  users_role?: string
+  date_from?: string
+  date_to?: string
 }
 
 type Props = {
   fields: FilterFieldConfig[]
   values: FilterValues
   onTextFilterDebounced: (name: TextFilterFieldKey, value: string) => void
-  onSelectChange: (name: 'type' | 'is_active', value: string | boolean | null) => void
-  /** Действия списка (Collection Actions): «Создать», «Сбросить фильтры» и т.д. */
-  actions: ReactNode
+  onSelectChange: (name: FilterPanelSelectKey, value: string | null) => void
+  /** ТЗ: Date Range Filter — обновление только при валидном диапазоне */
+  onDateRangeChange?: (next: DateRangeFilterModel) => void
+  /** Действия справа: `CollectionActions` (сброс + создание). */
+  actions?: ReactNode
+  /** Блокировка полей при загрузке списка (List Page Pattern). */
+  disabled?: boolean
 }
 
 const TEXT_DEBOUNCE_MS = 400
@@ -42,16 +69,25 @@ function splitSelectFilterOptions(options: { value: string; label: string }[]) {
   return { placeholder, choices }
 }
 
+const SELECT_CLEAR_ARIA: Partial<Record<SelectFilterFieldKey, string>> = {
+  type: 'Сбросить фильтр по типу',
+  type_id: 'Сбросить фильтр по типу товара',
+  client_id: 'Сбросить фильтр по клиенту',
+  supplier_id: 'Сбросить фильтр по поставщику',
+}
+
 function FilterSelectWithClear({
   name,
   options,
   valueStr,
   onSelectChange,
+  disabled,
 }: {
-  name: 'type' | 'is_active'
+  name: SelectFilterFieldKey
   options: { value: string; label: string }[]
   valueStr: string
-  onSelectChange: (name: 'type' | 'is_active', value: string | boolean | null) => void
+  onSelectChange: (name: SelectFilterFieldKey, value: string | null) => void
+  disabled?: boolean
 }) {
   const { placeholder, choices } = splitSelectFilterOptions(options)
   const hasValue = valueStr !== ''
@@ -62,8 +98,9 @@ function FilterSelectWithClear({
         <button
           type="button"
           className="list-filters__select-clear"
-          aria-label={name === 'type' ? 'Сбросить фильтр по типу' : 'Сбросить фильтр по статусу'}
+          aria-label={SELECT_CLEAR_ARIA[name] ?? 'Очистить фильтр'}
           title="Очистить"
+          disabled={disabled}
           onMouseDown={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -81,13 +118,13 @@ function FilterSelectWithClear({
         </button>
       ) : null}
       <select
-        className="field-input list-filters__select"
+        className={`field-input list-filters__select${hasValue ? '' : ' list-filters__select--empty'}`.trim()}
         value={valueStr}
+        disabled={disabled}
         onChange={(e) => {
           const raw = e.target.value
           if (raw === '') onSelectChange(name, null)
-          else if (name === 'type') onSelectChange('type', raw)
-          else onSelectChange('is_active', raw === 'true')
+          else onSelectChange(name, raw)
         }}
       >
         {placeholder ? (
@@ -101,6 +138,7 @@ function FilterSelectWithClear({
           </option>
         ))}
       </select>
+      <FieldDropdownChevron />
     </div>
   )
 }
@@ -110,11 +148,13 @@ function DebouncedTextFilterRow({
   placeholder,
   committedValue,
   onDebounced,
+  disabled,
 }: {
   name: TextFilterFieldKey
   placeholder: string
   committedValue: string | undefined
   onDebounced: (name: TextFilterFieldKey, value: string) => void
+  disabled?: boolean
 }) {
   const [draft, setDraft] = useState(committedValue ?? '')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -151,7 +191,7 @@ function DebouncedTextFilterRow({
     [name, onDebounced],
   )
 
-  const grow = name === 'search'
+  const grow = name === 'search' || name === 'name'
 
   return (
     <div
@@ -165,6 +205,7 @@ function DebouncedTextFilterRow({
         autoComplete="off"
         placeholder={placeholder}
         value={draft}
+        disabled={disabled}
         onChange={(e) => {
           const v = e.target.value
           setDraft(v)
@@ -181,8 +222,14 @@ export function FiltersPanel({
   values,
   onTextFilterDebounced,
   onSelectChange,
+  onDateRangeChange,
   actions,
+  disabled = false,
 }: Props) {
+  if (fields.length === 0 && actions == null) {
+    return null
+  }
+
   return (
     <div className="list-filters">
       {fields.map((field) => {
@@ -195,45 +242,71 @@ export function FiltersPanel({
               committedValue={
                 field.name === 'search'
                   ? values.search
-                  : field.name === 'sku'
-                    ? values.sku
-                    : values.supplier
+                  : field.name === 'name'
+                    ? values.name
+                    : field.name === 'sku'
+                      ? values.sku
+                      : values.supplier
               }
               onDebounced={onTextFilterDebounced}
+              disabled={disabled}
             />
           )
         }
-        if (field.type === 'select' && field.name === 'type') {
-          const v = values.type
-          const selectVal = v === 'clothes' || v === 'tech' ? v : ''
+        if (field.type === 'select') {
+          const name = field.name
+          let selectVal = ''
+          if (name === 'type') {
+            const v = values.type
+            selectVal = v === 'clothes' || v === 'tech' ? v : ''
+          } else {
+            const v = values[name]
+            selectVal = typeof v === 'string' && v ? v : ''
+          }
           return (
-            <div key="type" className="list-filters__field list-filters__field--text">
+            <div key={name} className="list-filters__field list-filters__field--text">
               <FilterSelectWithClear
-                name="type"
+                name={name}
                 options={field.options}
                 valueStr={selectVal}
                 onSelectChange={onSelectChange}
+                disabled={disabled}
               />
             </div>
           )
         }
-        if (field.type === 'select' && field.name === 'is_active') {
-          const v = values.is_active
-          const selectVal = v === true ? 'true' : v === false ? 'false' : ''
+        if (field.type === 'dictionary_autocomplete') {
+          const name = field.name
+          const v = values[name]
+          const selectVal = typeof v === 'string' && v ? v : ''
           return (
-            <div key="is_active" className="list-filters__field list-filters__field--text">
-              <FilterSelectWithClear
-                name="is_active"
+            <div key={name} className="list-filters__field list-filters__field--text">
+              <DictionaryFilterCombobox
+                name={name}
                 options={field.options}
                 valueStr={selectVal}
-                onSelectChange={onSelectChange}
+                onSelectChange={(n, id) => onSelectChange(n, id)}
+                disabled={disabled}
+              />
+            </div>
+          )
+        }
+        if (field.type === 'date_range') {
+          return (
+            <div key="date_range" className="list-filters__field list-filters__field--date-range">
+              <DateRangeFilter
+                placeholder={field.placeholder}
+                dateFrom={values.date_from}
+                dateTo={values.date_to}
+                disabled={disabled || !onDateRangeChange}
+                onChange={(next) => onDateRangeChange?.(next)}
               />
             </div>
           )
         }
         return null
       })}
-      <div className="list-filters__actions">{actions}</div>
+      {actions != null ? <div className="list-filters__actions">{actions}</div> : null}
     </div>
   )
 }

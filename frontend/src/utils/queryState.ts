@@ -5,10 +5,21 @@ export type ListQueryLimits = 20 | 50 | 100
 /** Значения фильтров списка (подмножество ключей задаётся filterKeys в хуке). */
 export type ListFilters = {
   search?: string
+  name?: string
   sku?: string
   supplier?: string
   type?: string
-  is_active?: boolean
+  type_id?: string
+  client_id?: string
+  supplier_id?: string
+  /** ID записи системного справочника актуальности (GET /system/record-actuality). */
+  actuality_id?: string
+  /** YYYY-MM-DD, начало периода (ТЗ: date_from) */
+  date_from?: string
+  /** YYYY-MM-DD, конец периода (ТЗ: date_to) */
+  date_to?: string
+  /** Фильтр списка пользователей по роли (URL: users_role). */
+  users_role?: string
 }
 
 export type ParsedListQuery = {
@@ -47,6 +58,19 @@ function parseLimit(raw: string | null): ListQueryLimits {
   return LIMITS.includes(n as ListQueryLimits) ? (n as ListQueryLimits) : 20
 }
 
+function parseYyyyMmDdParam(raw: string | null | undefined): string | undefined {
+  if (raw == null || !String(raw).trim()) return undefined
+  const v = String(raw).trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined
+}
+
+function parseUsersRoleParam(raw: string | null | undefined): string | undefined {
+  if (raw == null || !String(raw).trim()) return undefined
+  const v = String(raw).trim()
+  const allowed = new Set(['user', 'manager', 'client', 'admin'])
+  return allowed.has(v) ? v : undefined
+}
+
 export function parseListQueryFromSearchParams(
   sp: URLSearchParams,
   filterKeys: readonly string[],
@@ -60,6 +84,9 @@ export function parseListQueryFromSearchParams(
     if (key === 'search') {
       const v = sp.get('search')
       filters.search = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'name') {
+      const v = sp.get('name')
+      filters.name = v != null && v.trim() !== '' ? v.trim() : undefined
     } else if (key === 'sku') {
       const v = sp.get('sku')
       filters.sku = v != null && v.trim() !== '' ? v.trim() : undefined
@@ -69,11 +96,24 @@ export function parseListQueryFromSearchParams(
     } else if (key === 'type') {
       const v = sp.get('type')
       filters.type = v === 'clothes' || v === 'tech' ? v : undefined
-    } else if (key === 'is_active') {
-      const v = sp.get('is_active')
-      if (v === 'true') filters.is_active = true
-      else if (v === 'false') filters.is_active = false
-      else filters.is_active = undefined
+    } else if (key === 'type_id') {
+      const v = sp.get('type_id')
+      filters.type_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'client_id') {
+      const v = sp.get('client_id')
+      filters.client_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'supplier_id') {
+      const v = sp.get('supplier_id')
+      filters.supplier_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'actuality_id') {
+      const v = sp.get('actuality_id')
+      filters.actuality_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'date_from') {
+      filters.date_from = parseYyyyMmDdParam(sp.get('date_from'))
+    } else if (key === 'date_to') {
+      filters.date_to = parseYyyyMmDdParam(sp.get('date_to'))
+    } else if (key === 'users_role') {
+      filters.users_role = parseUsersRoleParam(sp.get('users_role'))
     }
   }
 
@@ -98,6 +138,10 @@ export function applyListQueryToSearchParams(
       const v = q.filters.search
       if (v != null && String(v).trim() !== '') next.set('search', String(v).trim())
       else next.delete('search')
+    } else if (key === 'name') {
+      const v = q.filters.name
+      if (v != null && String(v).trim() !== '') next.set('name', String(v).trim())
+      else next.delete('name')
     } else if (key === 'sku') {
       const v = q.filters.sku
       if (v != null && String(v).trim() !== '') next.set('sku', String(v).trim())
@@ -110,11 +154,36 @@ export function applyListQueryToSearchParams(
       const v = q.filters.type
       if (v === 'clothes' || v === 'tech') next.set('type', v)
       else next.delete('type')
-    } else if (key === 'is_active') {
-      const v = q.filters.is_active
-      if (v === true) next.set('is_active', 'true')
-      else if (v === false) next.set('is_active', 'false')
-      else next.delete('is_active')
+    } else if (key === 'type_id') {
+      const v = q.filters.type_id
+      if (v != null && String(v).trim() !== '') next.set('type_id', String(v).trim())
+      else next.delete('type_id')
+    } else if (key === 'client_id') {
+      const v = q.filters.client_id
+      if (v != null && String(v).trim() !== '') next.set('client_id', String(v).trim())
+      else next.delete('client_id')
+    } else if (key === 'supplier_id') {
+      const v = q.filters.supplier_id
+      if (v != null && String(v).trim() !== '') next.set('supplier_id', String(v).trim())
+      else next.delete('supplier_id')
+    } else if (key === 'actuality_id') {
+      const v = q.filters.actuality_id
+      if (v != null && String(v).trim() !== '') next.set('actuality_id', String(v).trim())
+      else next.delete('actuality_id')
+    } else if (key === 'date_from') {
+      const v = q.filters.date_from
+      const parsed = v != null ? parseYyyyMmDdParam(v) : undefined
+      if (parsed) next.set('date_from', parsed)
+      else next.delete('date_from')
+    } else if (key === 'date_to') {
+      const v = q.filters.date_to
+      const parsed = v != null ? parseYyyyMmDdParam(v) : undefined
+      if (parsed) next.set('date_to', parsed)
+      else next.delete('date_to')
+    } else if (key === 'users_role') {
+      const v = parseUsersRoleParam(q.filters.users_role ?? null)
+      if (v) next.set('users_role', v)
+      else next.delete('users_role')
     }
   }
 
@@ -125,25 +194,45 @@ export type ListApiQueryParams = {
   page: number
   limit: number
   search?: string
+  name?: string
   sku?: string
   supplier?: string
   type?: 'clothes' | 'tech'
-  is_active?: boolean
+  type_id?: string
+  client_id?: string
+  supplier_id?: string
+  actuality_id?: string
   sort?: string
+  date_from?: string
+  date_to?: string
 }
 
 export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   const out: ListApiQueryParams = { page: q.page, limit: q.limit }
   const s = q.filters.search
   if (s != null && String(s).trim() !== '') out.search = String(s).trim()
+  const name = q.filters.name
+  if (name != null && String(name).trim() !== '') out.name = String(name).trim()
   const sku = q.filters.sku
   if (sku != null && String(sku).trim() !== '') out.sku = String(sku).trim()
   const sup = q.filters.supplier
   if (sup != null && String(sup).trim() !== '') out.supplier = String(sup).trim()
   const t = q.filters.type
   if (t === 'clothes' || t === 'tech') out.type = t
-  const a = q.filters.is_active
-  if (a === true || a === false) out.is_active = a
+  const tid = q.filters.type_id
+  if (tid != null && String(tid).trim() !== '') out.type_id = String(tid).trim()
+  const cid = q.filters.client_id
+  if (cid != null && String(cid).trim() !== '') out.client_id = String(cid).trim()
+  const sid = q.filters.supplier_id
+  if (sid != null && String(sid).trim() !== '') out.supplier_id = String(sid).trim()
+  const aid = q.filters.actuality_id
+  if (aid != null && String(aid).trim() !== '') out.actuality_id = String(aid).trim()
+  const df = q.filters.date_from
+  const dfParsed = df != null ? parseYyyyMmDdParam(df) : undefined
+  if (dfParsed) out.date_from = dfParsed
+  const dt = q.filters.date_to
+  const dtParsed = dt != null ? parseYyyyMmDdParam(dt) : undefined
+  if (dtParsed) out.date_to = dtParsed
   const sortStr = serializeSortParam(q.sort)
   if (sortStr) out.sort = sortStr
   return out

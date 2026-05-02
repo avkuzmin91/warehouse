@@ -2,16 +2,11 @@ import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
+import { ActionBar } from '../components/ActionBar'
+import { ClientFormFields } from '../components/ClientFormFields'
+import { CLIENT_FORM_CONFIG, mapClientFormApiError } from '../config/clientFormConfig'
 import { createDictionaryItem } from '../api'
-
-const REQUIRED_MSG = 'Заполните обязательные поля'
-
-function mapClientCreateError(msg: string): string {
-  if (msg.includes('уже существ') || msg.includes('названием')) {
-    return 'Клиент уже существует'
-  }
-  return msg
-}
 
 export function ClientCreatePage() {
   const navigate = useNavigate()
@@ -29,7 +24,7 @@ export function ClientCreatePage() {
     setSubmitError('')
     setTouchedName(true)
     if (nameInvalid) {
-      setSubmitError(REQUIRED_MSG)
+      setSubmitError(CLIENT_FORM_CONFIG.messages.requiredFields)
       return
     }
     try {
@@ -39,66 +34,33 @@ export function ClientCreatePage() {
       })
       navigate('/dictionaries/clients')
     } catch (e) {
-      setSubmitError(e instanceof Error ? mapClientCreateError(e.message) : 'Ошибка сохранения')
+      setSubmitError(e instanceof Error ? mapClientFormApiError(e.message) : CLIENT_FORM_CONFIG.messages.saveFailed)
     }
   }
 
   return (
-    <main className="page page--center">
-      <section className="auth-card product-create-card">
-        <Breadcrumbs />
+    <PageContainer maxWidth={640} cardClassName="product-create-card">
+      <Breadcrumbs />
 
-        <form
-          id={formId}
-          className="auth-form product-create-form"
-          onSubmit={onSubmit}
-          noValidate
-        >
-          <label className="field-label" htmlFor={`${formId}-name`}>
-            Название клиента
-            <span className="field-label__required" aria-label="обязательное поле">
-              *
-            </span>
-          </label>
-          <input
-            id={`${formId}-name`}
-            className={`field-input${showNameError ? ' field-input--error' : ''}`}
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-            }}
-            onBlur={() => setTouchedName(true)}
-            autoComplete="off"
-            aria-invalid={showNameError}
-          />
+      <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
+        <ClientFormFields
+          formId={formId}
+          name={name}
+          onNameChange={setName}
+          onNameBlur={() => setTouchedName(true)}
+          isActive={isActive}
+          onIsActiveChange={setIsActive}
+          showNameError={showNameError}
+        />
+      </form>
 
-          <label className="remember product-create-remember" htmlFor={`${formId}-active`}>
-            <input
-              id={`${formId}-active`}
-              type="checkbox"
-              checked={isActive}
-              onChange={(e) => setIsActive(e.target.checked)}
-            />
-            <span className="remember__box" />
-            <span className="remember__text">Актуален</span>
-          </label>
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
 
-          {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
-
-          <div className="product-form-actions">
-            <button className="btn btn--primary btn--form-action" type="submit">
-              Сохранить
-            </button>
-            <button
-              className="btn btn--secondary btn--form-action"
-              type="button"
-              onClick={() => navigate('/dictionaries/clients')}
-            >
-              Отмена
-            </button>
-          </div>
-        </form>
-      </section>
-    </main>
+      <ActionBar
+        primaryLabel="Создать"
+        submitFormId={formId}
+        onSecondary={() => navigate('/dictionaries/clients')}
+      />
+    </PageContainer>
   )
 }

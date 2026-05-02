@@ -1,14 +1,13 @@
 import { Link } from 'react-router-dom'
 
+/** Только внутри `FiltersPanel` (см. TZ Collection actions). */
 export type CollectionActionsProps = {
-  /** Маршрут страницы создания сущности. */
-  createHref: string
-  /** Подпись для aria и подсказки (по умолчанию «Создать»). */
-  createLabel?: string
-  /** Подпись для сброса фильтров (aria и подсказка). */
-  resetFiltersLabel?: string
-  /** Сброс фильтров в Query State (без API). */
+  /** Если не задан — кнопка «Создать» скрыта (напр. список пользователей). */
+  createHref?: string
   onResetFilters: () => void
+  createLabel?: string
+  resetFiltersLabel?: string
+  disabled?: boolean
 }
 
 function PlusIcon() {
@@ -27,41 +26,36 @@ function PlusIcon() {
 function ResetFiltersIcon() {
   return (
     <svg className="collection-actions__svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <polyline
-        points="23 4 23 10 17 10"
+      <path
+        d="M5 5h14l-4.5 6.2V17l-5 2.5v-7.3L5 5z"
         stroke="currentColor"
         strokeWidth="1.75"
-        strokeLinecap="round"
         strokeLinejoin="round"
-      />
-      <polyline
-        points="1 20 1 14 7 14"
-        stroke="currentColor"
-        strokeWidth="1.75"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
       <path
-        d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+        d="M15.2 14.3l4.8 4.8M20 14.3l-4.8 4.8"
         stroke="currentColor"
         strokeWidth="1.75"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   )
 }
 
 /**
- * Блок действий списка справочника: создание + сброс фильтров (иконки).
- * Размещается в одной строке с фильтрами, справа.
+ * Действия над коллекцией в правой части `FiltersPanel`: сброс фильтров (secondary), создание (primary +).
+ * Без API; reset только через `onResetFilters` (Query State). Сортировка при сбросе не меняется (см. ТЗ).
  */
 export function CollectionActions({
   createHref,
+  onResetFilters,
   createLabel = 'Создать',
   resetFiltersLabel = 'Сбросить фильтры',
-  onResetFilters,
+  disabled,
 }: CollectionActionsProps) {
+  const inner = <PlusIcon />
+
   return (
     <div className="collection-actions">
       <button
@@ -70,17 +64,31 @@ export function CollectionActions({
         onClick={onResetFilters}
         aria-label={resetFiltersLabel}
         title={resetFiltersLabel}
+        disabled={disabled}
       >
         <ResetFiltersIcon />
       </button>
-      <Link
-        className="btn btn--primary collection-actions__icon-btn collection-actions__create"
-        to={createHref}
-        aria-label={createLabel}
-        title={createLabel}
-      >
-        <PlusIcon />
-      </Link>
+      {createHref ? (
+        disabled ? (
+          <span
+            className="btn btn--primary collection-actions__icon-btn collection-actions__create collection-actions__create--disabled"
+            aria-label={createLabel}
+            title={createLabel}
+            aria-disabled="true"
+          >
+            {inner}
+          </span>
+        ) : (
+          <Link
+            className="btn btn--primary collection-actions__icon-btn collection-actions__create"
+            to={createHref}
+            aria-label={createLabel}
+            title={createLabel}
+          >
+            {inner}
+          </Link>
+        )
+      ) : null}
     </div>
   )
 }

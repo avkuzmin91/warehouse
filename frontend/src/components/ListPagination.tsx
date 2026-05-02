@@ -6,6 +6,8 @@ type Props = {
   total: number
   onPageChange: (page: number) => void
   onLimitChange: (limit: ListQueryLimits) => void
+  /** Блокировка при загрузке списка (List Page Pattern). */
+  disabled?: boolean
 }
 
 function buildPageItems(totalPages: number, current: number): (number | 'ellipsis')[] {
@@ -23,7 +25,7 @@ function buildPageItems(totalPages: number, current: number): (number | 'ellipsi
   return items
 }
 
-export function ListPagination({ page, limit, total, onPageChange, onLimitChange }: Props) {
+export function ListPagination({ page, limit, total, onPageChange, onLimitChange, disabled = false }: Props) {
   const totalPages = Math.max(1, Math.ceil(total / limit) || 1)
   const pageItems = buildPageItems(totalPages, page)
 
@@ -34,7 +36,7 @@ export function ListPagination({ page, limit, total, onPageChange, onLimitChange
           <button
             className="btn btn--secondary list-pagination__btn"
             type="button"
-            disabled={page <= 1}
+            disabled={disabled || page <= 1}
             onClick={() => onPageChange(Math.max(1, page - 1))}
           >
             Назад
@@ -54,6 +56,7 @@ export function ListPagination({ page, limit, total, onPageChange, onLimitChange
                       ? 'list-pagination__page list-pagination__page--current'
                       : 'list-pagination__page'
                   }
+                  disabled={disabled}
                   onClick={() => onPageChange(item)}
                   aria-current={item === page ? 'page' : undefined}
                 >
@@ -65,7 +68,7 @@ export function ListPagination({ page, limit, total, onPageChange, onLimitChange
           <button
             className="btn btn--secondary list-pagination__btn"
             type="button"
-            disabled={page >= totalPages}
+            disabled={disabled || page >= totalPages}
             onClick={() => onPageChange(Math.min(totalPages, page + 1))}
           >
             Вперёд
@@ -78,20 +81,23 @@ export function ListPagination({ page, limit, total, onPageChange, onLimitChange
           из {total}
         </span>
       </div>
-      <label className="list-pagination__limit">
-        <span className="list-pagination__limit-label">Записей на странице</span>
-        <select
-          className="field-input list-pagination__select"
-          value={limit}
-          onChange={(event) => {
-            onLimitChange(Number(event.target.value) as ListQueryLimits)
-          }}
-        >
-          <option value={20}>20</option>
-          <option value={50}>50</option>
-          <option value={100}>100</option>
-        </select>
-      </label>
+      <div className="list-pagination__limit">
+        <div className="list-pagination__select-wrap">
+          <select
+            className="field-input list-pagination__select"
+            value={limit}
+            aria-label="Записей на странице"
+            disabled={disabled}
+            onChange={(event) => {
+              onLimitChange(Number(event.target.value) as ListQueryLimits)
+            }}
+          >
+              <option value={20}>20 строк</option>
+              <option value={50}>50 строк</option>
+              <option value={100}>100 строк</option>
+            </select>
+        </div>
+      </div>
     </div>
   )
 }

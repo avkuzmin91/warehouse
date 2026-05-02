@@ -1,13 +1,12 @@
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
 
 /** Заглушка: ТЗ «Учет товаров» → /inventory */
 export function InventoryPage() {
   return (
-    <main className="page page--center">
-      <section className="auth-card home-card">
-        <Breadcrumbs />
-        <p className="auth-card__subtitle">Раздел в разработке</p>
-      </section>
-    </main>
+    <PageContainer maxWidth={520} cardClassName="home-card">
+      <Breadcrumbs />
+      <p className="auth-card__subtitle">Раздел в разработке</p>
+    </PageContainer>
   )
 }

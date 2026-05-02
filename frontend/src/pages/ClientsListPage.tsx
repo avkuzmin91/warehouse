@@ -3,26 +3,31 @@ import { useNavigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { CollectionActions } from '../components/CollectionActions'
 import { FiltersPanel, type FilterFieldConfig } from '../components/FiltersPanel'
+import { ListPageLayout } from '../components/ListPageLayout'
 import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
-import { getClients } from '../api'
-import type { DictionaryItem } from '../api'
+import {
+  buildActualityFilterSelectOptions,
+  fetchRecordActualityFilterItems,
+  getClients,
+  type DictionaryItem,
+  type RecordActualityFilterItem,
+} from '../api'
 
-const CLIENT_FILTER_KEYS = ['search', 'is_active'] as const
+const CLIENT_FILTER_KEYS = ['search', 'actuality_id', 'date_from', 'date_to'] as const
 
-const clientFilterFields: FilterFieldConfig[] = [
-  { name: 'search', type: 'text', placeholder: 'Поиск...' },
-  {
-    name: 'is_active',
-    type: 'select',
-    options: [
-      { value: '', label: 'Статус' },
-      { value: 'true', label: 'Да' },
-      { value: 'false', label: 'Нет' },
-    ],
-  },
-]
+function clientFilterFields(actualityItems: RecordActualityFilterItem[]): FilterFieldConfig[] {
+  return [
+    { name: 'search', type: 'text', placeholder: 'Поиск...' },
+    {
+      name: 'actuality_id',
+      type: 'dictionary_autocomplete',
+      options: buildActualityFilterSelectOptions(actualityItems, 'Актуальность'),
+    },
+    { type: 'date_range', placeholder: 'Дата создания' },
+  ]
+}
 
 function formatDateDdMmYyyy(iso: string) {
   const d = new Date(iso)
@@ -43,6 +48,22 @@ export function ClientsListPage() {
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [actualityItems, setActualityItems] = useState<RecordActualityFilterItem[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchRecordActualityFilterItems()
+      .then((rows) => {
+        if (!cancelled) setActualityItems(rows)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const filterFields = useMemo(() => clientFilterFields(actualityItems), [actualityItems])
 
   const clientColumns: TableColumn<DictionaryItem>[] = useMemo(
     () => [
@@ -71,7 +92,9 @@ export function ClientsListPage() {
       page: apiParams.page,
       limit: apiParams.limit,
       search: apiParams.search,
-      is_active: apiParams.is_active,
+      actuality_id: apiParams.actuality_id,
+      date_from: apiParams.date_from,
+      date_to: apiParams.date_to,
       sort: apiParams.sort,
     })
       .then((res) => {
@@ -94,35 +117,44 @@ export function ClientsListPage() {
     return () => {
       cancelled = true
     }
-  }, [apiParams, query.limit, query.page, setPage])
+  }, [apiParams, query.limit, query.page, setPage, reloadKey])
 
   return (
-    <main className="page page--center">
-      <section className="auth-card users-card product-dict-card">
-        <Breadcrumbs />
-
+    <ListPageLayout
+      wrapWithPageContainer
+      pageContainerProps={{ cardClassName: 'users-card product-dict-card' }}
+      breadcrumbs={<Breadcrumbs />}
+      filters={
         <FiltersPanel
-          fields={clientFilterFields}
+          disabled={loading}
+          fields={filterFields}
           values={{
             search: query.filters.search,
-            is_active: query.filters.is_active,
+            actuality_id: query.filters.actuality_id,
+            date_from: query.filters.date_from,
+            date_to: query.filters.date_to,
           }}
           onTextFilterDebounced={(name, value) => {
             if (name === 'search') setFilters({ search: value || undefined })
           }}
-          onSelectChange={(_name, value) => {
-            setFilters({
-              is_active: value === null || value === undefined ? undefined : Boolean(value),
-            })
+          onSelectChange={(name, value) => {
+            if (name === 'actuality_id') {
+              setFilters({ actuality_id: value ?? undefined })
+            }
           }}
+          onDateRangeChange={(next) =>
+            setFilters({ date_from: next.date_from, date_to: next.date_to })
+          }
           actions={
             <CollectionActions
               createHref="/dictionaries/clients/new"
               onResetFilters={resetFilters}
+              disabled={loading}
             />
           }
         />
-
+      }
+      table={
         <Table<DictionaryItem>
           columns={clientColumns}
           data={items}
@@ -132,17 +164,22 @@ export function ClientsListPage() {
           onSortClick={cycleSortField}
           wrapClassName="product-table-wrap"
         />
-
+      }
+      pagination={
         <ListPagination
           page={query.page}
           limit={query.limit}
           total={total}
           onPageChange={setPage}
           onLimitChange={setLimit}
+          disabled={loading}
         />
-
-        {error ? <p className="error-text">{error}</p> : null}
-      </section>
-    </main>
+      }
+      error={error || null}
+      onRetry={() => {
+        setError('')
+        setReloadKey((k) => k + 1)
+      }}
+    />
   )
 }

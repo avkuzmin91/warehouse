@@ -1,9 +1,12 @@
 export const API_BASE_URL = 'http://127.0.0.1:8000'
 
+/** ID «Актуален» в системном справочнике актуальности (совпадает с backend `RECORD_ACTUALITY_YES_ID`). */
+export const RECORD_ACTUALITY_YES_ID = '00000000-0000-4000-8000-000000000001'
+
 export type User = {
   id: string
   email: string
-  role: 'user' | 'manager' | 'admin'
+  role: 'user' | 'manager' | 'admin' | 'client'
 }
 
 type AuthResponse = {
@@ -13,7 +16,7 @@ type AuthResponse = {
 export type UserListItem = {
   id: string
   email: string
-  role: 'user' | 'manager' | 'admin'
+  role: 'user' | 'manager' | 'admin' | 'client'
   created_at: string
 }
 
@@ -22,25 +25,38 @@ export type DictionaryItem = {
   name: string
   is_active: boolean
   created_at: string
-  creator: string | null
+  created_by: string | null
   updated_at: string | null
-  editor: string | null
+  updated_by: string | null
 }
 
-/** ТЗ: enum одежда/техника; в API: clothes / tech */
-export const PRODUCT_TYPE_LABELS = {
-  clothes: 'Одежда',
-  tech: 'Техника',
-} as const
+export type SizeItem = {
+  id: string
+  name: string
+  is_active: boolean
+  created_at: string
+  created_by: string | null
+  updated_at: string | null
+  updated_by: string | null
+}
 
-export type ProductType = keyof typeof PRODUCT_TYPE_LABELS
+export type SizeListResponse = {
+  items: SizeItem[]
+  total: number
+  page: number
+  limit: number
+}
 
 export type ProductItem = {
   id: string
   name: string
-  type: ProductType
+  type_id: string
+  type_name: string | null
   sku: string
-  supplier: string | null
+  client_id: string | null
+  client_name: string | null
+  supplier_id: string | null
+  supplier_name: string | null
   image_url: string | null
   /** Product: true = товар актуален, false = не актуален; по умолчанию true */
   is_active: boolean
@@ -205,7 +221,10 @@ export function getUsers() {
   return request<UserListItem[]>('/users')
 }
 
-export function updateUserRole(userId: string, role: 'user' | 'manager') {
+/** Роли, которые можно назначить через PATCH /users/:id/role (не admin). */
+export type AssignableUserRole = 'user' | 'manager' | 'client'
+
+export function updateUserRole(userId: string, role: AssignableUserRole) {
   return request<{ message: string }>(`/users/${userId}/role`, {
     method: 'PATCH',
     body: JSON.stringify({ role }),
@@ -229,8 +248,28 @@ export type DictionaryListQueryParams = {
   page?: number
   limit?: number
   search?: string
-  is_active?: boolean
+  actuality_id?: string
   sort?: string
+  date_from?: string
+  date_to?: string
+}
+
+/** Системный справочник для фильтра актуальности (не отображается в разделе справочников). */
+export type RecordActualityFilterItem = {
+  id: string
+  name: string
+}
+
+export function fetchRecordActualityFilterItems() {
+  return request<RecordActualityFilterItem[]>('/system/record-actuality')
+}
+
+/** Опции `<select>` фильтра актуальности (как у справочных селектов). */
+export function buildActualityFilterSelectOptions(
+  items: RecordActualityFilterItem[],
+  placeholderLabel: string,
+): { value: string; label: string }[] {
+  return [{ value: '', label: placeholderLabel }, ...items.map((i) => ({ value: i.id, label: i.name }))]
 }
 
 /** Список клиентов с пагинацией (GET /clients) */
@@ -239,29 +278,133 @@ export function getClients(params?: DictionaryListQueryParams) {
   if (params?.page != null) sp.set('page', String(params.page))
   if (params?.limit != null) sp.set('limit', String(params.limit))
   if (params?.search != null && params.search.trim() !== '') sp.set('search', params.search.trim())
-  if (params?.is_active === true || params?.is_active === false) {
-    sp.set('is_active', String(params.is_active))
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
+    sp.set('date_from', params.date_from.trim())
+  }
+  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
+    sp.set('date_to', params.date_to.trim())
   }
   if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
   const q = sp.toString()
   return request<DictionaryListResponse>(q ? `/clients?${q}` : '/clients')
 }
 
-export function getDictionary(kind: 'colors' | 'sizes') {
-  return request<DictionaryItem[]>(`/${kind}`)
+export type SizeListQueryParams = {
+  page?: number
+  limit?: number
+  name?: string
+  actuality_id?: string
+  sort?: string
 }
 
-export function getDictionaryItem(
-  kind: 'clients' | 'colors' | 'sizes',
-  id: string,
+export function getSizes(params?: SizeListQueryParams) {
+  const sp = new URLSearchParams()
+  if (params?.page != null) sp.set('page', String(params.page))
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
+  const q = sp.toString()
+  return request<SizeListResponse>(q ? `/sizes?${q}` : '/sizes')
+}
+
+export function getSize(id: string) {
+  return request<SizeItem>(`/sizes/${id}`)
+}
+
+export function createSize(payload: { name: string; is_active: boolean }) {
+  return request<{ message: string }>('/sizes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateSize(id: string, payload: { name?: string; is_active?: boolean }) {
+  return request<{ message: string }>(`/sizes/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Параметры списка простых справочников (GET с пагинацией): цвета, типы товаров, поставщики */
+export type SimpleDictionaryListParams = {
+  page?: number
+  limit?: number
+  name?: string
+  search?: string
+  actuality_id?: string
+  sort?: string
+  date_from?: string
+  date_to?: string
+}
+
+export function fetchSimpleDictionaryPage(
+  apiPath: string,
+  nameQueryKey: 'name' | 'search',
+  params?: SimpleDictionaryListParams,
 ) {
+  const sp = new URLSearchParams()
+  if (params?.page != null) sp.set('page', String(params.page))
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  if (nameQueryKey === 'name' && params?.name != null && params.name.trim() !== '') {
+    sp.set('name', params.name.trim())
+  }
+  if (nameQueryKey === 'search' && params?.search != null && params.search.trim() !== '') {
+    sp.set('search', params.search.trim())
+  }
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
+    sp.set('date_from', params.date_from.trim())
+  }
+  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
+    sp.set('date_to', params.date_to.trim())
+  }
+  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
+  const q = sp.toString()
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<DictionaryListResponse>(q ? `${path}?${q}` : path)
+}
+
+export function getSimpleDictionaryById(apiPath: string, id: string) {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<DictionaryItem>(`${path}/${id}`)
+}
+
+export function createSimpleDictionaryItem(
+  apiPath: string,
+  payload: { name: string; is_active: boolean },
+) {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<{ message: string }>(path, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateSimpleDictionaryItem(
+  apiPath: string,
+  id: string,
+  payload: { name?: string; is_active?: boolean },
+) {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<{ message: string }>(`${path}/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getDictionaryItem(kind: 'clients', id: string) {
   return request<DictionaryItem>(`/${kind}/${id}`)
 }
 
-export function createDictionaryItem(
-  kind: 'clients' | 'colors' | 'sizes',
-  payload: { name: string; is_active: boolean },
-) {
+export function createDictionaryItem(kind: 'clients', payload: { name: string; is_active: boolean }) {
   return request<{ message: string }>(`/${kind}`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -269,7 +412,7 @@ export function createDictionaryItem(
 }
 
 export function updateDictionaryItem(
-  kind: 'clients' | 'colors' | 'sizes',
+  kind: 'clients',
   id: string,
   payload: { name?: string; is_active?: boolean },
 ) {
@@ -279,35 +422,77 @@ export function updateDictionaryItem(
   })
 }
 
-export function deleteDictionaryItem(kind: 'clients' | 'colors' | 'sizes', id: string) {
-  return request<{ message: string }>(`/${kind}/${id}`, {
-    method: 'DELETE',
+export async function fetchActiveDictionaryItems(apiPath: string): Promise<DictionaryItem[]> {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  const nameQueryKey: 'name' | 'search' = path === '/clients' ? 'search' : 'name'
+  const res = await fetchSimpleDictionaryPage(path, nameQueryKey, {
+    page: 1,
+    limit: 100,
+    actuality_id: RECORD_ACTUALITY_YES_ID,
+    sort: 'name_asc',
   })
+  return res.items
+}
+
+/** Все записи справочника для фильтров списков (активные и неактивные), с постраничной подгрузкой. */
+export async function fetchAllDictionaryItemsForFilter(
+  apiPath: string,
+  nameQueryKey: 'name' | 'search' = 'name',
+): Promise<DictionaryItem[]> {
+  const limit = 100
+  let page = 1
+  const all: DictionaryItem[] = []
+  const maxPages = 50
+  while (page <= maxPages) {
+    const res = await fetchSimpleDictionaryPage(apiPath, nameQueryKey, {
+      page,
+      limit,
+      sort: 'name_asc',
+    })
+    all.push(...res.items)
+    if (res.items.length < limit || all.length >= res.total) break
+    page += 1
+  }
+  return all
 }
 
 export type ProductListQueryParams = {
   page?: number
   limit?: number
-  search?: string
+  name?: string
   sku?: string
-  supplier?: string
-  type?: ProductType
-  is_active?: boolean
+  type_id?: string
+  client_id?: string
+  supplier_id?: string
+  actuality_id?: string
   sort?: string
+  date_from?: string
+  date_to?: string
 }
 
 export function getProducts(params?: ProductListQueryParams) {
   const sp = new URLSearchParams()
   if (params?.page != null) sp.set('page', String(params.page))
   if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (params?.search != null && params.search.trim() !== '') sp.set('search', params.search.trim())
+  if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
   if (params?.sku != null && params.sku.trim() !== '') sp.set('sku', params.sku.trim())
-  if (params?.supplier != null && params.supplier.trim() !== '') {
-    sp.set('supplier', params.supplier.trim())
+  if (params?.type_id != null && params.type_id.trim() !== '') {
+    sp.set('type_id', params.type_id.trim())
   }
-  if (params?.type === 'clothes' || params?.type === 'tech') sp.set('type', params.type)
-  if (params?.is_active === true || params?.is_active === false) {
-    sp.set('is_active', String(params.is_active))
+  if (params?.client_id != null && params.client_id.trim() !== '') {
+    sp.set('client_id', params.client_id.trim())
+  }
+  if (params?.supplier_id != null && params.supplier_id.trim() !== '') {
+    sp.set('supplier_id', params.supplier_id.trim())
+  }
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
+    sp.set('date_from', params.date_from.trim())
+  }
+  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
+    sp.set('date_to', params.date_to.trim())
   }
   if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
   const q = sp.toString()
@@ -320,17 +505,21 @@ export function getProduct(id: string) {
 
 export function createProduct(payload: {
   name: string
-  type: ProductType
+  type_id: string
   sku: string
-  supplier: string
+  client_id: string
+  supplier_id?: string | null
   is_active: boolean
   image?: File | null
 }) {
   const form = new FormData()
   form.append('name', payload.name)
-  form.append('type', payload.type)
+  form.append('type_id', payload.type_id)
   form.append('sku', payload.sku)
-  form.append('supplier', payload.supplier)
+  form.append('client_id', String(payload.client_id).trim())
+  if (payload.supplier_id != null && String(payload.supplier_id).trim() !== '') {
+    form.append('supplier_id', String(payload.supplier_id).trim())
+  }
   form.append('is_active', String(payload.is_active))
   if (payload.image) {
     form.append('image', payload.image)
@@ -345,18 +534,24 @@ export function updateProduct(
   id: string,
   payload: {
     name?: string
-    type?: ProductType
+    type_id?: string
     sku?: string
-    supplier?: string
+    client_id?: string | null
+    supplier_id?: string | null
     is_active?: boolean
     image?: File | null
   },
 ) {
   const form = new FormData()
   if (payload.name !== undefined) form.append('name', payload.name)
-  if (payload.type !== undefined) form.append('type', payload.type)
+  if (payload.type_id !== undefined) form.append('type_id', payload.type_id)
   if (payload.sku !== undefined) form.append('sku', payload.sku)
-  if (payload.supplier !== undefined) form.append('supplier', payload.supplier)
+  if (payload.client_id !== undefined) {
+    form.append('client_id', payload.client_id != null ? String(payload.client_id).trim() : '')
+  }
+  if (payload.supplier_id !== undefined) {
+    form.append('supplier_id', payload.supplier_id != null ? String(payload.supplier_id).trim() : '')
+  }
   if (payload.is_active !== undefined) form.append('is_active', String(payload.is_active))
   if (payload.image) form.append('image', payload.image)
 

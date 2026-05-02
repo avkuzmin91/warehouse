@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
 import { me } from '../api'
 import { AccessDeniedPage } from '../pages/AccessDeniedPage'
 
@@ -34,12 +35,10 @@ export function AdminRoute({ children }: AdminRouteProps) {
 
   if (isAllowed === null) {
     return (
-      <main className="page">
-        <section className="auth-card lk-card">
-          <Breadcrumbs />
-          <p className="auth-card__subtitle">Проверка доступа...</p>
-        </section>
-      </main>
+      <PageContainer maxWidth={680}>
+        <Breadcrumbs />
+        <p className="auth-card__subtitle">Проверка доступа...</p>
+      </PageContainer>
     )
   }
 

@@ -1,12 +1,11 @@
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
 
 export function AccessDeniedPage() {
   return (
-    <main className="page page--center">
-      <section className="auth-card dict-hub-card">
-        <Breadcrumbs />
-        <p className="auth-card__subtitle">Доступ запрещён. Недостаточно прав. (403)</p>
-      </section>
-    </main>
+    <PageContainer maxWidth={520} cardClassName="dict-hub-card">
+      <Breadcrumbs />
+      <p className="auth-card__subtitle">Доступ запрещён. Недостаточно прав. (403)</p>
+    </PageContainer>
   )
 }

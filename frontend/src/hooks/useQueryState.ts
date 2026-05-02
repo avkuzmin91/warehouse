@@ -10,16 +10,31 @@ import {
   type ParsedListQuery,
 } from '../utils/queryState'
 
-export type UseQueryStateFilterKey = 'search' | 'sku' | 'supplier' | 'type' | 'is_active'
+export type UseQueryStateFilterKey =
+  | 'search'
+  | 'name'
+  | 'sku'
+  | 'supplier'
+  | 'type'
+  | 'type_id'
+  | 'client_id'
+  | 'supplier_id'
+  | 'actuality_id'
+  | 'date_from'
+  | 'date_to'
+  | 'users_role'
 
 export function useQueryState(options: { filterKeys: readonly UseQueryStateFilterKey[] }) {
   const { filterKeys } = options
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const query = useMemo(
-    () => parseListQueryFromSearchParams(searchParams, filterKeys),
-    [searchParams, filterKeys],
-  )
+  /** Строка query: стабильная при неизменном URL (объект searchParams меняет ссылку каждый рендер). */
+  const searchSnapshot = searchParams.toString()
+
+  const query = useMemo(() => {
+    const sp = new URLSearchParams(searchSnapshot)
+    return parseListQueryFromSearchParams(sp, filterKeys)
+  }, [searchSnapshot, filterKeys])
 
   const apiParams = useMemo(() => listQueryToApiParams(query), [query])
 
@@ -59,10 +74,17 @@ export function useQueryState(options: { filterKeys: readonly UseQueryStateFilte
             delete nextFilters[k]
           } else {
             if (k === 'search') nextFilters.search = v as string
+            else if (k === 'name') nextFilters.name = v as string
             else if (k === 'sku') nextFilters.sku = v as string
             else if (k === 'supplier') nextFilters.supplier = v as string
             else if (k === 'type') nextFilters.type = v as string
-            else if (k === 'is_active') nextFilters.is_active = v as boolean
+            else if (k === 'type_id') nextFilters.type_id = v as string
+            else if (k === 'client_id') nextFilters.client_id = v as string
+            else if (k === 'supplier_id') nextFilters.supplier_id = v as string
+            else if (k === 'actuality_id') nextFilters.actuality_id = v as string
+            else if (k === 'date_from') nextFilters.date_from = v as string | undefined
+            else if (k === 'date_to') nextFilters.date_to = v as string | undefined
+            else if (k === 'users_role') nextFilters.users_role = v as string
           }
         }
         return { ...prev, filters: nextFilters, page: 1 }
@@ -93,10 +115,17 @@ export function useQueryState(options: { filterKeys: readonly UseQueryStateFilte
       const nextFilters: ListFilters = { ...prev.filters }
       for (const k of filterKeys) {
         if (k === 'search') delete nextFilters.search
+        if (k === 'name') delete nextFilters.name
         if (k === 'sku') delete nextFilters.sku
         if (k === 'supplier') delete nextFilters.supplier
         if (k === 'type') delete nextFilters.type
-        if (k === 'is_active') delete nextFilters.is_active
+        if (k === 'type_id') delete nextFilters.type_id
+        if (k === 'client_id') delete nextFilters.client_id
+        if (k === 'supplier_id') delete nextFilters.supplier_id
+        if (k === 'actuality_id') delete nextFilters.actuality_id
+        if (k === 'date_from') delete nextFilters.date_from
+        if (k === 'date_to') delete nextFilters.date_to
+        if (k === 'users_role') delete nextFilters.users_role
       }
       return { ...prev, filters: nextFilters, page: 1 }
     })

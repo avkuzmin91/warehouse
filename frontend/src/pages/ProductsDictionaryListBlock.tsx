@@ -1,39 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { CollectionActions } from '../components/CollectionActions'
 import { FiltersPanel, type FilterFieldConfig } from '../components/FiltersPanel'
+import { ListPageLayout } from '../components/ListPageLayout'
 import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
-import { API_BASE_URL, getProducts, PRODUCT_TYPE_LABELS } from '../api'
+import {
+  API_BASE_URL,
+  buildActualityFilterSelectOptions,
+  fetchAllDictionaryItemsForFilter,
+  fetchRecordActualityFilterItems,
+  getProducts,
+  type DictionaryItem,
+  type RecordActualityFilterItem,
+} from '../api'
 import type { ProductItem } from '../api'
 
-const PRODUCT_FILTER_KEYS = ['search', 'type', 'sku', 'supplier', 'is_active'] as const
-
-const productFilterFields: FilterFieldConfig[] = [
-  { name: 'search', type: 'text', placeholder: 'Поиск по названию' },
-  {
-    name: 'type',
-    type: 'select',
-    options: [
-      { value: '', label: 'Тип' },
-      { value: 'clothes', label: 'Одежда' },
-      { value: 'tech', label: 'Техника' },
-    ],
-  },
-  { name: 'sku', type: 'text', placeholder: 'Артикул' },
-  { name: 'supplier', type: 'text', placeholder: 'Поставщик' },
-  {
-    name: 'is_active',
-    type: 'select',
-    options: [
-      { value: '', label: 'Актуален' },
-      { value: 'true', label: 'Да' },
-      { value: 'false', label: 'Нет' },
-    ],
-  },
-]
+const PRODUCT_FILTER_KEYS = [
+  'name',
+  'type_id',
+  'sku',
+  'client_id',
+  'supplier_id',
+  'actuality_id',
+  'date_from',
+  'date_to',
+] as const
 
 function formatDateDdMmYyyy(iso: string) {
   const d = new Date(iso)
@@ -45,24 +39,42 @@ function formatDateDdMmYyyy(iso: string) {
   })
 }
 
+function dictionarySelectOptions(items: DictionaryItem[], placeholder: string) {
+  return [
+    { value: '', label: placeholder },
+    ...items.map((i) => ({
+      value: i.id,
+      label: i.is_active ? i.name : `${i.name} (не актуален)`,
+    })),
+  ]
+}
+
 const productColumns: TableColumn<ProductItem>[] = [
-  { key: 'name', title: 'Название товара', sortable: true },
+  { key: 'name', title: 'Название', sortable: true },
   {
     key: 'type',
-    title: 'Тип',
+    title: 'Тип товара',
     sortable: true,
-    render: (_, row) => PRODUCT_TYPE_LABELS[row.type],
+    render: (_, row) => (row.type_name == null || row.type_name === '' ? '—' : row.type_name),
   },
-  { key: 'sku', title: 'Артикул товара', sortable: true },
+  { key: 'sku', title: 'Артикул', sortable: true },
+  {
+    key: 'client',
+    title: 'Клиент',
+    sortable: true,
+    render: (_, row) =>
+      row.client_name == null || row.client_name === '' ? '—' : row.client_name,
+  },
   {
     key: 'supplier',
     title: 'Поставщик',
     sortable: true,
-    render: (v) => (v == null || v === '' ? '—' : String(v)),
+    render: (_, row) =>
+      row.supplier_name == null || row.supplier_name === '' ? '—' : row.supplier_name,
   },
   {
     key: 'image_url',
-    title: 'Фото товара',
+    title: 'Фото',
     render: (_, row) =>
       row.image_url ? (
         <img
@@ -104,16 +116,87 @@ export function ProductsDictionaryListBlock() {
   const { query, apiParams, setFilters, setPage, setLimit, cycleSortField, resetFilters } =
     useQueryState({ filterKeys: PRODUCT_FILTER_KEYS })
 
+  const [productTypes, setProductTypes] = useState<DictionaryItem[]>([])
+  const [clients, setClients] = useState<DictionaryItem[]>([])
+  const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
+  const [actualityItems, setActualityItems] = useState<RecordActualityFilterItem[]>([])
+
   const [products, setProducts] = useState<ProductItem[]>([])
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      fetchAllDictionaryItemsForFilter('/product-types', 'name'),
+      fetchAllDictionaryItemsForFilter('/clients', 'search'),
+      fetchAllDictionaryItemsForFilter('/suppliers', 'name'),
+      fetchRecordActualityFilterItems(),
+    ])
+      .then(([pt, cl, sup, act]) => {
+        if (!cancelled) {
+          setProductTypes(pt)
+          setClients(cl)
+          setSuppliers(sup)
+          setActualityItems(act)
+        }
+      })
+      .catch(() => {
+        /* список фильтров подгрузится при следующем открытии; таблица покажет ошибку API */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const productFilterFields: FilterFieldConfig[] = useMemo(
+    () => [
+      { name: 'name', type: 'text', placeholder: 'Название' },
+      {
+        name: 'type_id',
+        type: 'dictionary_autocomplete',
+        options: dictionarySelectOptions(productTypes, 'Тип товара'),
+      },
+      { name: 'sku', type: 'text', placeholder: 'Артикул' },
+      {
+        name: 'client_id',
+        type: 'dictionary_autocomplete',
+        options: dictionarySelectOptions(clients, 'Клиент'),
+      },
+      {
+        name: 'supplier_id',
+        type: 'dictionary_autocomplete',
+        options: dictionarySelectOptions(suppliers, 'Поставщик'),
+      },
+      {
+        name: 'actuality_id',
+        type: 'dictionary_autocomplete',
+        options: buildActualityFilterSelectOptions(actualityItems, 'Актуальность'),
+      },
+      { type: 'date_range', placeholder: 'Дата создания' },
+    ],
+    [productTypes, clients, suppliers, actualityItems],
+  )
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
-    getProducts(apiParams)
+    getProducts({
+      page: apiParams.page,
+      limit: apiParams.limit,
+      name: apiParams.name,
+      sku: apiParams.sku,
+      type_id: apiParams.type_id,
+      client_id: apiParams.client_id,
+      supplier_id: apiParams.supplier_id,
+      actuality_id: apiParams.actuality_id,
+      date_from: apiParams.date_from,
+      date_to: apiParams.date_to,
+      sort: apiParams.sort,
+    })
       .then((res) => {
         if (cancelled) return
         setProducts(res.items)
@@ -134,63 +217,88 @@ export function ProductsDictionaryListBlock() {
     return () => {
       cancelled = true
     }
-  }, [apiParams, query.limit, query.page, setPage])
+  }, [apiParams, query.limit, query.page, setPage, reloadKey])
 
   return (
-    <>
-      <Breadcrumbs />
-
-      <FiltersPanel
-        fields={productFilterFields}
-        values={{
-          search: query.filters.search,
-          sku: query.filters.sku,
-          supplier: query.filters.supplier,
-          type: query.filters.type,
-          is_active: query.filters.is_active,
-        }}
-        onTextFilterDebounced={(name, value) => {
-          const v = value || undefined
-          if (name === 'search') setFilters({ search: v })
-          else if (name === 'sku') setFilters({ sku: v })
-          else setFilters({ supplier: v })
-        }}
-        onSelectChange={(name, value) => {
-          if (name === 'type') {
-            setFilters({ type: value === null ? undefined : String(value) })
-          } else {
-            setFilters({
-              is_active: value === null || value === undefined ? undefined : Boolean(value),
-            })
+    <ListPageLayout
+      wrapWithPageContainer={false}
+      breadcrumbs={<Breadcrumbs />}
+      filters={
+        <FiltersPanel
+          disabled={loading}
+          fields={productFilterFields}
+          values={{
+            name: query.filters.name,
+            sku: query.filters.sku,
+            type_id: query.filters.type_id,
+            client_id: query.filters.client_id,
+            supplier_id: query.filters.supplier_id,
+            actuality_id: query.filters.actuality_id,
+            date_from: query.filters.date_from,
+            date_to: query.filters.date_to,
+          }}
+          onTextFilterDebounced={(name, value) => {
+            const v = value || undefined
+            if (name === 'name') setFilters({ name: v })
+            else if (name === 'sku') setFilters({ sku: v })
+          }}
+          onSelectChange={(name, value) => {
+            if (name === 'actuality_id') {
+              setFilters({
+                actuality_id: value === null || value === undefined ? undefined : String(value),
+              })
+            } else if (name === 'type_id') {
+              setFilters({
+                type_id: value === null || value === undefined ? undefined : String(value),
+              })
+            } else if (name === 'client_id') {
+              setFilters({
+                client_id: value === null || value === undefined ? undefined : String(value),
+              })
+            } else if (name === 'supplier_id') {
+              setFilters({
+                supplier_id: value === null || value === undefined ? undefined : String(value),
+              })
+            }
+          }}
+          onDateRangeChange={(next) =>
+            setFilters({ date_from: next.date_from, date_to: next.date_to })
           }
-        }}
-        actions={
-          <CollectionActions
-            createHref="/dictionaries/products/new"
-            onResetFilters={resetFilters}
-          />
-        }
-      />
-
-      <Table<ProductItem>
-        columns={productColumns}
-        data={products}
-        loading={loading}
-        onRowClick={(row) => navigate(`/dictionaries/products/${row.id}`)}
-        sort={query.sort}
-        onSortClick={cycleSortField}
-        wrapClassName="product-table-wrap"
-      />
-
-      <ListPagination
-        page={query.page}
-        limit={query.limit}
-        total={total}
-        onPageChange={setPage}
-        onLimitChange={setLimit}
-      />
-
-      {error ? <p className="error-text">{error}</p> : null}
-    </>
+          actions={
+            <CollectionActions
+              createHref="/dictionaries/products/new"
+              onResetFilters={resetFilters}
+              disabled={loading}
+            />
+          }
+        />
+      }
+      table={
+        <Table<ProductItem>
+          columns={productColumns}
+          data={products}
+          loading={loading}
+          onRowClick={(row) => navigate(`/dictionaries/products/${row.id}`)}
+          sort={query.sort}
+          onSortClick={cycleSortField}
+          wrapClassName="product-table-wrap"
+        />
+      }
+      pagination={
+        <ListPagination
+          page={query.page}
+          limit={query.limit}
+          total={total}
+          onPageChange={setPage}
+          onLimitChange={setLimit}
+          disabled={loading}
+        />
+      }
+      error={error || null}
+      onRetry={() => {
+        setError('')
+        setReloadKey((k) => k + 1)
+      }}
+    />
   )
 }

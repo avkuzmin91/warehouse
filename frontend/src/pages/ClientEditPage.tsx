@@ -2,33 +2,15 @@ import { useEffect, useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
+import { ActionBar } from '../components/ActionBar'
+import { ClientFormFields } from '../components/ClientFormFields'
+import { SystemInfoBlock, systemInfoFromApi, type SystemInfo } from '../components/SystemInfoBlock'
+import { CLIENT_FORM_CONFIG, mapClientFormApiError } from '../config/clientFormConfig'
 import { getDictionaryItem, updateDictionaryItem } from '../api'
 import type { DictionaryItem } from '../api'
 
-const REQUIRED_MSG = 'Заполните обязательные поля'
-const NOT_FOUND = 'Клиент не найден'
-
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'
-
-function mapClientUpdateError(msg: string): string {
-  if (msg.includes('уже существ') || msg.includes('названием')) {
-    return 'Клиент уже существует'
-  }
-  return msg
-}
-
-function formatLineDateTime(iso: string | null | undefined) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 export function ClientEditPage() {
   const { id: routeId = '' } = useParams<{ id: string }>()
@@ -41,10 +23,7 @@ export function ClientEditPage() {
   const [name, setName] = useState('')
   const [isActive, setIsActive] = useState(true)
 
-  const [createdAt, setCreatedAt] = useState<string | null>(null)
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
-  const [creator, setCreator] = useState<string | null>(null)
-  const [editor, setEditor] = useState<string | null>(null)
+  const [auditInfo, setAuditInfo] = useState<SystemInfo | null>(null)
 
   const [touchedName, setTouchedName] = useState(false)
   const [submitError, setSubmitError] = useState('')
@@ -63,10 +42,7 @@ export function ClientEditPage() {
     setLoadError('')
     setName('')
     setIsActive(true)
-    setCreatedAt(null)
-    setUpdatedAt(null)
-    setCreator(null)
-    setEditor(null)
+    setAuditInfo(null)
     setTouchedName(false)
     setSubmitError('')
 
@@ -75,10 +51,14 @@ export function ClientEditPage() {
         if (cancelled) return
         setName(row.name)
         setIsActive(row.is_active)
-        setCreatedAt(row.created_at)
-        setUpdatedAt(row.updated_at)
-        setCreator(row.creator)
-        setEditor(row.editor)
+        setAuditInfo(
+          systemInfoFromApi({
+            created_at: row.created_at,
+            created_by: row.created_by,
+            updated_at: row.updated_at,
+            updated_by: row.updated_by,
+          }),
+        )
         setLoadState('ok')
       })
       .catch((e) => {
@@ -89,7 +69,7 @@ export function ClientEditPage() {
           return
         }
         setLoadState('error')
-        setLoadError(msg || 'Ошибка загрузки')
+        setLoadError(msg || CLIENT_FORM_CONFIG.messages.loadFailed)
       })
     return () => {
       cancelled = true
@@ -105,7 +85,7 @@ export function ClientEditPage() {
     setSubmitError('')
     setTouchedName(true)
     if (nameInvalid) {
-      setSubmitError(REQUIRED_MSG)
+      setSubmitError(CLIENT_FORM_CONFIG.messages.requiredFields)
       return
     }
     try {
@@ -115,143 +95,88 @@ export function ClientEditPage() {
       })
       navigate('/dictionaries/clients')
     } catch (e) {
-      setSubmitError(e instanceof Error ? mapClientUpdateError(e.message) : 'Ошибка сохранения')
+      setSubmitError(e instanceof Error ? mapClientFormApiError(e.message) : CLIENT_FORM_CONFIG.messages.saveFailed)
     }
   }
 
   if (loadState === 'not_found') {
     return (
-      <main className="page page--center">
-        <section className="auth-card product-create-card">
-          <Breadcrumbs />
-          <p className="error-text" style={{ marginTop: 12 }}>
-            {NOT_FOUND}
-          </p>
-          <p style={{ marginTop: 8 }}>
-            <Link className="btn btn--secondary" to="/dictionaries/clients">
-              Назад
-            </Link>
-          </p>
-        </section>
-      </main>
+      <PageContainer maxWidth={640} cardClassName="product-create-card">
+        <Breadcrumbs />
+        <p className="error-text" style={{ marginTop: 12 }}>
+          {CLIENT_FORM_CONFIG.messages.notFound}
+        </p>
+        <p style={{ marginTop: 8 }}>
+          <Link className="btn btn--secondary" to="/dictionaries/clients">
+            Назад
+          </Link>
+        </p>
+      </PageContainer>
     )
   }
 
   if (loadState === 'error') {
     return (
-      <main className="page page--center">
-        <section className="auth-card product-create-card">
-          <Breadcrumbs />
-          <p className="error-text" style={{ marginTop: 12 }}>
-            {loadError}
-          </p>
-          <p style={{ marginTop: 8 }}>
-            <Link className="btn btn--secondary" to="/dictionaries/clients">
-              Назад
-            </Link>
-          </p>
-        </section>
-      </main>
+      <PageContainer maxWidth={640} cardClassName="product-create-card">
+        <Breadcrumbs />
+        <p className="error-text" style={{ marginTop: 12 }}>
+          {loadError}
+        </p>
+        <p style={{ marginTop: 8 }}>
+          <Link className="btn btn--secondary" to="/dictionaries/clients">
+            Назад
+          </Link>
+        </p>
+      </PageContainer>
     )
   }
 
   return (
-    <main className="page page--center">
-      <section className="auth-card product-create-card">
-        <Breadcrumbs />
+    <PageContainer maxWidth={640} cardClassName="product-create-card">
+      <Breadcrumbs />
 
-        <form
-          id={formId}
-          className="auth-form product-create-form"
-          onSubmit={onSubmit}
-          noValidate
-          aria-busy={isPending}
-        >
-          {isPending ? (
-            <div className="product-edit-loading-banner" role="status" aria-live="polite">
-              <span className="product-edit-spinner" aria-hidden />
-              <span>Загрузка…</span>
-              <Link className="product-edit-loading-back" to="/dictionaries/clients">
-                К списку
-              </Link>
-            </div>
-          ) : null}
+      <form
+        id={formId}
+        className="auth-form product-create-form"
+        onSubmit={onSubmit}
+        noValidate
+        aria-busy={isPending}
+      >
+        {isPending ? (
+          <div className="product-edit-loading-banner" role="status" aria-live="polite">
+            <span className="product-edit-spinner" aria-hidden />
+            <span>Загрузка…</span>
+            <Link className="product-edit-loading-back" to="/dictionaries/clients">
+              К списку
+            </Link>
+          </div>
+        ) : null}
 
-          <fieldset className="product-edit-fieldset" disabled={isPending}>
-            <label className="field-label" htmlFor={`${formId}-name`}>
-              Название клиента
-              <span className="field-label__required" aria-label="обязательное поле">
-                *
-              </span>
-            </label>
-            <input
-              id={`${formId}-name`}
-              className={`field-input${showNameError ? ' field-input--error' : ''}`}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => setTouchedName(true)}
-              autoComplete="off"
-              aria-invalid={showNameError ? true : undefined}
-            />
+        <fieldset className="product-edit-fieldset" disabled={isPending}>
+          <ClientFormFields
+            formId={formId}
+            name={name}
+            onNameChange={setName}
+            onNameBlur={() => setTouchedName(true)}
+            isActive={isActive}
+            onIsActiveChange={setIsActive}
+            showNameError={showNameError}
+            disabled={isPending}
+          />
+        </fieldset>
+      </form>
 
-            <label className="remember product-create-remember" htmlFor={`${formId}-active`}>
-              <input
-                id={`${formId}-active`}
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-              />
-              <span className="remember__box" />
-              <span className="remember__text">Актуален</span>
-            </label>
-          </fieldset>
+      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
 
-          {isFormEnabled ? (
-            <div
-              className="product-meta-block product-meta-block--record"
-              role="group"
-              aria-label="Информация о записи"
-            >
-              <p className="product-meta-block__title">Информация о записи</p>
-              <ul className="product-record-meta" role="list">
-                <li>
-                  <span className="product-record-meta__k">Создано</span>
-                  <span className="product-record-meta__v">{formatLineDateTime(createdAt)}</span>
-                </li>
-                <li>
-                  <span className="product-record-meta__k">Создал</span>
-                  <span className="product-record-meta__v">{creator || '—'}</span>
-                </li>
-                <li>
-                  <span className="product-record-meta__k">Последнее изменение</span>
-                  <span className="product-record-meta__v">{formatLineDateTime(updatedAt)}</span>
-                </li>
-                <li>
-                  <span className="product-record-meta__k">Изменил</span>
-                  <span className="product-record-meta__v">{editor || '—'}</span>
-                </li>
-              </ul>
-            </div>
-          ) : null}
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
 
-          {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
-
-          {isFormEnabled ? (
-            <div className="product-form-actions">
-              <button className="btn btn--primary btn--form-action" type="submit">
-                Сохранить
-              </button>
-              <button
-                className="btn btn--secondary btn--form-action"
-                type="button"
-                onClick={() => navigate('/dictionaries/clients')}
-              >
-                Отмена
-              </button>
-            </div>
-          ) : null}
-        </form>
-      </section>
-    </main>
+      {isFormEnabled ? (
+        <ActionBar
+          primaryLabel="Сохранить"
+          submitFormId={formId}
+          onSecondary={() => navigate('/dictionaries/clients')}
+        />
+      ) : null}
+    </PageContainer>
   )
 }

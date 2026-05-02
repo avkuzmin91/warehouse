@@ -7,6 +7,12 @@ import { DictionariesPage } from './pages/DictionariesPage'
 import { ClientCreatePage } from './pages/ClientCreatePage'
 import { ClientEditPage } from './pages/ClientEditPage'
 import { ClientsListPage } from './pages/ClientsListPage'
+import { SizeCreatePage } from './pages/SizeCreatePage'
+import { SizeEditPage } from './pages/SizeEditPage'
+import { SizesListPage } from './pages/SizesListPage'
+import { SimpleDictionaryListPage } from './pages/SimpleDictionaryListPage'
+import { SimpleDictionaryCreatePage } from './pages/SimpleDictionaryCreatePage'
+import { SimpleDictionaryEditPage } from './pages/SimpleDictionaryEditPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProductCreatePage } from './pages/ProductCreatePage'
 import { ProductEditPage } from './pages/ProductEditPage'
@@ -87,6 +93,102 @@ function App() {
           element={
             <AdminRoute>
               <ClientEditPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/sizes"
+          element={
+            <AdminRoute>
+              <SizesListPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/sizes/new"
+          element={
+            <AdminRoute>
+              <SizeCreatePage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/sizes/:id"
+          element={
+            <AdminRoute>
+              <SizeEditPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/colors"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryListPage entity="colors" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/colors/new"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryCreatePage entity="colors" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/colors/:id"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryEditPage entity="colors" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/product-types"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryListPage entity="product-types" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/product-types/new"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryCreatePage entity="product-types" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/product-types/:id"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryEditPage entity="product-types" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/suppliers"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryListPage entity="suppliers" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/suppliers/new"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryCreatePage entity="suppliers" />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/dictionaries/suppliers/:id"
+          element={
+            <AdminRoute>
+              <SimpleDictionaryEditPage entity="suppliers" />
             </AdminRoute>
           }
         />

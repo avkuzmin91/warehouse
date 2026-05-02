@@ -13,15 +13,19 @@ const STATIC: Record<string, string> = {
   clients: 'Клиенты',
   colors: 'Цвета',
   sizes: 'Размеры',
+  suppliers: 'Поставщики',
+  'product-types': 'Типы товаров',
 }
 
-const DICT_SECTIONS = new Set(['clients', 'colors', 'sizes', 'products'])
+const DICT_SECTIONS = new Set(['clients', 'colors', 'products', 'product-types', 'suppliers'])
 
 const CREATE_BY_PREV: Record<string, string> = {
   clients: 'Создание клиента',
   colors: 'Создание цвета',
   sizes: 'Создание размера',
   products: 'Создание товара',
+  suppliers: 'Создание поставщика',
+  'product-types': 'Создание типа товара',
 }
 
 function labelForSegment(segment: string, index: number, parts: string[]): string {
@@ -48,6 +52,50 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
     const s = parts[2] ?? ''
     if (s !== 'new' && s !== 'edit' && s.length > 0) {
       return 'Редактирование клиента'
+    }
+  }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'sizes' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование размера'
+    }
+  }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'colors' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование цвета'
+    }
+  }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'product-types' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование типа товара'
+    }
+  }
+  if (
+    parts[0] === 'dictionaries' &&
+    parts[1] === 'suppliers' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование поставщика'
     }
   }
   if (segment === 'new') {

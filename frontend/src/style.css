@@ -153,6 +153,61 @@ body {
   min-height: calc(100vh - var(--app-header-height));
 }
 
+.app-shell__outlet .page-shell {
+  min-height: calc(100vh - var(--app-header-height));
+}
+
+/* COMPONENT: Page container — единая оболочка страниц (не /auth) */
+.page-shell {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(6, 2, 22, 0.55) 0%, rgba(5, 0, 20, 0.35) 40%, rgba(5, 0, 20, 0.2) 100%);
+}
+
+.page-container {
+  width: 100%;
+  margin: 0 auto;
+  padding: clamp(12px, 2.2vw, 24px);
+  box-sizing: border-box;
+}
+
+@media (min-width: 480px) and (max-width: 900px) {
+  .page-container {
+    padding: clamp(16px, 2.5vw, 20px);
+  }
+}
+
+.page-container__card {
+  width: 100%;
+  border-radius: 14px;
+  padding: clamp(16px, 2.2vw, 24px);
+  border: 1px solid var(--card-border);
+  background: linear-gradient(160deg, rgba(23, 16, 57, 0.56), var(--card-bg));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 36px rgba(4, 0, 20, 0.42);
+  backdrop-filter: blur(10px);
+  box-sizing: border-box;
+}
+
+.page-container__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.page-container__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .page {
   min-height: 100vh;
   display: flex;
@@ -239,6 +294,25 @@ body {
 .field-input--error {
   border-color: rgba(255, 98, 120, 0.65);
   box-shadow: 0 0 0 1px rgba(255, 98, 120, 0.25);
+}
+
+.field-dropdown-chevron {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: rgba(186, 165, 245, 0.62);
+}
+
+.field-dropdown-chevron__svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
 .field-input--select {
@@ -429,17 +503,11 @@ body {
   font-size: 15px;
 }
 
-.lk-card {
-  max-width: 680px;
-}
-
 .lk-link {
   margin-bottom: 18px;
 }
 
 .home-card {
-  max-width: 520px;
-  margin: 0 auto;
   width: 100%;
   text-align: center;
 }
@@ -491,8 +559,7 @@ body {
 }
 
 .users-card {
-  max-width: 980px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .table-wrap {
@@ -558,6 +625,37 @@ body {
   padding: 20px 12px !important;
 }
 
+/* List Page: скелетон строк при первой загрузке без данных */
+.table-skeleton-row td {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+
+.table-skeleton-cell {
+  display: block;
+  height: 12px;
+  max-width: 100%;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(120, 90, 200, 0.12) 0%,
+    rgba(180, 150, 255, 0.22) 50%,
+    rgba(120, 90, 200, 0.12) 100%
+  );
+  background-size: 200% 100%;
+  animation: table-skeleton-shimmer 1.1s ease-in-out infinite;
+}
+
+@keyframes table-skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 .users-table {
   width: 100%;
   border-collapse: collapse;
@@ -592,6 +690,115 @@ body {
 .users-action-btn--danger {
   border-color: rgba(255, 98, 140, 0.45);
   color: #ffd6e1;
+}
+
+.users-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.users-role-menu {
+  position: relative;
+}
+
+.users-role-menu__trigger {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.users-role-menu__trigger:hover:not(:disabled) {
+  border-color: rgba(167, 120, 255, 0.88);
+  background: rgba(127, 56, 255, 0.22);
+  color: #fff;
+}
+
+.users-role-menu__trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+/* Позиция задаётся inline (fixed + top/left) — портал в body, не режется overflow у page-shell */
+.users-role-menu__list {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  min-width: 188px;
+  border-radius: 10px;
+  background: rgba(22, 14, 48, 0.98);
+  border: 1px solid rgba(123, 63, 255, 0.38);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.users-role-menu__option {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 9px 14px;
+  border: none;
+  background: transparent;
+  color: rgba(232, 226, 255, 0.94);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.users-role-menu__option:hover {
+  background: rgba(127, 56, 255, 0.3);
+}
+
+.users-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--field-border);
+  background: rgba(35, 24, 73, 0.42);
+  color: rgba(210, 200, 250, 0.72);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.users-icon-btn__svg {
+  width: 18px;
+  height: 18px;
+}
+
+.users-icon-btn--delete:hover:not(:disabled) {
+  border-color: rgba(255, 98, 140, 0.55);
+  background: rgba(255, 98, 120, 0.14);
+  color: #ffc8d8;
+}
+
+.users-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+.users-icon-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.users-page__action-error {
+  margin: 0 0 12px;
 }
 
 .lk-actions {
@@ -667,9 +874,7 @@ body {
 
 /* Хаб справочников: /dictionaries (только навигация) */
 .dict-hub-card {
-  max-width: 520px;
   width: 100%;
-  margin: 0 auto;
 }
 
 .dict-breadcrumbs {
@@ -743,7 +948,6 @@ body {
 
 /* Список товаров /dictionaries/products */
 .product-dict-card {
-  max-width: 1100px;
   width: 100%;
 }
 
@@ -778,7 +982,7 @@ body {
 }
 
 .product-table-wrap {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .users-table--interactive tbody tr {
@@ -890,7 +1094,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 10px;
+  gap: 14px;
   margin-bottom: 14px;
   /* Нативный select/dropdown ближе к тёмной теме приложения (Windows / Chromium) */
   color-scheme: dark;
@@ -905,6 +1109,189 @@ body {
   flex: 1 1 120px;
   min-width: 100px;
   max-width: 200px;
+}
+
+.list-filters__field--date-range {
+  flex: 1 1 120px;
+  min-width: 100px;
+  max-width: 200px;
+}
+
+/* Date Range Filter: одно поле «ДД.ММ.ГГГГ-ДД.ММ.ГГГГ», выбор в модалке (С / По) */
+.date-range-filter {
+  min-width: 0;
+  width: 100%;
+}
+
+.date-range-filter__trigger-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
+.date-range-filter__trigger.field-input {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 10px;
+  line-height: 1.2;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: rgba(232, 226, 255, 0.88);
+  background: rgba(25, 16, 56, 0.35);
+  border: 1px solid var(--field-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.date-range-filter__trigger:hover:not(:disabled) {
+  border-color: rgba(123, 63, 255, 0.45);
+}
+
+.date-range-filter__trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+.date-range-filter__trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.date-range-filter__trigger.field-input.date-range-filter__trigger--placeholder {
+  color: rgba(214, 202, 255, 0.5);
+  font-weight: 400;
+}
+
+.date-range-filter__trigger-wrap:has(.date-range-filter__clear) .date-range-filter__trigger.field-input {
+  padding-left: 36px;
+}
+
+.date-range-filter__clear {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(18, 12, 36, 0.55);
+  color: rgba(210, 200, 250, 0.7);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.date-range-filter__clear:hover:not(:disabled) {
+  color: var(--text-main);
+  background: rgba(127, 56, 255, 0.28);
+}
+
+.date-range-filter__clear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+.date-range-filter__clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.date-range-filter__clear-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.date-range-modal__title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(214, 202, 255, 0.72);
+  line-height: 1.25;
+}
+
+.date-range-modal__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.date-range-modal__field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+}
+
+.date-range-modal__short-label {
+  flex: 0 0 28px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(214, 202, 255, 0.5);
+  text-align: right;
+}
+
+.date-range-modal__input.field-input {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+  min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 14px;
+  border-radius: 10px;
+  color-scheme: dark;
+}
+
+.date-range-modal__error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.date-range-modal__actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.date-range-modal__actions .confirm-modal__btn {
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.confirm-modal.date-range-modal {
+  max-width: 380px;
+  padding: 14px 16px;
+  border-radius: 14px;
 }
 
 .list-filters__select-wrap {
@@ -957,8 +1344,7 @@ body {
   flex-shrink: 0;
 }
 
-.list-filters .list-filters__input.field-input,
-.list-filters .list-filters__select.field-input {
+.list-filters .list-filters__input.field-input {
   margin-bottom: 0;
   height: 34px;
   min-height: 34px;
@@ -969,15 +1355,38 @@ body {
   line-height: 1.2;
 }
 
+.list-filters .list-filters__select.field-input {
+  margin-bottom: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 28px 0 10px;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 10px;
+  line-height: 1.2;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-color: var(--field-bg);
+  cursor: pointer;
+}
+
 .list-filters .list-filters__input.field-input::placeholder {
   font-size: 14px;
   color: rgba(214, 202, 255, 0.42);
 }
 
-/* Селекты — тот же «тихий» тон, что и placeholder у текстовых полей */
+/* Селекты в фильтрах: как поля справочника — основной текст при выборе, приглушённый «плейсхолдер» */
 .list-filters .list-filters__select.field-input {
-  color: rgba(214, 202, 255, 0.5);
   accent-color: var(--primary);
+}
+
+.list-filters .list-filters__select.field-input.list-filters__select--empty {
+  color: rgba(214, 202, 255, 0.42);
+}
+
+.list-filters .list-filters__select.field-input:not(.list-filters__select--empty) {
+  color: rgba(232, 226, 255, 0.88);
 }
 
 /* Выпадающий список: тёмный фиолетовый фон и высокий контраст текста (Chromium, Firefox; Safari частично) */
@@ -998,13 +1407,89 @@ body {
 }
 
 .list-filters .list-filters__select.field-input:focus {
-  color: rgba(232, 226, 255, 0.78);
+  color: rgba(232, 226, 255, 0.92);
 }
 
-/* Отступ слева под крестик, не перебивается общим padding селекта */
+/* Отступ слева под крестик, справа под стрелку */
 .list-filters .list-filters__select-wrap--has-value .list-filters__select.field-input {
   padding-left: 36px;
-  padding-right: 10px;
+  padding-right: 28px;
+}
+
+.list-filters .list-filters__select-wrap .field-dropdown-chevron {
+  right: 8px;
+}
+
+.list-filters .list-filters__select-wrap .field-dropdown-chevron__svg {
+  width: 15px;
+  height: 15px;
+}
+
+.list-filters .list-filters__select.field-input:disabled + .field-dropdown-chevron {
+  opacity: 0.38;
+}
+
+/* Комбобокс фильтра по справочнику: ввод текста + подсказки из записей */
+.list-filters__combobox {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.list-filters__combobox--has-value .list-filters__combobox-input.field-input {
+  padding-left: 36px;
+}
+
+.list-filters .list-filters__combobox-input.field-input {
+  padding-right: 28px;
+}
+
+.list-filters__combobox .field-dropdown-chevron {
+  right: 8px;
+}
+
+.list-filters__combobox .field-dropdown-chevron__svg {
+  width: 15px;
+  height: 15px;
+}
+
+.list-filters__combobox-input.field-input:disabled + .field-dropdown-chevron {
+  opacity: 0.38;
+}
+
+.list-filters__combobox-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 60;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: rgba(22, 14, 48, 0.98);
+  border: 1px solid rgba(123, 63, 255, 0.38);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.list-filters__combobox-option {
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.25;
+  cursor: pointer;
+  color: rgba(232, 226, 255, 0.94);
+}
+
+.list-filters__combobox-option:hover,
+.list-filters__combobox-option--active {
+  background: rgba(127, 56, 255, 0.3);
+}
+
+.list-filters .list-filters__combobox-input.field-input::placeholder {
+  font-size: 14px;
+  color: rgba(214, 202, 255, 0.42);
 }
 
 .list-filters__actions {
@@ -1030,14 +1515,62 @@ body {
   width: 34px;
   height: 34px;
   min-width: 34px;
+  min-height: 34px;
+  max-height: 34px;
   padding: 0;
+  flex: 0 0 34px;
   flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.collection-actions__reset-filters {
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.collection-actions__reset-filters:hover:not(:disabled) {
+  border-color: rgba(177, 143, 255, 0.55);
+  background: rgba(123, 63, 255, 0.18);
+  color: var(--text-main);
+}
+
+.collection-actions__reset-filters:focus-visible {
+  outline: none;
+  border-color: rgba(177, 143, 255, 0.85);
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.25);
+}
+
+.collection-actions__create.btn--primary:hover:not(.collection-actions__create--disabled) {
+  filter: brightness(1.08);
+  box-shadow:
+    0 0 0 1px rgba(177, 143, 255, 0.45),
+    0 10px 24px rgba(95, 31, 208, 0.45);
 }
 
 .collection-actions__svg {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
+}
+
+.collection-actions__create--disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.list-page__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.list-page__error-text {
+  margin: 0;
 }
 
 @media (max-width: 640px) {
@@ -1056,10 +1589,15 @@ body {
 .list-pagination {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: flex-end;
   gap: 16px;
-  margin-top: 16px;
+  margin-top: 0;
+}
+
+/* Сразу под таблицей: зазор между таблицей и пагинацией (+10px к предыдущему варианту) */
+.product-table-wrap + .list-pagination {
+  margin-top: 2px;
 }
 
 .list-pagination__main {
@@ -1131,23 +1669,51 @@ body {
 
 .list-pagination__limit {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
 }
 
-.list-pagination__limit-label {
-  font-size: 13px;
-  color: var(--text-muted);
+/* Селект лимита — как у FilterSelect в строке фильтров (в т.ч. тёмный dropdown) */
+.list-pagination__select-wrap {
+  position: relative;
+  min-width: 0;
+  color-scheme: dark;
 }
 
-.list-pagination__select {
-  width: auto;
-  min-width: 88px;
-  height: 44px;
+.list-pagination .list-pagination__select.field-input {
   margin-bottom: 0;
+  height: 44px;
+  min-height: 44px;
   padding: 0 12px;
-  font-size: 15px;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 10px;
+  line-height: 1.2;
+  width: auto;
+  min-width: 120px;
+  color: rgba(214, 202, 255, 0.5);
+  accent-color: var(--primary);
+}
+
+.list-pagination .list-pagination__select.field-input:focus {
+  color: rgba(232, 226, 255, 0.78);
+}
+
+.list-pagination .list-pagination__select.field-input option {
+  background-color: #100818;
+  color: #f2ecff;
+  font-weight: 500;
+}
+
+.list-pagination .list-pagination__select.field-input option:checked {
+  background-color: rgba(110, 55, 195, 0.75);
+  color: #fff;
+}
+
+.list-pagination .list-pagination__select.field-input option:hover {
+  background-color: rgba(90, 45, 160, 0.55);
+  color: #fff;
 }
 
 /* Сортируемые заголовки таблицы */
@@ -1186,17 +1752,234 @@ body {
 
 /* /dictionaries/products/new */
 .product-create-card {
-  max-width: 640px;
   width: 100%;
-  margin: 0 auto;
+}
+
+/* Компактная форма в карточке сущности (не страницы /auth) */
+.page-container__card.product-create-card {
+  padding: clamp(12px, 1.6vw, 20px);
+}
+
+.product-create-form {
+  --entity-form-field-h: 42px;
+  --entity-form-fs: 15px;
+  --entity-form-radius: 10px;
+  --entity-form-gap: 12px;
+}
+
+.product-create-form .field-label {
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.product-create-form .field-label__required {
+  font-weight: 700;
 }
 
 .product-create-form .field-input {
-  margin-bottom: 18px;
+  height: var(--entity-form-field-h);
+  min-height: var(--entity-form-field-h);
+  padding: 0 12px;
+  margin-bottom: var(--entity-form-gap);
+  font-size: var(--entity-form-fs);
+  border-radius: var(--entity-form-radius);
+  line-height: 1.25;
+}
+
+.product-create-form .field-input:focus {
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.22);
+}
+
+.product-create-form .field-input--select {
+  min-height: var(--entity-form-field-h);
 }
 
 .product-create-form .field-hint {
-  margin: -4px 0 18px;
+  margin: -6px 0 var(--entity-form-gap);
+  font-size: 13px;
+}
+
+.page-container__card.product-create-card .remember__text {
+  font-size: 14px;
+}
+
+.page-container__card.product-create-card .product-form-actions {
+  margin-top: 4px;
+  gap: 10px;
+}
+
+.page-container__card.product-create-card .btn--form-action {
+  height: 44px;
+  min-height: 44px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.product-create-form .dictionary-form-combobox {
+  margin-bottom: var(--entity-form-gap);
+}
+
+.product-create-form .dictionary-form-combobox__input.field-input {
+  padding-right: 34px;
+}
+
+.product-create-form .dictionary-form-combobox--has-clear .dictionary-form-combobox__input.field-input {
+  padding-left: 38px;
+}
+
+.product-create-form .dictionary-form-combobox .field-dropdown-chevron {
+  right: 10px;
+}
+
+.product-create-form .dictionary-form-combobox .field-dropdown-chevron__svg {
+  width: 15px;
+  height: 15px;
+}
+
+.product-create-form .dictionary-form-combobox__clear.list-filters__select-clear {
+  left: 10px;
+}
+
+.product-create-form .dictionary-form-combobox__list {
+  top: calc(100% + 4px);
+  padding: 4px 0;
+  border-radius: 10px;
+}
+
+.product-create-form .dictionary-form-combobox__option {
+  padding: 7px 12px;
+  font-size: var(--entity-form-fs);
+  line-height: 1.3;
+}
+
+.product-create-form .file-field {
+  margin-bottom: var(--entity-form-gap);
+}
+
+.product-create-form .file-field__row {
+  min-height: var(--entity-form-field-h);
+  border-radius: var(--entity-form-radius);
+}
+
+.product-create-form .file-field__name--label {
+  padding: 0 12px;
+  font-size: var(--entity-form-fs);
+}
+
+.product-create-form .file-field__icon-btn {
+  width: var(--entity-form-field-h);
+  min-height: var(--entity-form-field-h);
+}
+
+.page-container__card.product-create-card .page-container__stack {
+  gap: 12px;
+}
+
+.page-container__card.product-create-card .client-form-fields__readonly-value {
+  min-height: 40px;
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.page-container__card.product-create-card .product-meta-block {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+}
+
+.page-container__card.product-create-card .product-meta-block__title {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.page-container__card.product-create-card .system-info-block__groups {
+  gap: 12px;
+}
+
+.page-container__card.product-create-card .system-info-block__group {
+  gap: 8px;
+}
+
+.page-container__card.product-create-card .product-record-meta {
+  gap: 8px;
+  font-size: 14px;
+}
+
+.page-container__card.product-create-card .product-edit-loading-banner {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.page-container__card.product-create-card .product-create-preview {
+  margin-bottom: 10px;
+}
+
+/* Комбобокс справочника в карточке товара (ввод + список подсказок) */
+.dictionary-form-combobox {
+  position: relative;
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.dictionary-form-combobox__input.field-input {
+  margin-bottom: 0;
+  width: 100%;
+  padding-right: 38px;
+}
+
+.dictionary-form-combobox__input.field-input:disabled + .field-dropdown-chevron {
+  opacity: 0.38;
+}
+
+.dictionary-form-combobox--has-clear .dictionary-form-combobox__input.field-input {
+  padding-left: 44px;
+}
+
+.dictionary-form-combobox .field-dropdown-chevron {
+  right: 11px;
+}
+
+.dictionary-form-combobox .field-dropdown-chevron__svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dictionary-form-combobox__clear.list-filters__select-clear {
+  left: 12px;
+}
+
+.dictionary-form-combobox__list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  border-radius: 14px;
+  background: rgba(22, 14, 48, 0.98);
+  border: 1px solid rgba(123, 63, 255, 0.38);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.dictionary-form-combobox__option {
+  padding: 10px 16px;
+  font-size: var(--fs-md);
+  line-height: 1.35;
+  cursor: pointer;
+  color: rgba(232, 226, 255, 0.94);
+}
+
+.dictionary-form-combobox__option:hover,
+.dictionary-form-combobox__option--active {
+  background: rgba(127, 56, 255, 0.28);
 }
 
 /* Поле «Фотография»: строка + иконка выбора справа */
@@ -1415,6 +2198,49 @@ body {
   letter-spacing: 0.02em;
 }
 
+.system-info-block__title {
+  margin-bottom: 14px;
+}
+
+.system-info-block__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.system-info-block__group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.system-info-block__group--secondary {
+  padding-top: 14px;
+  border-top: 1px solid var(--field-border);
+}
+
+.system-info-block__line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.action-bar {
+  width: 100%;
+}
+
+.action-bar__leading {
+  margin-right: auto;
+}
+
+.action-bar__trailing {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
 .product-meta-dates {
   display: flex;
   flex-direction: column;
@@ -1504,10 +2330,32 @@ body {
   padding: 18px;
 }
 
+.confirm-modal--compact {
+  max-width: 420px;
+  padding: 22px 24px;
+  box-shadow:
+    0 24px 48px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
 .confirm-modal__text {
   margin: 0 0 16px;
   color: var(--text-main);
   font-size: 18px;
+}
+
+.confirm-modal__text--lead {
+  margin-bottom: 20px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: rgba(232, 226, 255, 0.92);
+}
+
+.confirm-modal__emphasis {
+  font-weight: 700;
+  color: #f7f0ff;
+  word-break: break-all;
 }
 
 .confirm-modal__actions {
@@ -1515,17 +2363,137 @@ body {
   gap: 10px;
 }
 
+.confirm-modal__actions--row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.confirm-modal__btn {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 44px;
+  padding: 10px 20px;
+  width: auto;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+.confirm-modal__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.45);
+}
+
+.confirm-modal__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.confirm-modal__btn--ghost {
+  background: rgba(25, 18, 58, 0.55);
+  border-color: rgba(145, 106, 255, 0.42);
+  color: rgba(239, 231, 255, 0.95);
+}
+
+.confirm-modal__btn--ghost:hover:not(:disabled) {
+  border-color: rgba(177, 143, 255, 0.65);
+  background: rgba(127, 56, 255, 0.15);
+  color: #fff;
+}
+
+.confirm-modal__btn--danger {
+  background: linear-gradient(145deg, rgba(200, 48, 88, 0.95), rgba(160, 32, 72, 0.92));
+  border-color: rgba(255, 130, 160, 0.42);
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(130, 24, 56, 0.38);
+}
+
+.confirm-modal__btn--danger:hover:not(:disabled) {
+  border-color: rgba(255, 170, 190, 0.55);
+  box-shadow: 0 8px 26px rgba(150, 28, 64, 0.48);
+  transform: translateY(-1px);
+}
+
+.confirm-modal__btn--danger:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.confirm-modal__btn--primary {
+  background: linear-gradient(90deg, var(--primary-2), var(--primary));
+  border-color: rgba(177, 143, 255, 0.55);
+  color: #f7f0ff;
+  box-shadow: 0 8px 22px rgba(95, 31, 208, 0.38);
+}
+
+.confirm-modal__btn--primary:hover:not(:disabled) {
+  border-color: rgba(200, 175, 255, 0.78);
+  box-shadow: 0 10px 28px rgba(110, 45, 215, 0.48);
+  transform: translateY(-1px);
+}
+
+.confirm-modal__btn--primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Client form — view (read-only), ТЗ Client Form */
+.client-form-fields--readonly {
+  margin: 0 0 4px;
+}
+
+.client-form-fields__readonly-value {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--field-border);
+  background: rgba(25, 16, 56, 0.2);
+  font-size: 16px;
+  color: var(--text-soft);
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+.client-form-fields__readonly-flag {
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 @media (max-width: 1200px) {
   .page {
     justify-content: flex-end;
   }
-  
+
   .field-input {
     height: 52px;
   }
-  
+
   .btn {
     height: 58px;
+  }
+
+  /* Иконки в панели фильтров — не растягивать глобальными высотами .btn */
+  .collection-actions > .btn.collection-actions__icon-btn {
+    height: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    min-width: 34px;
+    flex: 0 0 34px;
   }
 }
 
@@ -1562,6 +2530,14 @@ body {
 
   .btn {
     height: 54px;
+  }
+
+  .collection-actions > .btn.collection-actions__icon-btn {
+    height: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    min-width: 34px;
+    flex: 0 0 34px;
   }
 
   .divider {

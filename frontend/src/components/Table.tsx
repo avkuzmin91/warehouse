@@ -13,6 +13,8 @@ export type TableProps<TRow extends object> = {
   columns: TableColumn<TRow>[]
   data: TRow[]
   loading?: boolean
+  /** Число строк-скелетона при первой загрузке без данных (List Page Pattern). */
+  skeletonRows?: number
   onRowClick?: (row: TRow) => void
   /** Состояние сортировки из Query State (если есть sortable-колонки). */
   sort?: ListSortState
@@ -43,6 +45,7 @@ export function Table<TRow extends object>({
   columns,
   data,
   loading = false,
+  skeletonRows = 5,
   onRowClick,
   sort,
   onSortClick,
@@ -85,10 +88,20 @@ export function Table<TRow extends object>({
             </tr>
           </thead>
           <tbody>
-            {!loading && data.length === 0 ? (
+            {loading && data.length === 0 ? (
+              Array.from({ length: skeletonRows }, (_, skIdx) => (
+                <tr key={`sk-${skIdx}`} className="table-skeleton-row" aria-hidden="true">
+                  {columns.map((col) => (
+                    <td key={col.key}>
+                      <span className="table-skeleton-cell" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : !loading && data.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="data-table-empty">
-                  Нет данных
+                  Данные отсутствуют
                 </td>
               </tr>
             ) : (

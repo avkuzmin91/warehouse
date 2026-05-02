@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { PageContainer } from '../components/PageContainer'
 import { me } from '../api'
 import type { User } from '../api'
 
@@ -43,29 +44,27 @@ export function HomePage() {
   const loading = !user && !error
 
   return (
-    <main className="page page--center">
-      <section className="auth-card home-card">
-        <Breadcrumbs />
+    <PageContainer maxWidth={520} cardClassName="home-card">
+      <Breadcrumbs />
 
-        {loading ? <p className="auth-card__subtitle home-card__status">Загрузка...</p> : null}
-        {error ? <p className="error-text home-card__status">{error}</p> : null}
+      {loading ? <p className="auth-card__subtitle home-card__status">Загрузка...</p> : null}
+      {error ? <p className="error-text home-card__status">{error}</p> : null}
 
-        {user && !error ? (
-          showEmpty ? (
-            <p className="auth-card__subtitle home-card__empty">Нет доступных разделов</p>
-          ) : (
-            <ul className="home-nav" role="list">
-              {items.map((item) => (
-                <li key={item.key} className="home-nav__item">
-                  <Link className="home-nav__link" to={item.to}>
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )
-        ) : null}
-      </section>
-    </main>
+      {user && !error ? (
+        showEmpty ? (
+          <p className="auth-card__subtitle home-card__empty">Нет доступных разделов</p>
+        ) : (
+          <ul className="home-nav" role="list">
+            {items.map((item) => (
+              <li key={item.key} className="home-nav__item">
+                <Link className="home-nav__link" to={item.to}>
+                  {item.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </PageContainer>
   )
 }
