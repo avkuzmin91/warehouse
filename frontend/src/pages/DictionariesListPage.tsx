@@ -3,7 +3,7 @@ import { Breadcrumbs } from '../components/Breadcrumbs'
 import { PageContainer } from '../components/PageContainer'
 
 const entries: { label: string; to: string }[] = [
-  { label: 'Пользователи', to: '/users' },
+  { label: 'Пользователи', to: '/dictionaries/users' },
   { label: 'Товары', to: '/dictionaries/products' },
   { label: 'Клиенты', to: '/dictionaries/clients' },
   { label: 'Типы товаров', to: '/dictionaries/product-types' },

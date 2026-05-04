@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Breadcrumbs } from '../components/Breadcrumbs'
+import { DictionaryFilterCombobox } from '../components/DictionaryFilterCombobox'
+import { mergeDictionaryItemsWithCurrent } from '../components/DictionaryFormCombobox'
 import { CollectionActions } from '../components/CollectionActions'
 import { FiltersPanel, type FilterFieldConfig } from '../components/FiltersPanel'
 import { ListPageLayout } from '../components/ListPageLayout'
@@ -11,10 +13,13 @@ import { useQueryState } from '../hooks/useQueryState'
 import type { ListSortState } from '../utils/queryState'
 import {
   deleteUser,
+  getInventoryClients,
   getUsers,
   me,
+  updateUserClient,
   updateUserRole,
   type AssignableUserRole,
+  type DictionaryItem,
   type User,
   type UserListItem,
 } from '../api'
@@ -38,6 +43,10 @@ const USERS_FILTER_FIELDS: FilterFieldConfig[] = [
   },
   { type: 'date_range', placeholder: 'Дата регистрации' },
 ]
+
+function clientOptionLabel(c: DictionaryItem): string {
+  return c.is_active ? c.name : `${c.name} (не актуален)`
+}
 
 function userRoleLabel(role: UserListItem['role']): string {
   switch (role) {
@@ -145,6 +154,7 @@ export function UsersPage() {
   })
 
   const [users, setUsers] = useState<UserListItem[]>([])
+  const [clientDictionaryItems, setClientDictionaryItems] = useState<DictionaryItem[]>([])
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -167,6 +177,12 @@ export function UsersPage() {
 
   useEffect(() => {
     me().then(setCurrentUser).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    getInventoryClients()
+      .then((rows) => setClientDictionaryItems(rows))
+      .catch(() => setClientDictionaryItems([]))
   }, [])
 
   useEffect(() => {
@@ -244,6 +260,21 @@ export function UsersPage() {
     }
   }, [deleteCandidate, refreshUsers])
 
+  const handleAssignClient = useCallback(
+    async (userId: string, clientId: string | null) => {
+      setActionError('')
+      try {
+        await updateUserClient(userId, clientId)
+        await refreshUsers()
+      } catch (requestError) {
+        setActionError(
+          requestError instanceof Error ? requestError.message : 'Не удалось обновить привязку клиента',
+        )
+      }
+    },
+    [refreshUsers],
+  )
+
   const columns: TableColumn<UserListItem>[] = useMemo(
     () => [
       { key: 'email', title: 'Email', sortable: true },
@@ -252,6 +283,38 @@ export function UsersPage() {
         title: 'Роль',
         sortable: true,
         render: (_, row) => userRoleLabel(row.role),
+      },
+      {
+        key: 'client_name',
+        title: 'Клиент',
+        render: (_, row) =>
+          row.role === 'client' ? (
+            <div className="users-table__client-combo users-table__client-filter">
+              <DictionaryFilterCombobox
+                name="client_id"
+                listPortal
+                clearAriaLabel="Сбросить привязку к клиенту"
+                options={[
+                  { value: '', label: 'Клиент' },
+                  ...mergeDictionaryItemsWithCurrent(
+                    clientDictionaryItems,
+                    row.client_id,
+                    row.client_name,
+                  ).map((c) => ({ value: c.id, label: clientOptionLabel(c) })),
+                ]}
+                valueStr={row.client_id?.trim() ? row.client_id : ''}
+                disabled={currentUser?.id === row.id}
+                ariaLabel={`Клиент для ${row.email}`}
+                onSelectChange={(_name, next) => {
+                  const cur = row.client_id?.trim() ? row.client_id : null
+                  if (cur === next) return
+                  void handleAssignClient(row.id, next)
+                }}
+              />
+            </div>
+          ) : (
+            <span className="users-client-readonly">{row.client_name || '—'}</span>
+          ),
       },
       {
         key: 'created_at',
@@ -277,7 +340,7 @@ export function UsersPage() {
         ),
       },
     ],
-    [currentUser?.id, handleGrantRole],
+    [currentUser?.id, handleAssignClient, handleGrantRole, clientDictionaryItems],
   )
 
   return (

@@ -6,7 +6,10 @@ import { PageContainer } from '../components/PageContainer'
 import { ActionBar } from '../components/ActionBar'
 import { SystemInfoBlock, systemInfoFromApi, type SystemInfo } from '../components/SystemInfoBlock'
 import {
-  API_BASE_URL,
+  ProductVariantsEditor,
+  type ProductVariantsEditorHandle,
+} from '../components/ProductVariantsEditor'
+import {
   fetchActiveDictionaryItems,
   getProduct,
   updateProduct,
@@ -17,17 +20,23 @@ import {
   DictionaryFormCombobox,
   mergeDictionaryItemsWithCurrent,
 } from '../components/DictionaryFormCombobox'
+import {
+  ProductPhotoGalleryEditor,
+  resolveProductGalleryForSave,
+  slotsFromImageUrls,
+  type ProductGallerySlot,
+} from '../components/ProductPhotoGalleryEditor'
 
 const REQUIRED_MSG = 'Заполните обязательные поля'
 const NOT_FOUND = 'Товар не найден'
 
-type FieldName = 'name' | 'type_id' | 'sku' | 'client_id' | 'supplier_id' | 'image' | 'is_actual'
+type FieldName = 'name' | 'sku_base' | 'client_id' | 'is_actual'
 
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'
 
 function mapProductUpdateError(msg: string): string {
-  if (msg.includes('артикулом') || /sku/i.test(msg) || msg.toLowerCase().includes('sku')) {
-    return 'SKU уже существует'
+  if (msg.includes('артикул') || /sku/i.test(msg) || msg.toLowerCase().includes('sku')) {
+    return 'Конфликт артикула'
   }
   if (msg.includes('Нет данных')) {
     return 'Нет данных для обновления'
@@ -39,51 +48,39 @@ export function ProductEditPage() {
   const { id: routeId = '' } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const formId = useId()
-  const imageInputRef = useRef<HTMLInputElement>(null)
 
-  const [productTypes, setProductTypes] = useState<DictionaryItem[]>([])
   const [clients, setClients] = useState<DictionaryItem[]>([])
-  const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
 
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [loadError, setLoadError] = useState('')
 
   const [name, setName] = useState('')
-  const [typeId, setTypeId] = useState('')
-  const [sku, setSku] = useState('')
+  const [skuBase, setSkuBase] = useState('')
   const [clientId, setClientId] = useState('')
-  const [supplierId, setSupplierId] = useState('')
   const [isActual, setIsActual] = useState(true)
-  const [image, setImage] = useState<File | null>(null)
-  const [imageUrlFromServer, setImageUrlFromServer] = useState<string | null>(null)
-  const [filePreview, setFilePreview] = useState<string | null>(null)
 
   const [loadedProduct, setLoadedProduct] = useState<ProductItem | null>(null)
+  const [photoSlots, setPhotoSlots] = useState<ProductGallerySlot[]>([])
 
   const [auditInfo, setAuditInfo] = useState<SystemInfo | null>(null)
 
   const [touched, setTouched] = useState<Partial<Record<FieldName, boolean>>>({})
   const [submitError, setSubmitError] = useState('')
 
-  const invalid: Partial<Record<'name' | 'type_id' | 'sku' | 'client_id', boolean>> = {
+  const variantsRef = useRef<ProductVariantsEditorHandle>(null)
+
+  const invalid = {
     name: !name.trim(),
-    type_id: typeId === '',
-    sku: !sku.trim(),
-    client_id: clientId.trim() === '',
+    sku_base: !skuBase.trim(),
+    client_id: false,
   }
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      fetchActiveDictionaryItems('/product-types'),
-      fetchActiveDictionaryItems('/clients'),
-      fetchActiveDictionaryItems('/suppliers'),
-    ])
-      .then(([pt, cl, sup]) => {
+    fetchActiveDictionaryItems('/clients')
+      .then((cl) => {
         if (!cancelled) {
-          setProductTypes(pt)
           setClients(cl)
-          setSuppliers(sup)
         }
       })
       .catch(() => {})
@@ -102,14 +99,11 @@ export function ProductEditPage() {
     setLoadState('loading')
     setLoadError('')
     setName('')
-    setTypeId('')
-    setSku('')
+    setSkuBase('')
     setClientId('')
-    setSupplierId('')
     setIsActual(true)
-    setImage(null)
-    setImageUrlFromServer(null)
     setLoadedProduct(null)
+    setPhotoSlots([])
     setAuditInfo(null)
     setSubmitError('')
 
@@ -117,14 +111,11 @@ export function ProductEditPage() {
       .then((p: ProductItem) => {
         if (cancelled) return
         setName(p.name)
-        setTypeId(p.type_id)
-        setSku(p.sku)
+        setSkuBase(p.sku_base)
         setClientId(p.client_id ?? '')
-        setSupplierId(p.supplier_id ?? '')
         setIsActual(p.is_active)
-        setImage(null)
-        setImageUrlFromServer(p.image_url)
         setLoadedProduct(p)
+        setPhotoSlots(slotsFromImageUrls(p.image_urls))
         setAuditInfo(
           systemInfoFromApi({
             created_at: p.created_at,
@@ -154,41 +145,14 @@ export function ProductEditPage() {
     }
   }, [routeId])
 
-  useEffect(() => {
-    if (!image) {
-      setFilePreview((p) => {
-        if (p) URL.revokeObjectURL(p)
-        return null
-      })
-      return
-    }
-    const url = URL.createObjectURL(image)
-    setFilePreview((p) => {
-      if (p) URL.revokeObjectURL(p)
-      return url
-    })
-  }, [image])
-
-  const showFieldError = (key: 'name' | 'type_id' | 'sku' | 'client_id') =>
-    touched[key] && invalid[key]
-  const displayPreview = filePreview || (imageUrlFromServer ? `${API_BASE_URL}${imageUrlFromServer}` : null)
+  const showFieldError = (key: 'name' | 'sku_base') => touched[key] && invalid[key]
   const isPending = loadState === 'loading'
   const isFormEnabled = loadState === 'ok'
 
-  const typeItems = mergeDictionaryItemsWithCurrent(
-    productTypes,
-    loadedProduct?.type_id,
-    loadedProduct?.type_name,
-  )
   const clientItems = mergeDictionaryItemsWithCurrent(
     clients,
     loadedProduct?.client_id,
     loadedProduct?.client_name,
-  )
-  const supplierItems = mergeDictionaryItemsWithCurrent(
-    suppliers,
-    loadedProduct?.supplier_id,
-    loadedProduct?.supplier_name,
   )
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -197,27 +161,32 @@ export function ProductEditPage() {
     setSubmitError('')
     setTouched({
       name: true,
-      type_id: true,
-      sku: true,
+      sku_base: true,
       client_id: true,
-      supplier_id: true,
-      image: true,
       is_actual: true,
     })
-    if (invalid.name || invalid.type_id || invalid.sku || invalid.client_id) {
+    if (invalid.name || invalid.sku_base) {
       setSubmitError(REQUIRED_MSG)
       return
     }
     try {
+      const image_urls = await resolveProductGalleryForSave(photoSlots)
       await updateProduct(routeId, {
         name: name.trim(),
-        type_id: typeId,
-        sku: sku.trim(),
-        client_id: clientId.trim(),
-        supplier_id: supplierId.trim(),
+        sku_base: skuBase.trim(),
+        client_id: clientId.trim() || null,
         is_active: isActual,
-        image: image || undefined,
+        image_urls,
       })
+      const baseSkuChanged =
+        loadedProduct != null && skuBase.trim() !== loadedProduct.sku_base.trim()
+      const variantResult = await variantsRef.current?.saveVariants({
+        syncSkusFromServer: baseSkuChanged,
+      })
+      if (variantResult && !variantResult.ok) {
+        setSubmitError(mapProductUpdateError(variantResult.message ?? ''))
+        return
+      }
       navigate('/dictionaries/products')
     } catch (e) {
       setSubmitError(e instanceof Error ? mapProductUpdateError(e.message) : 'Ошибка сохранения')
@@ -257,7 +226,7 @@ export function ProductEditPage() {
   }
 
   return (
-    <PageContainer maxWidth={640} cardClassName="product-create-card">
+    <PageContainer maxWidth={1100} cardClassName="product-create-card">
       <Breadcrumbs />
 
       <form
@@ -296,19 +265,14 @@ export function ProductEditPage() {
 
           <label className="field-label" htmlFor={`${formId}-type`}>
             Тип товара
-            <span className="field-label__required" aria-label="обязательное поле">
-              *
-            </span>
           </label>
-          <DictionaryFormCombobox
+          <input
             id={`${formId}-type`}
-            items={typeItems}
-            value={typeId}
-            onChange={setTypeId}
-            disabled={isPending}
-            required
-            hasError={Boolean(showFieldError('type_id'))}
-            onBlur={() => setTouched((t) => ({ ...t, type_id: true }))}
+            className="field-input field-input--readonly"
+            value={loadedProduct?.type_name ?? ''}
+            readOnly
+            tabIndex={-1}
+            title="Тип товара нельзя изменить после создания"
           />
 
           <label className="field-label" htmlFor={`${formId}-sku`}>
@@ -319,19 +283,17 @@ export function ProductEditPage() {
           </label>
           <input
             id={`${formId}-sku`}
-            className={`field-input${showFieldError('sku') ? ' field-input--error' : ''}`}
-            value={sku}
-            onChange={(e) => setSku(e.target.value)}
-            onBlur={() => setTouched((t) => ({ ...t, sku: true }))}
+            className={`field-input${showFieldError('sku_base') ? ' field-input--error' : ''}`}
+            value={skuBase}
+            onChange={(e) => setSkuBase(e.target.value)}
+            onBlur={() => setTouched((t) => ({ ...t, sku_base: true }))}
             autoComplete="off"
-            aria-invalid={showFieldError('sku') ? true : undefined}
+            title="При изменении артикулы вариантов обновятся при сохранении (проверка уникальности на сервере)"
+            aria-invalid={showFieldError('sku_base') ? true : undefined}
           />
 
           <label className="field-label" htmlFor={`${formId}-client`}>
             Клиент
-            <span className="field-label__required" aria-label="обязательное поле">
-              *
-            </span>
           </label>
           <DictionaryFormCombobox
             id={`${formId}-client`}
@@ -339,76 +301,10 @@ export function ProductEditPage() {
             value={clientId}
             onChange={setClientId}
             disabled={isPending}
-            required
-            hasError={Boolean(showFieldError('client_id'))}
+            required={false}
+            allowClear
             onBlur={() => setTouched((t) => ({ ...t, client_id: true }))}
           />
-
-          <label className="field-label" htmlFor={`${formId}-supplier`}>
-            Поставщик
-          </label>
-          <DictionaryFormCombobox
-            id={`${formId}-supplier`}
-            items={supplierItems}
-            value={supplierId}
-            onChange={setSupplierId}
-            disabled={isPending}
-            required={false}
-            onBlur={() => setTouched((t) => ({ ...t, supplier_id: true }))}
-          />
-
-          <label className="field-label" htmlFor={`${formId}-image`}>
-            Фотография
-          </label>
-          {displayPreview ? (
-            <div className="product-create-preview">
-              <img src={displayPreview} alt="Превью" className="product-create-preview__img" />
-            </div>
-          ) : null}
-          <div className="file-field file-field--product">
-            <div className="file-field__row">
-              <label
-                className="file-field__name file-field__name--label"
-                htmlFor={`${formId}-image`}
-                title={image ? image.name : undefined}
-              >
-                {image ? image.name : '\u00A0'}
-              </label>
-              <button
-                type="button"
-                className="file-field__icon-btn"
-                aria-label="Выбрать файл изображения"
-                onClick={() => imageInputRef.current?.click()}
-              >
-                <svg
-                  className="file-field__icon"
-                  width="22"
-                  height="22"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                  aria-hidden
-                >
-                  <path
-                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-            </div>
-            <input
-              ref={imageInputRef}
-              id={`${formId}-image`}
-              className="file-field__native"
-              type="file"
-              accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,.heic,.heif"
-              onChange={(e) => setImage(e.target.files?.[0] || null)}
-            />
-          </div>
-          <p className="field-hint">Форматы: JPG, PNG, HEIC</p>
 
           <label className="remember product-create-remember" htmlFor={`${formId}-na`}>
             <input
@@ -423,9 +319,29 @@ export function ProductEditPage() {
         </fieldset>
       </form>
 
-      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
+      {isFormEnabled && loadedProduct ? (
+        <ProductVariantsEditor
+          ref={variantsRef}
+          productId={routeId}
+          skuBase={skuBase}
+          requiresSize={loadedProduct.requires_size}
+          disabled={isPending}
+          onVariantsSaved={() => {
+            void getProduct(routeId).then((p) => {
+              setLoadedProduct(p)
+              setSkuBase(p.sku_base)
+            })
+          }}
+        />
+      ) : null}
 
-      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
+      {isFormEnabled && loadedProduct ? (
+        <ProductPhotoGalleryEditor
+          slots={photoSlots}
+          onSlotsChange={setPhotoSlots}
+          disabled={isPending}
+        />
+      ) : null}
 
       {isFormEnabled ? (
         <ActionBar
@@ -434,6 +350,10 @@ export function ProductEditPage() {
           onSecondary={() => navigate('/dictionaries/products')}
         />
       ) : null}
+
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
+
+      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
     </PageContainer>
   )
 }

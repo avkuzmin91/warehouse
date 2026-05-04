@@ -166,10 +166,6 @@ export function ClientEditPage() {
         </fieldset>
       </form>
 
-      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
-
-      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
-
       {isFormEnabled ? (
         <ActionBar
           primaryLabel="Сохранить"
@@ -177,6 +173,10 @@ export function ClientEditPage() {
           onSecondary={() => navigate('/dictionaries/clients')}
         />
       ) : null}
+
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
+
+      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
     </PageContainer>
   )
 }

@@ -1,4 +1,6 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+import json
+import re
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -34,12 +36,33 @@ COLOR_LIST_SORT_COLUMNS: dict[str, str] = {
     "created_at": "d.created_at",
     "is_active": "d.is_active",
 }
+INVENTORY_OPERATIONS_SORT_COLUMNS: dict[str, str] = {
+    "created_at": "o.created_at",
+    "quantity": "o.quantity",
+    "product_name": "p.name COLLATE NOCASE",
+    "product_type_name": "pt.name COLLATE NOCASE",
+    "client_name": "cl.name COLLATE NOCASE",
+    "supplier_name": "sp.name COLLATE NOCASE",
+    "color_name": "col.name COLLATE NOCASE",
+    "size_name": "sz.name COLLATE NOCASE",
+    "variant_sku": "LOWER(TRIM(COALESCE(o.variant_sku, pv.sku, p.sku, ''))) COLLATE NOCASE",
+    "product_sku": "LOWER(TRIM(COALESCE(p.sku, ''))) COLLATE NOCASE",
+    "created_by": "u.email COLLATE NOCASE",
+}
+INVENTORY_BALANCES_SORT_COLUMNS: dict[str, str] = {
+    "product_name": "MAX(p.name) COLLATE NOCASE",
+    "product_type_name": "MAX(pt.name) COLLATE NOCASE",
+    "client_name": "MAX(cl.name) COLLATE NOCASE",
+    "supplier_name": "MAX(sp.name) COLLATE NOCASE",
+    "color_name": "MAX(col.name) COLLATE NOCASE",
+    "size_name": "MAX(sz.name) COLLATE NOCASE",
+    "quantity": "SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END)",
+}
 PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
+    "sku_base": "p.sku COLLATE NOCASE",
     "name": "p.name COLLATE NOCASE",
     "type": "IFNULL(pt.name, '') COLLATE NOCASE",
-    "sku": "p.sku COLLATE NOCASE",
     "client": "IFNULL(c.name, '') COLLATE NOCASE",
-    "supplier": "IFNULL(s.name, '') COLLATE NOCASE",
     "created_at": "p.created_at",
     "is_active": "p.is_active",
 }
@@ -73,6 +96,30 @@ def _normalize_date_yyyy_mm_dd(raw: str | None, param_name: str) -> str | None:
             detail=f"Параметр {param_name}: ожидается дата в формате YYYY-MM-DD",
         )
     return s
+
+
+def _created_at_for_receipt_date(raw: str | None) -> str:
+    """Дата приёмки (YYYY-MM-DD) → `created_at` (UTC, полдень); пусто → текущий момент. Не в будущем."""
+    if raw is None or not str(raw).strip():
+        return _now()
+    s = str(raw).strip()
+    d = _normalize_date_yyyy_mm_dd(s, "receipt_date")
+    if d is None:
+        return _now()
+    try:
+        y, mo, day = (int(d[0:4]), int(d[5:7]), int(d[8:10]))
+        chosen = date(y, mo, day)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректная дата приёмки",
+        )
+    if chosen > datetime.now(UTC).date():
+        raise HTTPException(
+            status_code=400,
+            detail="Дата приёмки не может быть позже сегодняшнего дня",
+        )
+    return datetime(y, mo, day, 12, 0, 0, tzinfo=UTC).isoformat()
 
 
 bearer_scheme = HTTPBearer()
@@ -112,6 +159,10 @@ class MeResponse(BaseModel):
     id: str
     email: EmailStr
     role: str
+    client_id: str | None = Field(
+        default=None,
+        description="Справочник клиента для роли client; назначается администратором.",
+    )
 
 
 class UserListItem(BaseModel):
@@ -119,10 +170,26 @@ class UserListItem(BaseModel):
     email: EmailStr
     role: str
     created_at: str
+    client_id: str | None = None
+    client_name: str | None = None
+
+
+class UserDeletePatchRequest(BaseModel):
+    """Мягкое удаление / восстановление (без физического DELETE)."""
+    is_deleted: bool
 
 
 class RoleUpdateRequest(BaseModel):
     role: str
+
+
+class UserClientAssignRequest(BaseModel):
+    """Привязка учётной записи к клиенту из справочника (только для роли client)."""
+
+    client_id: str | None = Field(
+        default=None,
+        description="UUID клиента или null — снять привязку.",
+    )
 
 
 class MessageResponse(BaseModel):
@@ -133,6 +200,12 @@ class DictionaryBaseItem(BaseModel):
     id: str
     name: str
     is_active: bool
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = Field(
+        default=None,
+        description="Email пользователя, пометившего запись удалённой.",
+    )
     created_at: str
     created_by: str | None = Field(
         default=None,
@@ -160,12 +233,19 @@ class DictionaryCreateRequest(BaseModel):
 class DictionaryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     is_active: bool | None = None
+    is_deleted: bool | None = None
 
 
 class SizeItem(BaseModel):
     id: str
     name: str
     is_active: bool
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = Field(
+        default=None,
+        description="Email пользователя, пометившего запись удалённой.",
+    )
     created_at: str
     created_by: str | None = None
     updated_at: str | None = None
@@ -187,6 +267,7 @@ class SizeCreateRequest(BaseModel):
 class SizeUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     is_active: bool | None = None
+    is_deleted: bool | None = None
 
 
 class ProductItem(BaseModel):
@@ -194,14 +275,24 @@ class ProductItem(BaseModel):
     name: str
     type_id: str
     type_name: str | None = None
-    sku: str
+    sku_base: str
+    requires_color: bool = False
+    requires_size: bool = False
     client_id: str | None = None
     client_name: str | None = None
-    supplier_id: str | None = None
-    supplier_name: str | None = None
-    image_url: str | None
+    variant_count: int = 0
     is_active: bool = Field(
         description="Актуален: true — товар в ассортименте, false — не актуален; по умолчанию true.",
+    )
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = Field(
+        default=None,
+        description="Email пользователя, пометившего запись удалённой.",
+    )
+    image_urls: list[str] = Field(
+        default_factory=list,
+        description="Галерея фото карточки (порядок как при сохранении); превью списка — первое.",
     )
     created_at: str
     created_by: str | None = Field(
@@ -212,6 +303,145 @@ class ProductItem(BaseModel):
     updated_by: str | None = Field(
         default=None,
         description="Кто менял последним: email из users (updated_by_id).",
+    )
+
+
+class ProductCreateDimensionBlock(BaseModel):
+    length: float = Field(ge=0)
+    width: float = Field(ge=0)
+    height: float = Field(ge=0)
+    sizes: list[str] = Field(default_factory=list)
+
+
+class ProductCreateInner(BaseModel):
+    name: str = Field(min_length=1)
+    type_id: str = Field(min_length=1)
+    sku_base: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    is_active: bool = True
+
+
+class ProductCreateMeta(BaseModel):
+    product: ProductCreateInner
+    colors: list[str] = Field(min_length=1)
+    dimensions: list[ProductCreateDimensionBlock] = Field(min_length=1)
+
+
+class ProductVariantDimension(BaseModel):
+    length: float = Field(ge=0)
+    width: float = Field(ge=0)
+    height: float = Field(ge=0)
+
+
+class ProductVariantItem(BaseModel):
+    id: str
+    color_id: str
+    dimension: ProductVariantDimension
+    size_id: str | None = None
+    sku: str
+    images: list[str] = Field(default_factory=list)
+    is_active: bool
+
+
+class ProductVariantDeletePatchRequest(BaseModel):
+    """PATCH вместо HTTP DELETE для варианта (ТЗ: мягкое удаление)."""
+    is_deleted: bool
+
+
+class ProductVariantWriteItem(BaseModel):
+    id: str | None = None
+    sku: str | None = None
+    color_id: str = Field(min_length=1)
+    dimension: ProductVariantDimension
+    size_id: str | None = None
+    images: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class ProductVariantsPatchRequest(BaseModel):
+    variants: list[ProductVariantWriteItem]
+
+
+class ProductVariantFindItem(BaseModel):
+    variant_id: str
+    product_id: str
+    product_name: str
+    product_type_name: str | None = None
+    client_name: str | None = Field(default=None, description="Клиент карточки товара")
+    requires_size: bool
+    sku: str
+    color_id: str
+    size_id: str | None
+    length: float
+    width: float
+    height: float
+    first_image_url: str | None = None
+
+
+class ProductVariantFindResponse(BaseModel):
+    found: bool
+    variant: ProductVariantFindItem | None = None
+    needs_size: bool = False
+
+
+class ReceiptCreate(BaseModel):
+    variant_id: str = Field(min_length=1)
+    quantity: int = Field(gt=0)
+    comment: str | None = None
+    receipt_date: str | None = Field(
+        default=None,
+        description="Дата приёмки YYYY-MM-DD, не позже сегодня; по умолчанию — текущий момент",
+    )
+
+
+class ReceiptPatch(BaseModel):
+    quantity: int | None = Field(default=None, gt=0)
+    comment: str | None = None
+    variant_id: str | None = Field(
+        default=None,
+        description="Новый вариант; при смене пересчитываются product_id и ключ остатка.",
+    )
+    receipt_date: str | None = Field(
+        default=None,
+        description="Дата приёмки YYYY-MM-DD, не позже сегодня (обновляет created_at).",
+    )
+
+
+class ReceiptDetailResponse(BaseModel):
+    id: str
+    variant_id: str | None
+    sku: str
+    color_id: str | None
+    size_id: str | None
+    quantity: int
+    comment: str | None
+    product_id: str
+    product_name: str
+    product_type_name: str | None
+    client_id: str | None
+    client_name: str | None
+    length: float
+    width: float
+    height: float
+    first_image_url: str | None
+    created_at: str
+    created_by: str | None
+
+
+class ProductUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    type_id: str | None = None
+    client_id: str | None = None
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+    sku_base: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Базовый артикул (products.sku); при смене пересчитываются SKU вариантов.",
+    )
+    image_urls: list[str] | None = Field(
+        default=None,
+        description="Галерея фото карточки (порядок); пустой список — без фото.",
     )
 
 
@@ -255,6 +485,13 @@ def init_db():
             connection.execute(
                 "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
             )
+        _ensure_columns(
+            connection,
+            "users",
+            {
+                "client_id": "TEXT",
+            },
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS clients (
@@ -338,6 +575,38 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_operations (
+                id TEXT PRIMARY KEY,
+                op_type TEXT NOT NULL CHECK (op_type IN ('in', 'out')),
+                product_id TEXT NOT NULL,
+                color_id TEXT,
+                size_id TEXT,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                note TEXT,
+                created_at TEXT NOT NULL,
+                created_by_id TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS inventory_operations_product_idx "
+            "ON inventory_operations(product_id, color_id, size_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS inventory_operations_created_idx "
+            "ON inventory_operations(created_at)"
+        )
+        _ensure_columns(
+            connection,
+            "product_types",
+            {
+                "requires_color": "INTEGER NOT NULL DEFAULT 0",
+                "requires_size": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
+        _migrate_product_types_requires_seed(connection)
         _ensure_columns(
             connection,
             "clients",
@@ -395,6 +664,17 @@ def init_db():
         _migrate_sizes_remove_code_column(connection)
         _migrate_products_is_active_aktualen(connection)
         _migrate_products_dictionary_fks(connection)
+        _migrate_product_variants_v1(connection)
+        _migrate_soft_delete_policy_v1(connection)
+        _migrate_product_gallery_json_v1(connection)
+        _ensure_columns(
+            connection,
+            "inventory_operations",
+            {
+                "variant_id": "TEXT",
+                "variant_sku": "TEXT",
+            },
+        )
         _ensure_record_actuality(connection)
         connection.commit()
 
@@ -408,6 +688,35 @@ def _ensure_columns(connection: sqlite3.Connection, table_name: str, columns: di
             connection.execute(
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
             )
+
+
+def _migrate_product_types_requires_seed(connection: sqlite3.Connection) -> None:
+    """Однократно: проставить requires_color/requires_size по названию типа.
+
+    «Одежда» → требуется и цвет, и размер; для прочих типов остаётся 0/0
+    (можно скорректировать вручную в БД при необходимости).
+    """
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'product_types_requires_seed_v1'"
+    ).fetchone():
+        return
+    connection.execute(
+        """
+        UPDATE product_types
+        SET requires_color = 1, requires_size = 1
+        WHERE LOWER(name) LIKE '%одежд%' OR LOWER(name) LIKE '%cloth%'
+        """
+    )
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('product_types_requires_seed_v1')"
+    )
 
 
 def _migrate_sizes_remove_code_column(connection: sqlite3.Connection) -> None:
@@ -615,6 +924,169 @@ def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_product_variants_v1(connection: sqlite3.Connection) -> None:
+    """Таблица вариантов SKU + перенос legacy image/sku в одну строку variant на товар."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'product_variants_v1'"
+    ).fetchone():
+        return
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_variants (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            color_id TEXT NOT NULL,
+            size_id TEXT,
+            length REAL NOT NULL,
+            width REAL NOT NULL,
+            height REAL NOT NULL,
+            sku TEXT NOT NULL UNIQUE,
+            images_json TEXT NOT NULL DEFAULT '[]',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS product_variants_product_idx "
+        "ON product_variants(product_id)"
+    )
+
+    color_row = connection.execute(
+        "SELECT id FROM colors WHERE is_active = 1 ORDER BY created_at LIMIT 1"
+    ).fetchone()
+    if not color_row:
+        color_row = connection.execute(
+            "SELECT id FROM colors ORDER BY created_at LIMIT 1"
+        ).fetchone()
+    if not color_row:
+        nid = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO colors (id, name, is_active, created_at)
+            VALUES (?, ?, 1, ?)
+            """,
+            (nid, "—", _now()),
+        )
+        legacy_color_id = nid
+    else:
+        legacy_color_id = color_row["id"]
+
+    products = connection.execute(
+        "SELECT id, sku, image_url, is_active, created_at FROM products"
+    ).fetchall()
+    for p in products:
+        exists = connection.execute(
+            "SELECT 1 FROM product_variants WHERE product_id = ? LIMIT 1",
+            (p["id"],),
+        ).fetchone()
+        if exists:
+            continue
+        imgs: list[str] = []
+        if p["image_url"]:
+            imgs.append(str(p["image_url"]))
+        connection.execute(
+            """
+            INSERT INTO product_variants (
+                id, product_id, color_id, size_id,
+                length, width, height, sku, images_json,
+                is_active, created_at
+            )
+            VALUES (?, ?, ?, NULL, 0, 0, 0, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                p["id"],
+                legacy_color_id,
+                str(p["sku"]),
+                json.dumps(imgs, ensure_ascii=False),
+                1 if p["is_active"] else 0,
+                p["created_at"],
+            ),
+        )
+
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('product_variants_v1')"
+    )
+
+
+def _migrate_soft_delete_policy_v1(connection: sqlite3.Connection) -> None:
+    """Мягкое удаление: is_deleted, deleted_at, deleted_by_id (ТЗ «Логика удаления элементов»)."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'soft_delete_policy_v1'"
+    ).fetchone():
+        return
+
+    soft_cols: dict[str, str] = {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+        "deleted_by_id": "TEXT",
+    }
+    for tbl in (
+        "clients",
+        "colors",
+        "sizes",
+        "product_types",
+        "suppliers",
+        "products",
+        "product_variants",
+        "users",
+    ):
+        _ensure_columns(connection, tbl, soft_cols)
+
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('soft_delete_policy_v1')"
+    )
+
+
+def _migrate_product_gallery_json_v1(connection: sqlite3.Connection) -> None:
+    """JSON-массив URL фото карточки (порядок); превью — первый элемент = image_url."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'product_gallery_json_v1'"
+    ).fetchone():
+        return
+    _ensure_columns(
+        connection,
+        "products",
+        {"gallery_json": "TEXT"},
+    )
+    for r in connection.execute(
+        "SELECT id, image_url FROM products WHERE image_url IS NOT NULL AND TRIM(image_url) != ''"
+    ).fetchall():
+        u = str(r["image_url"]).strip()
+        if u:
+            connection.execute(
+                "UPDATE products SET gallery_json = ? WHERE id = ?",
+                (json.dumps([u], ensure_ascii=False), r["id"]),
+            )
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('product_gallery_json_v1')"
+    )
+
+
 def _ensure_record_actuality(connection: sqlite3.Connection) -> None:
     """Системный справочник значений фильтра «актуальность»; не редактируется через UI."""
     connection.execute(
@@ -696,9 +1168,22 @@ def verify_password(password: str, password_hash: str) -> bool:
 def get_user_by_email(email: str):
     with get_connection() as connection:
         return connection.execute(
-            "SELECT id, email, password_hash, role, created_at FROM users WHERE email = ?",
+            "SELECT id, email, password_hash, role, created_at, client_id FROM users "
+            "WHERE email = ? AND COALESCE(is_deleted, 0) = 0",
             (email.lower(),),
         ).fetchone()
+
+
+def _user_client_id_opt(user) -> str | None:
+    """Значение users.client_id из sqlite3.Row (у Row нет метода .get)."""
+    try:
+        raw = user["client_id"]
+    except (KeyError, IndexError):
+        return None
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
 
 
 def get_current_user(
@@ -727,8 +1212,8 @@ def get_current_user(
 
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT id, email, role, created_at FROM users WHERE id = ? AND email = ?",
-            (user_id, email.lower())
+            "SELECT id, email, role, created_at, client_id FROM users WHERE id = ? AND email = ?",
+            (user_id, email.lower()),
         ).fetchone()
 
     if not user:
@@ -750,10 +1235,26 @@ def get_current_admin(user=Depends(get_current_user)):
 
 
 def get_current_manager(user=Depends(get_current_user)):
-    if user["role"] not in ("manager", "admin"):
+    if user["role"] not in ("manager", "admin", "warehouse_manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав",
+        )
+    return user
+
+
+def get_current_client_portal(user=Depends(get_current_user)):
+    """Роль client и назначенный client_id; иначе 403 (в т.ч. сообщение об активации)."""
+    if user["role"] != "client":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав",
+        )
+    cid = _user_client_id_opt(user) or ""
+    if not cid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Обратитесь к администратору для активации доступа",
         )
     return user
 
@@ -790,10 +1291,123 @@ def _normalize_sku(sku: str) -> str:
     return normalized
 
 
+def _variant_sku_in_use(
+    connection: sqlite3.Connection, sku: str, exclude_variant_id: str | None
+) -> bool:
+    q = (
+        "SELECT 1 FROM product_variants WHERE sku = ? "
+        "AND COALESCE(is_deleted, 0) = 0"
+    )
+    params: list[object] = [sku]
+    if exclude_variant_id:
+        q += " AND id != ?"
+        params.append(exclude_variant_id)
+    return connection.execute(q, tuple(params)).fetchone() is not None
+
+
+def _sku_taken_globally_except_product(
+    connection: sqlite3.Connection, sku: str, exclude_product_id: str
+) -> bool:
+    if connection.execute(
+        """
+        SELECT 1 FROM products
+        WHERE sku = ? AND id != ? AND COALESCE(is_deleted, 0) = 0
+        """,
+        (sku, exclude_product_id),
+    ).fetchone():
+        return True
+    if connection.execute(
+        """
+        SELECT 1 FROM product_variants
+        WHERE sku = ? AND product_id != ? AND COALESCE(is_deleted, 0) = 0
+        """,
+        (sku, exclude_product_id),
+    ).fetchone():
+        return True
+    return False
+
+
+def _rebase_variant_skus_for_new_product_base(
+    connection: sqlite3.Connection,
+    *,
+    product_id: str,
+    old_base_sku: str,
+    new_base_sku: str,
+    updated_at: str,
+) -> None:
+    """При смене базового артикула товара обновляет SKU неудалённых вариантов (префикс + проверка уникальности)."""
+    old_b = old_base_sku.strip()
+    new_b = new_base_sku.strip()
+    rows = connection.execute(
+        """
+        SELECT id, sku, color_id, size_id
+        FROM product_variants
+        WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0
+        ORDER BY sku COLLATE NOCASE ASC
+        """,
+        (product_id,),
+    ).fetchall()
+    computed: list[tuple[str, str, str, str | None]] = []
+    for r in rows:
+        vid = str(r["id"])
+        cur = str(r["sku"]).strip()
+        color_id = str(r["color_id"])
+        sz_id = str(r["size_id"]) if r["size_id"] else None
+        if cur == old_b or cur.startswith(old_b + "-"):
+            prop = new_b + cur[len(old_b) :] if cur.startswith(old_b + "-") else new_b
+        else:
+            prop = _generate_variant_sku_for_patch(
+                connection,
+                sku_base=new_b,
+                color_id=color_id,
+                size_id=sz_id,
+                exclude_variant_id=vid,
+            )
+        if prop == new_b:
+            prop = _generate_variant_sku_for_patch(
+                connection,
+                sku_base=new_b,
+                color_id=color_id,
+                size_id=sz_id,
+                exclude_variant_id=vid,
+            )
+        computed.append((vid, prop, color_id, sz_id))
+
+    used_local: set[str] = set()
+    finals: list[tuple[str, str]] = []
+    for vid, prop, color_id, sz_id in computed:
+        p = prop
+        n = 0
+        while n < 500:
+            n += 1
+            if p not in used_local and not _variant_sku_in_use(connection, p, vid):
+                break
+            p = _generate_variant_sku_for_patch(
+                connection,
+                sku_base=new_b,
+                color_id=color_id,
+                size_id=sz_id,
+                exclude_variant_id=vid,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Не удалось подобрать уникальные артикулы вариантов",
+            )
+        used_local.add(p)
+        finals.append((vid, p))
+
+    for vid, p in finals:
+        connection.execute(
+            "UPDATE product_variants SET sku = ?, updated_at = ? WHERE id = ?",
+            (p, updated_at, vid),
+        )
+
+
 def _require_active_product_type(connection: sqlite3.Connection, type_id: str) -> str:
     tid = type_id.strip()
     row = connection.execute(
-        "SELECT id FROM product_types WHERE id = ? AND is_active = 1",
+        "SELECT id FROM product_types WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
         (tid,),
     ).fetchone()
     if not row:
@@ -812,7 +1426,7 @@ def _require_active_client(connection: sqlite3.Connection, raw: str | None) -> s
         )
     cid = str(raw).strip()
     row = connection.execute(
-        "SELECT id FROM clients WHERE id = ? AND is_active = 1",
+        "SELECT id FROM clients WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
         (cid,),
     ).fetchone()
     if not row:
@@ -828,7 +1442,7 @@ def _optional_active_client(connection: sqlite3.Connection, raw: str | None) -> 
         return None
     cid = str(raw).strip()
     row = connection.execute(
-        "SELECT id FROM clients WHERE id = ? AND is_active = 1",
+        "SELECT id FROM clients WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
         (cid,),
     ).fetchone()
     if not row:
@@ -844,7 +1458,7 @@ def _optional_active_supplier(connection: sqlite3.Connection, raw: str | None) -
         return None
     sid = str(raw).strip()
     row = connection.execute(
-        "SELECT id FROM suppliers WHERE id = ? AND is_active = 1",
+        "SELECT id FROM suppliers WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
         (sid,),
     ).fetchone()
     if not row:
@@ -853,6 +1467,546 @@ def _optional_active_supplier(connection: sqlite3.Connection, raw: str | None) -
             detail="Поставщик: недопустимое или неактивное значение",
         )
     return sid
+
+
+def _decode_images_json(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        return [str(x) for x in v] if isinstance(v, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def _encode_images_json(urls: list[str]) -> str:
+    return json.dumps(urls, ensure_ascii=False)
+
+
+def _product_card_image_urls(
+    gallery_json_val: str | None, image_url_val: str | None
+) -> list[str]:
+    if gallery_json_val and str(gallery_json_val).strip():
+        try:
+            v = json.loads(str(gallery_json_val))
+            if isinstance(v, list) and v:
+                return [str(x).strip() for x in v if str(x).strip()]
+        except json.JSONDecodeError:
+            pass
+    if image_url_val and str(image_url_val).strip():
+        return [str(image_url_val).strip()]
+    return []
+
+
+def _find_variant_row_for_receipt(
+    connection: sqlite3.Connection,
+    sku_norm: str,
+    color_id: str,
+    size_id: str | None,
+) -> tuple[sqlite3.Row | None, bool]:
+    """Подбор варианта для приёмки: одежда — sku+color+size; техника — sku+color (size игнорируется).
+
+    Возвращает (строка или None, needs_size — нужно выбрать размер в UI).
+    """
+    rows = connection.execute(
+        """
+        SELECT v.id AS variant_id, v.product_id, v.sku AS variant_sku, p.sku AS product_sku,
+               v.color_id, v.size_id, v.length, v.width, v.height,
+               p.name AS product_name, p.gallery_json, p.image_url,
+               IFNULL(pt.requires_size, 0) AS requires_size,
+               pt.name AS product_type_name,
+               cl.name AS client_name
+        FROM product_variants v
+        JOIN products p ON p.id = v.product_id
+        JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        WHERE COALESCE(v.is_deleted, 0) = 0 AND COALESCE(p.is_deleted, 0) = 0
+          AND COALESCE(v.is_active, 1) = 1 AND COALESCE(p.is_active, 1) = 1
+          AND v.color_id = ?
+          AND (
+            LOWER(TRIM(COALESCE(v.sku, ''))) = LOWER(?)
+            OR LOWER(TRIM(COALESCE(p.sku, ''))) = LOWER(?)
+          )
+        """,
+        (color_id, sku_norm, sku_norm),
+    ).fetchall()
+    if not rows:
+        return None, False
+    req_size = bool(rows[0]["requires_size"])
+    if not req_size:
+        if len(rows) != 1:
+            return None, False
+        return rows[0], False
+    user_sz = (size_id or "").strip()
+    if len(rows) == 1:
+        r = rows[0]
+        vs = str(r["size_id"] or "")
+        if not user_sz:
+            return None, True
+        if vs != user_sz:
+            return None, True
+        return r, False
+    if not user_sz:
+        return None, True
+    matches = [r for r in rows if str(r["size_id"] or "") == user_sz]
+    if len(matches) != 1:
+        return None, True
+    return matches[0], False
+
+
+def _sku_token_from_label(name: str) -> str:
+    s = re.sub(r"\s+", "-", str(name).strip().upper())
+    s = re.sub(r"[^0-9A-ZА-ЯЁ\-]", "", s)
+    s = re.sub(r"-+", "-", s).strip("-") or "X"
+    return s[:18]
+
+
+def _product_type_flags(connection: sqlite3.Connection, type_id: str) -> tuple[bool, bool]:
+    row = connection.execute(
+        "SELECT requires_color, requires_size FROM product_types WHERE id = ?",
+        (type_id,),
+    ).fetchone()
+    if not row:
+        return False, False
+    return bool(row["requires_color"]), bool(row["requires_size"])
+
+
+def _require_active_color_id(connection: sqlite3.Connection, cid: str) -> str:
+    rid = cid.strip()
+    row = connection.execute(
+        "SELECT id FROM colors WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
+        (rid,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Цвет: недопустимое или неактивное значение",
+        )
+    return rid
+
+
+def _require_active_size_id(connection: sqlite3.Connection, sid: str) -> str:
+    rid = sid.strip()
+    row = connection.execute(
+        "SELECT id FROM sizes WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
+        (rid,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Размер: недопустимое или неактивное значение",
+        )
+    return rid
+
+
+def _color_size_labels_for_skus(
+    connection: sqlite3.Connection, color_ids: set[str], size_ids: set[str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    colors: dict[str, str] = {}
+    if color_ids:
+        placeholders = ",".join("?" * len(color_ids))
+        for r in connection.execute(
+            f"SELECT id, name FROM colors WHERE id IN ({placeholders})",
+            list(color_ids),
+        ).fetchall():
+            colors[str(r["id"])] = str(r["name"])
+    sizes: dict[str, str] = {}
+    if size_ids:
+        placeholders = ",".join("?" * len(size_ids))
+        for r in connection.execute(
+            f"SELECT id, name FROM sizes WHERE id IN ({placeholders})",
+            list(size_ids),
+        ).fetchall():
+            sizes[str(r["id"])] = str(r["name"])
+    return colors, sizes
+
+
+def _variant_dimension_key(
+    length: float, width: float, height: float, color_id: str, size_id: str | None
+) -> tuple:
+    return (
+        color_id,
+        round(float(length), 4),
+        round(float(width), 4),
+        round(float(height), 4),
+        size_id or "",
+    )
+
+
+def _variant_identity_key(
+    sku_base: str,
+    color_id: str,
+    size_id: str | None,
+    *,
+    requires_size: bool,
+) -> tuple[str, str, str]:
+    """Уникальность варианта: артикул товара + цвет варианта + размер варианта."""
+    base = str(sku_base).strip()
+    cid = str(color_id).strip().lower()
+    if requires_size:
+        sid = str(size_id).strip().lower() if size_id else ""
+    else:
+        sid = ""
+    return (base, cid, sid)
+
+
+def _norm_variant_row_id(value: str | None) -> str | None:
+    """Единый вид UUID строки варианта для сравнения (регистр, пробелы)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s.lower() if s else None
+
+
+def _sku_dim_token(length: float, width: float, height: float) -> str:
+    """Короткий суффикс SKU для различения габаритов (техника, несколько блоков)."""
+    a, b, c = int(round(float(length))), int(round(float(width))), int(round(float(height)))
+    return f"{a}X{b}X{c}"
+
+
+def _build_variant_rows_for_create(
+    connection: sqlite3.Connection,
+    *,
+    requires_size: bool,
+    sku_base: str,
+    color_ids: list[str],
+    dimensions: list[ProductCreateDimensionBlock],
+) -> list[dict]:
+    """Строки для INSERT в product_variants (без id/product_id).
+
+    По ТЗ «Product Variant Create Strategy»: фото не участвуют в генерации — images_json = [].
+    Техника: variants = colors × dimensions. Одежда: псевдокод color → group → size.
+    """
+    seen_keys: set[tuple] = set()
+    out: list[dict] = []
+    used_skus: set[str] = set()
+    size_ids_collect: set[str] = set()
+    for block in dimensions:
+        for s in block.sizes:
+            size_ids_collect.add(s)
+
+    if not dimensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите хотя бы один блок габаритов",
+        )
+
+    if requires_size:
+        for block in dimensions:
+            if not block.sizes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Для одежды укажите размеры в каждом блоке габаритов",
+                )
+        for color_id in color_ids:
+            _require_active_color_id(connection, color_id)
+        for sid in size_ids_collect:
+            _require_active_size_id(connection, sid)
+    else:
+        for block in dimensions:
+            if block.sizes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Для техники не указывайте размеры в блоке габаритов",
+                )
+
+    color_labels, size_labels = _color_size_labels_for_skus(
+        connection, set(color_ids), size_ids_collect
+    )
+    base_norm = _normalize_sku(sku_base)
+    multi_dim = len(dimensions) > 1
+
+    if requires_size:
+        for block in dimensions:
+            for sz in block.sizes:
+                sz_id = _require_active_size_id(connection, sz)
+                for color_id in color_ids:
+                    _require_active_color_id(connection, color_id)
+                    ct = _sku_token_from_label(color_labels.get(color_id, "C"))
+                    st = _sku_token_from_label(size_labels.get(sz_id, "S"))
+                    candidate = f"{base_norm}-{ct}-{st}"
+                    sku = candidate
+                    salt = 0
+                    while sku in used_skus:
+                        salt += 1
+                        sku = f"{candidate}-{salt}"
+                    used_skus.add(sku)
+                    key = _variant_dimension_key(
+                        block.length, block.width, block.height, color_id, sz_id
+                    )
+                    if key in seen_keys:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Дублируется комбинация цвета, габаритов и размера",
+                        )
+                    seen_keys.add(key)
+                    out.append(
+                        {
+                            "color_id": color_id,
+                            "size_id": sz_id,
+                            "length": float(block.length),
+                            "width": float(block.width),
+                            "height": float(block.height),
+                            "sku": sku,
+                            "images_json": _encode_images_json([]),
+                        }
+                    )
+    else:
+        for block in dimensions:
+            dim_tok = _sku_dim_token(block.length, block.width, block.height)
+            for color_id in color_ids:
+                _require_active_color_id(connection, color_id)
+                ct = _sku_token_from_label(color_labels.get(color_id, "C"))
+                candidate = (
+                    f"{base_norm}-{ct}-{dim_tok}" if multi_dim else f"{base_norm}-{ct}"
+                )
+                sku = candidate
+                salt = 0
+                while sku in used_skus:
+                    salt += 1
+                    sku = f"{candidate}-{salt}"
+                used_skus.add(sku)
+                key = _variant_dimension_key(
+                    block.length, block.width, block.height, color_id, None
+                )
+                if key in seen_keys:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Дублируется комбинация цвета и габаритов",
+                    )
+                seen_keys.add(key)
+                out.append(
+                    {
+                        "color_id": color_id,
+                        "size_id": None,
+                        "length": float(block.length),
+                        "width": float(block.width),
+                        "height": float(block.height),
+                        "sku": sku,
+                        "images_json": _encode_images_json([]),
+                    }
+                )
+    return out
+
+
+def _generate_variant_sku_for_patch(
+    connection: sqlite3.Connection,
+    *,
+    sku_base: str,
+    color_id: str,
+    size_id: str | None,
+    exclude_variant_id: str | None,
+) -> str:
+    base_norm = _normalize_sku(sku_base)
+    color_labels, size_labels = _color_size_labels_for_skus(
+        connection, {color_id}, {size_id} if size_id else set()
+    )
+    ct = _sku_token_from_label(color_labels.get(color_id, "C"))
+    if size_id:
+        st = _sku_token_from_label(size_labels.get(size_id, "S"))
+        candidate = f"{base_norm}-{ct}-{st}"
+    else:
+        candidate = f"{base_norm}-{ct}"
+    sku = candidate
+    salt = 0
+    while True:
+        q = "SELECT id FROM product_variants WHERE sku = ? AND COALESCE(is_deleted, 0) = 0"
+        params: list[object] = [sku]
+        if exclude_variant_id:
+            q += " AND id != ?"
+            params.append(exclude_variant_id)
+        dup = connection.execute(q, tuple(params)).fetchone()
+        if not dup:
+            return sku
+        salt += 1
+        sku = f"{candidate}-{salt}"
+
+
+def _soft_delete_variants_for_product(
+    connection: sqlite3.Connection,
+    product_id: str,
+    admin_id: str,
+    ts: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE product_variants
+        SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?,
+            updated_at = ?, is_active = 0
+        WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0
+        """,
+        (ts, admin_id, ts, product_id),
+    )
+
+
+def _sync_product_variants_from_request(
+    connection: sqlite3.Connection,
+    product_id: str,
+    payload: ProductVariantsPatchRequest,
+    admin_id: str,
+) -> None:
+    prow = connection.execute(
+        """
+        SELECT p.sku AS sku_base, IFNULL(pt.requires_size, 0) AS requires_size,
+               COALESCE(p.is_deleted, 0) AS is_deleted
+        FROM products p
+        JOIN product_types pt ON pt.id = p.type_id
+        WHERE p.id = ?
+        """,
+        (product_id,),
+    ).fetchone()
+    if not prow:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    if bool(prow["is_deleted"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Товар удалён. Восстановите его перед редактированием вариантов.",
+        )
+    sku_base = str(prow["sku_base"])
+    requires_size = bool(prow["requires_size"])
+    now = _now()
+
+    existing_rows = connection.execute(
+        "SELECT id FROM product_variants WHERE product_id = ?",
+        (product_id,),
+    ).fetchall()
+    existing_by_norm: dict[str, str] = {}
+    for r in existing_rows:
+        raw_id = str(r["id"])
+        n = _norm_variant_row_id(raw_id)
+        if n:
+            existing_by_norm[n] = raw_id
+    incoming_norm = {
+        _norm_variant_row_id(str(v.id)) for v in payload.variants if v.id
+    }
+    incoming_norm.discard(None)
+    for norm_id, raw_id in existing_by_norm.items():
+        if norm_id not in incoming_norm:
+            connection.execute(
+                """
+                UPDATE product_variants
+                SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?,
+                    updated_at = ?, is_active = 0
+                WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0
+                """,
+                (now, admin_id, now, raw_id, product_id),
+            )
+
+    dup_detail = (
+        "Дублируется сочетание артикула товара, цвета и размера"
+        if requires_size
+        else "Дублируется сочетание артикула товара и цвета"
+    )
+
+    rows_to_apply: list[tuple] = []
+    identity_keys: list[tuple[str, str, str]] = []
+    for item in payload.variants:
+        eff_size = item.size_id if requires_size else None
+        if requires_size and (eff_size is None or str(eff_size).strip() == ""):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для этого типа товара укажите размер варианта",
+            )
+        _require_active_color_id(connection, item.color_id)
+        if eff_size:
+            _require_active_size_id(connection, eff_size)
+        identity_keys.append(
+            _variant_identity_key(
+                sku_base,
+                item.color_id,
+                eff_size,
+                requires_size=requires_size,
+            )
+        )
+        rows_to_apply.append((item, eff_size))
+
+    if len(identity_keys) != len(set(identity_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=dup_detail,
+        )
+
+    for item, eff_size in rows_to_apply:
+        imgs = _encode_images_json(item.images)
+        if item.id:
+            rid = str(item.id)
+            own = connection.execute(
+                "SELECT id FROM product_variants WHERE id = ? AND product_id = ?",
+                (rid, product_id),
+            ).fetchone()
+            if not own:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Неизвестный вариант",
+                )
+            new_sku = (
+                _normalize_sku(item.sku)
+                if item.sku and str(item.sku).strip()
+                else _generate_variant_sku_for_patch(
+                    connection,
+                    sku_base=sku_base,
+                    color_id=item.color_id,
+                    size_id=eff_size,
+                    exclude_variant_id=rid,
+                )
+            )
+            connection.execute(
+                """
+                UPDATE product_variants
+                SET color_id = ?, size_id = ?, length = ?, width = ?, height = ?,
+                    sku = ?, images_json = ?, is_active = ?, updated_at = ?,
+                    is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL
+                WHERE id = ? AND product_id = ?
+                """,
+                (
+                    item.color_id,
+                    eff_size,
+                    float(item.dimension.length),
+                    float(item.dimension.width),
+                    float(item.dimension.height),
+                    new_sku,
+                    imgs,
+                    1 if item.is_active else 0,
+                    now,
+                    rid,
+                    product_id,
+                ),
+            )
+        else:
+            new_sku = (
+                _normalize_sku(item.sku)
+                if item.sku and str(item.sku).strip()
+                else _generate_variant_sku_for_patch(
+                    connection,
+                    sku_base=sku_base,
+                    color_id=item.color_id,
+                    size_id=eff_size,
+                    exclude_variant_id=None,
+                )
+            )
+            connection.execute(
+                """
+                INSERT INTO product_variants (
+                    id, product_id, color_id, size_id,
+                    length, width, height, sku, images_json,
+                    is_active, created_at, is_deleted
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    str(uuid4()),
+                    product_id,
+                    item.color_id,
+                    eff_size,
+                    float(item.dimension.length),
+                    float(item.dimension.width),
+                    float(item.dimension.height),
+                    new_sku,
+                    imgs,
+                    1 if item.is_active else 0,
+                    now,
+                ),
+            )
 
 
 def _product_image_extension(
@@ -884,13 +2038,18 @@ def _get_dictionary_items(table_name: str):
                 d.id,
                 d.name,
                 d.is_active,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
                 d.created_at,
                 d.updated_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
+            WHERE COALESCE(d.is_deleted, 0) = 0
             ORDER BY d.created_at ASC
             """
         ).fetchall()
@@ -899,6 +2058,9 @@ def _get_dictionary_items(table_name: str):
             id=row["id"],
             name=row["name"],
             is_active=bool(row["is_active"]),
+            is_deleted=bool(row["is_deleted"]),
+            deleted_at=row["deleted_at"],
+            deleted_by=row["deleted_by"],
             created_at=row["created_at"],
             created_by=row["created_by"],
             updated_at=row["updated_at"],
@@ -908,7 +2070,9 @@ def _get_dictionary_items(table_name: str):
     ]
 
 
-def _get_dictionary_item(table_name: str, item_id: str):
+def _get_dictionary_item(
+    table_name: str, item_id: str, *, include_deleted: bool = False
+):
     _ensure_dictionary_table(table_name)
     with get_connection() as connection:
         row = connection.execute(
@@ -917,13 +2081,17 @@ def _get_dictionary_item(table_name: str, item_id: str):
                 d.id,
                 d.name,
                 d.is_active,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
                 d.created_at,
                 d.updated_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
             WHERE d.id = ?
             """,
             (item_id,),
@@ -933,10 +2101,18 @@ def _get_dictionary_item(table_name: str, item_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Запись не найдена",
         )
+    if bool(row["is_deleted"]) and not include_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Запись не найдена",
+        )
     return DictionaryBaseItem(
         id=row["id"],
         name=row["name"],
         is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
         created_at=row["created_at"],
         created_by=row["created_by"],
         updated_at=row["updated_at"],
@@ -979,35 +2155,66 @@ def _update_dictionary_item(
     editor_id: str,
 ):
     _ensure_dictionary_table(table_name)
-    fields = []
-    values: list[object] = []
-    if payload.name is not None:
-        fields.append("name = ?")
-        values.append(_normalize_name(payload.name))
-    if payload.is_active is not None:
-        fields.append("is_active = ?")
-        values.append(1 if payload.is_active else 0)
-    if not fields:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Нет данных для обновления",
-        )
-    fields.append("updated_at = ?")
-    values.append(_now())
-    fields.append("updated_by_id = ?")
-    values.append(editor_id)
-
-    values.append(item_id)
+    now = _now()
     with get_connection() as connection:
-        exists = connection.execute(
-            f"SELECT id FROM {table_name} WHERE id = ?",
+        meta = connection.execute(
+            f"SELECT COALESCE(is_deleted, 0) AS del FROM {table_name} WHERE id = ?",
             (item_id,),
         ).fetchone()
-        if not exists:
+        if not meta:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Запись не найдена",
             )
+        is_del = bool(meta["del"])
+        if is_del and payload.is_deleted is not False:
+            if payload.name is not None or payload.is_active is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена. Восстановите её перед редактированием.",
+                )
+            if payload.is_deleted is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена",
+                )
+
+        fields: list[str] = []
+        values: list[object] = []
+        if payload.is_deleted is True:
+            fields.extend(
+                [
+                    "is_deleted = 1",
+                    "deleted_at = ?",
+                    "deleted_by_id = ?",
+                ]
+            )
+            values.extend([now, editor_id])
+        elif payload.is_deleted is False:
+            fields.extend(
+                [
+                    "is_deleted = 0",
+                    "deleted_at = NULL",
+                    "deleted_by_id = NULL",
+                ]
+            )
+        if payload.name is not None:
+            fields.append("name = ?")
+            values.append(_normalize_name(payload.name))
+        if payload.is_active is not None:
+            fields.append("is_active = ?")
+            values.append(1 if payload.is_active else 0)
+
+        if not fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нет данных для обновления",
+            )
+        fields.append("updated_at = ?")
+        values.append(now)
+        fields.append("updated_by_id = ?")
+        values.append(editor_id)
+        values.append(item_id)
         try:
             connection.execute(
                 f"UPDATE {table_name} SET {', '.join(fields)} WHERE id = ?",
@@ -1019,24 +2226,22 @@ def _update_dictionary_item(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
             ) from exc
-    return MessageResponse(message="Обновлено")
+    msg = "Обновлено"
+    if payload.is_deleted is True:
+        msg = "Удалено"
+    elif payload.is_deleted is False:
+        msg = "Восстановлено"
+    return MessageResponse(message=msg)
 
 
-def _delete_dictionary_item(table_name: str, item_id: str):
-    _ensure_dictionary_table(table_name)
-    with get_connection() as connection:
-        exists = connection.execute(
-            f"SELECT id FROM {table_name} WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if not exists:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Запись не найдена",
-            )
-        connection.execute(f"DELETE FROM {table_name} WHERE id = ?", (item_id,))
-        connection.commit()
-    return MessageResponse(message="Удалено")
+def _delete_dictionary_item(table_name: str, item_id: str, admin_id: str):
+    """Мягкое удаление (ТЗ: без физического DELETE)."""
+    return _update_dictionary_item(
+        table_name,
+        item_id,
+        DictionaryUpdateRequest(is_deleted=True),
+        admin_id,
+    )
 
 
 def _size_row_to_item(row: sqlite3.Row) -> SizeItem:
@@ -1044,6 +2249,9 @@ def _size_row_to_item(row: sqlite3.Row) -> SizeItem:
         id=row["id"],
         name=row["name"],
         is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
         created_at=row["created_at"],
         created_by=row["created_by"],
         updated_at=row["updated_at"],
@@ -1051,7 +2259,7 @@ def _size_row_to_item(row: sqlite3.Row) -> SizeItem:
     )
 
 
-def _get_size_item(item_id: str) -> SizeItem:
+def _get_size_item(item_id: str, *, include_deleted: bool = False) -> SizeItem:
     _ensure_dictionary_table("sizes")
     with get_connection() as connection:
         row = connection.execute(
@@ -1060,18 +2268,25 @@ def _get_size_item(item_id: str) -> SizeItem:
                 d.id,
                 d.name,
                 d.is_active,
-                d.created_at,
-                d.updated_at,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             FROM sizes d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
             WHERE d.id = ?
             """,
             (item_id,),
         ).fetchone()
     if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Запись не найдена",
+        )
+    if bool(row["is_deleted"]) and not include_deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Запись не найдена",
@@ -1086,6 +2301,7 @@ def _list_sizes_page(
     name: str | None,
     actuality_id: str | None,
     sort: str | None,
+    include_deleted: bool = False,
 ) -> SizeListResponse:
     _ensure_dictionary_table("sizes")
     offset = (page - 1) * limit
@@ -1094,6 +2310,8 @@ def _list_sizes_page(
     if name is not None and str(name).strip():
         conds.append("LOWER(d.name) LIKE LOWER(?)")
         params.append(f"%{str(name).strip()}%")
+    if not include_deleted:
+        conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
     order_sql = _order_sql_from_sort_param(sort, SIZE_LIST_SORT_COLUMNS) or "d.created_at DESC"
     with get_connection() as connection:
@@ -1114,13 +2332,17 @@ def _list_sizes_page(
                 d.id,
                 d.name,
                 d.is_active,
-                d.created_at,
-                d.updated_at,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by,
+                d.created_at,
+                d.updated_at
             FROM sizes d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
             WHERE {where_sql}
             ORDER BY {order_sql}
             LIMIT ? OFFSET ?
@@ -1165,31 +2387,66 @@ def _create_size(payload: SizeCreateRequest, creator_id: str) -> MessageResponse
 
 def _update_size(item_id: str, payload: SizeUpdateRequest, editor_id: str) -> MessageResponse:
     _ensure_dictionary_table("sizes")
-    fields: list[str] = []
-    values: list[object] = []
-    if payload.name is not None:
-        fields.append("name = ?")
-        values.append(_normalize_name(payload.name))
-    if payload.is_active is not None:
-        fields.append("is_active = ?")
-        values.append(1 if payload.is_active else 0)
-    if not fields:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Нет данных для обновления",
-        )
-    fields.append("updated_at = ?")
-    values.append(_now())
-    fields.append("updated_by_id = ?")
-    values.append(editor_id)
-    values.append(item_id)
+    now = _now()
     with get_connection() as connection:
-        exists = connection.execute("SELECT id FROM sizes WHERE id = ?", (item_id,)).fetchone()
-        if not exists:
+        meta = connection.execute(
+            "SELECT COALESCE(is_deleted, 0) AS del FROM sizes WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if not meta:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Запись не найдена",
             )
+        is_del = bool(meta["del"])
+        if is_del and payload.is_deleted is not False:
+            if payload.name is not None or payload.is_active is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена. Восстановите её перед редактированием.",
+                )
+            if payload.is_deleted is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена",
+                )
+
+        fields: list[str] = []
+        values: list[object] = []
+        if payload.is_deleted is True:
+            fields.extend(
+                [
+                    "is_deleted = 1",
+                    "deleted_at = ?",
+                    "deleted_by_id = ?",
+                ]
+            )
+            values.extend([now, editor_id])
+        elif payload.is_deleted is False:
+            fields.extend(
+                [
+                    "is_deleted = 0",
+                    "deleted_at = NULL",
+                    "deleted_by_id = NULL",
+                ]
+            )
+        if payload.name is not None:
+            fields.append("name = ?")
+            values.append(_normalize_name(payload.name))
+        if payload.is_active is not None:
+            fields.append("is_active = ?")
+            values.append(1 if payload.is_active else 0)
+
+        if not fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нет данных для обновления",
+            )
+        fields.append("updated_at = ?")
+        values.append(now)
+        fields.append("updated_by_id = ?")
+        values.append(editor_id)
+        values.append(item_id)
         try:
             connection.execute(
                 f"UPDATE sizes SET {', '.join(fields)} WHERE id = ?",
@@ -1201,7 +2458,12 @@ def _update_size(item_id: str, payload: SizeUpdateRequest, editor_id: str) -> Me
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
             ) from exc
-    return MessageResponse(message="Обновлено")
+    msg = "Обновлено"
+    if payload.is_deleted is True:
+        msg = "Удалено"
+    elif payload.is_deleted is False:
+        msg = "Восстановлено"
+    return MessageResponse(message=msg)
 
 
 @app.post("/auth/register", response_model=RegisterResponse)
@@ -1245,7 +2507,12 @@ def login(payload: LoginRequest):
 
 @app.get("/auth/me", response_model=MeResponse)
 def me(user=Depends(get_current_user)):
-    return MeResponse(id=user["id"], email=user["email"], role=user["role"])
+    return MeResponse(
+        id=user["id"],
+        email=user["email"],
+        role=user["role"],
+        client_id=_user_client_id_opt(user),
+    )
 
 
 @app.get("/users", response_model=list[UserListItem])
@@ -1253,7 +2520,13 @@ def list_users(admin=Depends(get_current_admin)):
     _ = admin
     with get_connection() as connection:
         users = connection.execute(
-            "SELECT id, email, role, created_at FROM users ORDER BY created_at ASC"
+            """
+            SELECT u.id, u.email, u.role, u.created_at, u.client_id, c.name AS client_name
+            FROM users u
+            LEFT JOIN clients c ON c.id = u.client_id
+            WHERE COALESCE(u.is_deleted, 0) = 0
+            ORDER BY u.created_at ASC
+            """
         ).fetchall()
 
     return [
@@ -1262,6 +2535,8 @@ def list_users(admin=Depends(get_current_admin)):
             email=user["email"],
             role=user["role"],
             created_at=user["created_at"],
+            client_id=user["client_id"],
+            client_name=user["client_name"],
         )
         for user in users
     ]
@@ -1306,14 +2581,20 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get
     return MessageResponse(message="Role updated")
 
 
-@app.delete("/users/{user_id}", response_model=MessageResponse)
-def delete_user(user_id: str, admin=Depends(get_current_admin)):
+@app.patch("/users/{user_id}/client", response_model=MessageResponse)
+def update_user_client(
+    user_id: str,
+    payload: UserClientAssignRequest,
+    admin=Depends(get_current_admin),
+):
+    _ = admin
     if user_id == admin["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Нельзя удалить самого себя",
+            detail="Нельзя изменить привязку самому себе",
         )
-
+    raw = payload.client_id
+    new_cid = (str(raw).strip() if raw is not None else "") or None
     with get_connection() as connection:
         target_user = connection.execute(
             "SELECT id, role FROM users WHERE id = ?",
@@ -1324,16 +2605,86 @@ def delete_user(user_id: str, admin=Depends(get_current_admin)):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Пользователь не найден",
             )
-        if target_user["role"] == "admin":
+        if target_user["role"] != "client":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Нельзя удалить администратора",
+                detail="Привязка к клиенту доступна только для пользователей с ролью «Клиент»",
             )
-
-        connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        if new_cid:
+            _require_active_client(connection, new_cid)
+        connection.execute(
+            "UPDATE users SET client_id = ? WHERE id = ?",
+            (new_cid, user_id),
+        )
         connection.commit()
+    return MessageResponse(message="Привязка обновлена")
 
-    return MessageResponse(message="User deleted")
+
+@app.patch("/users/{user_id}", response_model=MessageResponse)
+def patch_user_deleted_flag(
+    user_id: str,
+    payload: UserDeletePatchRequest,
+    admin=Depends(get_current_admin),
+):
+    return _apply_user_deleted_flag(user_id, admin, is_deleted=payload.is_deleted)
+
+
+def _apply_user_deleted_flag(
+    user_id: str,
+    admin: dict,
+    *,
+    is_deleted: bool,
+) -> MessageResponse:
+    if user_id == admin["id"] and is_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя удалить самого себя",
+        )
+    with get_connection() as connection:
+        target_user = connection.execute(
+            "SELECT id, role, COALESCE(is_deleted, 0) AS del FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Пользователь не найден",
+            )
+        if is_deleted:
+            if target_user["del"]:
+                return MessageResponse(message="Удалено")
+            if target_user["role"] == "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Нельзя удалить администратора",
+                )
+            now = _now()
+            connection.execute(
+                """
+                UPDATE users
+                SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?
+                WHERE id = ?
+                """,
+                (now, admin["id"], user_id),
+            )
+        else:
+            if not target_user["del"]:
+                return MessageResponse(message="Восстановлено")
+            connection.execute(
+                """
+                UPDATE users
+                SET is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+        connection.commit()
+    return MessageResponse(message="Удалено" if is_deleted else "Восстановлено")
+
+
+@app.delete("/users/{user_id}", response_model=MessageResponse)
+def delete_user(user_id: str, admin=Depends(get_current_admin)):
+    return _apply_user_deleted_flag(user_id, admin, is_deleted=True)
 
 
 def _resolve_actuality_filter(
@@ -1369,6 +2720,7 @@ def _list_dictionary_items_page(
     sort: str | None,
     sort_columns: dict[str, str],
     default_order: str,
+    include_deleted: bool = False,
 ) -> DictionaryListResponse:
     _ensure_dictionary_table(table_name)
     offset = (page - 1) * limit
@@ -1383,6 +2735,8 @@ def _list_dictionary_items_page(
     if date_to is not None and str(date_to).strip():
         conds.append("substr(d.created_at, 1, 10) <= ?")
         params.append(str(date_to).strip())
+    if not include_deleted:
+        conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
     order_sql = _order_sql_from_sort_param(sort, sort_columns) or default_order
     with get_connection() as connection:
@@ -1403,13 +2757,17 @@ def _list_dictionary_items_page(
                 d.id,
                 d.name,
                 d.is_active,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
                 d.created_at,
                 d.updated_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
             WHERE {where_sql}
             ORDER BY {order_sql}
             LIMIT ? OFFSET ?
@@ -1422,6 +2780,9 @@ def _list_dictionary_items_page(
                 id=row["id"],
                 name=row["name"],
                 is_active=bool(row["is_active"]),
+                is_deleted=bool(row["is_deleted"]),
+                deleted_at=row["deleted_at"],
+                deleted_by=row["deleted_by"],
                 created_at=row["created_at"],
                 created_by=row["created_by"],
                 updated_at=row["updated_at"],
@@ -1459,6 +2820,7 @@ def list_clients(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
@@ -1474,6 +2836,7 @@ def list_clients(
         sort=sort,
         sort_columns=CLIENT_LIST_SORT_COLUMNS,
         default_order="d.created_at DESC",
+        include_deleted=include_deleted,
     )
 
 
@@ -1483,9 +2846,13 @@ def create_client(payload: DictionaryCreateRequest, admin=Depends(get_current_ad
 
 
 @app.get("/clients/{item_id}", response_model=DictionaryBaseItem)
-def get_client(item_id: str, admin=Depends(get_current_admin)):
+def get_client(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
-    return _get_dictionary_item("clients", item_id)
+    return _get_dictionary_item("clients", item_id, include_deleted=include_deleted)
 
 
 @app.patch("/clients/{item_id}", response_model=MessageResponse)
@@ -1496,7 +2863,7 @@ def update_client(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(
 @app.delete("/clients/{item_id}", response_model=MessageResponse)
 def delete_client(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
-    return _delete_dictionary_item("clients", item_id)
+    return _delete_dictionary_item("clients", item_id, admin["id"])
 
 
 @app.get("/colors", response_model=DictionaryListResponse)
@@ -1509,6 +2876,7 @@ def list_colors(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
@@ -1524,6 +2892,7 @@ def list_colors(
         sort=sort,
         sort_columns=COLOR_LIST_SORT_COLUMNS,
         default_order="d.created_at DESC",
+        include_deleted=include_deleted,
     )
 
 
@@ -1533,9 +2902,13 @@ def create_color(payload: DictionaryCreateRequest, admin=Depends(get_current_adm
 
 
 @app.get("/colors/{item_id}", response_model=DictionaryBaseItem)
-def get_color(item_id: str, admin=Depends(get_current_admin)):
+def get_color(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
-    return _get_dictionary_item("colors", item_id)
+    return _get_dictionary_item("colors", item_id, include_deleted=include_deleted)
 
 
 @app.patch("/colors/{item_id}", response_model=MessageResponse)
@@ -1546,7 +2919,7 @@ def update_color(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(g
 @app.delete("/colors/{item_id}", response_model=MessageResponse)
 def delete_color(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
-    return _delete_dictionary_item("colors", item_id)
+    return _delete_dictionary_item("colors", item_id, admin["id"])
 
 
 @app.get("/product-types", response_model=DictionaryListResponse)
@@ -1559,6 +2932,7 @@ def list_product_types(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
@@ -1574,6 +2948,7 @@ def list_product_types(
         sort=sort,
         sort_columns=CLIENT_LIST_SORT_COLUMNS,
         default_order="d.created_at DESC",
+        include_deleted=include_deleted,
     )
 
 
@@ -1583,9 +2958,13 @@ def create_product_type(payload: DictionaryCreateRequest, admin=Depends(get_curr
 
 
 @app.get("/product-types/{item_id}", response_model=DictionaryBaseItem)
-def get_product_type(item_id: str, admin=Depends(get_current_admin)):
+def get_product_type(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
-    return _get_dictionary_item("product_types", item_id)
+    return _get_dictionary_item("product_types", item_id, include_deleted=include_deleted)
 
 
 @app.patch("/product-types/{item_id}", response_model=MessageResponse)
@@ -1596,7 +2975,7 @@ def update_product_type(item_id: str, payload: DictionaryUpdateRequest, admin=De
 @app.delete("/product-types/{item_id}", response_model=MessageResponse)
 def delete_product_type(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
-    return _delete_dictionary_item("product_types", item_id)
+    return _delete_dictionary_item("product_types", item_id, admin["id"])
 
 
 @app.get("/suppliers", response_model=DictionaryListResponse)
@@ -1609,6 +2988,7 @@ def list_suppliers(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
@@ -1624,6 +3004,7 @@ def list_suppliers(
         sort=sort,
         sort_columns=CLIENT_LIST_SORT_COLUMNS,
         default_order="d.created_at DESC",
+        include_deleted=include_deleted,
     )
 
 
@@ -1633,9 +3014,13 @@ def create_supplier(payload: DictionaryCreateRequest, admin=Depends(get_current_
 
 
 @app.get("/suppliers/{item_id}", response_model=DictionaryBaseItem)
-def get_supplier(item_id: str, admin=Depends(get_current_admin)):
+def get_supplier(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
-    return _get_dictionary_item("suppliers", item_id)
+    return _get_dictionary_item("suppliers", item_id, include_deleted=include_deleted)
 
 
 @app.patch("/suppliers/{item_id}", response_model=MessageResponse)
@@ -1646,7 +3031,7 @@ def update_supplier(item_id: str, payload: DictionaryUpdateRequest, admin=Depend
 @app.delete("/suppliers/{item_id}", response_model=MessageResponse)
 def delete_supplier(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
-    return _delete_dictionary_item("suppliers", item_id)
+    return _delete_dictionary_item("suppliers", item_id, admin["id"])
 
 
 @app.get("/sizes", response_model=SizeListResponse)
@@ -1657,6 +3042,7 @@ def list_sizes(
     name: str | None = Query(None),
     actuality_id: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
     return _list_sizes_page(
@@ -1665,6 +3051,7 @@ def list_sizes(
         name=name,
         actuality_id=actuality_id,
         sort=sort,
+        include_deleted=include_deleted,
     )
 
 
@@ -1674,9 +3061,13 @@ def create_size(payload: SizeCreateRequest, admin=Depends(get_current_admin)):
 
 
 @app.get("/sizes/{item_id}", response_model=SizeItem)
-def get_size(item_id: str, admin=Depends(get_current_admin)):
+def get_size(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
-    return _get_size_item(item_id)
+    return _get_size_item(item_id, include_deleted=include_deleted)
 
 
 @app.patch("/sizes/{item_id}", response_model=MessageResponse)
@@ -1687,7 +3078,7 @@ def update_size(item_id: str, payload: SizeUpdateRequest, admin=Depends(get_curr
 @app.delete("/sizes/{item_id}", response_model=MessageResponse)
 def delete_size(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
-    return _delete_dictionary_item("sizes", item_id)
+    return _delete_dictionary_item("sizes", item_id, admin["id"])
 
 
 @app.get("/products", response_model=ProductListResponse)
@@ -1699,15 +3090,11 @@ def list_products(
     sku: str | None = Query(None),
     type_id: str | None = Query(None),
     client_id: str | None = Query(None),
-    supplier_id: str | None = Query(None),
     actuality_id: str | None = Query(None),
-    date_from: str | None = Query(None),
-    date_to: str | None = Query(None),
     sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
 ):
     _ = admin
-    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
-    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
@@ -1723,22 +3110,21 @@ def list_products(
     if client_id is not None and str(client_id).strip():
         conds.append("p.client_id = ?")
         params.append(str(client_id).strip())
-    if supplier_id is not None and str(supplier_id).strip():
-        conds.append("p.supplier_id = ?")
-        params.append(str(supplier_id).strip())
-    if df is not None:
-        conds.append("substr(p.created_at, 1, 10) >= ?")
-        params.append(df)
-    if dt is not None:
-        conds.append("substr(p.created_at, 1, 10) <= ?")
-        params.append(dt)
+    if not include_deleted:
+        conds.append("COALESCE(p.is_deleted, 0) = 0")
     join_sql = """
             FROM products p
             LEFT JOIN product_types pt ON pt.id = p.type_id
             LEFT JOIN clients c ON c.id = p.client_id
-            LEFT JOIN suppliers s ON s.id = p.supplier_id
+            LEFT JOIN (
+                SELECT product_id, COUNT(*) AS cnt
+                FROM product_variants
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY product_id
+            ) vcnt ON vcnt.product_id = p.id
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
             """
     order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "p.created_at DESC"
     with get_connection() as connection:
@@ -1760,17 +3146,22 @@ def list_products(
                 p.name,
                 p.type_id,
                 pt.name AS type_name,
-                p.sku,
+                p.sku AS sku_base,
+                IFNULL(pt.requires_color, 0) AS requires_color,
+                IFNULL(pt.requires_size, 0) AS requires_size,
                 p.client_id,
                 c.name AS client_name,
-                p.supplier_id,
-                s.name AS supplier_name,
-                p.image_url,
+                IFNULL(vcnt.cnt, 0) AS variant_count,
                 p.is_active,
+                COALESCE(p.is_deleted, 0) AS is_deleted,
+                p.deleted_at,
+                p.image_url,
+                p.gallery_json,
                 p.created_at,
                 p.updated_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             {join_sql}
             WHERE {where_sql}
             ORDER BY {order_sql}
@@ -1785,13 +3176,17 @@ def list_products(
                 name=row["name"],
                 type_id=row["type_id"],
                 type_name=row["type_name"],
-                sku=row["sku"],
+                sku_base=row["sku_base"],
+                requires_color=bool(row["requires_color"]),
+                requires_size=bool(row["requires_size"]),
                 client_id=row["client_id"],
                 client_name=row["client_name"],
-                supplier_id=row["supplier_id"],
-                supplier_name=row["supplier_name"],
-                image_url=row["image_url"],
+                variant_count=int(row["variant_count"] or 0),
                 is_active=bool(row["is_active"]),
+                is_deleted=bool(row["is_deleted"]),
+                deleted_at=row["deleted_at"],
+                deleted_by=row["deleted_by"],
+                image_urls=_product_card_image_urls(row["gallery_json"], row["image_url"]),
                 created_at=row["created_at"],
                 created_by=row["created_by"],
                 updated_at=row["updated_at"],
@@ -1806,7 +3201,11 @@ def list_products(
 
 
 @app.get("/products/{item_id}", response_model=ProductItem)
-def get_product(item_id: str, admin=Depends(get_current_admin)):
+def get_product(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
     _ = admin
     with get_connection() as connection:
         row = connection.execute(
@@ -1816,41 +3215,58 @@ def get_product(item_id: str, admin=Depends(get_current_admin)):
                 p.name,
                 p.type_id,
                 pt.name AS type_name,
-                p.sku,
+                p.sku AS sku_base,
+                IFNULL(pt.requires_color, 0) AS requires_color,
+                IFNULL(pt.requires_size, 0) AS requires_size,
                 p.client_id,
                 c.name AS client_name,
-                p.supplier_id,
-                s.name AS supplier_name,
-                p.image_url,
+                IFNULL(vcnt.cnt, 0) AS variant_count,
                 p.is_active,
+                COALESCE(p.is_deleted, 0) AS is_deleted,
+                p.deleted_at,
+                p.image_url,
+                p.gallery_json,
                 p.created_at,
                 p.updated_at,
                 creator.email AS created_by,
-                editor.email AS updated_by
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
             FROM products p
             LEFT JOIN product_types pt ON pt.id = p.type_id
             LEFT JOIN clients c ON c.id = p.client_id
-            LEFT JOIN suppliers s ON s.id = p.supplier_id
+            LEFT JOIN (
+                SELECT product_id, COUNT(*) AS cnt
+                FROM product_variants
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY product_id
+            ) vcnt ON vcnt.product_id = p.id
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
             WHERE p.id = ?
             """,
             (item_id,),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Товар не найден")
+    if bool(row["is_deleted"]) and not include_deleted:
+        raise HTTPException(status_code=404, detail="Товар не найден")
     return ProductItem(
         id=row["id"],
         name=row["name"],
         type_id=row["type_id"],
         type_name=row["type_name"],
-        sku=row["sku"],
+        sku_base=row["sku_base"],
+        requires_color=bool(row["requires_color"]),
+        requires_size=bool(row["requires_size"]),
         client_id=row["client_id"],
         client_name=row["client_name"],
-        supplier_id=row["supplier_id"],
-        supplier_name=row["supplier_name"],
-        image_url=row["image_url"],
+        variant_count=int(row["variant_count"] or 0),
         is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
+        image_urls=_product_card_image_urls(row["gallery_json"], row["image_url"]),
         created_at=row["created_at"],
         created_by=row["created_by"],
         updated_at=row["updated_at"],
@@ -1858,19 +3274,254 @@ def get_product(item_id: str, admin=Depends(get_current_admin)):
     )
 
 
-@app.post("/products", response_model=MessageResponse)
-async def create_product(
-    name: str = Form(...),
-    type_id: str = Form(...),
-    sku: str = Form(...),
-    client_id: str | None = Form(default=None),
-    supplier_id: str | None = Form(default=None),
-    is_active: bool = Form(default=True),
-    image: UploadFile | None = File(default=None),
+@app.get("/product-variants/find", response_model=ProductVariantFindResponse)
+def find_product_variant_for_receipt(
+    sku: str = Query("", description="Артикул варианта или базовый артикул товара"),
+    color_id: str = Query("", description="Идентификатор цвета"),
+    size_id: str | None = Query(None, description="Размер; для одежды обязателен для однозначного поиска"),
+    user=Depends(get_current_manager),
+):
+    """Поиск варианта для приёмки: admin / manager (роль «кладовщик» в ТЗ = manager)."""
+    _ = user
+    sku_t = sku.strip()
+    cid = color_id.strip()
+    if not sku_t or not cid:
+        return ProductVariantFindResponse(found=False)
+    with get_connection() as connection:
+        row, needs_size = _find_variant_row_for_receipt(
+            connection, sku_t, cid, size_id
+        )
+        if row is None:
+            return ProductVariantFindResponse(found=False, needs_size=needs_size)
+        urls = _product_card_image_urls(row["gallery_json"], row["image_url"])
+        first_img = urls[0] if urls else None
+        return ProductVariantFindResponse(
+            found=True,
+            needs_size=False,
+            variant=ProductVariantFindItem(
+                variant_id=str(row["variant_id"]),
+                product_id=str(row["product_id"]),
+                product_name=str(row["product_name"]),
+                product_type_name=str(row["product_type_name"])
+                if row["product_type_name"]
+                else None,
+                client_name=str(row["client_name"]).strip() if row["client_name"] else None,
+                requires_size=bool(row["requires_size"]),
+                sku=str(row["variant_sku"]),
+                color_id=str(row["color_id"]),
+                size_id=str(row["size_id"]) if row["size_id"] else None,
+                length=float(row["length"]),
+                width=float(row["width"]),
+                height=float(row["height"]),
+                first_image_url=first_img,
+            ),
+        )
+
+
+@app.get("/products/{item_id}/variants", response_model=list[ProductVariantItem])
+def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    with get_connection() as connection:
+        exists = connection.execute(
+            """
+            SELECT 1 FROM products p
+            WHERE p.id = ? AND COALESCE(p.is_deleted, 0) = 0
+            """,
+            (item_id,),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        rows = connection.execute(
+            """
+            SELECT id, color_id, size_id, length, width, height, sku, images_json, is_active
+            FROM product_variants
+            WHERE product_id = ?
+              AND COALESCE(is_deleted, 0) = 0
+            ORDER BY sku COLLATE NOCASE ASC
+            """,
+            (item_id,),
+        ).fetchall()
+    return [
+        ProductVariantItem(
+            id=str(r["id"]),
+            color_id=str(r["color_id"]),
+            dimension=ProductVariantDimension(
+                length=float(r["length"]),
+                width=float(r["width"]),
+                height=float(r["height"]),
+            ),
+            size_id=str(r["size_id"]) if r["size_id"] else None,
+            sku=str(r["sku"]),
+            images=_decode_images_json(r["images_json"]),
+            is_active=bool(r["is_active"]),
+        )
+        for r in rows
+    ]
+
+
+@app.patch("/products/{item_id}/variants", response_model=MessageResponse)
+def patch_product_variants(
+    item_id: str,
+    payload: ProductVariantsPatchRequest,
     admin=Depends(get_current_admin),
 ):
-    image_url: str | None = None
-    if image and image.filename:
+    _ = admin
+    with get_connection() as connection:
+        try:
+            _sync_product_variants_from_request(connection, item_id, payload, admin["id"])
+            connection.execute(
+                "UPDATE products SET updated_at = ?, updated_by_id = ? WHERE id = ?",
+                (_now(), admin["id"], item_id),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="SKU варианта уже занят",
+            ) from exc
+    return MessageResponse(message="Варианты сохранены")
+
+
+def _require_product_not_deleted_for_variants(
+    connection: sqlite3.Connection, product_id: str
+) -> None:
+    r = connection.execute(
+        "SELECT COALESCE(is_deleted, 0) FROM products WHERE id = ?",
+        (product_id,),
+    ).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    if bool(r[0]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Товар удалён. Восстановите товар перед изменением вариантов.",
+        )
+
+
+def _apply_product_variant_deleted_flag(
+    item_id: str,
+    variant_id: str,
+    admin_id: str,
+    *,
+    is_deleted: bool,
+) -> MessageResponse:
+    now = _now()
+    with get_connection() as connection:
+        _require_product_not_deleted_for_variants(connection, item_id)
+        row = connection.execute(
+            """
+            SELECT id, COALESCE(is_deleted, 0) AS del
+            FROM product_variants
+            WHERE id = ? AND product_id = ?
+            """,
+            (variant_id, item_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Вариант не найден")
+        if is_deleted:
+            if row["del"]:
+                return MessageResponse(message="Вариант отключён")
+            connection.execute(
+                """
+                UPDATE product_variants
+                SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?,
+                    updated_at = ?, is_active = 0
+                WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0
+                """,
+                (now, admin_id, now, variant_id, item_id),
+            )
+        else:
+            if not row["del"]:
+                return MessageResponse(message="Вариант восстановлен")
+            connection.execute(
+                """
+                UPDATE product_variants
+                SET is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL,
+                    updated_at = ?, is_active = 1
+                WHERE id = ? AND product_id = ?
+                """,
+                (now, variant_id, item_id),
+            )
+        connection.execute(
+            "UPDATE products SET updated_at = ?, updated_by_id = ? WHERE id = ?",
+            (now, admin_id, item_id),
+        )
+        connection.commit()
+    return MessageResponse(
+        message="Вариант отключён" if is_deleted else "Вариант восстановлен"
+    )
+
+
+@app.patch(
+    "/products/{item_id}/variants/{variant_id}",
+    response_model=MessageResponse,
+)
+def patch_product_variant(
+    item_id: str,
+    variant_id: str,
+    payload: ProductVariantDeletePatchRequest,
+    admin=Depends(get_current_admin),
+):
+    return _apply_product_variant_deleted_flag(
+        item_id,
+        variant_id,
+        admin["id"],
+        is_deleted=payload.is_deleted,
+    )
+
+
+@app.delete("/products/{item_id}/variants/{variant_id}", response_model=MessageResponse)
+def delete_product_variant(
+    item_id: str, variant_id: str, admin=Depends(get_current_admin)
+):
+    return _apply_product_variant_deleted_flag(
+        item_id, variant_id, admin["id"], is_deleted=True
+    )
+
+
+class ProductUploadImageResponse(BaseModel):
+    url: str
+
+
+@app.post("/products/upload-image", response_model=ProductUploadImageResponse)
+async def upload_product_dictionary_image(
+    image: UploadFile = File(...),
+    admin=Depends(get_current_admin),
+):
+    _ = admin
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = _product_image_extension(image.content_type, image.filename)
+    if not ext:
+        raise HTTPException(
+            status_code=400,
+            detail="Допустимы изображения: jpg, png, heic",
+        )
+    filename = f"{uuid4()}{ext}"
+    file_path = UPLOADS_DIR / filename
+    file_path.write_bytes(await image.read())
+    return ProductUploadImageResponse(url=f"/uploads/{filename}")
+
+
+@app.post("/products", response_model=MessageResponse)
+async def create_product(
+    meta: str = Form(...),
+    images: list[UploadFile] = File(default=[]),
+    admin=Depends(get_current_admin),
+):
+    try:
+        parsed = ProductCreateMeta.model_validate_json(meta)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Некорректные данные товара (meta JSON)",
+        ) from exc
+
+    image_urls: list[str] = []
+    for image in images:
+        if not image.filename:
+            continue
         ext = _product_image_extension(image.content_type, image.filename)
         if not ext:
             raise HTTPException(
@@ -1880,113 +3531,189 @@ async def create_product(
         filename = f"{uuid4()}{ext}"
         file_path = UPLOADS_DIR / filename
         file_path.write_bytes(await image.read())
-        image_url = f"/uploads/{filename}"
+        image_urls.append(f"/uploads/{filename}")
+
+    inner = parsed.product
+    if not parsed.colors:
+        raise HTTPException(status_code=400, detail="Выберите хотя бы один цвет")
 
     with get_connection() as connection:
-        tid = _require_active_product_type(connection, type_id)
-        cid = _require_active_client(connection, client_id)
-        sid = _optional_active_supplier(connection, supplier_id)
+        tid = _require_active_product_type(connection, inner.type_id)
+        _, requires_size = _product_type_flags(connection, tid)
+        cid = _require_active_client(connection, inner.client_id)
+        variant_rows = _build_variant_rows_for_create(
+            connection,
+            requires_size=requires_size,
+            sku_base=inner.sku_base,
+            color_ids=parsed.colors,
+            dimensions=parsed.dimensions,
+        )
+        pid = str(uuid4())
+        now = _now()
+        preview_url = image_urls[0] if image_urls else None
+        gallery_ser = json.dumps(image_urls, ensure_ascii=False) if image_urls else None
         try:
             connection.execute(
                 """
                 INSERT INTO products (
-                    id, name, type_id, client_id, supplier_id, sku, image_url,
+                    id, name, type_id, client_id, supplier_id, sku, image_url, gallery_json,
                     is_active, created_at, creator_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(uuid4()),
-                    _normalize_name(name),
+                    pid,
+                    _normalize_name(inner.name),
                     tid,
                     cid,
-                    sid,
-                    _normalize_sku(sku),
-                    image_url,
-                    1 if is_active else 0,
-                    _now(),
+                    _normalize_sku(inner.sku_base),
+                    preview_url,
+                    gallery_ser,
+                    1 if inner.is_active else 0,
+                    now,
                     admin["id"],
                 ),
             )
+            for vr in variant_rows:
+                connection.execute(
+                    """
+                    INSERT INTO product_variants (
+                        id, product_id, color_id, size_id,
+                        length, width, height, sku, images_json,
+                        is_active, created_at, is_deleted
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+                    """,
+                    (
+                        str(uuid4()),
+                        pid,
+                        vr["color_id"],
+                        vr["size_id"],
+                        vr["length"],
+                        vr["width"],
+                        vr["height"],
+                        vr["sku"],
+                        vr["images_json"],
+                        now,
+                    ),
+                )
             connection.commit()
         except sqlite3.IntegrityError as exc:
+            connection.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="SKU уже существует",
+                detail="Базовый артикул или SKU варианта уже существует",
             ) from exc
     return MessageResponse(message="Создано")
 
 
 @app.patch("/products/{item_id}", response_model=MessageResponse)
-async def update_product(
+def update_product(
     item_id: str,
-    name: str | None = Form(default=None),
-    type_id: str | None = Form(default=None),
-    sku: str | None = Form(default=None),
-    client_id: str | None = Form(default=None),
-    supplier_id: str | None = Form(default=None),
-    is_active: bool | None = Form(default=None),
-    image: UploadFile | None = File(default=None),
+    payload: ProductUpdateRequest,
     admin=Depends(get_current_admin),
 ):
-    fields = []
-    values: list[object] = []
-    if name is not None:
-        fields.append("name = ?")
-        values.append(_normalize_name(name))
-    if image is not None and image.filename:
-        ext = _product_image_extension(image.content_type, image.filename)
-        if not ext:
-            raise HTTPException(
-                status_code=400,
-                detail="Допустимы изображения: jpg, png, heic",
-            )
-        filename = f"{uuid4()}{ext}"
-        file_path = UPLOADS_DIR / filename
-        file_path.write_bytes(await image.read())
-        fields.append("image_url = ?")
-        values.append(f"/uploads/{filename}")
-
+    now = _now()
     with get_connection() as connection:
-        exists = connection.execute(
-            "SELECT id FROM products WHERE id = ?",
+        meta = connection.execute(
+            """
+            SELECT COALESCE(is_deleted, 0) AS del, sku AS sku, type_id AS type_id
+            FROM products WHERE id = ?
+            """,
             (item_id,),
         ).fetchone()
-        if not exists:
+        if not meta:
             raise HTTPException(status_code=404, detail="Товар не найден")
+        is_del = bool(meta["del"])
+        cur_sku = str(meta["sku"])
+        cur_type = str(meta["type_id"])
+        if is_del and payload.is_deleted is not False:
+            if (
+                payload.name is not None
+                or payload.type_id is not None
+                or payload.client_id is not None
+                or payload.is_active is not None
+                or payload.sku_base is not None
+                or payload.image_urls is not None
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Товар удалён. Восстановите его перед редактированием.",
+                )
+            if payload.is_deleted is None:
+                raise HTTPException(status_code=400, detail="Товар удалён")
 
-        if type_id is not None:
-            tid = _require_active_product_type(connection, type_id)
-            fields.append("type_id = ?")
-            values.append(tid)
-        if sku is not None:
-            fields.append("sku = ?")
-            values.append(_normalize_sku(sku))
-        if client_id is not None:
-            if str(client_id).strip() == "":
+        if payload.type_id is not None:
+            req_tid = str(payload.type_id).strip()
+            if req_tid != cur_type:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Поле Клиент обязательно",
+                    detail="Тип товара нельзя изменить после создания",
                 )
-            cid = _require_active_client(connection, client_id)
-            fields.append("client_id = ?")
-            values.append(cid)
-        if supplier_id is not None:
-            if str(supplier_id).strip() == "":
-                fields.append("supplier_id = ?")
+
+        fields: list[str] = []
+        values: list[object] = []
+        if payload.is_deleted is True:
+            fields.extend(
+                [
+                    "is_deleted = 1",
+                    "deleted_at = ?",
+                    "deleted_by_id = ?",
+                ]
+            )
+            values.extend([now, admin["id"]])
+        elif payload.is_deleted is False:
+            fields.extend(
+                [
+                    "is_deleted = 0",
+                    "deleted_at = NULL",
+                    "deleted_by_id = NULL",
+                ]
+            )
+        if payload.name is not None:
+            fields.append("name = ?")
+            values.append(_normalize_name(payload.name))
+        if payload.client_id is not None:
+            if str(payload.client_id).strip() == "":
+                fields.append("client_id = ?")
                 values.append(None)
             else:
-                sid = _optional_active_supplier(connection, supplier_id)
-                fields.append("supplier_id = ?")
-                values.append(sid)
-        if is_active is not None:
+                cid = _optional_active_client(connection, payload.client_id)
+                fields.append("client_id = ?")
+                values.append(cid)
+        if payload.is_active is not None:
             fields.append("is_active = ?")
-            values.append(1 if is_active else 0)
+            values.append(1 if payload.is_active else 0)
+
+        if payload.sku_base is not None:
+            new_sku = _normalize_sku(payload.sku_base)
+            if new_sku != cur_sku:
+                if _sku_taken_globally_except_product(connection, new_sku, item_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Базовый артикул уже занят",
+                    )
+                _rebase_variant_skus_for_new_product_base(
+                    connection,
+                    product_id=item_id,
+                    old_base_sku=cur_sku,
+                    new_base_sku=new_sku,
+                    updated_at=now,
+                )
+                fields.append("sku = ?")
+                values.append(new_sku)
+
+        if payload.image_urls is not None:
+            urls = [str(u).strip() for u in payload.image_urls if str(u).strip()]
+            fields.append("gallery_json = ?")
+            values.append(json.dumps(urls, ensure_ascii=False) if urls else None)
+            fields.append("image_url = ?")
+            values.append(urls[0] if urls else None)
 
         if not fields:
             raise HTTPException(status_code=400, detail="Нет данных для обновления")
         fields.append("updated_at = ?")
-        values.append(_now())
+        values.append(now)
         fields.append("updated_by_id = ?")
         values.append(admin["id"])
         values.append(item_id)
@@ -1996,18 +3723,26 @@ async def update_product(
                 f"UPDATE products SET {', '.join(fields)} WHERE id = ?",
                 tuple(values),
             )
+            if payload.is_deleted is True:
+                _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
             connection.commit()
         except sqlite3.IntegrityError as exc:
+            connection.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="SKU уже существует",
+                detail="Базовый артикул или SKU варианта уже существует",
             ) from exc
-    return MessageResponse(message="Обновлено")
+    msg = "Обновлено"
+    if payload.is_deleted is True:
+        msg = "Удалено"
+    elif payload.is_deleted is False:
+        msg = "Восстановлено"
+    return MessageResponse(message=msg)
 
 
 @app.delete("/products/{item_id}", response_model=MessageResponse)
 def delete_product(item_id: str, admin=Depends(get_current_admin)):
-    _ = admin
+    now = _now()
     with get_connection() as connection:
         exists = connection.execute(
             "SELECT id FROM products WHERE id = ?",
@@ -2015,6 +3750,2318 @@ def delete_product(item_id: str, admin=Depends(get_current_admin)):
         ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Запись не найдена")
-        connection.execute("DELETE FROM products WHERE id = ?", (item_id,))
+        connection.execute(
+            """
+            UPDATE products
+            SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?,
+                updated_at = ?, updated_by_id = ?
+            WHERE id = ?
+            """,
+            (now, admin["id"], now, admin["id"], item_id),
+        )
+        _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
         connection.commit()
     return MessageResponse(message="Удалено")
+
+
+# ============================================================================
+# Inventory: операции (приход/расход), остатки.
+# Бизнес-логика: см. ТЗ «Бизнес логика приемка отгрузка остатки».
+# Доступ — менеджер и админ (get_current_manager).
+# Остатки агрегируются из истории операций по ключу (product_id, color_id, size_id).
+# ============================================================================
+
+
+class InventoryProductTypeLookup(BaseModel):
+    id: str
+    name: str
+    requires_color: bool
+    requires_size: bool
+
+
+class InventoryProductLookup(BaseModel):
+    id: str
+    name: str
+    sku: str
+    type_id: str
+    type_name: str
+    supplier_id: str | None = None
+    supplier_name: str | None = None
+    requires_color: bool
+    requires_size: bool
+
+
+class InventoryOperationCreate(BaseModel):
+    op_type: str = Field(description="'in' — поступление, 'out' — отгрузка")
+    client_id: str = Field(description="Клиент: проверяется как владелец товара")
+    product_id: str
+    color_id: str | None = None
+    size_id: str | None = None
+    quantity: int = Field(gt=0)
+    note: str | None = None
+
+
+class InventoryOperationItem(BaseModel):
+    id: str
+    op_type: str
+    client_id: str | None
+    client_name: str | None
+    product_id: str
+    product_name: str
+    product_type_id: str | None
+    product_type_name: str | None
+    supplier_id: str | None
+    supplier_name: str | None
+    color_id: str | None
+    color_name: str | None
+    size_id: str | None
+    size_name: str | None
+    variant_sku: str | None = Field(
+        default=None, description="Артикул варианта (для сортировки/совместимости; в UI списка — product_sku)"
+    )
+    product_sku: str | None = Field(
+        default=None, description="Базовый артикул товара (products.sku)"
+    )
+    preview_image_url: str | None = Field(default=None, description="Первое фото карточки товара")
+    quantity: int
+    note: str | None
+    created_at: str
+    created_by: str | None
+
+
+class InventoryOperationListResponse(BaseModel):
+    items: list[InventoryOperationItem]
+    total: int
+    page: int
+    limit: int
+
+
+class InventoryBalanceItem(BaseModel):
+    product_id: str
+    product_name: str
+    product_type_id: str | None
+    product_type_name: str | None
+    client_id: str | None
+    client_name: str | None
+    supplier_id: str | None
+    supplier_name: str | None
+    color_id: str | None
+    color_name: str | None
+    size_id: str | None
+    size_name: str | None
+    quantity: int
+
+
+class InventoryBalanceListResponse(BaseModel):
+    items: list[InventoryBalanceItem]
+    total: int
+    page: int
+    limit: int
+
+
+class InventorySingleBalanceResponse(BaseModel):
+    quantity: int
+
+
+def _active_lookup_dictionary(table_name: str) -> list[DictionaryBaseItem]:
+    _ensure_dictionary_table(table_name)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, name, is_active, created_at, NULL AS created_by,
+                   NULL AS updated_at, NULL AS updated_by
+            FROM {table_name}
+            WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0
+            ORDER BY name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+    return [
+        DictionaryBaseItem(
+            id=r["id"],
+            name=r["name"],
+            is_active=bool(r["is_active"]),
+            created_at=r["created_at"],
+            created_by=None,
+            updated_at=None,
+            updated_by=None,
+        )
+        for r in rows
+    ]
+
+
+def _balance_qty(
+    connection: sqlite3.Connection,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+) -> int:
+    row = connection.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN op_type = 'in' THEN quantity ELSE 0 END), 0) AS qty_in,
+            COALESCE(SUM(CASE WHEN op_type = 'out' THEN quantity ELSE 0 END), 0) AS qty_out
+        FROM inventory_operations
+        WHERE product_id = ?
+          AND IFNULL(color_id, '') = IFNULL(?, '')
+          AND IFNULL(size_id, '') = IFNULL(?, '')
+        """,
+        (product_id, color_id, size_id),
+    ).fetchone()
+    return int(row["qty_in"]) - int(row["qty_out"])
+
+
+@app.get("/inventory/lookups/clients", response_model=list[DictionaryBaseItem])
+def inventory_lookup_clients(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("clients")
+
+
+@app.get("/inventory/lookups/colors", response_model=list[DictionaryBaseItem])
+def inventory_lookup_colors(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("colors")
+
+
+@app.get(
+    "/inventory/lookups/colors-for-sku",
+    response_model=list[DictionaryBaseItem],
+)
+def inventory_lookup_colors_for_sku(
+    sku: str = Query(..., description="Базовый артикул товара (products.sku)"),
+    user=Depends(get_current_manager),
+):
+    """Цвета, для которых у товара есть варианты (только по этому артикулу)."""
+    _ = user
+    s = str(sku).strip()
+    if not s:
+        return []
+    with get_connection() as connection:
+        prow = connection.execute(
+            """
+            SELECT p.id
+            FROM products p
+            WHERE COALESCE(p.is_deleted, 0) = 0
+              AND p.is_active = 1
+              AND LOWER(TRIM(COALESCE(p.sku, ''))) = LOWER(?)
+            LIMIT 1
+            """,
+            (s,),
+        ).fetchone()
+        if not prow:
+            return []
+        pid = str(prow["id"])
+        rows = connection.execute(
+            """
+            SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
+                   NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
+                   COALESCE(d.is_deleted, 0) AS is_deleted
+            FROM product_variants v
+            INNER JOIN colors d ON d.id = v.color_id
+            WHERE v.product_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+              AND COALESCE(v.is_active, 1) = 1
+              AND v.color_id IS NOT NULL
+              AND d.is_active = 1
+              AND COALESCE(d.is_deleted, 0) = 0
+            ORDER BY d.name COLLATE NOCASE ASC
+            """,
+            (pid,),
+        ).fetchall()
+    return [
+        DictionaryBaseItem(
+            id=str(r["id"]),
+            name=r["name"],
+            is_active=bool(r["is_active"]),
+            is_deleted=bool(r["is_deleted"]) if r["is_deleted"] is not None else False,
+            created_at=r["created_at"],
+            created_by=None,
+            updated_at=None,
+            updated_by=None,
+        )
+        for r in rows
+    ]
+
+
+@app.get(
+    "/inventory/lookups/sizes-for-sku",
+    response_model=list[DictionaryBaseItem],
+)
+def inventory_lookup_sizes_for_sku(
+    sku: str = Query(..., description="Базовый артикул товара (products.sku)"),
+    color_id: str = Query(..., description="Цвет варианта"),
+    user=Depends(get_current_manager),
+):
+    """Размеры вариантов для пары товар (артикул) + цвет."""
+    _ = user
+    s = str(sku).strip()
+    cid = str(color_id).strip()
+    if not s or not cid:
+        return []
+    with get_connection() as connection:
+        prow = connection.execute(
+            """
+            SELECT p.id
+            FROM products p
+            WHERE COALESCE(p.is_deleted, 0) = 0
+              AND p.is_active = 1
+              AND LOWER(TRIM(COALESCE(p.sku, ''))) = LOWER(?)
+            LIMIT 1
+            """,
+            (s,),
+        ).fetchone()
+        if not prow:
+            return []
+        pid = str(prow["id"])
+        rows = connection.execute(
+            """
+            SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
+                   NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
+                   COALESCE(d.is_deleted, 0) AS is_deleted
+            FROM product_variants v
+            INNER JOIN sizes d ON d.id = v.size_id
+            WHERE v.product_id = ?
+              AND v.color_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+              AND COALESCE(v.is_active, 1) = 1
+              AND v.size_id IS NOT NULL
+              AND d.is_active = 1
+              AND COALESCE(d.is_deleted, 0) = 0
+            ORDER BY d.name COLLATE NOCASE ASC
+            """,
+            (pid, cid),
+        ).fetchall()
+    return [
+        DictionaryBaseItem(
+            id=str(r["id"]),
+            name=r["name"],
+            is_active=bool(r["is_active"]),
+            is_deleted=bool(r["is_deleted"]) if r["is_deleted"] is not None else False,
+            created_at=r["created_at"],
+            created_by=None,
+            updated_at=None,
+            updated_by=None,
+        )
+        for r in rows
+    ]
+
+
+@app.get("/inventory/lookups/sizes", response_model=list[DictionaryBaseItem])
+def inventory_lookup_sizes(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("sizes")
+
+
+@app.get(
+    "/inventory/lookups/product-types",
+    response_model=list[InventoryProductTypeLookup],
+)
+def inventory_lookup_product_types(user=Depends(get_current_manager)):
+    _ = user
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name, requires_color, requires_size
+            FROM product_types
+            WHERE is_active = 1
+            ORDER BY name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+    return [
+        InventoryProductTypeLookup(
+            id=r["id"],
+            name=r["name"],
+            requires_color=bool(r["requires_color"]),
+            requires_size=bool(r["requires_size"]),
+        )
+        for r in rows
+    ]
+
+
+@app.get("/inventory/lookups/suppliers", response_model=list[DictionaryBaseItem])
+def inventory_lookup_suppliers(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("suppliers")
+
+
+@app.get("/inventory/lookups/products", response_model=list[InventoryProductLookup])
+def inventory_lookup_products(
+    client_id: str | None = Query(None, description="Фильтр по клиенту-владельцу товара"),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    conds = ["p.is_active = 1", "COALESCE(p.is_deleted, 0) = 0"]
+    params: list[object] = []
+    if client_id is not None and str(client_id).strip():
+        conds.append("p.client_id = ?")
+        params.append(str(client_id).strip())
+    where_sql = " AND ".join(conds)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT p.id, p.name, p.sku, p.type_id,
+                   pt.name AS type_name,
+                   p.supplier_id, sp.name AS supplier_name,
+                   pt.requires_color, pt.requires_size
+            FROM products p
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+            WHERE {where_sql}
+            ORDER BY p.name COLLATE NOCASE ASC
+            """,
+            params,
+        ).fetchall()
+    return [
+        InventoryProductLookup(
+            id=r["id"],
+            name=r["name"],
+            sku=r["sku"],
+            type_id=r["type_id"],
+            type_name=r["type_name"] or "",
+            supplier_id=r["supplier_id"],
+            supplier_name=r["supplier_name"],
+            requires_color=bool(r["requires_color"]) if r["requires_color"] is not None else False,
+            requires_size=bool(r["requires_size"]) if r["requires_size"] is not None else False,
+        )
+        for r in rows
+    ]
+
+
+@app.get("/inventory/lookups/skus", response_model=list[str])
+def inventory_lookup_skus(user=Depends(get_current_manager)):
+    """Базовые артикулы товаров (`products.sku`) для выбора в приёмке (без артикулов вариантов)."""
+    _ = user
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT TRIM(p.sku) AS sku
+            FROM products p
+            WHERE COALESCE(p.is_deleted, 0) = 0
+              AND p.is_active = 1
+              AND TRIM(COALESCE(p.sku, '')) != ''
+            ORDER BY sku COLLATE NOCASE ASC
+            """
+        ).fetchall()
+    return [str(r["sku"]).strip() for r in rows]
+
+
+@app.get("/inventory/balance/single", response_model=InventorySingleBalanceResponse)
+def inventory_balance_single(
+    product_id: str = Query(...),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    """Текущий остаток по точному ключу (product, color, size). Используется в форме отгрузки."""
+    _ = user
+    pid = str(product_id).strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="product_id обязателен")
+    cid = (color_id or "").strip() or None
+    sid = (size_id or "").strip() or None
+    with get_connection() as connection:
+        qty = _balance_qty(connection, pid, cid, sid)
+    return InventorySingleBalanceResponse(quantity=qty)
+
+
+@app.get("/inventory/operations", response_model=InventoryOperationListResponse)
+def list_inventory_operations(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    op_type: str | None = Query(None, description="'in' или 'out'"),
+    client_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    supplier_id: str | None = Query(None),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    sku: str | None = Query(None, description="Подстрока по базовому артикулу товара (products.sku)"),
+    name: str | None = Query(None, description="Подстрока по названию товара (products.name)"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    offset = (page - 1) * limit
+    conds = ["1=1"]
+    params: list[object] = []
+    if op_type is not None and str(op_type).strip():
+        v = str(op_type).strip()
+        if v not in ("in", "out"):
+            raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+        conds.append("o.op_type = ?")
+        params.append(v)
+    if client_id is not None and str(client_id).strip():
+        conds.append("p.client_id = ?")
+        params.append(str(client_id).strip())
+    if supplier_id is not None and str(supplier_id).strip():
+        conds.append("p.supplier_id = ?")
+        params.append(str(supplier_id).strip())
+    if product_id is not None and str(product_id).strip():
+        conds.append("o.product_id = ?")
+        params.append(str(product_id).strip())
+    if color_id is not None and str(color_id).strip():
+        conds.append("o.color_id = ?")
+        params.append(str(color_id).strip())
+    if size_id is not None and str(size_id).strip():
+        conds.append("o.size_id = ?")
+        params.append(str(size_id).strip())
+    if sku is not None and str(sku).strip():
+        like = f"%{str(sku).strip().lower()}%"
+        conds.append("LOWER(COALESCE(p.sku, '')) LIKE ?")
+        params.append(like)
+    if name is not None and str(name).strip():
+        like_name = f"%{str(name).strip().lower()}%"
+        conds.append("LOWER(COALESCE(p.name, '')) LIKE ?")
+        params.append(like_name)
+    if df is not None:
+        conds.append("substr(o.created_at, 1, 10) >= ?")
+        params.append(df)
+    if dt is not None:
+        conds.append("substr(o.created_at, 1, 10) <= ?")
+        params.append(dt)
+    where_sql = " AND ".join(conds)
+    join_sql = """
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+        LEFT JOIN colors col ON col.id = o.color_id
+        LEFT JOIN sizes sz ON sz.id = o.size_id
+        LEFT JOIN users u ON u.id = o.created_by_id
+        LEFT JOIN product_variants pv ON pv.id = o.variant_id
+    """
+    order_sql = (
+        _order_sql_from_sort_param(sort, INVENTORY_OPERATIONS_SORT_COLUMNS)
+        or "o.created_at DESC"
+    )
+    with get_connection() as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) {join_sql} WHERE {where_sql}", params
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity,
+                o.note, o.created_at, o.variant_id, o.variant_sku,
+                p.name AS product_name, p.client_id, p.type_id AS product_type_id,
+                p.sku AS product_sku, p.gallery_json, p.image_url,
+                pt.name AS product_type_name,
+                p.supplier_id, sp.name AS supplier_name,
+                cl.name AS client_name,
+                col.name AS color_name,
+                sz.name AS size_name,
+                pv.sku AS pv_sku,
+                u.email AS created_by
+            {join_sql}
+            WHERE {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    items: list[InventoryOperationItem] = []
+    for r in rows:
+        urls = _product_card_image_urls(r["gallery_json"], r["image_url"])
+        preview = urls[0] if urls else None
+        vs = (r["variant_sku"] or r["pv_sku"] or r["product_sku"] or "").strip() or None
+        items.append(
+            InventoryOperationItem(
+                id=r["id"],
+                op_type=r["op_type"],
+                client_id=r["client_id"],
+                client_name=r["client_name"],
+                product_id=r["product_id"],
+                product_name=r["product_name"] or "",
+                product_type_id=r["product_type_id"],
+                product_type_name=r["product_type_name"],
+                supplier_id=r["supplier_id"],
+                supplier_name=r["supplier_name"],
+                color_id=r["color_id"],
+                color_name=r["color_name"],
+                size_id=r["size_id"],
+                size_name=r["size_name"],
+                variant_sku=vs,
+                product_sku=str(r["product_sku"] or "").strip() or None,
+                preview_image_url=preview,
+                quantity=int(r["quantity"]),
+                note=r["note"],
+                created_at=r["created_at"],
+                created_by=r["created_by"],
+            )
+        )
+    return InventoryOperationListResponse(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.post("/inventory/operations", response_model=MessageResponse)
+def create_inventory_operation(
+    payload: InventoryOperationCreate,
+    user=Depends(get_current_manager),
+):
+    op_type = payload.op_type.strip().lower()
+    if op_type not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+
+    pid = payload.product_id.strip()
+    cid = (payload.color_id or "").strip() or None
+    sid = (payload.size_id or "").strip() or None
+    note = (payload.note or "").strip() or None
+
+    with get_connection() as connection:
+        client_id = _require_active_client(connection, payload.client_id)
+        product = connection.execute(
+            """
+            SELECT p.id, p.name, p.client_id, p.is_active,
+                   pt.id AS type_id, pt.name AS type_name,
+                   pt.requires_color, pt.requires_size
+            FROM products p
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            WHERE p.id = ? AND COALESCE(p.is_deleted, 0) = 0
+            """,
+            (pid,),
+        ).fetchone()
+        if not product:
+            raise HTTPException(status_code=400, detail="Товар не найден")
+        if not bool(product["is_active"]):
+            raise HTTPException(status_code=400, detail="Товар не актуален")
+        if product["client_id"] != client_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Название: товар не привязан к выбранному клиенту",
+            )
+
+        requires_color = bool(product["requires_color"]) if product["requires_color"] is not None else False
+        requires_size = bool(product["requires_size"]) if product["requires_size"] is not None else False
+
+        if requires_color and not cid:
+            raise HTTPException(status_code=400, detail="Цвет обязателен для этого типа товара")
+        if requires_size and not sid:
+            raise HTTPException(status_code=400, detail="Размер обязателен для этого типа товара")
+
+        if cid:
+            ok = connection.execute(
+                "SELECT 1 FROM colors WHERE id = ? AND is_active = 1", (cid,)
+            ).fetchone()
+            if not ok:
+                raise HTTPException(
+                    status_code=400, detail="Цвет: недопустимое или неактивное значение"
+                )
+        if sid:
+            ok = connection.execute(
+                "SELECT 1 FROM sizes WHERE id = ? AND is_active = 1", (sid,)
+            ).fetchone()
+            if not ok:
+                raise HTTPException(
+                    status_code=400, detail="Размер: недопустимое или неактивное значение"
+                )
+
+        if op_type == "out":
+            current = _balance_qty(connection, pid, cid, sid)
+            if current < payload.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Недостаточно остатка: доступно {current}, требуется {payload.quantity}"
+                    ),
+                )
+
+        connection.execute(
+            """
+            INSERT INTO inventory_operations
+                (id, op_type, product_id, color_id, size_id, quantity, note,
+                 created_at, created_by_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                op_type,
+                pid,
+                cid,
+                sid,
+                int(payload.quantity),
+                note,
+                _now(),
+                user["id"],
+            ),
+        )
+        connection.commit()
+    return MessageResponse(message="Создано")
+
+
+@app.post("/inventory/receipt", response_model=MessageResponse)
+def create_inventory_receipt(
+    payload: ReceiptCreate,
+    user=Depends(get_current_manager),
+):
+    """Приёмка по варианту: op_type=in; дублирует POST /receipts."""
+    return _create_receipt_from_variant(payload, user)
+
+
+@app.post("/receipts", response_model=MessageResponse)
+def create_receipt(
+    payload: ReceiptCreate,
+    user=Depends(get_current_manager),
+):
+    """Создание приёмки (поступления) по варианту товара."""
+    return _create_receipt_from_variant(payload, user)
+
+
+def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageResponse:
+    vid = payload.variant_id.strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="Укажите вариант")
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+    note = (payload.comment or "").strip() or None
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT v.id, v.sku AS v_sku, v.product_id, v.color_id, v.size_id,
+                   COALESCE(v.is_deleted, 0) AS vdel,
+                   COALESCE(p.is_deleted, 0) AS pdel,
+                   COALESCE(v.is_active, 1) AS vact,
+                   COALESCE(p.is_active, 1) AS pact
+            FROM product_variants v
+            JOIN products p ON p.id = v.product_id
+            WHERE v.id = ?
+            """,
+            (vid,),
+        ).fetchone()
+        if not row or bool(row["vdel"]) or bool(row["pdel"]):
+            raise HTTPException(status_code=400, detail="Вариант не найден")
+        if not bool(row["vact"]) or not bool(row["pact"]):
+            raise HTTPException(status_code=400, detail="Товар не актуален")
+
+        pid = str(row["product_id"])
+        cid = str(row["color_id"]) if row["color_id"] else None
+        sid = str(row["size_id"]) if row["size_id"] else None
+        vsku = str(row["v_sku"]).strip()
+        created_at = _created_at_for_receipt_date(
+            (payload.receipt_date or "").strip() or None
+        )
+
+        connection.execute(
+            """
+            INSERT INTO inventory_operations
+                (id, op_type, product_id, color_id, size_id, quantity, note,
+                 created_at, created_by_id, variant_id, variant_sku)
+            VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                pid,
+                cid,
+                sid,
+                int(payload.quantity),
+                note,
+                created_at,
+                user["id"],
+                vid,
+                vsku,
+            ),
+        )
+        connection.commit()
+    return MessageResponse(message="Товар принят на склад")
+
+
+def _receipt_detail_from_connection(
+    connection: sqlite3.Connection, op_id: str
+) -> ReceiptDetailResponse:
+    row = connection.execute(
+        """
+        SELECT o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity, o.note,
+               o.created_at, o.variant_id, o.variant_sku,
+               p.name AS product_name, p.sku AS product_sku, p.client_id, p.gallery_json, p.image_url,
+               cl.name AS client_name, pt.name AS product_type_name,
+               u.email AS created_by
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN users u ON u.id = o.created_by_id
+        WHERE o.id = ? AND o.op_type = 'in'
+        """,
+        (op_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Поступление не найдено")
+    vr = None
+    if row["variant_id"] and str(row["variant_id"]).strip():
+        vr = connection.execute(
+            """
+            SELECT length, width, height, sku
+            FROM product_variants
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (str(row["variant_id"]).strip(),),
+        ).fetchone()
+    if not vr:
+        vr = connection.execute(
+            """
+            SELECT length, width, height, sku
+            FROM product_variants
+            WHERE product_id = ? AND color_id = ? AND IFNULL(size_id, '') = IFNULL(?, '')
+              AND COALESCE(is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (row["product_id"], row["color_id"], row["size_id"]),
+        ).fetchone()
+    if not vr:
+        raise HTTPException(status_code=400, detail="Не удалось сопоставить вариант")
+    urls = _product_card_image_urls(row["gallery_json"], row["image_url"])
+    first_img = urls[0] if urls else None
+    base_sku = str(row["product_sku"] or "").strip()
+    variant_sku_display = (row["variant_sku"] or vr["sku"] or "").strip()
+    sku_for_form = base_sku if base_sku else variant_sku_display
+    return ReceiptDetailResponse(
+        id=str(row["id"]),
+        variant_id=str(row["variant_id"]) if row["variant_id"] else None,
+        sku=sku_for_form,
+        color_id=str(row["color_id"]) if row["color_id"] else None,
+        size_id=str(row["size_id"]) if row["size_id"] else None,
+        quantity=int(row["quantity"]),
+        comment=row["note"],
+        product_id=str(row["product_id"]),
+        product_name=str(row["product_name"] or ""),
+        product_type_name=str(row["product_type_name"] or "") or None,
+        client_id=str(row["client_id"]) if row["client_id"] else None,
+        client_name=str(row["client_name"] or "") or None,
+        length=float(vr["length"]),
+        width=float(vr["width"]),
+        height=float(vr["height"]),
+        first_image_url=first_img,
+        created_at=str(row["created_at"]),
+        created_by=row["created_by"],
+    )
+
+
+@app.get("/receipts/{receipt_id}", response_model=ReceiptDetailResponse)
+def get_receipt(
+    receipt_id: str,
+    user=Depends(get_current_manager),
+):
+    _ = user
+    with get_connection() as connection:
+        return _receipt_detail_from_connection(connection, receipt_id.strip())
+
+
+@app.patch("/receipts/{receipt_id}", response_model=MessageResponse)
+def patch_receipt(
+    receipt_id: str,
+    payload: ReceiptPatch,
+    user=Depends(get_current_manager),
+):
+    _ = user
+    rid = receipt_id.strip()
+    patch = payload.model_dump(exclude_unset=True)
+    if not patch:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    change_variant = bool(
+        "variant_id" in patch and (patch.get("variant_id") or "").strip()
+    )
+
+    with get_connection() as connection:
+        cur = connection.execute(
+            "SELECT id, op_type FROM inventory_operations WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        if not cur or str(cur["op_type"]) != "in":
+            raise HTTPException(status_code=404, detail="Поступление не найдено")
+
+        if change_variant:
+            new_vid = str(patch["variant_id"]).strip()
+            vrow = connection.execute(
+                """
+                SELECT v.id, v.sku, v.product_id, v.color_id, v.size_id,
+                       COALESCE(v.is_deleted,0) AS vdel, COALESCE(p.is_deleted,0) AS pdel,
+                       COALESCE(v.is_active,1) AS vact, COALESCE(p.is_active,1) AS pact
+                FROM product_variants v
+                JOIN products p ON p.id = v.product_id
+                WHERE v.id = ?
+                """,
+                (new_vid,),
+            ).fetchone()
+            if not vrow or vrow["vdel"] or vrow["pdel"] or not vrow["vact"] or not vrow["pact"]:
+                raise HTTPException(status_code=400, detail="Вариант не найден")
+            qty_bind = int(patch["quantity"]) if "quantity" in patch else None
+            if qty_bind is not None and qty_bind <= 0:
+                raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+            note_bind = (
+                (patch["comment"] or "").strip() or None if "comment" in patch else None
+            )
+            set_parts = [
+                "product_id = ?",
+                "color_id = ?",
+                "size_id = ?",
+                "variant_id = ?",
+                "variant_sku = ?",
+                "quantity = COALESCE(?, quantity)",
+                "note = COALESCE(?, note)",
+            ]
+            exec_vals: list[object] = [
+                str(vrow["product_id"]),
+                str(vrow["color_id"]) if vrow["color_id"] else None,
+                str(vrow["size_id"]) if vrow["size_id"] else None,
+                new_vid,
+                str(vrow["sku"] or "").strip(),
+                qty_bind,
+                note_bind,
+            ]
+            if "receipt_date" in patch:
+                set_parts.append("created_at = ?")
+                exec_vals.append(_created_at_for_receipt_date(patch.get("receipt_date")))
+            exec_vals.append(rid)
+            connection.execute(
+                f"UPDATE inventory_operations SET {', '.join(set_parts)} WHERE id = ?",
+                exec_vals,
+            )
+        else:
+            if "quantity" in patch and patch["quantity"] <= 0:
+                raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+            sets: list[str] = []
+            vals: list[object] = []
+            if "quantity" in patch:
+                sets.append("quantity = ?")
+                vals.append(int(patch["quantity"]))
+            if "comment" in patch:
+                sets.append("note = ?")
+                vals.append((patch["comment"] or "").strip() or None)
+            if "receipt_date" in patch:
+                sets.append("created_at = ?")
+                vals.append(_created_at_for_receipt_date(patch.get("receipt_date")))
+            if not sets:
+                raise HTTPException(status_code=400, detail="Нет данных для обновления")
+            vals.append(rid)
+            connection.execute(
+                f"UPDATE inventory_operations SET {', '.join(sets)} WHERE id = ?",
+                vals,
+            )
+        connection.commit()
+    return MessageResponse(message="Сохранено")
+
+
+@app.get("/inventory/balances", response_model=InventoryBalanceListResponse)
+def list_inventory_balances(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    client_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    supplier_id: str | None = Query(None),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
+    sort: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    offset = (page - 1) * limit
+    conds = ["1=1"]
+    params: list[object] = []
+    if client_id is not None and str(client_id).strip():
+        conds.append("p.client_id = ?")
+        params.append(str(client_id).strip())
+    if product_id is not None and str(product_id).strip():
+        conds.append("o.product_id = ?")
+        params.append(str(product_id).strip())
+    if type_id is not None and str(type_id).strip():
+        conds.append("p.type_id = ?")
+        params.append(str(type_id).strip())
+    if supplier_id is not None and str(supplier_id).strip():
+        conds.append("p.supplier_id = ?")
+        params.append(str(supplier_id).strip())
+    if color_id is not None and str(color_id).strip():
+        conds.append("IFNULL(o.color_id, '') = ?")
+        params.append(str(color_id).strip())
+    if size_id is not None and str(size_id).strip():
+        conds.append("IFNULL(o.size_id, '') = ?")
+        params.append(str(size_id).strip())
+    where_sql = " AND ".join(conds)
+    having_sql = "HAVING quantity > 0" if only_positive else ""
+    base_sql = f"""
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+        LEFT JOIN colors col ON col.id = o.color_id
+        LEFT JOIN sizes sz ON sz.id = o.size_id
+        WHERE {where_sql}
+        GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+        {having_sql}
+    """
+    balances_order_sql = (
+        _order_sql_from_sort_param(sort, INVENTORY_BALANCES_SORT_COLUMNS)
+        or "MAX(p.name) COLLATE NOCASE ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
+    )
+    with get_connection() as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})",
+                params,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product_name,
+                MAX(p.type_id) AS product_type_id,
+                MAX(pt.name) AS product_type_name,
+                MAX(p.client_id) AS client_id,
+                MAX(cl.name) AS client_name,
+                MAX(p.supplier_id) AS supplier_id,
+                MAX(sp.name) AS supplier_name,
+                o.color_id,
+                MAX(col.name) AS color_name,
+                o.size_id,
+                MAX(sz.name) AS size_name,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS quantity
+            {base_sql}
+            ORDER BY {balances_order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return InventoryBalanceListResponse(
+        items=[
+            InventoryBalanceItem(
+                product_id=r["product_id"],
+                product_name=r["product_name"] or "",
+                product_type_id=r["product_type_id"],
+                product_type_name=r["product_type_name"],
+                client_id=r["client_id"],
+                client_name=r["client_name"],
+                supplier_id=r["supplier_id"],
+                supplier_name=r["supplier_name"],
+                color_id=r["color_id"],
+                color_name=r["color_name"],
+                size_id=r["size_id"],
+                size_name=r["size_name"],
+                quantity=int(r["quantity"]),
+            )
+            for r in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+# ============================================================================
+# Analytics: отчёты по операциям и остаткам.
+# Реализовано по ТЗ «analyst data.md».
+# Доступ — менеджер и админ. Период по умолчанию — последние 30 дней.
+# Все эндпоинты возвращают {report, chart, explanation, period, filters, data}.
+# ============================================================================
+
+
+ANALYTICS_GROUPS = ("day", "week", "month")
+
+
+class AnalyticsPeriod(BaseModel):
+    date_from: str
+    date_to: str
+
+
+class AnalyticsFilters(BaseModel):
+    client_id: str | None = None
+    product_id: str | None = None
+    type_id: str | None = None
+
+
+class MovementBucket(BaseModel):
+    period: str
+    inflow: int
+    outflow: int
+
+
+class MovementReport(BaseModel):
+    report: str = "movement"
+    chart: str = "line"
+    explanation: str
+    group: str
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    data: list[MovementBucket]
+
+
+class StockSnapshotItem(BaseModel):
+    product_id: str
+    product: str
+    type_id: str | None
+    type_name: str | None
+    client_id: str | None
+    client: str | None
+    color_id: str | None
+    color: str | None
+    size_id: str | None
+    size: str | None
+    stock: int
+
+
+class StockSnapshotReport(BaseModel):
+    report: str = "stock_snapshot"
+    chart: str = "table"
+    explanation: str
+    at_date: str
+    filters: AnalyticsFilters
+    data: list[StockSnapshotItem]
+
+
+class TopProductItem(BaseModel):
+    product_id: str
+    product: str
+    type_name: str | None
+    total_outflow: int
+
+
+class TopProductsReport(BaseModel):
+    report: str = "top_products"
+    chart: str = "bar"
+    explanation: str
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    limit: int
+    data: list[TopProductItem]
+
+
+class DeadStockItem(BaseModel):
+    product_id: str
+    product: str
+    client_id: str | None
+    client: str | None
+    color_id: str | None
+    color: str | None
+    size_id: str | None
+    size: str | None
+    stock: int
+    last_movement_at: str | None
+    days_without_movement: int
+
+
+class DeadStockReport(BaseModel):
+    report: str = "dead_stock"
+    chart: str = "table"
+    explanation: str
+    days_threshold: int
+    filters: AnalyticsFilters
+    data: list[DeadStockItem]
+
+
+class ClientActivityItem(BaseModel):
+    client_id: str
+    client: str
+    total_outflow: int
+    operations: int
+
+
+class ClientActivityReport(BaseModel):
+    report: str = "client_activity"
+    chart: str = "bar"
+    explanation: str
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    data: list[ClientActivityItem]
+
+
+class BalanceReport(BaseModel):
+    report: str = "balance"
+    chart: str = "bar"
+    explanation: str
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    inflow: int
+    outflow: int
+    delta: int
+    prev_inflow: int
+    prev_outflow: int
+    prev_delta: int
+    inflow_change_pct: float | None
+    outflow_change_pct: float | None
+    delta_trend: str  # 'up' | 'down' | 'flat'
+
+
+class ByTypeItem(BaseModel):
+    type_id: str | None
+    type_name: str
+    stock: int
+    outflow: int
+    inflow: int
+
+
+class ByTypeReport(BaseModel):
+    report: str = "by_type"
+    chart: str = "bar"
+    explanation: str
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    data: list[ByTypeItem]
+
+
+def _default_period(date_from: str | None, date_to: str | None) -> tuple[str, str]:
+    """Если период не задан — последние 30 дней (включительно)."""
+    today = datetime.now(UTC).date()
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    if not dt:
+        dt = today.isoformat()
+    if not df:
+        df_date = today - timedelta(days=29)
+        df = df_date.isoformat()
+    if df > dt:
+        df, dt = dt, df
+    return df, dt
+
+
+def _ana_filter_sql(
+    *,
+    client_id: str | None,
+    product_id: str | None,
+    type_id: str | None,
+) -> tuple[list[str], list[object]]:
+    conds: list[str] = []
+    params: list[object] = []
+    cid = (client_id or "").strip()
+    pid = (product_id or "").strip()
+    tid = (type_id or "").strip()
+    if cid:
+        conds.append("p.client_id = ?")
+        params.append(cid)
+    if pid:
+        conds.append("o.product_id = ?")
+        params.append(pid)
+    if tid:
+        conds.append("p.type_id = ?")
+        params.append(tid)
+    return conds, params
+
+
+def _group_expr(group: str) -> str:
+    """SQL-выражение для бакета периода по дате создания операции."""
+    g = (group or "day").lower()
+    if g == "week":
+        # ISO-неделя через strftime — поддерживается SQLite.
+        return "strftime('%Y-W%W', o.created_at)"
+    if g == "month":
+        return "substr(o.created_at, 1, 7)"
+    return "substr(o.created_at, 1, 10)"
+
+
+def _explain_period(date_from: str, date_to: str) -> str:
+    return f"Период: {date_from} … {date_to}"
+
+
+@app.get("/analytics/movement", response_model=MovementReport)
+def analytics_movement(
+    group: str = Query("day", description="day | week | month"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    g = (group or "day").lower()
+    if g not in ANALYTICS_GROUPS:
+        raise HTTPException(status_code=400, detail="group: допустимо day | week | month")
+    df, dt = _default_period(date_from, date_to)
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=product_id, type_id=type_id
+    )
+    conds.extend(
+        [
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds) if conds else "1=1"
+    bucket_expr = _group_expr(g)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                {bucket_expr} AS bucket,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
+                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            WHERE {where_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            params,
+        ).fetchall()
+    data = [
+        MovementBucket(
+            period=r["bucket"],
+            inflow=int(r["inflow"] or 0),
+            outflow=int(r["outflow"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Движение товаров по {g}. {_explain_period(df, dt)}. "
+        f"Бакетов: {len(data)}."
+    )
+    return MovementReport(
+        explanation=explanation,
+        group=g,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
+        data=data,
+    )
+
+
+@app.get("/analytics/stock-snapshot", response_model=StockSnapshotReport)
+def analytics_stock_snapshot(
+    at_date: str | None = Query(None, description="YYYY-MM-DD; по умолчанию сегодня"),
+    client_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    only_positive: bool = Query(True),
+    limit: int = Query(500, ge=1, le=5000),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    at = _normalize_date_yyyy_mm_dd(at_date, "at_date")
+    if not at:
+        at = datetime.now(UTC).date().isoformat()
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=product_id, type_id=type_id
+    )
+    conds.append("substr(o.created_at, 1, 10) <= ?")
+    params.append(at)
+    where_sql = " AND ".join(conds)
+    having_sql = "HAVING stock > 0" if only_positive else ""
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product,
+                MAX(p.type_id) AS type_id,
+                MAX(pt.name) AS type_name,
+                MAX(p.client_id) AS client_id,
+                MAX(cl.name) AS client,
+                o.color_id,
+                MAX(col.name) AS color,
+                o.size_id,
+                MAX(sz.name) AS size,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            LEFT JOIN colors col ON col.id = o.color_id
+            LEFT JOIN sizes sz ON sz.id = o.size_id
+            WHERE {where_sql}
+            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            {having_sql}
+            ORDER BY stock DESC
+            LIMIT ?
+            """,
+            [*params, limit],
+        ).fetchall()
+    data = [
+        StockSnapshotItem(
+            product_id=r["product_id"],
+            product=r["product"] or "",
+            type_id=r["type_id"],
+            type_name=r["type_name"],
+            client_id=r["client_id"],
+            client=r["client"],
+            color_id=r["color_id"],
+            color=r["color"],
+            size_id=r["size_id"],
+            size=r["size"],
+            stock=int(r["stock"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Срез остатков на {at}. Записей: {len(data)}."
+        + (" Только > 0." if only_positive else "")
+    )
+    return StockSnapshotReport(
+        explanation=explanation,
+        at_date=at,
+        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
+        data=data,
+    )
+
+
+@app.get("/analytics/top-products", response_model=TopProductsReport)
+def analytics_top_products(
+    limit: int = Query(10, ge=1, le=100),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    df, dt = _default_period(date_from, date_to)
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=None, type_id=type_id
+    )
+    conds.extend(
+        [
+            "o.op_type = 'out'",
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product,
+                MAX(pt.name) AS type_name,
+                SUM(o.quantity) AS total_outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            WHERE {where_sql}
+            GROUP BY o.product_id
+            ORDER BY total_outflow DESC
+            LIMIT ?
+            """,
+            [*params, limit],
+        ).fetchall()
+    data = [
+        TopProductItem(
+            product_id=r["product_id"],
+            product=r["product"] or "",
+            type_name=r["type_name"],
+            total_outflow=int(r["total_outflow"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Топ-{limit} товаров по отгрузке. {_explain_period(df, dt)}. "
+        f"Записей: {len(data)}."
+    )
+    return TopProductsReport(
+        explanation=explanation,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=type_id),
+        limit=limit,
+        data=data,
+    )
+
+
+@app.get("/analytics/dead-stock", response_model=DeadStockReport)
+def analytics_dead_stock(
+    days: int = Query(30, ge=1, le=3650),
+    client_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=5000),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    today = datetime.now(UTC).date()
+    cutoff = (today - timedelta(days=days)).isoformat()
+    today_iso = today.isoformat()
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=None, type_id=type_id
+    )
+    where_sql = " AND ".join(conds) if conds else "1=1"
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product,
+                MAX(p.client_id) AS client_id,
+                MAX(cl.name) AS client,
+                o.color_id,
+                MAX(col.name) AS color,
+                o.size_id,
+                MAX(sz.name) AS size,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock,
+                MAX(o.created_at) AS last_movement_at
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            LEFT JOIN colors col ON col.id = o.color_id
+            LEFT JOIN sizes sz ON sz.id = o.size_id
+            WHERE {where_sql}
+            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            HAVING stock > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
+            ORDER BY stock DESC
+            LIMIT ?
+            """,
+            [*params, cutoff, limit],
+        ).fetchall()
+    data: list[DeadStockItem] = []
+    for r in rows:
+        last_iso = r["last_movement_at"] or ""
+        days_without = 0
+        if last_iso:
+            try:
+                last_date = datetime.fromisoformat(last_iso).date()
+                days_without = (today - last_date).days
+            except ValueError:
+                days_without = days
+        data.append(
+            DeadStockItem(
+                product_id=r["product_id"],
+                product=r["product"] or "",
+                client_id=r["client_id"],
+                client=r["client"],
+                color_id=r["color_id"],
+                color=r["color"],
+                size_id=r["size_id"],
+                size=r["size"],
+                stock=int(r["stock"] or 0),
+                last_movement_at=last_iso or None,
+                days_without_movement=days_without,
+            )
+        )
+    explanation = (
+        f"Мёртвые остатки: без движения ≥ {days} дней (на {today_iso}). "
+        f"Найдено позиций: {len(data)}."
+    )
+    return DeadStockReport(
+        explanation=explanation,
+        days_threshold=days,
+        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=type_id),
+        data=data,
+    )
+
+
+@app.get("/analytics/client-activity", response_model=ClientActivityReport)
+def analytics_client_activity(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    type_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    df, dt = _default_period(date_from, date_to)
+    conds, params = _ana_filter_sql(
+        client_id=None, product_id=product_id, type_id=type_id
+    )
+    conds.extend(
+        [
+            "o.op_type = 'out'",
+            "p.client_id IS NOT NULL",
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                p.client_id,
+                MAX(cl.name) AS client,
+                SUM(o.quantity) AS total_outflow,
+                COUNT(*) AS operations
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            WHERE {where_sql}
+            GROUP BY p.client_id
+            ORDER BY total_outflow DESC
+            LIMIT ?
+            """,
+            [*params, limit],
+        ).fetchall()
+    data = [
+        ClientActivityItem(
+            client_id=r["client_id"],
+            client=r["client"] or "",
+            total_outflow=int(r["total_outflow"] or 0),
+            operations=int(r["operations"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Активность клиентов по отгрузкам. {_explain_period(df, dt)}. "
+        f"Клиентов в выборке: {len(data)}."
+    )
+    return ClientActivityReport(
+        explanation=explanation,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=None, product_id=product_id, type_id=type_id),
+        data=data,
+    )
+
+
+def _sum_in_out_for_range(
+    connection: sqlite3.Connection,
+    *,
+    df: str,
+    dt: str,
+    client_id: str | None,
+    product_id: str | None,
+    type_id: str | None,
+) -> tuple[int, int]:
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=product_id, type_id=type_id
+    )
+    conds.extend(
+        [
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds)
+    row = connection.execute(
+        f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END), 0) AS inflow,
+            COALESCE(SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END), 0) AS outflow
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        WHERE {where_sql}
+        """,
+        params,
+    ).fetchone()
+    return int(row["inflow"]), int(row["outflow"])
+
+
+def _change_pct(current: int, previous: int) -> float | None:
+    if previous == 0:
+        return None
+    return round((current - previous) * 100.0 / previous, 2)
+
+
+@app.get("/analytics/balance", response_model=BalanceReport)
+def analytics_balance(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_id: str | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    df, dt = _default_period(date_from, date_to)
+    df_d = datetime.fromisoformat(df).date()
+    dt_d = datetime.fromisoformat(dt).date()
+    span = (dt_d - df_d).days + 1
+    prev_dt = (df_d - timedelta(days=1)).isoformat()
+    prev_df = (df_d - timedelta(days=span)).isoformat()
+    with get_connection() as connection:
+        cur_in, cur_out = _sum_in_out_for_range(
+            connection,
+            df=df,
+            dt=dt,
+            client_id=client_id,
+            product_id=product_id,
+            type_id=type_id,
+        )
+        prev_in, prev_out = _sum_in_out_for_range(
+            connection,
+            df=prev_df,
+            dt=prev_dt,
+            client_id=client_id,
+            product_id=product_id,
+            type_id=type_id,
+        )
+    delta = cur_in - cur_out
+    prev_delta = prev_in - prev_out
+    if delta > prev_delta:
+        trend = "up"
+    elif delta < prev_delta:
+        trend = "down"
+    else:
+        trend = "flat"
+    explanation = (
+        f"Баланс за {df}…{dt}: приход {cur_in}, расход {cur_out}, дельта {delta}. "
+        f"Сравнение с {prev_df}…{prev_dt}."
+    )
+    return BalanceReport(
+        explanation=explanation,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
+        inflow=cur_in,
+        outflow=cur_out,
+        delta=delta,
+        prev_inflow=prev_in,
+        prev_outflow=prev_out,
+        prev_delta=prev_delta,
+        inflow_change_pct=_change_pct(cur_in, prev_in),
+        outflow_change_pct=_change_pct(cur_out, prev_out),
+        delta_trend=trend,
+    )
+
+
+@app.get("/analytics/by-type", response_model=ByTypeReport)
+def analytics_by_type(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    df, dt = _default_period(date_from, date_to)
+    # 1) inflow / outflow в периоде по типу
+    conds, params = _ana_filter_sql(
+        client_id=client_id, product_id=None, type_id=None
+    )
+    conds.extend(
+        [
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds) if conds else "1=1"
+    with get_connection() as connection:
+        movement_rows = connection.execute(
+            f"""
+            SELECT
+                p.type_id AS type_id,
+                MAX(pt.name) AS type_name,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
+                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            WHERE {where_sql}
+            GROUP BY p.type_id
+            """,
+            params,
+        ).fetchall()
+        # 2) текущий остаток по типу (на сегодня, без учёта периода — это снапшот)
+        stock_conds, stock_params = _ana_filter_sql(
+            client_id=client_id, product_id=None, type_id=None
+        )
+        stock_where = " AND ".join(stock_conds) if stock_conds else "1=1"
+        stock_rows = connection.execute(
+            f"""
+            SELECT
+                type_id, type_name,
+                SUM(stock) AS stock
+            FROM (
+                SELECT
+                    p.type_id AS type_id,
+                    MAX(pt.name) AS type_name,
+                    SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock
+                FROM inventory_operations o
+                LEFT JOIN products p ON p.id = o.product_id
+                LEFT JOIN product_types pt ON pt.id = p.type_id
+                WHERE {stock_where}
+                GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            )
+            WHERE stock > 0
+            GROUP BY type_id, type_name
+            """,
+            stock_params,
+        ).fetchall()
+
+    stock_by_type = {row["type_id"]: int(row["stock"] or 0) for row in stock_rows}
+    name_by_type = {row["type_id"]: (row["type_name"] or "") for row in stock_rows}
+
+    seen: set[str | None] = set()
+    items: list[ByTypeItem] = []
+    for row in movement_rows:
+        tid = row["type_id"]
+        seen.add(tid)
+        items.append(
+            ByTypeItem(
+                type_id=tid,
+                type_name=row["type_name"] or name_by_type.get(tid) or "—",
+                stock=stock_by_type.get(tid, 0),
+                outflow=int(row["outflow"] or 0),
+                inflow=int(row["inflow"] or 0),
+            )
+        )
+    # Типы, у которых есть остаток, но не было движения в периоде.
+    for tid, stock in stock_by_type.items():
+        if tid in seen:
+            continue
+        items.append(
+            ByTypeItem(
+                type_id=tid,
+                type_name=name_by_type.get(tid) or "—",
+                stock=stock,
+                outflow=0,
+                inflow=0,
+            )
+        )
+    items.sort(key=lambda x: (-x.outflow, -x.stock, x.type_name))
+    explanation = (
+        f"Разрез по типам товаров. {_explain_period(df, dt)}. "
+        f"Типов в выборке: {len(items)}."
+    )
+    return ByTypeReport(
+        explanation=explanation,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=None),
+        data=items,
+    )
+
+
+# ============================================================================
+# Личный кабинет клиента: данные только по users.client_id (не из query).
+# ============================================================================
+
+
+class ClientPortalDashboardMetrics(BaseModel):
+    total_stock: int
+    period_inflow: int
+    period_outflow: int
+    period: AnalyticsPeriod
+
+
+def _portal_bound_client_id(user) -> str:
+    return _user_client_id_opt(user) or ""
+
+
+def _client_portal_total_positive_stock(connection: sqlite3.Connection, client_id: str) -> int:
+    row = connection.execute(
+        """
+        SELECT COALESCE(SUM(b.qty), 0) AS total
+        FROM (
+            SELECT SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS qty
+            FROM inventory_operations o
+            INNER JOIN products p ON p.id = o.product_id
+            WHERE p.client_id = ?
+            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            HAVING qty > 0
+        ) AS b
+        """,
+        (client_id,),
+    ).fetchone()
+    return int(row["total"] or 0)
+
+
+@app.get("/client-portal/balances", response_model=InventoryBalanceListResponse)
+def client_portal_list_balances(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    search: str | None = Query(None, description="Подстрока в названии товара"),
+    only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
+    sort: str | None = Query(None),
+    user=Depends(get_current_client_portal),
+):
+    portal_cid = _portal_bound_client_id(user)
+    offset = (page - 1) * limit
+    conds = ["p.client_id = ?"]
+    params: list[object] = [portal_cid]
+    if search is not None and str(search).strip():
+        conds.append("LOWER(p.name) LIKE ?")
+        params.append(f"%{str(search).strip().lower()}%")
+    if product_id is not None and str(product_id).strip():
+        conds.append("o.product_id = ?")
+        params.append(str(product_id).strip())
+    if type_id is not None and str(type_id).strip():
+        conds.append("p.type_id = ?")
+        params.append(str(type_id).strip())
+    if color_id is not None and str(color_id).strip():
+        conds.append("IFNULL(o.color_id, '') = ?")
+        params.append(str(color_id).strip())
+    if size_id is not None and str(size_id).strip():
+        conds.append("IFNULL(o.size_id, '') = ?")
+        params.append(str(size_id).strip())
+    where_sql = " AND ".join(conds)
+    having_sql = "HAVING quantity > 0" if only_positive else ""
+    base_sql = f"""
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+        LEFT JOIN colors col ON col.id = o.color_id
+        LEFT JOIN sizes sz ON sz.id = o.size_id
+        WHERE {where_sql}
+        GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+        {having_sql}
+    """
+    balances_order_sql = (
+        _order_sql_from_sort_param(sort, INVENTORY_BALANCES_SORT_COLUMNS)
+        or "MAX(p.name) COLLATE NOCASE ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
+    )
+    with get_connection() as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})",
+                params,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product_name,
+                MAX(p.type_id) AS product_type_id,
+                MAX(pt.name) AS product_type_name,
+                MAX(p.client_id) AS client_id,
+                MAX(cl.name) AS client_name,
+                MAX(p.supplier_id) AS supplier_id,
+                MAX(sp.name) AS supplier_name,
+                o.color_id,
+                MAX(col.name) AS color_name,
+                o.size_id,
+                MAX(sz.name) AS size_name,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS quantity
+            {base_sql}
+            ORDER BY {balances_order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return InventoryBalanceListResponse(
+        items=[
+            InventoryBalanceItem(
+                product_id=r["product_id"],
+                product_name=r["product_name"] or "",
+                product_type_id=r["product_type_id"],
+                product_type_name=r["product_type_name"],
+                client_id=r["client_id"],
+                client_name=r["client_name"],
+                supplier_id=r["supplier_id"],
+                supplier_name=r["supplier_name"],
+                color_id=r["color_id"],
+                color_name=r["color_name"],
+                size_id=r["size_id"],
+                size_name=r["size_name"],
+                quantity=int(r["quantity"]),
+            )
+            for r in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.get("/client-portal/operations", response_model=InventoryOperationListResponse)
+def client_portal_list_operations(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    op_type: str | None = Query(None, description="'in' или 'out'"),
+    product_id: str | None = Query(None),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    search: str | None = Query(None, description="Подстрока в названии товара"),
+    sort: str | None = Query(None),
+    user=Depends(get_current_client_portal),
+):
+    portal_cid = _portal_bound_client_id(user)
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    offset = (page - 1) * limit
+    conds = ["p.client_id = ?"]
+    params: list[object] = [portal_cid]
+    if search is not None and str(search).strip():
+        conds.append("LOWER(p.name) LIKE ?")
+        params.append(f"%{str(search).strip().lower()}%")
+    if op_type is not None and str(op_type).strip():
+        v = str(op_type).strip()
+        if v not in ("in", "out"):
+            raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+        conds.append("o.op_type = ?")
+        params.append(v)
+    if product_id is not None and str(product_id).strip():
+        conds.append("o.product_id = ?")
+        params.append(str(product_id).strip())
+    if color_id is not None and str(color_id).strip():
+        conds.append("o.color_id = ?")
+        params.append(str(color_id).strip())
+    if size_id is not None and str(size_id).strip():
+        conds.append("o.size_id = ?")
+        params.append(str(size_id).strip())
+    if df is not None:
+        conds.append("substr(o.created_at, 1, 10) >= ?")
+        params.append(df)
+    if dt is not None:
+        conds.append("substr(o.created_at, 1, 10) <= ?")
+        params.append(dt)
+    where_sql = " AND ".join(conds)
+    join_sql = """
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+        LEFT JOIN colors col ON col.id = o.color_id
+        LEFT JOIN sizes sz ON sz.id = o.size_id
+        LEFT JOIN users u ON u.id = o.created_by_id
+    """
+    order_sql = (
+        _order_sql_from_sort_param(sort, INVENTORY_OPERATIONS_SORT_COLUMNS)
+        or "o.created_at DESC"
+    )
+    with get_connection() as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) {join_sql} WHERE {where_sql}", params
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity,
+                o.note, o.created_at,
+                p.name AS product_name, p.client_id, p.type_id AS product_type_id,
+                pt.name AS product_type_name,
+                p.sku AS product_sku,
+                p.supplier_id, sp.name AS supplier_name,
+                cl.name AS client_name,
+                col.name AS color_name,
+                sz.name AS size_name,
+                u.email AS created_by
+            {join_sql}
+            WHERE {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return InventoryOperationListResponse(
+        items=[
+            InventoryOperationItem(
+                id=r["id"],
+                op_type=r["op_type"],
+                client_id=r["client_id"],
+                client_name=r["client_name"],
+                product_id=r["product_id"],
+                product_name=r["product_name"] or "",
+                product_type_id=r["product_type_id"],
+                product_type_name=r["product_type_name"],
+                supplier_id=r["supplier_id"],
+                supplier_name=r["supplier_name"],
+                color_id=r["color_id"],
+                color_name=r["color_name"],
+                size_id=r["size_id"],
+                size_name=r["size_name"],
+                variant_sku=None,
+                product_sku=str(r["product_sku"] or "").strip() or None,
+                quantity=int(r["quantity"]),
+                note=r["note"],
+                created_at=r["created_at"],
+                created_by=r["created_by"],
+            )
+            for r in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.get("/client-portal/lookups/products", response_model=list[InventoryProductLookup])
+def client_portal_lookup_products(user=Depends(get_current_client_portal)):
+    portal_cid = _portal_bound_client_id(user)
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT p.id, p.name, p.sku, p.type_id,
+                   pt.name AS type_name,
+                   p.supplier_id, sp.name AS supplier_name,
+                   pt.requires_color, pt.requires_size
+            FROM products p
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            LEFT JOIN suppliers sp ON sp.id = p.supplier_id
+            WHERE p.is_active = 1 AND p.client_id = ? AND COALESCE(p.is_deleted, 0) = 0
+            ORDER BY p.name COLLATE NOCASE ASC
+            """,
+            (portal_cid,),
+        ).fetchall()
+    return [
+        InventoryProductLookup(
+            id=r["id"],
+            name=r["name"],
+            sku=r["sku"],
+            type_id=r["type_id"],
+            type_name=r["type_name"] or "",
+            supplier_id=r["supplier_id"],
+            supplier_name=r["supplier_name"],
+            requires_color=bool(r["requires_color"]) if r["requires_color"] is not None else False,
+            requires_size=bool(r["requires_size"]) if r["requires_size"] is not None else False,
+        )
+        for r in rows
+    ]
+
+
+@app.get(
+    "/client-portal/lookups/product-types",
+    response_model=list[InventoryProductTypeLookup],
+)
+def client_portal_lookup_product_types(user=Depends(get_current_client_portal)):
+    _ = user
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name, requires_color, requires_size
+            FROM product_types
+            WHERE is_active = 1
+            ORDER BY name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+    return [
+        InventoryProductTypeLookup(
+            id=r["id"],
+            name=r["name"],
+            requires_color=bool(r["requires_color"]),
+            requires_size=bool(r["requires_size"]),
+        )
+        for r in rows
+    ]
+
+
+@app.get("/client-portal/dashboard/metrics", response_model=ClientPortalDashboardMetrics)
+def client_portal_dashboard_metrics(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    user=Depends(get_current_client_portal),
+):
+    portal_cid = _portal_bound_client_id(user)
+    df, dt = _default_period(date_from, date_to)
+    with get_connection() as connection:
+        total_stock = _client_portal_total_positive_stock(connection, portal_cid)
+        cur_in, cur_out = _sum_in_out_for_range(
+            connection,
+            df=df,
+            dt=dt,
+            client_id=portal_cid,
+            product_id=None,
+            type_id=None,
+        )
+    return ClientPortalDashboardMetrics(
+        total_stock=total_stock,
+        period_inflow=cur_in,
+        period_outflow=cur_out,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+    )
+
+
+@app.get("/client-portal/dashboard/movement", response_model=MovementReport)
+def client_portal_dashboard_movement(
+    group: str = Query("day", description="day | week | month"),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    user=Depends(get_current_client_portal),
+):
+    portal_cid = _portal_bound_client_id(user)
+    g = (group or "day").lower()
+    if g not in ANALYTICS_GROUPS:
+        raise HTTPException(status_code=400, detail="group: допустимо day | week | month")
+    df, dt = _default_period(date_from, date_to)
+    conds, params = _ana_filter_sql(
+        client_id=portal_cid, product_id=product_id, type_id=type_id
+    )
+    conds.extend(
+        [
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds) if conds else "1=1"
+    bucket_expr = _group_expr(g)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                {bucket_expr} AS bucket,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
+                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            WHERE {where_sql}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            params,
+        ).fetchall()
+    data = [
+        MovementBucket(
+            period=r["bucket"],
+            inflow=int(r["inflow"] or 0),
+            outflow=int(r["outflow"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Движение товаров по {g}. {_explain_period(df, dt)}. "
+        f"Бакетов: {len(data)}."
+    )
+    return MovementReport(
+        explanation=explanation,
+        group=g,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(
+            client_id=portal_cid, product_id=product_id, type_id=type_id
+        ),
+        data=data,
+    )
+
+
+@app.get("/client-portal/dashboard/top-products", response_model=TopProductsReport)
+def client_portal_dashboard_top_products(
+    limit: int = Query(10, ge=1, le=100),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    type_id: str | None = Query(None),
+    user=Depends(get_current_client_portal),
+):
+    portal_cid = _portal_bound_client_id(user)
+    df, dt = _default_period(date_from, date_to)
+    conds, params = _ana_filter_sql(
+        client_id=portal_cid, product_id=None, type_id=type_id
+    )
+    conds.extend(
+        [
+            "o.op_type = 'out'",
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params.extend([df, dt])
+    where_sql = " AND ".join(conds)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product,
+                MAX(pt.name) AS type_name,
+                SUM(o.quantity) AS total_outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            WHERE {where_sql}
+            GROUP BY o.product_id
+            ORDER BY total_outflow DESC
+            LIMIT ?
+            """,
+            [*params, limit],
+        ).fetchall()
+    data = [
+        TopProductItem(
+            product_id=r["product_id"],
+            product=r["product"] or "",
+            type_name=r["type_name"],
+            total_outflow=int(r["total_outflow"] or 0),
+        )
+        for r in rows
+    ]
+    explanation = (
+        f"Топ-{limit} товаров по отгрузке. {_explain_period(df, dt)}. "
+        f"Записей: {len(data)}."
+    )
+    return TopProductsReport(
+        explanation=explanation,
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(client_id=portal_cid, product_id=None, type_id=type_id),
+        limit=limit,
+        data=data,
+    )
+
+
+@app.get("/client-portal/dashboard/dead-stock", response_model=DeadStockReport)
+def client_portal_dashboard_dead_stock(
+    days: int = Query(30, ge=1, le=3650),
+    type_id: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=5000),
+    user=Depends(get_current_client_portal),
+):
+    """Мёртвые остатки только по товарам клиента (кабинет)."""
+    portal_cid = _portal_bound_client_id(user)
+    today = datetime.now(UTC).date()
+    cutoff = (today - timedelta(days=days)).isoformat()
+    today_iso = today.isoformat()
+    conds, params = _ana_filter_sql(
+        client_id=portal_cid, product_id=None, type_id=type_id
+    )
+    where_sql = " AND ".join(conds) if conds else "1=1"
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                o.product_id,
+                MAX(p.name) AS product,
+                MAX(p.client_id) AS client_id,
+                MAX(cl.name) AS client,
+                o.color_id,
+                MAX(col.name) AS color,
+                o.size_id,
+                MAX(sz.name) AS size,
+                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock,
+                MAX(o.created_at) AS last_movement_at
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            LEFT JOIN colors col ON col.id = o.color_id
+            LEFT JOIN sizes sz ON sz.id = o.size_id
+            WHERE {where_sql}
+            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            HAVING stock > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
+            ORDER BY stock DESC
+            LIMIT ?
+            """,
+            [*params, cutoff, limit],
+        ).fetchall()
+    data: list[DeadStockItem] = []
+    for r in rows:
+        last_iso = r["last_movement_at"] or ""
+        days_without = 0
+        if last_iso:
+            try:
+                last_date = datetime.fromisoformat(last_iso).date()
+                days_without = (today - last_date).days
+            except ValueError:
+                days_without = days
+        data.append(
+            DeadStockItem(
+                product_id=r["product_id"],
+                product=r["product"] or "",
+                client_id=r["client_id"],
+                client=r["client"],
+                color_id=r["color_id"],
+                color=r["color"],
+                size_id=r["size_id"],
+                size=r["size"],
+                stock=int(r["stock"] or 0),
+                last_movement_at=last_iso or None,
+                days_without_movement=days_without,
+            )
+        )
+    explanation = (
+        f"Ваши мёртвые остатки: без движения ≥ {days} дней (на {today_iso}). "
+        f"Найдено позиций: {len(data)}."
+    )
+    return DeadStockReport(
+        explanation=explanation,
+        days_threshold=days,
+        filters=AnalyticsFilters(client_id=portal_cid, product_id=None, type_id=type_id),
+        data=data,
+    )

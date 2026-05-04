@@ -19,6 +19,10 @@ export type UseQueryStateFilterKey =
   | 'type_id'
   | 'client_id'
   | 'supplier_id'
+  | 'product_id'
+  | 'color_id'
+  | 'size_id'
+  | 'op_type'
   | 'actuality_id'
   | 'date_from'
   | 'date_to'
@@ -81,6 +85,10 @@ export function useQueryState(options: { filterKeys: readonly UseQueryStateFilte
             else if (k === 'type_id') nextFilters.type_id = v as string
             else if (k === 'client_id') nextFilters.client_id = v as string
             else if (k === 'supplier_id') nextFilters.supplier_id = v as string
+            else if (k === 'product_id') nextFilters.product_id = v as string
+            else if (k === 'color_id') nextFilters.color_id = v as string
+            else if (k === 'size_id') nextFilters.size_id = v as string
+            else if (k === 'op_type') nextFilters.op_type = v as string
             else if (k === 'actuality_id') nextFilters.actuality_id = v as string
             else if (k === 'date_from') nextFilters.date_from = v as string | undefined
             else if (k === 'date_to') nextFilters.date_to = v as string | undefined
@@ -122,6 +130,10 @@ export function useQueryState(options: { filterKeys: readonly UseQueryStateFilte
         if (k === 'type_id') delete nextFilters.type_id
         if (k === 'client_id') delete nextFilters.client_id
         if (k === 'supplier_id') delete nextFilters.supplier_id
+        if (k === 'product_id') delete nextFilters.product_id
+        if (k === 'color_id') delete nextFilters.color_id
+        if (k === 'size_id') delete nextFilters.size_id
+        if (k === 'op_type') delete nextFilters.op_type
         if (k === 'actuality_id') delete nextFilters.actuality_id
         if (k === 'date_from') delete nextFilters.date_from
         if (k === 'date_to') delete nextFilters.date_to

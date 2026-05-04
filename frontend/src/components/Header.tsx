@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { clearToken, me } from '../api'
 import type { User } from '../api'
+import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
 const LOGO_PATH = '/logo/' + encodeURIComponent('logo main.png')
 
@@ -36,8 +37,16 @@ export function Header() {
   return (
     <header className="app-header" role="banner">
       <div className="app-header__inner">
-        <Link className="app-header__brand" to="/home" title="На главную">
-          <img className="app-header__logo" src={LOGO_PATH} alt="На главную" />
+        <Link
+          className="app-header__brand"
+          to={user ? postAuthLandingPath(user) : '/home'}
+          title={user && postAuthLandingPath(user) === '/cabinet' ? 'В личный кабинет' : 'На главную'}
+        >
+          <img
+            className="app-header__logo"
+            src={LOGO_PATH}
+            alt={user && postAuthLandingPath(user) === '/cabinet' ? 'В личный кабинет' : 'На главную'}
+          />
         </Link>
         <div className="app-header__right">
           {user ? (

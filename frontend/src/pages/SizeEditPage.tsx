@@ -166,10 +166,6 @@ export function SizeEditPage() {
         </fieldset>
       </form>
 
-      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
-
-      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
-
       {isFormEnabled ? (
         <ActionBar
           primaryLabel="Сохранить"
@@ -177,6 +173,10 @@ export function SizeEditPage() {
           onSecondary={() => navigate('/dictionaries/sizes')}
         />
       ) : null}
+
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
+
+      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
     </PageContainer>
   )
 }

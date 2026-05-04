@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type {
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  WheelEvent as ReactWheelEvent,
+} from 'react'
+import { createPortal } from 'react-dom'
+import { FixedSizeList, type ListChildComponentProps } from 'react-window'
 import type { DictionaryItem } from '../api'
+import { useFixedDictionaryListPosition } from '../hooks/useFixedDictionaryListPosition'
 import { FieldDropdownChevron } from './FieldDropdownChevron'
 
-const MAX_SUGGESTIONS = 48
+const ROW_H = 40
+const LIST_MAX_H = 280
+const SEARCH_DEBOUNCE_MS = 220
 
 function choiceLabel(item: DictionaryItem): string {
   return item.is_active ? item.name : `${item.name} (не актуален)`
@@ -27,6 +37,54 @@ export function mergeDictionaryItemsWithCurrent(
   return [...items, stub]
 }
 
+type Choice = { value: string; label: string }
+
+type FormComboListRowData = {
+  filtered: Choice[]
+  emptySearch: boolean
+  value: string
+  highlight: number
+  listboxId: string
+  pick: (nextValue: string, label: string) => void
+  onHighlightChange: (index: number) => void
+}
+
+function FormComboListRow({ index, style, data }: ListChildComponentProps<FormComboListRowData>) {
+  const { filtered, emptySearch, value, highlight, listboxId, pick, onHighlightChange } = data
+  if (emptySearch) {
+    return (
+      <div style={style} className="dictionary-form-combobox__vrow dictionary-form-combobox__vrow--empty">
+        <div className="dictionary-multiselect__empty-msg">Нет совпадений</div>
+      </div>
+    )
+  }
+  const opt = filtered[index]
+  if (!opt) return null
+  const active = index === highlight
+  const selected = opt.value === value
+  return (
+    <div style={style} className="dictionary-form-combobox__vrow">
+      <div
+        id={`${listboxId}-opt-${index}`}
+        role="option"
+        aria-selected={selected}
+        className={`dictionary-form-combobox__option dictionary-form-combobox__option--row${active ? ' dictionary-form-combobox__option--active' : ''}`}
+        onMouseDown={(e) => {
+          e.preventDefault()
+          pick(opt.value, opt.label)
+        }}
+        onMouseEnter={() => onHighlightChange(index)}
+      >
+        <span
+          className={`dictionary-form-combobox__radio${selected ? ' dictionary-form-combobox__radio--on' : ''}`}
+          aria-hidden
+        />
+        <span className="dictionary-form-combobox__option-label">{opt.label}</span>
+      </div>
+    </div>
+  )
+}
+
 export type DictionaryFormComboboxProps = {
   id: string
   items: DictionaryItem[]
@@ -37,9 +95,18 @@ export type DictionaryFormComboboxProps = {
   required?: boolean
   /** Разрешить сброс (клиент / поставщик). По умолчанию = !required */
   allowClear?: boolean
+  /** Подпись кнопки «×» (ТЗ: «Очистить значение»). */
+  clearAriaLabel?: string
   hasError?: boolean
   /** После потери фокуса вне поля (например, touched в форме). */
   onBlur?: () => void
+  /**
+   * Список подсказок в `position: fixed` + портал в `document.body`.
+   * Нужно внутри таблиц и блоков с overflow, иначе список обрезается и «не появляется».
+   */
+  listPortal?: boolean
+  /** Порядок вариантов в выпадающем списке. */
+  sortMode?: 'alphabet' | 'preserve'
 }
 
 export function DictionaryFormCombobox({
@@ -50,21 +117,27 @@ export function DictionaryFormCombobox({
   disabled = false,
   required = false,
   allowClear = !required,
+  clearAriaLabel = 'Очистить значение',
   hasError = false,
   onBlur: onBlurProp,
+  listPortal = false,
+  sortMode = 'preserve',
 }: DictionaryFormComboboxProps) {
   const listboxId = useId()
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const portalListRef = useRef<HTMLDivElement>(null)
 
-  const choices = useMemo(
-    () =>
-      items.map((i) => ({
-        value: i.id,
-        label: choiceLabel(i),
-      })),
-    [items],
-  )
+  const choices = useMemo(() => {
+    const mapped = items.map((i) => ({
+      value: i.id,
+      label: choiceLabel(i),
+    }))
+    if (sortMode === 'alphabet') {
+      mapped.sort((a, b) => a.label.localeCompare(b.label, 'ru', { sensitivity: 'base', numeric: true }))
+    }
+    return mapped
+  }, [items, sortMode])
 
   const committedLabel = useMemo(() => {
     if (!value) return ''
@@ -73,6 +146,7 @@ export function DictionaryFormCombobox({
 
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(committedLabel)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
 
   useEffect(() => {
@@ -81,15 +155,41 @@ export function DictionaryFormCombobox({
     }
   }, [committedLabel, open])
 
-  const filtered = useMemo(() => {
-    const q = draft.trim().toLowerCase()
-    if (!q) return choices.slice(0, MAX_SUGGESTIONS)
-    return choices.filter((c) => c.label.toLowerCase().includes(q)).slice(0, MAX_SUGGESTIONS)
-  }, [draft, choices])
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(draft), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [draft])
 
   useEffect(() => {
-    setHighlight((h) => (filtered.length === 0 ? 0 : Math.min(h, filtered.length - 1)))
-  }, [filtered.length])
+    const idRaf = requestAnimationFrame(() => setHighlight(0))
+    return () => cancelAnimationFrame(idRaf)
+  }, [debouncedQuery, items.length, sortMode])
+
+  const filtered = useMemo(() => {
+    const q = debouncedQuery.trim().toLowerCase()
+    if (!q) return choices
+    return choices.filter((c) => c.label.toLowerCase().includes(q))
+  }, [debouncedQuery, choices])
+
+  const showEmptySearch =
+    debouncedQuery.trim() !== '' && filtered.length === 0 && choices.length > 0
+  const emptySearch = showEmptySearch
+  const virtualCount = emptySearch ? 1 : filtered.length
+  const listH = Math.min(LIST_MAX_H, Math.max(virtualCount * ROW_H, ROW_H))
+
+  const listOpen = open && !disabled && choices.length > 0 && (filtered.length > 0 || showEmptySearch)
+
+  const portalListStyle = useFixedDictionaryListPosition(
+    listPortal,
+    listOpen,
+    disabled,
+    wrapRef,
+    portalListRef,
+  )
+
+  useEffect(() => {
+    setHighlight((h) => (virtualCount === 0 ? 0 : Math.min(h, virtualCount - 1)))
+  }, [virtualCount])
 
   const hasValue = value !== ''
 
@@ -136,45 +236,68 @@ export function DictionaryFormCombobox({
     if (!allowClear || disabled) return
     onChange('')
     setDraft('')
-    setOpen(false)
+    setDebouncedQuery('')
+    setHighlight(0)
+    setOpen(true)
     onBlurProp?.()
   }, [allowClear, disabled, onBlurProp, onChange])
 
   const onBlur = useCallback(
-    (e: React.FocusEvent) => {
+    (e: ReactFocusEvent) => {
       const next = e.relatedTarget as Node | null
       if (wrapRef.current?.contains(next)) return
+      if (listPortal && portalListRef.current?.contains(next)) return
       applyCommit()
       onBlurProp?.()
     },
-    [applyCommit, onBlurProp],
+    [applyCommit, listPortal, onBlurProp],
   )
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    if (!listPortal || !listOpen) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (portalListRef.current?.contains(t)) return
+      if (wrapRef.current?.contains(t)) return
+      applyCommit()
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [listPortal, listOpen, applyCommit])
+
+  const maxHi = emptySearch ? 0 : Math.max(0, filtered.length - 1)
+  const safeHi = emptySearch ? 0 : Math.min(highlight, maxHi)
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault()
       setDraft(committedLabel)
       setOpen(false)
       return
     }
+    if (e.key === 'Backspace' && draft === '' && hasValue && allowClear) {
+      e.preventDefault()
+      clearField()
+      return
+    }
+    if (!choices.length) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setOpen(true)
-      setHighlight((h) => (filtered.length === 0 ? 0 : (h + 1) % filtered.length))
+      setHighlight((h) => (virtualCount === 0 ? 0 : (h + 1) % virtualCount))
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       setOpen(true)
-      setHighlight((h) =>
-        filtered.length === 0 ? 0 : (h - 1 + filtered.length) % filtered.length,
-      )
+      setHighlight((h) => (virtualCount === 0 ? 0 : (h - 1 + virtualCount) % virtualCount))
       return
     }
     if (e.key === 'Enter') {
       e.preventDefault()
-      if (open && filtered[highlight]) {
-        const row = filtered[highlight]
+      if (open && !emptySearch && filtered[safeHi]) {
+        const row = filtered[safeHi]
         pick(row.value, row.label)
       } else {
         applyCommit()
@@ -182,17 +305,63 @@ export function DictionaryFormCombobox({
     }
   }
 
+  const itemData: FormComboListRowData = useMemo(
+    () => ({
+      filtered,
+      emptySearch,
+      value,
+      highlight: safeHi,
+      listboxId,
+      pick,
+      onHighlightChange: setHighlight,
+    }),
+    [filtered, emptySearch, value, safeHi, listboxId, pick],
+  )
+
+  const activeDescendant =
+    listOpen && !emptySearch && filtered[safeHi] ? `${listboxId}-opt-${safeHi}` : undefined
+
+  const stopWheelBubble = useCallback((e: ReactWheelEvent) => {
+    e.stopPropagation()
+  }, [])
+
+  const listInner = listOpen ? (
+    <div
+      ref={portalListRef}
+      id={listboxId}
+      className={`dictionary-form-combobox__list dictionary-form-combobox__list--virtual${listPortal ? ' dictionary-form-combobox__list--portal' : ''}`}
+      style={listPortal ? portalListStyle : undefined}
+      role="listbox"
+      onWheel={stopWheelBubble}
+    >
+      <FixedSizeList
+        height={listH}
+        width="100%"
+        itemCount={virtualCount}
+        itemSize={ROW_H}
+        itemData={itemData}
+        innerProps={{
+          className: 'dictionary-form-combobox__vscroll',
+        }}
+      >
+        {FormComboListRow}
+      </FixedSizeList>
+    </div>
+  ) : null
+
+  const placeholderText = !hasValue ? 'Выберите значение' : ''
+
   return (
     <div
       ref={wrapRef}
-      className={`dictionary-form-combobox${allowClear && hasValue ? ' dictionary-form-combobox--has-clear' : ''}`}
+      className={`dictionary-form-combobox${allowClear && hasValue ? ' dictionary-form-combobox--has-clear' : ''}${listPortal ? ' dictionary-form-combobox--portal-root' : ''}`}
     >
       {allowClear && hasValue ? (
         <button
           type="button"
           className="list-filters__select-clear dictionary-form-combobox__clear"
-          aria-label="Очистить поле"
-          title="Очистить"
+          aria-label={clearAriaLabel}
+          title={clearAriaLabel}
           disabled={disabled}
           onMouseDown={(e) => {
             e.preventDefault()
@@ -218,10 +387,11 @@ export function DictionaryFormCombobox({
         autoComplete="off"
         spellCheck={false}
         disabled={disabled}
-        placeholder=""
+        placeholder={placeholderText}
         aria-autocomplete="list"
         aria-expanded={open}
-        aria-controls={open ? listboxId : undefined}
+        aria-controls={listOpen ? listboxId : undefined}
+        aria-activedescendant={activeDescendant}
         aria-invalid={hasError || undefined}
         role="combobox"
         value={draft}
@@ -236,25 +406,10 @@ export function DictionaryFormCombobox({
         onKeyDown={onKeyDown}
       />
       <FieldDropdownChevron />
-      {open && filtered.length > 0 && !disabled ? (
-        <ul id={listboxId} className="dictionary-form-combobox__list" role="listbox">
-          {filtered.map((opt, i) => (
-            <li
-              key={opt.value}
-              role="option"
-              aria-selected={i === highlight}
-              className={`dictionary-form-combobox__option${i === highlight ? ' dictionary-form-combobox__option--active' : ''}`}
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pick(opt.value, opt.label)
-              }}
-              onMouseEnter={() => setHighlight(i)}
-            >
-              {opt.label}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {listOpen && listPortal && typeof document !== 'undefined'
+        ? createPortal(listInner, document.body)
+        : null}
+      {listOpen && !listPortal ? listInner : null}
     </div>
   )
 }

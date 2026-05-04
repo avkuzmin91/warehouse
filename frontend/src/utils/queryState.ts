@@ -12,6 +12,14 @@ export type ListFilters = {
   type_id?: string
   client_id?: string
   supplier_id?: string
+  /** Inventory: фильтр по конкретному товару. */
+  product_id?: string
+  /** Inventory: фильтр по цвету. */
+  color_id?: string
+  /** Inventory: фильтр по размеру. */
+  size_id?: string
+  /** Inventory: тип операции 'in' / 'out'. */
+  op_type?: string
   /** ID записи системного справочника актуальности (GET /system/record-actuality). */
   actuality_id?: string
   /** YYYY-MM-DD, начало периода (ТЗ: date_from) */
@@ -105,6 +113,18 @@ export function parseListQueryFromSearchParams(
     } else if (key === 'supplier_id') {
       const v = sp.get('supplier_id')
       filters.supplier_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'product_id') {
+      const v = sp.get('product_id')
+      filters.product_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'color_id') {
+      const v = sp.get('color_id')
+      filters.color_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'size_id') {
+      const v = sp.get('size_id')
+      filters.size_id = v != null && v.trim() !== '' ? v.trim() : undefined
+    } else if (key === 'op_type') {
+      const v = sp.get('op_type')
+      filters.op_type = v === 'in' || v === 'out' ? v : undefined
     } else if (key === 'actuality_id') {
       const v = sp.get('actuality_id')
       filters.actuality_id = v != null && v.trim() !== '' ? v.trim() : undefined
@@ -166,6 +186,22 @@ export function applyListQueryToSearchParams(
       const v = q.filters.supplier_id
       if (v != null && String(v).trim() !== '') next.set('supplier_id', String(v).trim())
       else next.delete('supplier_id')
+    } else if (key === 'product_id') {
+      const v = q.filters.product_id
+      if (v != null && String(v).trim() !== '') next.set('product_id', String(v).trim())
+      else next.delete('product_id')
+    } else if (key === 'color_id') {
+      const v = q.filters.color_id
+      if (v != null && String(v).trim() !== '') next.set('color_id', String(v).trim())
+      else next.delete('color_id')
+    } else if (key === 'size_id') {
+      const v = q.filters.size_id
+      if (v != null && String(v).trim() !== '') next.set('size_id', String(v).trim())
+      else next.delete('size_id')
+    } else if (key === 'op_type') {
+      const v = q.filters.op_type
+      if (v === 'in' || v === 'out') next.set('op_type', v)
+      else next.delete('op_type')
     } else if (key === 'actuality_id') {
       const v = q.filters.actuality_id
       if (v != null && String(v).trim() !== '') next.set('actuality_id', String(v).trim())
@@ -201,6 +237,10 @@ export type ListApiQueryParams = {
   type_id?: string
   client_id?: string
   supplier_id?: string
+  product_id?: string
+  color_id?: string
+  size_id?: string
+  op_type?: 'in' | 'out'
   actuality_id?: string
   sort?: string
   date_from?: string
@@ -225,6 +265,14 @@ export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   if (cid != null && String(cid).trim() !== '') out.client_id = String(cid).trim()
   const sid = q.filters.supplier_id
   if (sid != null && String(sid).trim() !== '') out.supplier_id = String(sid).trim()
+  const pid = q.filters.product_id
+  if (pid != null && String(pid).trim() !== '') out.product_id = String(pid).trim()
+  const colId = q.filters.color_id
+  if (colId != null && String(colId).trim() !== '') out.color_id = String(colId).trim()
+  const szId = q.filters.size_id
+  if (szId != null && String(szId).trim() !== '') out.size_id = String(szId).trim()
+  const opT = q.filters.op_type
+  if (opT === 'in' || opT === 'out') out.op_type = opT
   const aid = q.filters.actuality_id
   if (aid != null && String(aid).trim() !== '') out.actuality_id = String(aid).trim()
   const df = q.filters.date_from

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { login, me, saveToken } from '../api'
+import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -23,8 +24,8 @@ export function LoginPage() {
       setIsLoading(true)
       const response = await login(email, password)
       saveToken(response.token)
-      await me()
-      navigate('/home')
+      const user = await me()
+      navigate(postAuthLandingPath(user))
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Ошибка входа')
     } finally {

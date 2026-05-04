@@ -2,12 +2,20 @@ import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DateRangeFilter, type DateRangeFilterModel } from './DateRangeFilter'
 import { DictionaryFilterCombobox } from './DictionaryFilterCombobox'
-import { FieldDropdownChevron } from './FieldDropdownChevron'
+import { FilterStyleSelectWithClear } from './FilterStyleSelectWithClear'
 
 /** Текстовые поля с debounce (поиск по названию / артикулу / поставщику). */
 export type TextFilterFieldKey = 'search' | 'name' | 'sku' | 'supplier'
 
-export type SelectFilterFieldKey = 'type' | 'type_id' | 'client_id' | 'supplier_id'
+export type SelectFilterFieldKey =
+  | 'type'
+  | 'type_id'
+  | 'client_id'
+  | 'supplier_id'
+  | 'product_id'
+  | 'color_id'
+  | 'size_id'
+  | 'op_type'
 
 export type DictionaryAutocompleteFilterKey =
   | 'type_id'
@@ -15,6 +23,9 @@ export type DictionaryAutocompleteFilterKey =
   | 'supplier_id'
   | 'actuality_id'
   | 'users_role'
+  | 'product_id'
+  | 'color_id'
+  | 'size_id'
 
 /** Ключ селекта / комбобокса в панели фильтров (native select или dictionary autocomplete). */
 export type FilterPanelSelectKey = SelectFilterFieldKey | DictionaryAutocompleteFilterKey
@@ -42,6 +53,10 @@ type FilterValues = {
   type_id?: string
   client_id?: string
   supplier_id?: string
+  product_id?: string
+  color_id?: string
+  size_id?: string
+  op_type?: string
   actuality_id?: string
   users_role?: string
   date_from?: string
@@ -63,17 +78,15 @@ type Props = {
 
 const TEXT_DEBOUNCE_MS = 400
 
-function splitSelectFilterOptions(options: { value: string; label: string }[]) {
-  const placeholder = options.find((o) => o.value === '')
-  const choices = options.filter((o) => o.value !== '')
-  return { placeholder, choices }
-}
-
 const SELECT_CLEAR_ARIA: Partial<Record<SelectFilterFieldKey, string>> = {
   type: 'Сбросить фильтр по типу',
   type_id: 'Сбросить фильтр по типу товара',
   client_id: 'Сбросить фильтр по клиенту',
   supplier_id: 'Сбросить фильтр по поставщику',
+  product_id: 'Сбросить фильтр по товару',
+  color_id: 'Сбросить фильтр по цвету',
+  size_id: 'Сбросить фильтр по размеру',
+  op_type: 'Сбросить фильтр по типу операции',
 }
 
 function FilterSelectWithClear({
@@ -89,57 +102,15 @@ function FilterSelectWithClear({
   onSelectChange: (name: SelectFilterFieldKey, value: string | null) => void
   disabled?: boolean
 }) {
-  const { placeholder, choices } = splitSelectFilterOptions(options)
-  const hasValue = valueStr !== ''
-
   return (
-    <div className={`list-filters__select-wrap${hasValue ? ' list-filters__select-wrap--has-value' : ''}`}>
-      {hasValue ? (
-        <button
-          type="button"
-          className="list-filters__select-clear"
-          aria-label={SELECT_CLEAR_ARIA[name] ?? 'Очистить фильтр'}
-          title="Очистить"
-          disabled={disabled}
-          onMouseDown={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-          }}
-          onClick={() => onSelectChange(name, null)}
-        >
-          <svg className="list-filters__select-clear-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M18 6L6 18M6 6l12 12"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-        </button>
-      ) : null}
-      <select
-        className={`field-input list-filters__select${hasValue ? '' : ' list-filters__select--empty'}`.trim()}
-        value={valueStr}
-        disabled={disabled}
-        onChange={(e) => {
-          const raw = e.target.value
-          if (raw === '') onSelectChange(name, null)
-          else onSelectChange(name, raw)
-        }}
-      >
-        {placeholder ? (
-          <option value="" disabled hidden>
-            {placeholder.label}
-          </option>
-        ) : null}
-        {choices.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <FieldDropdownChevron />
-    </div>
+    <FilterStyleSelectWithClear
+      options={options}
+      valueStr={valueStr}
+      onChange={(v) => onSelectChange(name, v)}
+      disabled={disabled}
+      clearAriaLabel="Очистить значение"
+      clearTitle={SELECT_CLEAR_ARIA[name] ?? undefined}
+    />
   )
 }
 
@@ -148,18 +119,21 @@ function DebouncedTextFilterRow({
   placeholder,
   committedValue,
   onDebounced,
-  disabled,
 }: {
   name: TextFilterFieldKey
   placeholder: string
   committedValue: string | undefined
   onDebounced: (name: TextFilterFieldKey, value: string) => void
-  disabled?: boolean
 }) {
   const [draft, setDraft] = useState(committedValue ?? '')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    const el = inputRef.current
+    if (el != null && document.activeElement === el) {
+      return
+    }
     setDraft(committedValue ?? '')
   }, [committedValue])
 
@@ -200,12 +174,12 @@ function DebouncedTextFilterRow({
       }
     >
       <input
+        ref={inputRef}
         className="field-input list-filters__input"
         type="text"
         autoComplete="off"
         placeholder={placeholder}
         value={draft}
-        disabled={disabled}
         onChange={(e) => {
           const v = e.target.value
           setDraft(v)
@@ -249,7 +223,6 @@ export function FiltersPanel({
                       : values.supplier
               }
               onDebounced={onTextFilterDebounced}
-              disabled={disabled}
             />
           )
         }
@@ -259,6 +232,9 @@ export function FiltersPanel({
           if (name === 'type') {
             const v = values.type
             selectVal = v === 'clothes' || v === 'tech' ? v : ''
+          } else if (name === 'op_type') {
+            const v = values.op_type
+            selectVal = v === 'in' || v === 'out' ? v : ''
           } else {
             const v = values[name]
             selectVal = typeof v === 'string' && v ? v : ''

@@ -22,7 +22,9 @@ export function ManagerAdminRoute({ children }: ManagerAdminRouteProps) {
 
     me()
       .then((user) => {
-        setIsAllowed(user.role === 'admin' || user.role === 'manager')
+        setIsAllowed(
+          user.role === 'admin' || user.role === 'manager' || user.role === 'warehouse_manager',
+        )
       })
       .catch(() => {
         setIsAllowed(false)

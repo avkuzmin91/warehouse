@@ -10,6 +10,12 @@ const STATIC: Record<string, string> = {
   products: 'Товары',
   users: 'Пользователи',
   inventory: 'Учет товаров',
+  analytics: 'Аналитика',
+  cabinet: 'Личный кабинет',
+  receipt: 'Приёмка товаров',
+  receipts: 'Поступления',
+  shipments: 'Отгрузки',
+  balances: 'Остатки',
   clients: 'Клиенты',
   colors: 'Цвета',
   sizes: 'Размеры',
@@ -26,6 +32,8 @@ const CREATE_BY_PREV: Record<string, string> = {
   products: 'Создание товара',
   suppliers: 'Создание поставщика',
   'product-types': 'Создание типа товара',
+  receipts: 'Новое поступление',
+  shipments: 'Новая отгрузка',
 }
 
 function labelForSegment(segment: string, index: number, parts: string[]): string {
@@ -98,6 +106,17 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
       return 'Редактирование поставщика'
     }
   }
+  if (
+    parts[0] === 'inventory' &&
+    parts[1] === 'receipts' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование поступления'
+    }
+  }
   if (segment === 'new') {
     const prev = index > 0 ? parts[index - 1] : null
     if (prev && CREATE_BY_PREV[prev]) {
@@ -126,6 +145,12 @@ export function buildBreadcrumbsFromPathname(pathname: string): BreadcrumbItem[]
   }
   if (parts.length === 1 && parts[0] === 'home') {
     return [{ label: 'Главная', to: null }]
+  }
+  if (parts.length === 1 && parts[0] === 'cabinet') {
+    return [
+      { label: 'Главная', to: '/home' },
+      { label: 'Личный кабинет', to: null },
+    ]
   }
 
   const items: BreadcrumbItem[] = [{ label: 'Главная', to: '/home' }]

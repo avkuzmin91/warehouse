@@ -2,6 +2,12 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthLayout } from './components/AuthLayout'
 import { HomePage } from './pages/HomePage'
 import { InventoryPage } from './pages/InventoryPage'
+import { InventoryBalancesPage } from './pages/InventoryBalancesPage'
+import { InventoryOperationsListPage } from './pages/InventoryOperationsListPage'
+import { InventoryOperationCreatePage } from './pages/InventoryOperationCreatePage'
+import { InventoryReceiptPage } from './pages/InventoryReceiptPage'
+import { InventoryReceiptEditPage } from './pages/InventoryReceiptEditPage'
+import { AnalyticsPage } from './pages/AnalyticsPage'
 import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
 import { ClientCreatePage } from './pages/ClientCreatePage'
@@ -21,6 +27,10 @@ import { UsersPage } from './pages/UsersPage'
 import { AdminRoute } from './routes/AdminRoute'
 import { ManagerAdminRoute } from './routes/ManagerAdminRoute'
 import { ProtectedLayout } from './routes/ProtectedLayout'
+import { ClientCabinetLayout } from './routes/ClientCabinetLayout'
+import { ClientCabinetDashboardPage } from './pages/ClientCabinetDashboardPage'
+import { ClientCabinetBalancesPage } from './pages/ClientCabinetBalancesPage'
+import { ClientCabinetOperationsPage } from './pages/ClientCabinetOperationsPage'
 
 function App() {
   return (
@@ -32,6 +42,12 @@ function App() {
       </Route>
       <Route element={<ProtectedLayout />}>
         <Route path="/home" element={<HomePage />} />
+        <Route path="/cabinet" element={<ClientCabinetLayout />}>
+          <Route index element={<ClientCabinetDashboardPage />} />
+          <Route path="balances" element={<ClientCabinetBalancesPage />} />
+          <Route path="receipts" element={<ClientCabinetOperationsPage opType="in" />} />
+          <Route path="shipments" element={<ClientCabinetOperationsPage opType="out" />} />
+        </Route>
         <Route
           path="/inventory"
           element={
@@ -41,7 +57,68 @@ function App() {
           }
         />
         <Route
-          path="/users"
+          path="/inventory/balances"
+          element={
+            <ManagerAdminRoute>
+              <InventoryBalancesPage />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/receipt"
+          element={<Navigate to="/inventory/receipts/new" replace />}
+        />
+        <Route
+          path="/inventory/receipts"
+          element={
+            <ManagerAdminRoute>
+              <InventoryOperationsListPage opType="in" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/receipts/new"
+          element={
+            <ManagerAdminRoute>
+              <InventoryReceiptPage />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/receipts/:receiptId"
+          element={
+            <ManagerAdminRoute>
+              <InventoryReceiptEditPage />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/shipments"
+          element={
+            <ManagerAdminRoute>
+              <InventoryOperationsListPage opType="out" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/shipments/new"
+          element={
+            <ManagerAdminRoute>
+              <InventoryOperationCreatePage opType="out" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            <ManagerAdminRoute>
+              <AnalyticsPage />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route path="/users" element={<Navigate to="/dictionaries/users" replace />} />
+        <Route
+          path="/dictionaries/users"
           element={
             <AdminRoute>
               <UsersPage />

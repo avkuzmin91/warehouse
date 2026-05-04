@@ -179,10 +179,6 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
         </fieldset>
       </form>
 
-      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
-
-      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
-
       {isFormEnabled ? (
         <ActionBar
           primaryLabel="Сохранить"
@@ -190,6 +186,10 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
           onSecondary={() => navigate(basePath)}
         />
       ) : null}
+
+      {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
+
+      {isFormEnabled && auditInfo ? <SystemInfoBlock info={auditInfo} /> : null}
     </PageContainer>
   )
 }
