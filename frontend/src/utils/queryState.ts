@@ -20,6 +20,10 @@ export type ListFilters = {
   size_id?: string
   /** Inventory: тип операции 'in' / 'out'. */
   op_type?: string
+  /** Поступления: pending | accepted (URL: receipt_status). */
+  receipt_status?: string
+  /** Отгрузки: pending | shipped (URL: shipment_status). */
+  shipment_status?: string
   /** ID записи системного справочника актуальности (GET /system/record-actuality). */
   actuality_id?: string
   /** YYYY-MM-DD, начало периода (ТЗ: date_from) */
@@ -134,6 +138,12 @@ export function parseListQueryFromSearchParams(
       filters.date_to = parseYyyyMmDdParam(sp.get('date_to'))
     } else if (key === 'users_role') {
       filters.users_role = parseUsersRoleParam(sp.get('users_role'))
+    } else if (key === 'receipt_status') {
+      const v = sp.get('receipt_status')
+      filters.receipt_status = v === 'pending' || v === 'accepted' ? v : undefined
+    } else if (key === 'shipment_status') {
+      const v = sp.get('shipment_status')
+      filters.shipment_status = v === 'pending' || v === 'shipped' ? v : undefined
     }
   }
 
@@ -220,6 +230,14 @@ export function applyListQueryToSearchParams(
       const v = parseUsersRoleParam(q.filters.users_role ?? null)
       if (v) next.set('users_role', v)
       else next.delete('users_role')
+    } else if (key === 'receipt_status') {
+      const v = q.filters.receipt_status
+      if (v === 'pending' || v === 'accepted') next.set('receipt_status', v)
+      else next.delete('receipt_status')
+    } else if (key === 'shipment_status') {
+      const v = q.filters.shipment_status
+      if (v === 'pending' || v === 'shipped') next.set('shipment_status', v)
+      else next.delete('shipment_status')
     }
   }
 
@@ -241,6 +259,8 @@ export type ListApiQueryParams = {
   color_id?: string
   size_id?: string
   op_type?: 'in' | 'out'
+  receipt_status?: 'pending' | 'accepted'
+  shipment_status?: 'pending' | 'shipped'
   actuality_id?: string
   sort?: string
   date_from?: string
@@ -273,6 +293,10 @@ export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   if (szId != null && String(szId).trim() !== '') out.size_id = String(szId).trim()
   const opT = q.filters.op_type
   if (opT === 'in' || opT === 'out') out.op_type = opT
+  const rs = q.filters.receipt_status
+  if (rs === 'pending' || rs === 'accepted') out.receipt_status = rs
+  const ss = q.filters.shipment_status
+  if (ss === 'pending' || ss === 'shipped') out.shipment_status = ss
   const aid = q.filters.actuality_id
   if (aid != null && String(aid).trim() !== '') out.actuality_id = String(aid).trim()
   const df = q.filters.date_from

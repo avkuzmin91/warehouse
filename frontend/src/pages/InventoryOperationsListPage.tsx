@@ -12,13 +12,10 @@ import {
   type DictionaryItem,
   type InventoryOperationItem,
   type InventoryOpType,
-  type InventoryProductLookup,
   getInventoryClients,
   getInventoryColors,
   getInventoryOperations,
-  getInventoryProducts,
   getInventorySizes,
-  getInventorySuppliers,
   resolvePublicUploadSrc,
 } from '../api'
 
@@ -28,16 +25,18 @@ const FILTER_KEYS_RECEIPTS = [
   'name',
   'color_id',
   'size_id',
+  'receipt_status',
   'date_from',
   'date_to',
 ] as const
 
 const FILTER_KEYS_SHIPMENTS = [
   'client_id',
-  'product_id',
-  'supplier_id',
+  'sku',
+  'name',
   'color_id',
   'size_id',
+  'shipment_status',
   'date_from',
   'date_to',
 ] as const
@@ -66,28 +65,20 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
   const [clients, setClients] = useState<DictionaryItem[]>([])
-  const [products, setProducts] = useState<InventoryProductLookup[]>([])
   const [colors, setColors] = useState<DictionaryItem[]>([])
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
-  const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
   const createHref = isShipment ? '/inventory/shipments/new' : '/inventory/receipts/new'
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      getInventoryClients(),
-      getInventoryColors(),
-      getInventorySizes(),
-      getInventorySuppliers(),
-    ])
-      .then(([cs, cls, szs, sps]) => {
+    Promise.all([getInventoryClients(), getInventoryColors(), getInventorySizes()])
+      .then(([cs, cls, szs]) => {
         if (cancelled) return
         setClients(cs)
         setColors(cls)
         setSizes(szs)
-        setSuppliers(sps)
       })
       .catch(() => {})
     return () => {
@@ -95,41 +86,44 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
     }
   }, [])
 
-  useEffect(() => {
-    if (!isShipment) return
-    let cancelled = false
-    getInventoryProducts(query.filters.client_id ?? null)
-      .then((rows) => {
-        if (!cancelled) setProducts(rows)
-      })
-      .catch(() => {
-        if (!cancelled) setProducts([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isShipment, query.filters.client_id])
-
   const filterFields: FilterFieldConfig[] = useMemo(() => {
     if (!isShipment) {
       return [
-        { type: 'date_range', placeholder: 'Дата' },
+        { type: 'date_range', placeholder: 'Дата поступления' },
         { name: 'client_id', type: 'dictionary_autocomplete', options: dictOptions(clients, 'Клиент') },
         { name: 'sku', type: 'text', placeholder: 'Артикул' },
         { name: 'name', type: 'text', placeholder: 'Название' },
+        {
+          name: 'receipt_status',
+          type: 'select',
+          options: [
+            { value: '', label: 'Статус' },
+            { value: 'pending', label: 'Ожидает приемки' },
+            { value: 'accepted', label: 'Принят' },
+          ],
+        },
         { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
         { name: 'size_id', type: 'dictionary_autocomplete', options: dictOptions(sizes, 'Размер') },
       ]
     }
     return [
+      { type: 'date_range', placeholder: 'Дата отгрузки (регистрация)' },
       { name: 'client_id', type: 'dictionary_autocomplete', options: dictOptions(clients, 'Клиент') },
-      { name: 'product_id', type: 'dictionary_autocomplete', options: dictOptions(products, 'Товар') },
-      { name: 'supplier_id', type: 'dictionary_autocomplete', options: dictOptions(suppliers, 'Поставщик') },
+      { name: 'sku', type: 'text', placeholder: 'Артикул' },
+      { name: 'name', type: 'text', placeholder: 'Название' },
+      {
+        name: 'shipment_status',
+        type: 'select',
+        options: [
+          { value: '', label: 'Статус' },
+          { value: 'pending', label: 'Ожидает отгрузки' },
+          { value: 'shipped', label: 'Отгружен' },
+        ],
+      },
       { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
       { name: 'size_id', type: 'dictionary_autocomplete', options: dictOptions(sizes, 'Размер') },
-      { type: 'date_range', placeholder: 'Период регистрации' },
     ]
-  }, [isShipment, clients, products, suppliers, colors, sizes])
+  }, [isShipment, clients, colors, sizes])
 
   const columns: TableColumn<InventoryOperationItem>[] = useMemo(() => {
     if (!isShipment) {
@@ -139,6 +133,17 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           title: 'Дата',
           sortable: true,
           render: (v) => formatDateDdMmYyyy(String(v)),
+        },
+        {
+          key: 'receipt_status',
+          title: 'Статус',
+          sortable: true,
+          render: (_v, row) => {
+            const s = row.receipt_status
+            if (s === 'pending') return 'Ожидает приемки'
+            if (s === 'accepted') return 'Принят'
+            return '—'
+          },
         },
         { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },
         {
@@ -195,24 +200,63 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
         sortable: true,
         render: (v) => formatDateDdMmYyyy(String(v)),
       },
-      { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },
-      { key: 'product_name', title: 'Товар', sortable: true },
       {
-        key: 'product_type_name',
-        title: 'Тип',
+        key: 'shipment_status',
+        title: 'Статус',
         sortable: true,
-        render: (v) => (v as string) || '—',
+        render: (_v, row) => {
+          const s = row.shipment_status
+          if (s === 'pending') return 'Ожидает отгрузки'
+          if (s === 'shipped') return 'Отгружен'
+          return '—'
+        },
+      },
+      { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },
+      {
+        key: 'product_sku',
+        title: 'Артикул',
+        sortable: true,
+        render: (_v, row) => (row.product_sku as string) || '—',
       },
       {
-        key: 'supplier_name',
-        title: 'Поставщик',
+        key: 'product_name',
+        title: 'Название',
         sortable: true,
-        render: (v) => (v as string) || '—',
+        render: (v) => (String(v || '').trim() ? String(v) : '—'),
+      },
+      {
+        key: 'preview_image_url',
+        title: 'Фото',
+        sortable: false,
+        render: (_v, row) => {
+          const raw = row.preview_image_url
+          if (!raw?.trim()) {
+            return (
+              <span
+                className="product-thumb product-thumb--empty product-list-preview-placeholder"
+                aria-hidden
+              />
+            )
+          }
+          const src = resolvePublicUploadSrc(raw)
+          return (
+            <button
+              type="button"
+              className="product-list-preview-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setLightboxSrc(src)
+              }}
+              aria-label="Открыть фото"
+            >
+              <img src={src} alt="" className="product-thumb" width={40} height={40} loading="lazy" />
+            </button>
+          )
+        },
       },
       { key: 'color_name', title: 'Цвет', sortable: true, render: (v) => (v as string) || '—' },
       { key: 'size_name', title: 'Размер', sortable: true, render: (v) => (v as string) || '—' },
       { key: 'quantity', title: 'Количество', sortable: true },
-      { key: 'created_by', title: 'Кто внёс', sortable: true, render: (v) => (v as string) || '—' },
     ]
   }, [isShipment])
 
@@ -225,12 +269,12 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
       limit: apiParams.limit,
       op_type: opType,
       client_id: apiParams.client_id,
-      product_id: apiParams.product_id,
-      supplier_id: apiParams.supplier_id,
       color_id: apiParams.color_id,
       size_id: apiParams.size_id,
       sku: apiParams.sku,
       name: apiParams.name,
+      receipt_status: apiParams.receipt_status,
+      shipment_status: apiParams.shipment_status,
       date_from: apiParams.date_from,
       date_to: apiParams.date_to,
       sort: apiParams.sort,
@@ -262,10 +306,11 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
   const filterValues = isShipment
     ? {
         client_id: query.filters.client_id,
-        product_id: query.filters.product_id,
-        supplier_id: query.filters.supplier_id,
+        sku: query.filters.sku,
+        name: query.filters.name,
         color_id: query.filters.color_id,
         size_id: query.filters.size_id,
+        shipment_status: query.filters.shipment_status,
         date_from: query.filters.date_from,
         date_to: query.filters.date_to,
       }
@@ -275,6 +320,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
         name: query.filters.name,
         color_id: query.filters.color_id,
         size_id: query.filters.size_id,
+        receipt_status: query.filters.receipt_status,
         date_from: query.filters.date_from,
         date_to: query.filters.date_to,
       }
@@ -293,12 +339,12 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           onTextFilterDebounced={onTextFilterDebounced}
           onSelectChange={(name, value) => {
             if (name === 'client_id') {
-              setFilters({ client_id: value ?? undefined, product_id: undefined })
+              setFilters({ client_id: value ?? undefined })
             } else if (
-              name === 'product_id' ||
-              name === 'supplier_id' ||
               name === 'color_id' ||
-              name === 'size_id'
+              name === 'size_id' ||
+              name === 'receipt_status' ||
+              name === 'shipment_status'
             ) {
               setFilters({ [name]: value ?? undefined })
             }
@@ -324,13 +370,25 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           sort={query.sort}
           onSortClick={cycleSortField}
           wrapClassName="product-table-wrap"
-          onRowClick={
-            isShipment
-              ? undefined
-              : (row) => {
-                  navigate(`/inventory/receipts/${row.id}`)
-                }
-          }
+          rowClassName={(row) => {
+            if (!isShipment) {
+              const s = row.receipt_status
+              if (s === 'pending') return 'inv-receipt-row inv-receipt-row--pending'
+              if (s === 'accepted') return 'inv-receipt-row inv-receipt-row--accepted'
+              return undefined
+            }
+            const s = row.shipment_status
+            if (s === 'pending') return 'inv-shipment-row inv-shipment-row--pending'
+            if (s === 'shipped') return 'inv-shipment-row inv-shipment-row--shipped'
+            return undefined
+          }}
+          onRowClick={(row) => {
+            if (!isShipment) {
+              navigate(`/inventory/receipts/${row.id}`)
+            } else {
+              navigate(`/inventory/shipments/${row.id}`)
+            }
+          }}
         />
       }
       pagination={
@@ -349,13 +407,11 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
         setReloadKey((k) => k + 1)
       }}
     />
-      {!isShipment ? (
-        <ImageFullscreenLightbox
-          open={lightboxSrc !== null}
-          src={lightboxSrc}
-          onClose={() => setLightboxSrc(null)}
-        />
-      ) : null}
+      <ImageFullscreenLightbox
+        open={lightboxSrc !== null}
+        src={lightboxSrc}
+        onClose={() => setLightboxSrc(null)}
+      />
     </>
   )
 }

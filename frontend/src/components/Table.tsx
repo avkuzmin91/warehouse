@@ -24,6 +24,8 @@ export type TableProps<TRow extends object> = {
   wrapClassName?: string
   /** Доп. класс на table. */
   tableClassName?: string
+  /** Подсветка строки (например статус поступления). */
+  rowClassName?: (row: TRow) => string | undefined
 }
 
 function readCell(row: object, key: string): unknown {
@@ -51,6 +53,7 @@ export function Table<TRow extends object>({
   onSortClick,
   wrapClassName = '',
   tableClassName = '',
+  rowClassName,
 }: TableProps<TRow>) {
   const interactive = Boolean(onRowClick)
   const tableClass = ['users-table', interactive ? 'users-table--interactive' : '', tableClassName]
@@ -106,7 +109,11 @@ export function Table<TRow extends object>({
               </tr>
             ) : (
               data.map((row, index) => (
-                <tr key={rowKey(row, index)} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+                <tr
+                  key={rowKey(row, index)}
+                  className={rowClassName?.(row)}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
                   {columns.map((col) => {
                     const raw = readCell(row, col.key)
                     const content = col.render ? col.render(raw, row) : defaultRender(raw)

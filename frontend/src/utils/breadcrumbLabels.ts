@@ -117,6 +117,17 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
       return 'Редактирование поступления'
     }
   }
+  if (
+    parts[0] === 'inventory' &&
+    parts[1] === 'shipments' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s !== 'new' && s.length > 0) {
+      return 'Редактирование отгрузки'
+    }
+  }
   if (segment === 'new') {
     const prev = index > 0 ? parts[index - 1] : null
     if (prev && CREATE_BY_PREV[prev]) {

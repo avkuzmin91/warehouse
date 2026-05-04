@@ -675,6 +675,10 @@ export type InventoryOperationItem = {
   /** Базовый артикул товара (карточка), products.sku */
   product_sku?: string | null
   preview_image_url?: string | null
+  /** Поступление: ожидает / принят; для отгрузки null */
+  receipt_status?: 'pending' | 'accepted' | null
+  /** Отгрузка: ожидает / отгружен; для прихода null */
+  shipment_status?: 'pending' | 'shipped' | null
   quantity: number
   note: string | null
   created_at: string
@@ -691,6 +695,9 @@ export type InventoryOperationListResponse = {
 export type InventoryBalanceItem = {
   product_id: string
   product_name: string
+  /** Базовый артикул карточки (products.sku) */
+  product_sku: string
+  preview_image_url?: string | null
   product_type_id: string | null
   product_type_name: string | null
   client_id: string | null
@@ -819,6 +826,7 @@ export function createReceipt(payload: {
   quantity: number
   comment?: string | null
   receipt_date?: string | null
+  receipt_status?: 'pending' | 'accepted'
 }) {
   return request<{ message: string }>('/receipts', {
     method: 'POST',
@@ -827,6 +835,7 @@ export function createReceipt(payload: {
       quantity: payload.quantity,
       comment: (payload.comment ?? '').trim() || null,
       receipt_date: (payload.receipt_date ?? '').trim() || null,
+      receipt_status: payload.receipt_status ?? 'accepted',
     }),
   })
 }
@@ -850,6 +859,7 @@ export type ReceiptDetail = {
   first_image_url: string | null
   created_at: string
   created_by: string | null
+  receipt_status: 'pending' | 'accepted'
 }
 
 export function getReceipt(receiptId: string) {
@@ -858,9 +868,90 @@ export function getReceipt(receiptId: string) {
 
 export function patchReceipt(
   receiptId: string,
-  payload: { quantity?: number; comment?: string | null; variant_id?: string; receipt_date?: string | null },
+  payload: {
+    quantity?: number
+    comment?: string | null
+    variant_id?: string
+    receipt_date?: string | null
+    receipt_status?: 'pending' | 'accepted'
+  },
 ) {
   return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Удаление поступления (только роль admin). */
+export function deleteReceipt(receiptId: string) {
+  return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
+    method: 'DELETE',
+  })
+}
+
+/** Удаление отгрузки (только роль admin). */
+export function deleteShipment(shipmentId: string) {
+  return request<{ message: string }>(`/shipments/${encodeURIComponent(shipmentId.trim())}`, {
+    method: 'DELETE',
+  })
+}
+
+export type ShipmentDetail = {
+  id: string
+  variant_id: string | null
+  sku: string
+  color_id: string | null
+  size_id: string | null
+  quantity: number
+  comment: string | null
+  shipment_status: 'pending' | 'shipped'
+  product_id: string
+  product_name: string
+  product_type_name: string | null
+  client_id: string | null
+  client_name: string | null
+  length: number
+  width: number
+  height: number
+  first_image_url: string | null
+  created_at: string
+  created_by: string | null
+}
+
+export function createShipment(payload: {
+  variant_id: string
+  quantity: number
+  comment?: string | null
+  shipment_date?: string | null
+  shipment_status: 'pending' | 'shipped'
+}) {
+  return request<{ message: string }>('/shipments', {
+    method: 'POST',
+    body: JSON.stringify({
+      variant_id: payload.variant_id,
+      quantity: payload.quantity,
+      comment: (payload.comment ?? '').trim() || null,
+      shipment_date: (payload.shipment_date ?? '').trim() || null,
+      shipment_status: payload.shipment_status,
+    }),
+  })
+}
+
+export function getShipment(shipmentId: string) {
+  return request<ShipmentDetail>(`/shipments/${encodeURIComponent(shipmentId.trim())}`)
+}
+
+export function patchShipment(
+  shipmentId: string,
+  payload: {
+    quantity?: number
+    comment?: string | null
+    variant_id?: string
+    shipment_date?: string | null
+    shipment_status?: 'pending' | 'shipped'
+  },
+) {
+  return request<{ message: string }>(`/shipments/${encodeURIComponent(shipmentId.trim())}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })
@@ -881,6 +972,10 @@ export type InventoryOperationsListParams = {
   name?: string
   date_from?: string
   date_to?: string
+  /** Фильтр поступлений по статусу */
+  receipt_status?: 'pending' | 'accepted' | ''
+  /** Фильтр отгрузок по статусу */
+  shipment_status?: 'pending' | 'shipped' | ''
   sort?: string
 }
 
@@ -902,6 +997,12 @@ export function getInventoryOperations(params?: InventoryOperationsListParams) {
   if (params?.date_to && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to)) {
     sp.set('date_to', params.date_to)
   }
+  if (params?.receipt_status === 'pending' || params?.receipt_status === 'accepted') {
+    sp.set('receipt_status', params.receipt_status)
+  }
+  if (params?.shipment_status === 'pending' || params?.shipment_status === 'shipped') {
+    sp.set('shipment_status', params.shipment_status)
+  }
   if (params?.sort) sp.set('sort', params.sort)
   const q = sp.toString()
   return request<InventoryOperationListResponse>(
@@ -918,6 +1019,10 @@ export type InventoryBalancesListParams = {
   supplier_id?: string
   color_id?: string
   size_id?: string
+  /** Подстрока по базовому артикулу товара */
+  sku?: string
+  /** Подстрока по названию товара */
+  name?: string
   only_positive?: boolean
   sort?: string
 }
@@ -932,6 +1037,8 @@ export function getInventoryBalances(params?: InventoryBalancesListParams) {
   if (params?.supplier_id) sp.set('supplier_id', params.supplier_id)
   if (params?.color_id) sp.set('color_id', params.color_id)
   if (params?.size_id) sp.set('size_id', params.size_id)
+  if (params?.sku?.trim()) sp.set('sku', params.sku.trim())
+  if (params?.name?.trim()) sp.set('name', params.name.trim())
   if (params?.only_positive === false) sp.set('only_positive', 'false')
   if (params?.sort) sp.set('sort', params.sort)
   const q = sp.toString()

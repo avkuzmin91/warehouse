@@ -8,13 +8,15 @@ export type ActionBarProps = {
   /** `type="submit"` с `form={submitFormId}` — кнопка может стоять вне `<form>` */
   submitFormId: string
   primaryDisabled?: boolean
-  /** Доп. действия слева (например «Удалить») */
+  /** Доп. действия слева (например «Принять на склад» / «Подтвердить отгрузку») */
   leading?: ReactNode
+  /** После «Отмена»: например «Удалить» */
+  trailingEnd?: ReactNode
   className?: string
 }
 
 /**
- * Глобальная панель действий страницы сущности: primary (submit) + secondary (отмена).
+ * Панель действий: primary (submit) + secondary (отмена) + опционально leading / trailingEnd.
  */
 export function ActionBar({
   primaryLabel,
@@ -23,6 +25,7 @@ export function ActionBar({
   submitFormId,
   primaryDisabled,
   leading,
+  trailingEnd,
   className = '',
 }: ActionBarProps) {
   const root = ['product-form-actions', 'action-bar', className].filter(Boolean).join(' ')
@@ -42,6 +45,7 @@ export function ActionBar({
         <button className="btn btn--secondary btn--form-action" type="button" onClick={onSecondary}>
           {secondaryLabel}
         </button>
+        {trailingEnd}
       </div>
     </div>
   )

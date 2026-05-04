@@ -2,15 +2,16 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  createReceipt,
-  deleteReceipt,
+  createShipment,
+  deleteShipment,
   findProductVariantForReceipt,
-  getReceipt,
-  patchReceipt,
   getInventoryColorsForProductSku,
-  getInventorySizesForProductSkuAndColor,
   getInventoryProductSkus,
+  getInventorySingleBalance,
+  getInventorySizesForProductSkuAndColor,
+  getShipment,
   me,
+  patchShipment,
   resolvePublicUploadSrc,
   type DictionaryItem,
   type ProductVariantFindResponse,
@@ -22,7 +23,7 @@ import { FormDateField } from './FormDateField'
 import { ProductDimNumberInput } from './ProductDimNumberInput'
 import { ActionBar } from './ActionBar'
 
-type Props = { receiptId?: string }
+type Props = { shipmentId?: string }
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [d, setD] = useState(value)
@@ -41,7 +42,7 @@ function localTodayYmd(): string {
   return `${y}-${m}-${day}`
 }
 
-function ReceiptStatusBadge({ status }: { status: 'pending' | 'accepted' }) {
+function ShipmentStatusBadge({ status }: { status: 'pending' | 'shipped' }) {
   const pending = status === 'pending'
   return (
     <div
@@ -54,18 +55,18 @@ function ReceiptStatusBadge({ status }: { status: 'pending' | 'accepted' }) {
     >
       <span className="receipt-form__status-badge__mark" aria-hidden />
       <span className="receipt-form__status-badge__label">
-        {pending ? 'Ожидает приемки' : 'Принят на склад'}
+        {pending ? 'Ожидает отгрузки' : 'Отгружен'}
       </span>
       <span className="receipt-form__status-badge__hint">
-        {pending ? 'ещё не на остатках' : 'учтён на складе'}
+        {pending ? 'ещё не списано со склада' : 'списано со склада'}
       </span>
     </div>
   )
 }
 
-export function ReceiptForm({ receiptId }: Props) {
+export function ShipmentForm({ shipmentId }: Props) {
   const navigate = useNavigate()
-  const isEdit = Boolean(receiptId?.trim())
+  const isEdit = Boolean(shipmentId?.trim())
   const formId = useId()
   const [ready, setReady] = useState(!isEdit)
   const [loadedVariantId, setLoadedVariantId] = useState<string | null>(null)
@@ -103,13 +104,16 @@ export function ReceiptForm({ receiptId }: Props) {
   const [findRes, setFindRes] = useState<ProductVariantFindResponse | null>(null)
   const [findLoading, setFindLoading] = useState(false)
   const [quantityStr, setQuantityStr] = useState('')
-  const [receiptDate, setReceiptDate] = useState(() => localTodayYmd())
+  const [shipmentDate, setShipmentDate] = useState(() => localTodayYmd())
   const [comment, setComment] = useState('')
-  const [receiptStatus, setReceiptStatus] = useState<'pending' | 'accepted'>('accepted')
+  const [shipmentStatus, setShipmentStatus] = useState<'pending' | 'shipped'>('shipped')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [successFlash, setSuccessFlash] = useState('')
   const findSeq = useRef(0)
+
+  const [balance, setBalance] = useState<number | null>(null)
+  const [balanceLoading, setBalanceLoading] = useState(false)
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -196,10 +200,10 @@ export function ReceiptForm({ receiptId }: Props) {
   }, [sku])
 
   useEffect(() => {
-    if (!isEdit || !receiptId) return
+    if (!isEdit || !shipmentId) return
     let cancelled = false
     setLoadError('')
-    getReceipt(receiptId)
+    getShipment(shipmentId)
       .then((d) => {
         if (cancelled) return
         setLoadedVariantId(d.variant_id)
@@ -207,9 +211,9 @@ export function ReceiptForm({ receiptId }: Props) {
         setColorId(d.color_id || '')
         setSizeId(d.size_id || '')
         setQuantityStr(String(d.quantity))
-        setReceiptDate(d.created_at.slice(0, 10))
+        setShipmentDate(d.created_at.slice(0, 10))
         setComment(d.comment || '')
-        setReceiptStatus(d.receipt_status)
+        setShipmentStatus(d.shipment_status)
         setReady(true)
       })
       .catch((e) => {
@@ -218,9 +222,8 @@ export function ReceiptForm({ receiptId }: Props) {
     return () => {
       cancelled = true
     }
-  }, [isEdit, receiptId])
+  }, [isEdit, shipmentId])
 
-  /** Не сбрасывать размер до ответа find: при открытии редактирования showSize ещё false, а sizeId уже из API. */
   useEffect(() => {
     if (findRes === null) return
     if (!showSize && sizeId) {
@@ -243,7 +246,6 @@ export function ReceiptForm({ receiptId }: Props) {
     findProductVariantForReceipt({
       sku: q,
       color_id: cid,
-      /** Для одежды бэкенд ждёт размер; передаём сразу при загрузке формы редактирования (не ждём showSize). */
       size_id: sizeId.trim() || null,
     })
       .then((r) => {
@@ -260,6 +262,33 @@ export function ReceiptForm({ receiptId }: Props) {
       })
   }, [debouncedSku, colorId, sizeId, ready])
 
+  useEffect(() => {
+    const v = findRes?.variant
+    if (!findRes?.found || !v) {
+      setBalance(null)
+      return
+    }
+    let cancelled = false
+    setBalanceLoading(true)
+    getInventorySingleBalance({
+      product_id: v.product_id,
+      color_id: v.color_id,
+      size_id: v.size_id,
+    })
+      .then((r) => {
+        if (!cancelled) setBalance(r.quantity)
+      })
+      .catch(() => {
+        if (!cancelled) setBalance(null)
+      })
+      .finally(() => {
+        if (!cancelled) setBalanceLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [findRes])
+
   const quantityNum = Number(quantityStr.replace(',', '.'))
   const quantityValid =
     quantityStr.trim() !== '' &&
@@ -267,28 +296,32 @@ export function ReceiptForm({ receiptId }: Props) {
     Math.floor(quantityNum) === quantityNum &&
     quantityNum >= 1
 
-  const receiptDateFormatOk = /^\d{4}-\d{2}-\d{2}$/.test(receiptDate)
-  const receiptDateOkAccepted =
-    receiptDateFormatOk && receiptDate <= localTodayYmd()
+  const shipmentDateFormatOk = /^\d{4}-\d{2}-\d{2}$/.test(shipmentDate)
+  const shipmentDateOkShipped = shipmentDateFormatOk && shipmentDate <= localTodayYmd()
 
   const canSubmitBase = Boolean(
     findRes?.found &&
       findRes.variant &&
       quantityValid &&
-      receiptDateFormatOk &&
+      shipmentDateFormatOk &&
       !submitting &&
       ready,
   )
 
   const canSubmitEdit = Boolean(
-    canSubmitBase && (receiptStatus === 'accepted' ? receiptDateOkAccepted : true),
+    canSubmitBase && (shipmentStatus === 'shipped' ? shipmentDateOkShipped : true),
   )
 
   const canSubmit = isEdit ? canSubmitEdit : canSubmitBase
 
-  const canSubmitAcceptCreate = Boolean(canSubmitBase && receiptDateOkAccepted)
+  const stockEnoughForShipped =
+    balance == null || !quantityValid || balance >= Math.floor(quantityNum)
 
-  async function submitCreate(intent: 'pending' | 'accepted') {
+  const canSubmitShippedCreate = Boolean(
+    canSubmitBase && shipmentDateOkShipped && stockEnoughForShipped,
+  )
+
+  async function submitCreate(intent: 'pending' | 'shipped') {
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
       setSubmitError('Сначала выберите артикул и цвет')
@@ -298,33 +331,41 @@ export function ReceiptForm({ receiptId }: Props) {
       setSubmitError('Укажите количество не менее 1')
       return
     }
-    if (!receiptDateFormatOk) {
-      setSubmitError('Укажите дату поступления')
+    if (!shipmentDateFormatOk) {
+      setSubmitError('Укажите дату отгрузки')
       return
     }
-    if (intent === 'accepted' && !receiptDateOkAccepted) {
-      setSubmitError('Для принятого поступления дата не может быть позже сегодняшнего дня')
-      return
+    if (intent === 'shipped') {
+      if (!shipmentDateOkShipped) {
+        setSubmitError('Для отгруженной позиции дата не может быть позже сегодняшнего дня')
+        return
+      }
+      if (!stockEnoughForShipped) {
+        setSubmitError(
+          `Недостаточно остатка: доступно ${balance ?? 0}, требуется ${Math.floor(quantityNum)}`,
+        )
+        return
+      }
     }
     setSubmitting(true)
     try {
-      await createReceipt({
+      await createShipment({
         variant_id: findRes.variant.variant_id,
         quantity: Math.floor(quantityNum),
         comment: comment.trim() || null,
-        receipt_date: receiptDate,
-        receipt_status: intent,
+        shipment_date: shipmentDate,
+        shipment_status: intent,
       })
       setSku('')
       setColorId('')
       setSizeId('')
       setQuantityStr('')
-      setReceiptDate(localTodayYmd())
+      setShipmentDate(localTodayYmd())
       setComment('')
       setFindRes(null)
       findSeq.current += 1
       setSuccessFlash(
-        intent === 'pending' ? 'Поступление запланировано' : 'Товар принят на склад',
+        intent === 'pending' ? 'Отгрузка запланирована' : 'Отгрузка зарегистрирована',
       )
       window.setTimeout(() => setSuccessFlash(''), 5000)
     } catch (e) {
@@ -334,13 +375,13 @@ export function ReceiptForm({ receiptId }: Props) {
     }
   }
 
-  async function finalizeReceipt() {
-    if (!receiptId?.trim()) return
+  async function finalizeShipment() {
+    if (!shipmentId?.trim()) return
     setSubmitError('')
     setSubmitting(true)
     try {
-      await patchReceipt(receiptId, { receipt_status: 'accepted' })
-      navigate('/inventory/receipts')
+      await patchShipment(shipmentId, { shipment_status: 'shipped' })
+      navigate('/inventory/shipments')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -348,13 +389,13 @@ export function ReceiptForm({ receiptId }: Props) {
     }
   }
 
-  async function revertReceiptToPending() {
-    if (!receiptId?.trim()) return
+  async function revertShipmentToPending() {
+    if (!shipmentId?.trim()) return
     setSubmitError('')
     setSubmitting(true)
     try {
-      await patchReceipt(receiptId, { receipt_status: 'pending' })
-      setReceiptStatus('pending')
+      await patchShipment(shipmentId, { shipment_status: 'pending' })
+      setShipmentStatus('pending')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -362,14 +403,14 @@ export function ReceiptForm({ receiptId }: Props) {
     }
   }
 
-  async function handleDeleteReceipt() {
-    if (!receiptId?.trim()) return
+  async function handleDeleteShipment() {
+    if (!shipmentId?.trim()) return
     setSubmitError('')
     setDeleteSubmitting(true)
     try {
-      await deleteReceipt(receiptId)
+      await deleteShipment(shipmentId)
       setDeleteOpen(false)
-      navigate('/inventory/receipts')
+      navigate('/inventory/shipments')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка удаления')
       setDeleteOpen(false)
@@ -381,7 +422,7 @@ export function ReceiptForm({ receiptId }: Props) {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!isEdit) {
-      void submitCreate('accepted')
+      void submitCreate('shipped')
       return
     }
     setSubmitError('')
@@ -393,36 +434,36 @@ export function ReceiptForm({ receiptId }: Props) {
       setSubmitError('Укажите количество не менее 1')
       return
     }
-    if (!receiptDateFormatOk) {
-      setSubmitError('Укажите дату поступления')
+    if (!shipmentDateFormatOk) {
+      setSubmitError('Укажите дату отгрузки')
       return
     }
-    if (receiptStatus === 'accepted' && !receiptDateOkAccepted) {
-      setSubmitError('Для принятого поступления дата не может быть позже сегодняшнего дня')
+    if (shipmentStatus === 'shipped' && !shipmentDateOkShipped) {
+      setSubmitError('Для отгруженной позиции дата не может быть позже сегодняшнего дня')
       return
     }
     setSubmitting(true)
     try {
-      if (receiptId) {
+      if (shipmentId) {
         const qty = Math.floor(quantityNum)
         const note = comment.trim() || null
         const nextVid = findRes.variant.variant_id
         if (nextVid !== loadedVariantId) {
-          await patchReceipt(receiptId, {
+          await patchShipment(shipmentId, {
             variant_id: nextVid,
             quantity: qty,
             comment: note,
-            receipt_date: receiptDate,
+            shipment_date: shipmentDate,
           })
         } else {
-          await patchReceipt(receiptId, {
+          await patchShipment(shipmentId, {
             quantity: qty,
             comment: note,
-            receipt_date: receiptDate,
+            shipment_date: shipmentDate,
           })
         }
         setLoadedVariantId(nextVid)
-        navigate('/inventory/receipts')
+        navigate('/inventory/shipments')
       }
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -453,21 +494,21 @@ export function ReceiptForm({ receiptId }: Props) {
       <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
         {showStatusAtTop ? (
           <div className="receipt-form__status-banner-wrap">
-            <ReceiptStatusBadge status={receiptStatus} />
+            <ShipmentStatusBadge status={shipmentStatus} />
           </div>
         ) : null}
-        <label className="field-label" htmlFor={`${formId}-receipt-date`}>
-          Дата поступления
+        <label className="field-label" htmlFor={`${formId}-shipment-date`}>
+          Дата отгрузки
           <span className="field-label__required" aria-label="обязательное поле">
             *
           </span>
         </label>
         <FormDateField
-          id={`${formId}-receipt-date`}
-          value={receiptDate}
-          onChange={setReceiptDate}
-          max={isEdit && receiptStatus === 'accepted' ? localTodayYmd() : undefined}
-          ariaLabel="Дата поступления"
+          id={`${formId}-shipment-date`}
+          value={shipmentDate}
+          onChange={setShipmentDate}
+          max={isEdit && shipmentStatus === 'shipped' ? localTodayYmd() : undefined}
+          ariaLabel="Дата отгрузки"
         />
 
         <label className="field-label" htmlFor={`${formId}-sku`}>
@@ -553,6 +594,12 @@ export function ReceiptForm({ receiptId }: Props) {
           inputClassName="field-input field-input--narrow"
         />
 
+        {findRes?.found && v ? (
+          <small className={`field-hint inv-balance-hint ${balance == null ? '' : balance > 0 ? 'qty-positive' : 'qty-zero'}`}>
+            {balanceLoading ? 'Остаток: загрузка…' : `Текущий остаток: ${balance ?? 0}`}
+          </small>
+        ) : null}
+
         <label className="field-label" htmlFor={`${formId}-comment`}>
           Комментарий
         </label>
@@ -605,24 +652,24 @@ export function ReceiptForm({ receiptId }: Props) {
       {isEdit ? (
         <ActionBar
           leading={
-            receiptStatus === 'pending' ? (
+            shipmentStatus === 'pending' ? (
               <div className="users-actions">
                 <button
                   type="button"
                   className="btn btn--primary btn--form-action"
                   disabled={submitting}
-                  onClick={() => void finalizeReceipt()}
+                  onClick={() => void finalizeShipment()}
                 >
-                  Принять на склад
+                  Подтвердить отгрузку
                 </button>
               </div>
-            ) : receiptStatus === 'accepted' ? (
+            ) : shipmentStatus === 'shipped' ? (
               <div className="users-actions">
                 <button
                   type="button"
                   className="btn btn--primary btn--form-action"
                   disabled={submitting}
-                  onClick={() => void revertReceiptToPending()}
+                  onClick={() => void revertShipmentToPending()}
                 >
                   Вернуть в ожидание
                 </button>
@@ -644,7 +691,7 @@ export function ReceiptForm({ receiptId }: Props) {
           primaryLabel="Сохранить"
           submitFormId={formId}
           primaryDisabled={!canSubmit}
-          onSecondary={() => navigate('/inventory/receipts')}
+          onSecondary={() => navigate('/inventory/shipments')}
         />
       ) : (
         <div className="product-form-actions action-bar">
@@ -655,20 +702,20 @@ export function ReceiptForm({ receiptId }: Props) {
               disabled={!canSubmitBase}
               onClick={() => void submitCreate('pending')}
             >
-              Запланировать поступление
+              Запланировать отгрузку
             </button>
             <button
               type="button"
               className="btn btn--primary btn--form-action"
-              disabled={!canSubmitAcceptCreate}
-              onClick={() => void submitCreate('accepted')}
+              disabled={!canSubmitShippedCreate}
+              onClick={() => void submitCreate('shipped')}
             >
-              Принять на склад
+              Подтвердить отгрузку
             </button>
             <button
               type="button"
               className="btn btn--secondary btn--form-action"
-              onClick={() => navigate('/inventory/receipts')}
+              onClick={() => navigate('/inventory/shipments')}
             >
               Отмена
             </button>
@@ -678,9 +725,9 @@ export function ReceiptForm({ receiptId }: Props) {
       <ConfirmDialog
         open={deleteOpen}
         onCancel={() => setDeleteOpen(false)}
-        onConfirm={() => void handleDeleteReceipt()}
-        ariaLabel="Подтверждение удаления поступления"
-        message="Удалить это поступление? Операция необратима."
+        onConfirm={() => void handleDeleteShipment()}
+        ariaLabel="Подтверждение удаления отгрузки"
+        message="Удалить эту отгрузку? Операция необратима."
         confirmLabel="Удалить"
         confirmVariant="danger"
         confirmDisabled={deleteSubmitting}

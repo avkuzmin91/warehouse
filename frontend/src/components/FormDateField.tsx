@@ -63,7 +63,7 @@ export type FormDateFieldProps = {
   max?: string
   disabled?: boolean
   className?: string
-  /** aria-label для поля (кратко, например «Дата приёмки») */
+  /** aria-label для поля (кратко, например «Дата поступления») */
   ariaLabel: string
 }
 

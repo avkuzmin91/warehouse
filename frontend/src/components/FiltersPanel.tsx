@@ -16,6 +16,7 @@ export type SelectFilterFieldKey =
   | 'color_id'
   | 'size_id'
   | 'op_type'
+  | 'receipt_status'
 
 export type DictionaryAutocompleteFilterKey =
   | 'type_id'
@@ -61,6 +62,7 @@ type FilterValues = {
   users_role?: string
   date_from?: string
   date_to?: string
+  receipt_status?: string
 }
 
 type Props = {
@@ -87,6 +89,7 @@ const SELECT_CLEAR_ARIA: Partial<Record<SelectFilterFieldKey, string>> = {
   color_id: 'Сбросить фильтр по цвету',
   size_id: 'Сбросить фильтр по размеру',
   op_type: 'Сбросить фильтр по типу операции',
+  receipt_status: 'Сбросить фильтр по статусу поступления',
 }
 
 function FilterSelectWithClear({
@@ -235,6 +238,9 @@ export function FiltersPanel({
           } else if (name === 'op_type') {
             const v = values.op_type
             selectVal = v === 'in' || v === 'out' ? v : ''
+          } else if (name === 'receipt_status') {
+            const v = values.receipt_status
+            selectVal = v === 'pending' || v === 'accepted' ? v : ''
           } else {
             const v = values[name]
             selectVal = typeof v === 'string' && v ? v : ''

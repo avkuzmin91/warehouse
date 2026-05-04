@@ -21,6 +21,32 @@ DB_PATH = Path(__file__).parent / "auth.db"
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
 
+# Поступления (op_type = 'in'): в остатках учитываются только со статусом «accepted».
+RECEIPT_STATUS_PENDING = "pending"
+RECEIPT_STATUS_ACCEPTED = "accepted"
+
+# Отгрузка (op_type = 'out'): в остатках учитываются только «отгружено».
+SHIPMENT_STATUS_PENDING = "pending"
+SHIPMENT_STATUS_SHIPPED = "shipped"
+
+# Агрегаты с алиасом `o` (inventory_operations o).
+SQL_O_NET_QTY = (
+    "CASE WHEN o.op_type = 'out' AND COALESCE(o.shipment_status, 'shipped') = 'shipped' THEN -o.quantity "
+    "WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') = 'accepted' "
+    "THEN o.quantity ELSE 0 END"
+)
+# Сумма отгруженного количества (для отчётов; не путать с SQL_O_NET_QTY).
+SQL_O_SHIPPED_OUT_QTY = (
+    "CASE WHEN o.op_type = 'out' AND COALESCE(o.shipment_status, 'shipped') = 'shipped' "
+    "THEN o.quantity ELSE 0 END"
+)
+SQL_O_INFLOW_QTY = (
+    "CASE WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') = 'accepted' "
+    "THEN o.quantity ELSE 0 END"
+)
+# Мягкое удаление складских операций (как у справочников).
+SQL_WHERE_INV_OP_ACTIVE_O = "COALESCE(o.is_deleted, 0) = 0"
+
 CLIENT_LIST_SORT_COLUMNS: dict[str, str] = {
     "name": "d.name COLLATE NOCASE",
     "created_at": "d.created_at",
@@ -38,6 +64,8 @@ COLOR_LIST_SORT_COLUMNS: dict[str, str] = {
 }
 INVENTORY_OPERATIONS_SORT_COLUMNS: dict[str, str] = {
     "created_at": "o.created_at",
+    "receipt_status": "COALESCE(o.receipt_status, 'accepted')",
+    "shipment_status": "COALESCE(o.shipment_status, 'shipped')",
     "quantity": "o.quantity",
     "product_name": "p.name COLLATE NOCASE",
     "product_type_name": "pt.name COLLATE NOCASE",
@@ -50,13 +78,14 @@ INVENTORY_OPERATIONS_SORT_COLUMNS: dict[str, str] = {
     "created_by": "u.email COLLATE NOCASE",
 }
 INVENTORY_BALANCES_SORT_COLUMNS: dict[str, str] = {
+    "product_sku": "MAX(p.sku) COLLATE NOCASE",
     "product_name": "MAX(p.name) COLLATE NOCASE",
     "product_type_name": "MAX(pt.name) COLLATE NOCASE",
     "client_name": "MAX(cl.name) COLLATE NOCASE",
     "supplier_name": "MAX(sp.name) COLLATE NOCASE",
     "color_name": "MAX(col.name) COLLATE NOCASE",
     "size_name": "MAX(sz.name) COLLATE NOCASE",
-    "quantity": "SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END)",
+    "quantity": f"SUM({SQL_O_NET_QTY})",
 }
 PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
     "sku_base": "p.sku COLLATE NOCASE",
@@ -98,8 +127,12 @@ def _normalize_date_yyyy_mm_dd(raw: str | None, param_name: str) -> str | None:
     return s
 
 
-def _created_at_for_receipt_date(raw: str | None) -> str:
-    """Дата приёмки (YYYY-MM-DD) → `created_at` (UTC, полдень); пусто → текущий момент. Не в будущем."""
+def _created_at_for_receipt_date(raw: str | None, *, allow_future: bool = False) -> str:
+    """Дата поступления (YYYY-MM-DD) → `created_at` (UTC, полдень); пусто → текущий момент.
+
+    Для статуса «ожидает» допускается будущая дата. Для «принят» — не позже сегодня, если
+    `allow_future` ложь.
+    """
     if raw is None or not str(raw).strip():
         return _now()
     s = str(raw).strip()
@@ -112,14 +145,75 @@ def _created_at_for_receipt_date(raw: str | None) -> str:
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="Некорректная дата приёмки",
+            detail="Некорректная дата поступления",
         )
+    if not allow_future and chosen > datetime.now(UTC).date():
+        raise HTTPException(
+            status_code=400,
+            detail="Для принятого поступления дата не может быть позже сегодняшнего дня",
+        )
+    return datetime(y, mo, day, 12, 0, 0, tzinfo=UTC).isoformat()
+
+
+def _assert_receipt_posting_day_not_after_today(created_at_val: str | None) -> None:
+    """Для статуса «принят» день поступления (по `created_at`) не позже сегодня."""
+    if not created_at_val or len(str(created_at_val)) < 10:
+        return
+    s = str(created_at_val)[:10]
+    try:
+        y, mo, day = (int(s[0:4]), int(s[5:7]), int(s[8:10]))
+        chosen = date(y, mo, day)
+    except ValueError:
+        return
     if chosen > datetime.now(UTC).date():
         raise HTTPException(
             status_code=400,
-            detail="Дата приёмки не может быть позже сегодняшнего дня",
+            detail="Чтобы принять на склад, укажите дату поступления не позже сегодняшнего дня",
+        )
+
+
+def _created_at_for_shipment_date(raw: str | None, *, allow_future: bool = False) -> str:
+    """Дата отгрузки (YYYY-MM-DD) → `created_at` (UTC полдень); пусто → сейчас.
+
+    Для «ожидает отгрузки» — дата может быть в будущем. Для «отгружен» — не позже сегодня.
+    """
+    if raw is None or not str(raw).strip():
+        return _now()
+    s = str(raw).strip()
+    d = _normalize_date_yyyy_mm_dd(s, "shipment_date")
+    if d is None:
+        return _now()
+    try:
+        y, mo, day = (int(d[0:4]), int(d[5:7]), int(d[8:10]))
+        chosen = date(y, mo, day)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректная дата отгрузки",
+        )
+    if not allow_future and chosen > datetime.now(UTC).date():
+        raise HTTPException(
+            status_code=400,
+            detail="Для отгруженной позиции дата отгрузки не может быть позже сегодняшнего дня",
         )
     return datetime(y, mo, day, 12, 0, 0, tzinfo=UTC).isoformat()
+
+
+def _assert_shipment_posting_day_not_after_today(created_at_val: str | None) -> None:
+    """Для статуса «отгружен» день отгрузки (по `created_at`) не позже сегодня."""
+    if not created_at_val or len(str(created_at_val)) < 10:
+        return
+    s = str(created_at_val)[:10]
+    try:
+        y, mo, day = (int(s[0:4]), int(s[5:7]), int(s[8:10]))
+        chosen = date(y, mo, day)
+    except ValueError:
+        return
+    if chosen > datetime.now(UTC).date():
+        raise HTTPException(
+            status_code=400,
+            detail="Чтобы подтвердить отгрузку, укажите дату отгрузки не позже сегодняшнего дня",
+        )
 
 
 bearer_scheme = HTTPBearer()
@@ -390,7 +484,12 @@ class ReceiptCreate(BaseModel):
     comment: str | None = None
     receipt_date: str | None = Field(
         default=None,
-        description="Дата приёмки YYYY-MM-DD, не позже сегодня; по умолчанию — текущий момент",
+        description=f"Дата поступления YYYY-MM-DD. Для «{RECEIPT_STATUS_PENDING}» — любая; "
+        f"для «{RECEIPT_STATUS_ACCEPTED}» — не позже сегодня. Пусто — текущий момент",
+    )
+    receipt_status: str = Field(
+        default=RECEIPT_STATUS_ACCEPTED,
+        description=f"'{RECEIPT_STATUS_PENDING}' — запланировано, '{RECEIPT_STATUS_ACCEPTED}' — принято на склад",
     )
 
 
@@ -403,7 +502,13 @@ class ReceiptPatch(BaseModel):
     )
     receipt_date: str | None = Field(
         default=None,
-        description="Дата приёмки YYYY-MM-DD, не позже сегодня (обновляет created_at).",
+        description=f"Дата поступления YYYY-MM-DD (обновляет created_at). "
+        f"Для итогового «{RECEIPT_STATUS_ACCEPTED}» — не позже сегодня; "
+        f"для «{RECEIPT_STATUS_PENDING}» — без ограничения по будущему",
+    )
+    receipt_status: str | None = Field(
+        default=None,
+        description=f"'{RECEIPT_STATUS_PENDING}' | '{RECEIPT_STATUS_ACCEPTED}'",
     )
 
 
@@ -415,6 +520,57 @@ class ReceiptDetailResponse(BaseModel):
     size_id: str | None
     quantity: int
     comment: str | None
+    receipt_status: str
+    product_id: str
+    product_name: str
+    product_type_name: str | None
+    client_id: str | None
+    client_name: str | None
+    length: float
+    width: float
+    height: float
+    first_image_url: str | None
+    created_at: str
+    created_by: str | None
+
+
+class ShipmentCreate(BaseModel):
+    variant_id: str = Field(min_length=1)
+    quantity: int = Field(gt=0)
+    comment: str | None = None
+    shipment_date: str | None = Field(
+        default=None,
+        description="Дата отгрузки YYYY-MM-DD. Для ожидания — любая; для отгружено — не позже сегодня",
+    )
+    shipment_status: str = Field(
+        default=SHIPMENT_STATUS_PENDING,
+        description=f"'{SHIPMENT_STATUS_PENDING}' — план, '{SHIPMENT_STATUS_SHIPPED}' — факт (остаток)",
+    )
+
+
+class ShipmentPatch(BaseModel):
+    quantity: int | None = Field(default=None, gt=0)
+    comment: str | None = None
+    variant_id: str | None = Field(
+        default=None,
+        description="Новый вариант; пересчёт product_id, color_id, size_id",
+    )
+    shipment_date: str | None = None
+    shipment_status: str | None = Field(
+        default=None,
+        description=f"'{SHIPMENT_STATUS_PENDING}' | '{SHIPMENT_STATUS_SHIPPED}'",
+    )
+
+
+class ShipmentDetailResponse(BaseModel):
+    id: str
+    variant_id: str | None
+    sku: str
+    color_id: str | None
+    size_id: str | None
+    quantity: int
+    comment: str | None
+    shipment_status: str
     product_id: str
     product_name: str
     product_type_name: str | None
@@ -459,9 +615,21 @@ class DictionaryListResponse(BaseModel):
     limit: int
 
 
+def _fold_ci_str(x: object) -> str:
+    """Нижний регистр для сравнения (Unicode, в т.ч. кириллица); в SQLite через fold_ci()."""
+    if x is None:
+        return ""
+    return str(x).casefold()
+
+
+def _ci_substring_like_param(raw: str) -> str:
+    return f"%{_fold_ci_str(str(raw).strip())}%"
+
+
 def get_connection():
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
+    connection.create_function("fold_ci", 1, _fold_ci_str)
     return connection
 
 
@@ -673,7 +841,21 @@ def init_db():
             {
                 "variant_id": "TEXT",
                 "variant_sku": "TEXT",
+                "receipt_status": "TEXT",
+                "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+                "deleted_at": "TEXT",
+                "deleted_by_id": "TEXT",
+                "shipment_status": "TEXT",
             },
+        )
+        connection.execute(
+            """
+            UPDATE inventory_operations
+            SET receipt_status = ?
+            WHERE op_type = 'in'
+              AND (receipt_status IS NULL OR TRIM(COALESCE(receipt_status, '')) = '')
+            """,
+            (RECEIPT_STATUS_ACCEPTED,),
         )
         _ensure_record_actuality(connection)
         connection.commit()
@@ -2308,8 +2490,8 @@ def _list_sizes_page(
     conds = ["1=1"]
     params: list[object] = []
     if name is not None and str(name).strip():
-        conds.append("LOWER(d.name) LIKE LOWER(?)")
-        params.append(f"%{str(name).strip()}%")
+        conds.append("fold_ci(d.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(name)))
     if not include_deleted:
         conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
@@ -2727,8 +2909,8 @@ def _list_dictionary_items_page(
     conds = ["1=1"]
     params: list = []
     if search is not None and str(search).strip():
-        conds.append("LOWER(d.name) LIKE LOWER(?)")
-        params.append(f"%{str(search).strip()}%")
+        conds.append("fold_ci(d.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(search)))
     if date_from is not None and str(date_from).strip():
         conds.append("substr(d.created_at, 1, 10) >= ?")
         params.append(str(date_from).strip())
@@ -3099,11 +3281,11 @@ def list_products(
     conds = ["1=1"]
     params: list = []
     if name is not None and str(name).strip():
-        conds.append("LOWER(p.name) LIKE LOWER(?)")
-        params.append(f"%{str(name).strip()}%")
+        conds.append("fold_ci(p.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(name)))
     if sku is not None and str(sku).strip():
-        conds.append("LOWER(p.sku) LIKE LOWER(?)")
-        params.append(f"%{str(sku).strip()}%")
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
     if type_id is not None and str(type_id).strip():
         conds.append("p.type_id = ?")
         params.append(str(type_id).strip())
@@ -3799,6 +3981,15 @@ class InventoryOperationCreate(BaseModel):
     size_id: str | None = None
     quantity: int = Field(gt=0)
     note: str | None = None
+    shipment_status: str | None = Field(
+        default=None,
+        description=f"Только out: '{SHIPMENT_STATUS_PENDING}' | '{SHIPMENT_STATUS_SHIPPED}'; "
+        "по умолчанию для out — отгружено (совместимость API)",
+    )
+    shipment_date: str | None = Field(
+        default=None,
+        description="Только out: дата отгрузки YYYY-MM-DD (в created_at). Для ожидания — любая дата",
+    )
 
 
 class InventoryOperationItem(BaseModel):
@@ -3823,6 +4014,14 @@ class InventoryOperationItem(BaseModel):
         default=None, description="Базовый артикул товара (products.sku)"
     )
     preview_image_url: str | None = Field(default=None, description="Первое фото карточки товара")
+    receipt_status: str | None = Field(
+        default=None,
+        description="Для op_type=in: pending | accepted; для отгрузки — null",
+    )
+    shipment_status: str | None = Field(
+        default=None,
+        description="Для op_type=out: pending | shipped; для прихода — null",
+    )
     quantity: int
     note: str | None
     created_at: str
@@ -3839,6 +4038,8 @@ class InventoryOperationListResponse(BaseModel):
 class InventoryBalanceItem(BaseModel):
     product_id: str
     product_name: str
+    product_sku: str = Field("", description="Базовый артикул карточки товара")
+    preview_image_url: str | None = Field(None, description="Первое фото карточки товара")
     product_type_id: str | None
     product_type_name: str | None
     client_id: str | None
@@ -3857,6 +4058,28 @@ class InventoryBalanceListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+def _inventory_balance_item_from_row(r: sqlite3.Row) -> InventoryBalanceItem:
+    urls = _product_card_image_urls(r["gallery_json"], r["image_url"])
+    preview = urls[0] if urls else None
+    return InventoryBalanceItem(
+        product_id=str(r["product_id"]),
+        product_name=r["product_name"] or "",
+        product_sku=str(r["product_sku"] or "").strip(),
+        preview_image_url=preview,
+        product_type_id=r["product_type_id"],
+        product_type_name=r["product_type_name"],
+        client_id=r["client_id"],
+        client_name=r["client_name"],
+        supplier_id=r["supplier_id"],
+        supplier_name=r["supplier_name"],
+        color_id=r["color_id"],
+        color_name=r["color_name"],
+        size_id=r["size_id"],
+        size_name=r["size_name"],
+        quantity=int(r["quantity"]),
+    )
 
 
 class InventorySingleBalanceResponse(BaseModel):
@@ -3898,14 +4121,21 @@ def _balance_qty(
     row = connection.execute(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN op_type = 'in' THEN quantity ELSE 0 END), 0) AS qty_in,
-            COALESCE(SUM(CASE WHEN op_type = 'out' THEN quantity ELSE 0 END), 0) AS qty_out
+            COALESCE(SUM(
+                CASE WHEN op_type = 'in'
+                     AND COALESCE(receipt_status, 'accepted') = 'accepted'
+                THEN quantity ELSE 0 END
+            ), 0) AS qty_in,
+            COALESCE(SUM(CASE WHEN op_type = 'out'
+                     AND COALESCE(shipment_status, 'shipped') = ?
+                THEN quantity ELSE 0 END), 0) AS qty_out
         FROM inventory_operations
         WHERE product_id = ?
           AND IFNULL(color_id, '') = IFNULL(?, '')
           AND IFNULL(size_id, '') = IFNULL(?, '')
+          AND COALESCE(is_deleted, 0) = 0
         """,
-        (product_id, color_id, size_id),
+        (SHIPMENT_STATUS_SHIPPED, product_id, color_id, size_id),
     ).fetchone()
     return int(row["qty_in"]) - int(row["qty_out"])
 
@@ -4177,6 +4407,14 @@ def list_inventory_operations(
     name: str | None = Query(None, description="Подстрока по названию товара (products.name)"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    receipt_status: str | None = Query(
+        None,
+        description=f"Только приход: '{RECEIPT_STATUS_PENDING}' | '{RECEIPT_STATUS_ACCEPTED}'",
+    ),
+    shipment_status: str | None = Query(
+        None,
+        description=f"Только расход: '{SHIPMENT_STATUS_PENDING}' | '{SHIPMENT_STATUS_SHIPPED}'",
+    ),
     sort: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
@@ -4184,7 +4422,7 @@ def list_inventory_operations(
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
     dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
     offset = (page - 1) * limit
-    conds = ["1=1"]
+    conds = ["1=1", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = []
     if op_type is not None and str(op_type).strip():
         v = str(op_type).strip()
@@ -4208,19 +4446,40 @@ def list_inventory_operations(
         conds.append("o.size_id = ?")
         params.append(str(size_id).strip())
     if sku is not None and str(sku).strip():
-        like = f"%{str(sku).strip().lower()}%"
-        conds.append("LOWER(COALESCE(p.sku, '')) LIKE ?")
-        params.append(like)
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
     if name is not None and str(name).strip():
-        like_name = f"%{str(name).strip().lower()}%"
-        conds.append("LOWER(COALESCE(p.name, '')) LIKE ?")
-        params.append(like_name)
+        conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(name)))
     if df is not None:
         conds.append("substr(o.created_at, 1, 10) >= ?")
         params.append(df)
     if dt is not None:
         conds.append("substr(o.created_at, 1, 10) <= ?")
         params.append(dt)
+    if receipt_status is not None and str(receipt_status).strip():
+        rsq = str(receipt_status).strip().lower()
+        if rsq not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+            raise HTTPException(
+                status_code=400,
+                detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+            )
+        if op_type is None or str(op_type).strip() != "out":
+            conds.append("COALESCE(o.receipt_status, 'accepted') = ?")
+            params.append(rsq)
+    if shipment_status is not None and str(shipment_status).strip():
+        ssq = str(shipment_status).strip().lower()
+        if ssq not in (SHIPMENT_STATUS_PENDING, SHIPMENT_STATUS_SHIPPED):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
+                    f"{SHIPMENT_STATUS_SHIPPED}"
+                ),
+            )
+        if op_type is None or str(op_type).strip() != "in":
+            conds.append("COALESCE(o.shipment_status, 'shipped') = ?")
+            params.append(ssq)
     where_sql = " AND ".join(conds)
     join_sql = """
         FROM inventory_operations o
@@ -4247,7 +4506,8 @@ def list_inventory_operations(
             f"""
             SELECT
                 o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity,
-                o.note, o.created_at, o.variant_id, o.variant_sku,
+                o.note, o.created_at, o.variant_id, o.variant_sku, o.receipt_status,
+                o.shipment_status,
                 p.name AS product_name, p.client_id, p.type_id AS product_type_id,
                 p.sku AS product_sku, p.gallery_json, p.image_url,
                 pt.name AS product_type_name,
@@ -4269,10 +4529,17 @@ def list_inventory_operations(
         urls = _product_card_image_urls(r["gallery_json"], r["image_url"])
         preview = urls[0] if urls else None
         vs = (r["variant_sku"] or r["pv_sku"] or r["product_sku"] or "").strip() or None
+        op_t = str(r["op_type"])
+        rec_st: str | None = None
+        ship_st: str | None = None
+        if op_t == "in":
+            rec_st = str(r["receipt_status"] or RECEIPT_STATUS_ACCEPTED)
+        elif op_t == "out":
+            ship_st = str(r["shipment_status"] or SHIPMENT_STATUS_SHIPPED)
         items.append(
             InventoryOperationItem(
                 id=r["id"],
-                op_type=r["op_type"],
+                op_type=op_t,
                 client_id=r["client_id"],
                 client_name=r["client_name"],
                 product_id=r["product_id"],
@@ -4288,6 +4555,8 @@ def list_inventory_operations(
                 variant_sku=vs,
                 product_sku=str(r["product_sku"] or "").strip() or None,
                 preview_image_url=preview,
+                receipt_status=rec_st,
+                shipment_status=ship_st,
                 quantity=int(r["quantity"]),
                 note=r["note"],
                 created_at=r["created_at"],
@@ -4366,35 +4635,70 @@ def create_inventory_operation(
                     status_code=400, detail="Размер: недопустимое или неактивное значение"
                 )
 
-        if op_type == "out":
-            current = _balance_qty(connection, pid, cid, sid)
-            if current < payload.quantity:
+        if op_type == "in":
+            in_rs = RECEIPT_STATUS_ACCEPTED
+            connection.execute(
+                """
+                INSERT INTO inventory_operations
+                    (id, op_type, product_id, color_id, size_id, quantity, note,
+                     created_at, created_by_id, receipt_status, shipment_status)
+                VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    str(uuid4()),
+                    pid,
+                    cid,
+                    sid,
+                    int(payload.quantity),
+                    note,
+                    _now(),
+                    user["id"],
+                    in_rs,
+                ),
+            )
+        else:
+            ss = (payload.shipment_status or "").strip().lower() or SHIPMENT_STATUS_SHIPPED
+            if ss not in (SHIPMENT_STATUS_PENDING, SHIPMENT_STATUS_SHIPPED):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Недостаточно остатка: доступно {current}, требуется {payload.quantity}"
+                        f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
+                        f"{SHIPMENT_STATUS_SHIPPED}"
                     ),
                 )
-
-        connection.execute(
-            """
-            INSERT INTO inventory_operations
-                (id, op_type, product_id, color_id, size_id, quantity, note,
-                 created_at, created_by_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid4()),
-                op_type,
-                pid,
-                cid,
-                sid,
-                int(payload.quantity),
-                note,
-                _now(),
-                user["id"],
-            ),
-        )
+            created_at = _created_at_for_shipment_date(
+                (payload.shipment_date or "").strip() or None,
+                allow_future=(ss == SHIPMENT_STATUS_PENDING),
+            )
+            if ss == SHIPMENT_STATUS_SHIPPED:
+                current = _balance_qty(connection, pid, cid, sid)
+                if current < payload.quantity:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Недостаточно остатка: доступно {current}, "
+                            f"требуется {payload.quantity}"
+                        ),
+                    )
+            connection.execute(
+                """
+                INSERT INTO inventory_operations
+                    (id, op_type, product_id, color_id, size_id, quantity, note,
+                     created_at, created_by_id, receipt_status, shipment_status)
+                VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    str(uuid4()),
+                    pid,
+                    cid,
+                    sid,
+                    int(payload.quantity),
+                    note,
+                    created_at,
+                    user["id"],
+                    ss,
+                ),
+            )
         connection.commit()
     return MessageResponse(message="Создано")
 
@@ -4423,6 +4727,12 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
         raise HTTPException(status_code=400, detail="Укажите вариант")
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+    rs = str(payload.receipt_status or "").strip().lower() or RECEIPT_STATUS_ACCEPTED
+    if rs not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+        )
     note = (payload.comment or "").strip() or None
 
     with get_connection() as connection:
@@ -4449,15 +4759,16 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
         sid = str(row["size_id"]) if row["size_id"] else None
         vsku = str(row["v_sku"]).strip()
         created_at = _created_at_for_receipt_date(
-            (payload.receipt_date or "").strip() or None
+            (payload.receipt_date or "").strip() or None,
+            allow_future=(rs == RECEIPT_STATUS_PENDING),
         )
 
         connection.execute(
             """
             INSERT INTO inventory_operations
                 (id, op_type, product_id, color_id, size_id, quantity, note,
-                 created_at, created_by_id, variant_id, variant_sku)
-            VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, created_by_id, variant_id, variant_sku, receipt_status)
+            VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid4()),
@@ -4470,9 +4781,12 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
                 user["id"],
                 vid,
                 vsku,
+                rs,
             ),
         )
         connection.commit()
+    if rs == RECEIPT_STATUS_PENDING:
+        return MessageResponse(message="Поступление запланировано")
     return MessageResponse(message="Товар принят на склад")
 
 
@@ -4483,6 +4797,7 @@ def _receipt_detail_from_connection(
         """
         SELECT o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity, o.note,
                o.created_at, o.variant_id, o.variant_sku,
+               COALESCE(o.receipt_status, ?) AS receipt_status,
                p.name AS product_name, p.sku AS product_sku, p.client_id, p.gallery_json, p.image_url,
                cl.name AS client_name, pt.name AS product_type_name,
                u.email AS created_by
@@ -4491,9 +4806,9 @@ def _receipt_detail_from_connection(
         LEFT JOIN clients cl ON cl.id = p.client_id
         LEFT JOIN product_types pt ON pt.id = p.type_id
         LEFT JOIN users u ON u.id = o.created_by_id
-        WHERE o.id = ? AND o.op_type = 'in'
+        WHERE o.id = ? AND o.op_type = 'in' AND COALESCE(o.is_deleted, 0) = 0
         """,
-        (op_id,),
+        (RECEIPT_STATUS_ACCEPTED, op_id),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Поступление не найдено")
@@ -4533,6 +4848,7 @@ def _receipt_detail_from_connection(
         size_id=str(row["size_id"]) if row["size_id"] else None,
         quantity=int(row["quantity"]),
         comment=row["note"],
+        receipt_status=str(row["receipt_status"] or RECEIPT_STATUS_ACCEPTED),
         product_id=str(row["product_id"]),
         product_name=str(row["product_name"] or ""),
         product_type_name=str(row["product_type_name"] or "") or None,
@@ -4545,6 +4861,372 @@ def _receipt_detail_from_connection(
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
     )
+
+
+def _shipment_detail_from_connection(
+    connection: sqlite3.Connection, op_id: str
+) -> ShipmentDetailResponse:
+    row = connection.execute(
+        """
+        SELECT o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity, o.note,
+               o.created_at, o.variant_id, o.variant_sku,
+               COALESCE(o.shipment_status, ?) AS shipment_status,
+               p.name AS product_name, p.sku AS product_sku, p.client_id, p.gallery_json, p.image_url,
+               cl.name AS client_name, pt.name AS product_type_name,
+               u.email AS created_by
+        FROM inventory_operations o
+        LEFT JOIN products p ON p.id = o.product_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        LEFT JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN users u ON u.id = o.created_by_id
+        WHERE o.id = ? AND o.op_type = 'out' AND COALESCE(o.is_deleted, 0) = 0
+        """,
+        (SHIPMENT_STATUS_SHIPPED, op_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Отгрузка не найдена")
+    vr = None
+    if row["variant_id"] and str(row["variant_id"]).strip():
+        vr = connection.execute(
+            """
+            SELECT length, width, height, sku
+            FROM product_variants
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (str(row["variant_id"]).strip(),),
+        ).fetchone()
+    if not vr:
+        vr = connection.execute(
+            """
+            SELECT length, width, height, sku
+            FROM product_variants
+            WHERE product_id = ? AND color_id = ? AND IFNULL(size_id, '') = IFNULL(?, '')
+              AND COALESCE(is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (row["product_id"], row["color_id"], row["size_id"]),
+        ).fetchone()
+    if not vr:
+        raise HTTPException(status_code=400, detail="Не удалось сопоставить вариант")
+    urls = _product_card_image_urls(row["gallery_json"], row["image_url"])
+    first_img = urls[0] if urls else None
+    base_sku = str(row["product_sku"] or "").strip()
+    variant_sku_display = (row["variant_sku"] or vr["sku"] or "").strip()
+    sku_for_form = base_sku if base_sku else variant_sku_display
+    return ShipmentDetailResponse(
+        id=str(row["id"]),
+        variant_id=str(row["variant_id"]) if row["variant_id"] else None,
+        sku=sku_for_form,
+        color_id=str(row["color_id"]) if row["color_id"] else None,
+        size_id=str(row["size_id"]) if row["size_id"] else None,
+        quantity=int(row["quantity"]),
+        comment=row["note"],
+        shipment_status=str(row["shipment_status"] or SHIPMENT_STATUS_SHIPPED),
+        product_id=str(row["product_id"]),
+        product_name=str(row["product_name"] or ""),
+        product_type_name=str(row["product_type_name"] or "") or None,
+        client_id=str(row["client_id"]) if row["client_id"] else None,
+        client_name=str(row["client_name"] or "") or None,
+        length=float(vr["length"]),
+        width=float(vr["width"]),
+        height=float(vr["height"]),
+        first_image_url=first_img,
+        created_at=str(row["created_at"]),
+        created_by=row["created_by"],
+    )
+
+
+def _create_shipment_from_variant(payload: ShipmentCreate, user: dict) -> MessageResponse:
+    vid = payload.variant_id.strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="Укажите вариант")
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+    ss = str(payload.shipment_status or "").strip().lower() or SHIPMENT_STATUS_PENDING
+    if ss not in (SHIPMENT_STATUS_PENDING, SHIPMENT_STATUS_SHIPPED):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
+                f"{SHIPMENT_STATUS_SHIPPED}"
+            ),
+        )
+    note = (payload.comment or "").strip() or None
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT v.id, v.sku AS v_sku, v.product_id, v.color_id, v.size_id,
+                   COALESCE(v.is_deleted, 0) AS vdel,
+                   COALESCE(p.is_deleted, 0) AS pdel,
+                   COALESCE(v.is_active, 1) AS vact,
+                   COALESCE(p.is_active, 1) AS pact
+            FROM product_variants v
+            JOIN products p ON p.id = v.product_id
+            WHERE v.id = ?
+            """,
+            (vid,),
+        ).fetchone()
+        if not row or bool(row["vdel"]) or bool(row["pdel"]):
+            raise HTTPException(status_code=400, detail="Вариант не найден")
+        if not bool(row["vact"]) or not bool(row["pact"]):
+            raise HTTPException(status_code=400, detail="Товар не актуален")
+
+        pid = str(row["product_id"])
+        cid = str(row["color_id"]) if row["color_id"] else None
+        sid = str(row["size_id"]) if row["size_id"] else None
+        vsku = str(row["v_sku"]).strip()
+        created_at = _created_at_for_shipment_date(
+            (payload.shipment_date or "").strip() or None,
+            allow_future=(ss == SHIPMENT_STATUS_PENDING),
+        )
+
+        if ss == SHIPMENT_STATUS_SHIPPED:
+            current = _balance_qty(connection, pid, cid, sid)
+            if current < int(payload.quantity):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Недостаточно остатка: доступно {current}, "
+                        f"требуется {payload.quantity}"
+                    ),
+                )
+
+        connection.execute(
+            """
+            INSERT INTO inventory_operations
+                (id, op_type, product_id, color_id, size_id, quantity, note,
+                 created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
+            VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                str(uuid4()),
+                pid,
+                cid,
+                sid,
+                int(payload.quantity),
+                note,
+                created_at,
+                user["id"],
+                vid,
+                vsku,
+                ss,
+            ),
+        )
+        connection.commit()
+    if ss == SHIPMENT_STATUS_PENDING:
+        return MessageResponse(message="Отгрузка запланирована")
+    return MessageResponse(message="Отгрузка отражена на складе")
+
+
+@app.post("/shipments", response_model=MessageResponse)
+def create_shipment(
+    payload: ShipmentCreate,
+    user=Depends(get_current_manager),
+):
+    """Создание отгрузки по варианту (план или факт)."""
+    return _create_shipment_from_variant(payload, user)
+
+
+@app.get("/shipments/{shipment_id}", response_model=ShipmentDetailResponse)
+def get_shipment(
+    shipment_id: str,
+    user=Depends(get_current_manager),
+):
+    _ = user
+    with get_connection() as connection:
+        return _shipment_detail_from_connection(connection, shipment_id.strip())
+
+
+@app.patch("/shipments/{shipment_id}", response_model=MessageResponse)
+def patch_shipment(
+    shipment_id: str,
+    payload: ShipmentPatch,
+    user=Depends(get_current_manager),
+):
+    _ = user
+    sid = shipment_id.strip()
+    patch = payload.model_dump(exclude_unset=True)
+    if not patch:
+        raise HTTPException(status_code=400, detail="Нет данных для обновления")
+
+    change_variant = bool(
+        "variant_id" in patch and (patch.get("variant_id") or "").strip()
+    )
+
+    with get_connection() as connection:
+        cur_row = connection.execute(
+            """
+            SELECT id, op_type, product_id, color_id, size_id, quantity, created_at,
+                   COALESCE(shipment_status, ?) AS shipment_status
+            FROM inventory_operations WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (SHIPMENT_STATUS_SHIPPED, sid),
+        ).fetchone()
+        if not cur_row or str(cur_row["op_type"]) != "out":
+            raise HTTPException(status_code=404, detail="Отгрузка не найдена")
+
+        cur_ss = str(cur_row["shipment_status"])
+        if "shipment_status" in patch and patch["shipment_status"] is not None:
+            eff_ss = str(patch["shipment_status"]).strip().lower()
+        else:
+            eff_ss = cur_ss
+        allow_date_future = eff_ss == SHIPMENT_STATUS_PENDING
+
+        if "shipment_status" in patch and patch["shipment_status"] is not None:
+            new_ss = str(patch["shipment_status"]).strip().lower()
+            if new_ss not in (SHIPMENT_STATUS_PENDING, SHIPMENT_STATUS_SHIPPED):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
+                        f"{SHIPMENT_STATUS_SHIPPED}"
+                    ),
+                )
+
+        if (
+            "shipment_status" in patch
+            and patch["shipment_status"] is not None
+            and str(patch["shipment_status"]).strip().lower() == SHIPMENT_STATUS_SHIPPED
+            and "shipment_date" not in patch
+        ):
+            _assert_shipment_posting_day_not_after_today(cur_row["created_at"])
+
+        def _stock_headroom(
+            pid_: str, cid_: str | None, sid_: str | None, shipped: bool, q_line: int
+        ) -> int:
+            return _balance_qty(connection, pid_, cid_, sid_) + (
+                int(q_line) if shipped else 0
+            )
+
+        if change_variant:
+            new_vid = str(patch["variant_id"]).strip()
+            vrow = connection.execute(
+                """
+                SELECT v.id, v.sku, v.product_id, v.color_id, v.size_id,
+                       COALESCE(v.is_deleted,0) AS vdel, COALESCE(p.is_deleted,0) AS pdel,
+                       COALESCE(v.is_active,1) AS vact, COALESCE(p.is_active,1) AS pact
+                FROM product_variants v
+                JOIN products p ON p.id = v.product_id
+                WHERE v.id = ?
+                """,
+                (new_vid,),
+            ).fetchone()
+            if not vrow or vrow["vdel"] or vrow["pdel"] or not vrow["vact"] or not vrow["pact"]:
+                raise HTTPException(status_code=400, detail="Вариант не найден")
+            qty_bind = int(patch["quantity"]) if "quantity" in patch else None
+            if qty_bind is not None and qty_bind <= 0:
+                raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+            note_bind = (
+                (patch["comment"] or "").strip() or None if "comment" in patch else None
+            )
+            npid = str(vrow["product_id"])
+            ncid = str(vrow["color_id"]) if vrow["color_id"] else None
+            nsid = str(vrow["size_id"]) if vrow["size_id"] else None
+            eff_qty = qty_bind if qty_bind is not None else int(cur_row["quantity"])
+            target_shipped = (
+                str(patch["shipment_status"]).strip().lower()
+                if "shipment_status" in patch and patch["shipment_status"] is not None
+                else cur_ss
+            )
+            if target_shipped == SHIPMENT_STATUS_SHIPPED:
+                head = _stock_headroom(npid, ncid, nsid, False, 0)
+                if head < eff_qty:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Недостаточно остатка по новой позиции: доступно {head}, "
+                            f"требуется {eff_qty}"
+                        ),
+                    )
+
+            set_parts = [
+                "product_id = ?",
+                "color_id = ?",
+                "size_id = ?",
+                "variant_id = ?",
+                "variant_sku = ?",
+                "quantity = COALESCE(?, quantity)",
+                "note = COALESCE(?, note)",
+            ]
+            exec_vals: list[object] = [
+                npid,
+                ncid,
+                nsid,
+                new_vid,
+                str(vrow["sku"] or "").strip(),
+                qty_bind,
+                note_bind,
+            ]
+            if "shipment_date" in patch:
+                set_parts.append("created_at = ?")
+                exec_vals.append(
+                    _created_at_for_shipment_date(
+                        patch.get("shipment_date"), allow_future=allow_date_future
+                    )
+                )
+            if "shipment_status" in patch and patch["shipment_status"] is not None:
+                set_parts.append("shipment_status = ?")
+                exec_vals.append(str(patch["shipment_status"]).strip().lower())
+            exec_vals.append(sid)
+            connection.execute(
+                f"UPDATE inventory_operations SET {', '.join(set_parts)} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                exec_vals,
+            )
+        else:
+            if "quantity" in patch and patch["quantity"] <= 0:
+                raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
+
+            new_qty = int(patch["quantity"]) if "quantity" in patch else int(cur_row["quantity"])
+            target_ss = (
+                str(patch["shipment_status"]).strip().lower()
+                if "shipment_status" in patch and patch["shipment_status"] is not None
+                else cur_ss
+            )
+
+            if target_ss == SHIPMENT_STATUS_SHIPPED:
+                pid = str(cur_row["product_id"])
+                cid = str(cur_row["color_id"]) if cur_row["color_id"] else None
+                sid_sz = str(cur_row["size_id"]) if cur_row["size_id"] else None
+                was_shipped = cur_ss == SHIPMENT_STATUS_SHIPPED
+                old_q = int(cur_row["quantity"])
+                room = _stock_headroom(pid, cid, sid_sz, was_shipped, old_q)
+                if room < new_qty:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Недостаточно остатка для отгрузки: доступно "
+                            f"{room}, требуется {new_qty}"
+                        ),
+                    )
+
+            sets: list[str] = []
+            vals: list[object] = []
+            if "quantity" in patch:
+                sets.append("quantity = ?")
+                vals.append(int(patch["quantity"]))
+            if "comment" in patch:
+                sets.append("note = ?")
+                vals.append((patch["comment"] or "").strip() or None)
+            if "shipment_date" in patch:
+                sets.append("created_at = ?")
+                vals.append(
+                    _created_at_for_shipment_date(
+                        patch.get("shipment_date"), allow_future=allow_date_future
+                    )
+                )
+            if "shipment_status" in patch and patch["shipment_status"] is not None:
+                sets.append("shipment_status = ?")
+                vals.append(str(patch["shipment_status"]).strip().lower())
+            if not sets:
+                raise HTTPException(status_code=400, detail="Нет данных для обновления")
+            vals.append(sid)
+            connection.execute(
+                f"UPDATE inventory_operations SET {', '.join(sets)} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                vals,
+            )
+        connection.commit()
+    return MessageResponse(message="Сохранено")
 
 
 @app.get("/receipts/{receipt_id}", response_model=ReceiptDetailResponse)
@@ -4574,12 +5256,51 @@ def patch_receipt(
     )
 
     with get_connection() as connection:
-        cur = connection.execute(
-            "SELECT id, op_type FROM inventory_operations WHERE id = ?",
-            (rid,),
+        cur_row = connection.execute(
+            """
+            SELECT id, op_type, product_id, color_id, size_id, quantity, created_at,
+                   COALESCE(receipt_status, ?) AS receipt_status
+            FROM inventory_operations WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (RECEIPT_STATUS_ACCEPTED, rid),
         ).fetchone()
-        if not cur or str(cur["op_type"]) != "in":
+        if not cur_row or str(cur_row["op_type"]) != "in":
             raise HTTPException(status_code=404, detail="Поступление не найдено")
+
+        cur_rs = str(cur_row["receipt_status"])
+        if "receipt_status" in patch and patch["receipt_status"] is not None:
+            eff_rs = str(patch["receipt_status"]).strip().lower()
+        else:
+            eff_rs = cur_rs
+        allow_date_future = eff_rs == RECEIPT_STATUS_PENDING
+
+        if "receipt_status" in patch and patch["receipt_status"] is not None:
+            new_rs = str(patch["receipt_status"]).strip().lower()
+            if new_rs not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+                )
+            old_rs = str(cur_row["receipt_status"])
+            if old_rs == RECEIPT_STATUS_ACCEPTED and new_rs == RECEIPT_STATUS_PENDING:
+                pid = str(cur_row["product_id"])
+                cid = str(cur_row["color_id"]) if cur_row["color_id"] else None
+                sid = str(cur_row["size_id"]) if cur_row["size_id"] else None
+                q_eff = int(patch["quantity"]) if "quantity" in patch else int(cur_row["quantity"])
+                bal = _balance_qty(connection, pid, cid, sid)
+                if bal < q_eff:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Нельзя вернуть в ожидание: недостаточно остатка на складе по этой позиции",
+                    )
+
+        if (
+            "receipt_status" in patch
+            and patch["receipt_status"] is not None
+            and str(patch["receipt_status"]).strip().lower() == RECEIPT_STATUS_ACCEPTED
+            and "receipt_date" not in patch
+        ):
+            _assert_receipt_posting_day_not_after_today(cur_row["created_at"])
 
         if change_variant:
             new_vid = str(patch["variant_id"]).strip()
@@ -4622,10 +5343,17 @@ def patch_receipt(
             ]
             if "receipt_date" in patch:
                 set_parts.append("created_at = ?")
-                exec_vals.append(_created_at_for_receipt_date(patch.get("receipt_date")))
+                exec_vals.append(
+                    _created_at_for_receipt_date(
+                        patch.get("receipt_date"), allow_future=allow_date_future
+                    )
+                )
+            if "receipt_status" in patch and patch["receipt_status"] is not None:
+                set_parts.append("receipt_status = ?")
+                exec_vals.append(str(patch["receipt_status"]).strip().lower())
             exec_vals.append(rid)
             connection.execute(
-                f"UPDATE inventory_operations SET {', '.join(set_parts)} WHERE id = ?",
+                f"UPDATE inventory_operations SET {', '.join(set_parts)} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
                 exec_vals,
             )
         else:
@@ -4641,16 +5369,96 @@ def patch_receipt(
                 vals.append((patch["comment"] or "").strip() or None)
             if "receipt_date" in patch:
                 sets.append("created_at = ?")
-                vals.append(_created_at_for_receipt_date(patch.get("receipt_date")))
+                vals.append(
+                    _created_at_for_receipt_date(
+                        patch.get("receipt_date"), allow_future=allow_date_future
+                    )
+                )
+            if "receipt_status" in patch and patch["receipt_status"] is not None:
+                sets.append("receipt_status = ?")
+                vals.append(str(patch["receipt_status"]).strip().lower())
             if not sets:
                 raise HTTPException(status_code=400, detail="Нет данных для обновления")
             vals.append(rid)
             connection.execute(
-                f"UPDATE inventory_operations SET {', '.join(sets)} WHERE id = ?",
+                f"UPDATE inventory_operations SET {', '.join(sets)} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
                 vals,
             )
         connection.commit()
     return MessageResponse(message="Сохранено")
+
+
+@app.delete("/receipts/{receipt_id}", response_model=MessageResponse)
+def delete_receipt(receipt_id: str, admin=Depends(get_current_admin)):
+    """Мягкое удаление записи поступления (только администратор)."""
+    rid = receipt_id.strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="Укажите поступление")
+
+    with get_connection() as connection:
+        cur = connection.execute(
+            """
+            SELECT id, op_type, product_id, color_id, size_id, quantity,
+                   COALESCE(receipt_status, ?) AS receipt_status
+            FROM inventory_operations WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (RECEIPT_STATUS_ACCEPTED, rid),
+        ).fetchone()
+        if not cur or str(cur["op_type"]) != "in":
+            raise HTTPException(status_code=404, detail="Поступление не найдено")
+        rs = str(cur["receipt_status"])
+        if rs == RECEIPT_STATUS_ACCEPTED:
+            pid = str(cur["product_id"])
+            cid = str(cur["color_id"]) if cur["color_id"] else None
+            sid = str(cur["size_id"]) if cur["size_id"] else None
+            q = int(cur["quantity"])
+            bal = _balance_qty(connection, pid, cid, sid)
+            if bal < q:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Нельзя удалить принятое поступление: по этой позиции есть отгрузки, "
+                        "остаток стал бы отрицательным"
+                    ),
+                )
+        ts = _now()
+        connection.execute(
+            """
+            UPDATE inventory_operations
+            SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (ts, admin["id"], rid),
+        )
+        connection.commit()
+    return MessageResponse(message="Удалено")
+
+
+@app.delete("/shipments/{shipment_id}", response_model=MessageResponse)
+def delete_shipment(shipment_id: str, admin=Depends(get_current_admin)):
+    """Мягкое удаление записи отгрузки (только администратор)."""
+    sid = shipment_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="Укажите отгрузку")
+
+    with get_connection() as connection:
+        cur = connection.execute(
+            "SELECT id, op_type FROM inventory_operations WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (sid,),
+        ).fetchone()
+        if not cur or str(cur["op_type"]) != "out":
+            raise HTTPException(status_code=404, detail="Отгрузка не найдена")
+        ts = _now()
+        connection.execute(
+            """
+            UPDATE inventory_operations
+            SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (ts, admin["id"], sid),
+        )
+        connection.commit()
+    return MessageResponse(message="Удалено")
 
 
 @app.get("/inventory/balances", response_model=InventoryBalanceListResponse)
@@ -4663,13 +5471,15 @@ def list_inventory_balances(
     supplier_id: str | None = Query(None),
     color_id: str | None = Query(None),
     size_id: str | None = Query(None),
+    sku: str | None = Query(None, description="Подстрока по базовому артикулу (products.sku)"),
+    name: str | None = Query(None, description="Подстрока по названию товара"),
     only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
     sort: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
     _ = user
     offset = (page - 1) * limit
-    conds = ["1=1"]
+    conds = ["1=1", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = []
     if client_id is not None and str(client_id).strip():
         conds.append("p.client_id = ?")
@@ -4689,6 +5499,12 @@ def list_inventory_balances(
     if size_id is not None and str(size_id).strip():
         conds.append("IFNULL(o.size_id, '') = ?")
         params.append(str(size_id).strip())
+    if sku is not None and str(sku).strip():
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
+    if name is not None and str(name).strip():
+        conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(name)))
     where_sql = " AND ".join(conds)
     having_sql = "HAVING quantity > 0" if only_positive else ""
     base_sql = f"""
@@ -4718,7 +5534,10 @@ def list_inventory_balances(
             f"""
             SELECT
                 o.product_id,
+                MAX(p.sku) AS product_sku,
                 MAX(p.name) AS product_name,
+                MAX(p.gallery_json) AS gallery_json,
+                MAX(p.image_url) AS image_url,
                 MAX(p.type_id) AS product_type_id,
                 MAX(pt.name) AS product_type_name,
                 MAX(p.client_id) AS client_id,
@@ -4729,7 +5548,7 @@ def list_inventory_balances(
                 MAX(col.name) AS color_name,
                 o.size_id,
                 MAX(sz.name) AS size_name,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS quantity
+                SUM({SQL_O_NET_QTY}) AS quantity
             {base_sql}
             ORDER BY {balances_order_sql}
             LIMIT ? OFFSET ?
@@ -4737,24 +5556,7 @@ def list_inventory_balances(
             [*params, limit, offset],
         ).fetchall()
     return InventoryBalanceListResponse(
-        items=[
-            InventoryBalanceItem(
-                product_id=r["product_id"],
-                product_name=r["product_name"] or "",
-                product_type_id=r["product_type_id"],
-                product_type_name=r["product_type_name"],
-                client_id=r["client_id"],
-                client_name=r["client_name"],
-                supplier_id=r["supplier_id"],
-                supplier_name=r["supplier_name"],
-                color_id=r["color_id"],
-                color_name=r["color_name"],
-                size_id=r["size_id"],
-                size_name=r["size_name"],
-                quantity=int(r["quantity"]),
-            )
-            for r in rows
-        ],
+        items=[_inventory_balance_item_from_row(r) for r in rows],
         total=total,
         page=page,
         limit=limit,
@@ -4947,6 +5749,7 @@ def _ana_filter_sql(
     if tid:
         conds.append("p.type_id = ?")
         params.append(tid)
+    conds.append(SQL_WHERE_INV_OP_ACTIVE_O)
     return conds, params
 
 
@@ -4997,8 +5800,8 @@ def analytics_movement(
             f"""
             SELECT
                 {bucket_expr} AS bucket,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
-                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+                SUM({SQL_O_INFLOW_QTY}) AS inflow,
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS outflow
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             WHERE {where_sql}
@@ -5063,7 +5866,7 @@ def analytics_stock_snapshot(
                 MAX(col.name) AS color,
                 o.size_id,
                 MAX(sz.name) AS size,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock
+                SUM({SQL_O_NET_QTY}) AS stock
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             LEFT JOIN product_types pt ON pt.id = p.type_id
@@ -5136,7 +5939,7 @@ def analytics_top_products(
                 o.product_id,
                 MAX(p.name) AS product,
                 MAX(pt.name) AS type_name,
-                SUM(o.quantity) AS total_outflow
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS total_outflow
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             LEFT JOIN product_types pt ON pt.id = p.type_id
@@ -5197,7 +6000,7 @@ def analytics_dead_stock(
                 MAX(col.name) AS color,
                 o.size_id,
                 MAX(sz.name) AS size,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock,
+                SUM({SQL_O_NET_QTY}) AS stock,
                 MAX(o.created_at) AS last_movement_at
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
@@ -5279,8 +6082,8 @@ def analytics_client_activity(
             SELECT
                 p.client_id,
                 MAX(cl.name) AS client,
-                SUM(o.quantity) AS total_outflow,
-                COUNT(*) AS operations
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS total_outflow,
+                SUM(CASE WHEN COALESCE(o.shipment_status, 'shipped') = '{SHIPMENT_STATUS_SHIPPED}' THEN 1 ELSE 0 END) AS operations
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             LEFT JOIN clients cl ON cl.id = p.client_id
@@ -5335,8 +6138,8 @@ def _sum_in_out_for_range(
     row = connection.execute(
         f"""
         SELECT
-            COALESCE(SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END), 0) AS inflow,
-            COALESCE(SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END), 0) AS outflow
+            COALESCE(SUM({SQL_O_INFLOW_QTY}), 0) AS inflow,
+            COALESCE(SUM({SQL_O_SHIPPED_OUT_QTY}), 0) AS outflow
         FROM inventory_operations o
         LEFT JOIN products p ON p.id = o.product_id
         WHERE {where_sql}
@@ -5440,8 +6243,8 @@ def analytics_by_type(
             SELECT
                 p.type_id AS type_id,
                 MAX(pt.name) AS type_name,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
-                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+                SUM({SQL_O_INFLOW_QTY}) AS inflow,
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS outflow
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             LEFT JOIN product_types pt ON pt.id = p.type_id
@@ -5464,7 +6267,7 @@ def analytics_by_type(
                 SELECT
                     p.type_id AS type_id,
                     MAX(pt.name) AS type_name,
-                    SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock
+                    SUM({SQL_O_NET_QTY}) AS stock
                 FROM inventory_operations o
                 LEFT JOIN products p ON p.id = o.product_id
                 LEFT JOIN product_types pt ON pt.id = p.type_id
@@ -5538,13 +6341,13 @@ def _portal_bound_client_id(user) -> str:
 
 def _client_portal_total_positive_stock(connection: sqlite3.Connection, client_id: str) -> int:
     row = connection.execute(
-        """
+        f"""
         SELECT COALESCE(SUM(b.qty), 0) AS total
         FROM (
-            SELECT SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS qty
+            SELECT SUM({SQL_O_NET_QTY}) AS qty
             FROM inventory_operations o
             INNER JOIN products p ON p.id = o.product_id
-            WHERE p.client_id = ?
+            WHERE p.client_id = ? AND {SQL_WHERE_INV_OP_ACTIVE_O}
             GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
             HAVING qty > 0
         ) AS b
@@ -5569,11 +6372,11 @@ def client_portal_list_balances(
 ):
     portal_cid = _portal_bound_client_id(user)
     offset = (page - 1) * limit
-    conds = ["p.client_id = ?"]
+    conds = ["p.client_id = ?", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = [portal_cid]
     if search is not None and str(search).strip():
-        conds.append("LOWER(p.name) LIKE ?")
-        params.append(f"%{str(search).strip().lower()}%")
+        conds.append("fold_ci(p.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(search)))
     if product_id is not None and str(product_id).strip():
         conds.append("o.product_id = ?")
         params.append(str(product_id).strip())
@@ -5615,7 +6418,10 @@ def client_portal_list_balances(
             f"""
             SELECT
                 o.product_id,
+                MAX(p.sku) AS product_sku,
                 MAX(p.name) AS product_name,
+                MAX(p.gallery_json) AS gallery_json,
+                MAX(p.image_url) AS image_url,
                 MAX(p.type_id) AS product_type_id,
                 MAX(pt.name) AS product_type_name,
                 MAX(p.client_id) AS client_id,
@@ -5626,7 +6432,7 @@ def client_portal_list_balances(
                 MAX(col.name) AS color_name,
                 o.size_id,
                 MAX(sz.name) AS size_name,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS quantity
+                SUM({SQL_O_NET_QTY}) AS quantity
             {base_sql}
             ORDER BY {balances_order_sql}
             LIMIT ? OFFSET ?
@@ -5634,24 +6440,7 @@ def client_portal_list_balances(
             [*params, limit, offset],
         ).fetchall()
     return InventoryBalanceListResponse(
-        items=[
-            InventoryBalanceItem(
-                product_id=r["product_id"],
-                product_name=r["product_name"] or "",
-                product_type_id=r["product_type_id"],
-                product_type_name=r["product_type_name"],
-                client_id=r["client_id"],
-                client_name=r["client_name"],
-                supplier_id=r["supplier_id"],
-                supplier_name=r["supplier_name"],
-                color_id=r["color_id"],
-                color_name=r["color_name"],
-                size_id=r["size_id"],
-                size_name=r["size_name"],
-                quantity=int(r["quantity"]),
-            )
-            for r in rows
-        ],
+        items=[_inventory_balance_item_from_row(r) for r in rows],
         total=total,
         page=page,
         limit=limit,
@@ -5676,11 +6465,11 @@ def client_portal_list_operations(
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
     dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
     offset = (page - 1) * limit
-    conds = ["p.client_id = ?"]
+    conds = ["p.client_id = ?", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = [portal_cid]
     if search is not None and str(search).strip():
-        conds.append("LOWER(p.name) LIKE ?")
-        params.append(f"%{str(search).strip().lower()}%")
+        conds.append("fold_ci(p.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(search)))
     if op_type is not None and str(op_type).strip():
         v = str(op_type).strip()
         if v not in ("in", "out"):
@@ -5727,10 +6516,10 @@ def client_portal_list_operations(
             f"""
             SELECT
                 o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity,
-                o.note, o.created_at,
+                o.note, o.created_at, o.receipt_status, o.shipment_status,
                 p.name AS product_name, p.client_id, p.type_id AS product_type_id,
                 pt.name AS product_type_name,
-                p.sku AS product_sku,
+                p.sku AS product_sku, p.gallery_json, p.image_url,
                 p.supplier_id, sp.name AS supplier_name,
                 cl.name AS client_name,
                 col.name AS color_name,
@@ -5762,6 +6551,21 @@ def client_portal_list_operations(
                 size_name=r["size_name"],
                 variant_sku=None,
                 product_sku=str(r["product_sku"] or "").strip() or None,
+                preview_image_url=(
+                    (lambda urls: urls[0] if urls else None)(
+                        _product_card_image_urls(r["gallery_json"], r["image_url"])
+                    )
+                ),
+                receipt_status=(
+                    str(r["receipt_status"] or RECEIPT_STATUS_ACCEPTED)
+                    if str(r["op_type"]) == "in"
+                    else None
+                ),
+                shipment_status=(
+                    str(r["shipment_status"] or SHIPMENT_STATUS_SHIPPED)
+                    if str(r["op_type"]) == "out"
+                    else None
+                ),
                 quantity=int(r["quantity"]),
                 note=r["note"],
                 created_at=r["created_at"],
@@ -5892,8 +6696,8 @@ def client_portal_dashboard_movement(
             f"""
             SELECT
                 {bucket_expr} AS bucket,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE 0 END) AS inflow,
-                SUM(CASE WHEN o.op_type = 'out' THEN o.quantity ELSE 0 END) AS outflow
+                SUM({SQL_O_INFLOW_QTY}) AS inflow,
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS outflow
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             WHERE {where_sql}
@@ -5954,7 +6758,7 @@ def client_portal_dashboard_top_products(
                 o.product_id,
                 MAX(p.name) AS product,
                 MAX(pt.name) AS type_name,
-                SUM(o.quantity) AS total_outflow
+                SUM({SQL_O_SHIPPED_OUT_QTY}) AS total_outflow
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id
             LEFT JOIN product_types pt ON pt.id = p.type_id
@@ -6015,7 +6819,7 @@ def client_portal_dashboard_dead_stock(
                 MAX(col.name) AS color,
                 o.size_id,
                 MAX(sz.name) AS size,
-                SUM(CASE WHEN o.op_type = 'in' THEN o.quantity ELSE -o.quantity END) AS stock,
+                SUM({SQL_O_NET_QTY}) AS stock,
                 MAX(o.created_at) AS last_movement_at
             FROM inventory_operations o
             LEFT JOIN products p ON p.id = o.product_id

@@ -4,9 +4,10 @@ import { HomePage } from './pages/HomePage'
 import { InventoryPage } from './pages/InventoryPage'
 import { InventoryBalancesPage } from './pages/InventoryBalancesPage'
 import { InventoryOperationsListPage } from './pages/InventoryOperationsListPage'
-import { InventoryOperationCreatePage } from './pages/InventoryOperationCreatePage'
 import { InventoryReceiptPage } from './pages/InventoryReceiptPage'
 import { InventoryReceiptEditPage } from './pages/InventoryReceiptEditPage'
+import { InventoryShipmentPage } from './pages/InventoryShipmentPage'
+import { InventoryShipmentEditPage } from './pages/InventoryShipmentEditPage'
 import { AnalyticsPage } from './pages/AnalyticsPage'
 import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
@@ -104,7 +105,15 @@ function App() {
           path="/inventory/shipments/new"
           element={
             <ManagerAdminRoute>
-              <InventoryOperationCreatePage opType="out" />
+              <InventoryShipmentPage />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/shipments/:shipmentId"
+          element={
+            <ManagerAdminRoute>
+              <InventoryShipmentEditPage />
             </ManagerAdminRoute>
           }
         />
