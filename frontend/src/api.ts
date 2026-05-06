@@ -1,4 +1,16 @@
-export const API_BASE_URL = 'http://127.0.0.1:8000'
+function resolveApiBaseUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_BASE_URL
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
+    return fromEnv.trim().replace(/\/$/, '')
+  }
+  if (import.meta.env.DEV) {
+    return '/api'
+  }
+  return 'http://127.0.0.1:8000'
+}
+
+/** База URL бэкенда: в dev — префикс `/api` (прокси в vite.config), иначе см. VITE_API_BASE_URL или 127.0.0.1:8000. */
+export const API_BASE_URL = resolveApiBaseUrl()
 
 /** Пути с API (`/uploads/...`) в `<img>` на другом origin; полные URL не трогаем. */
 export function resolvePublicUploadSrc(url: string): string {
@@ -44,6 +56,12 @@ export type DictionaryItem = {
   created_by: string | null
   updated_at: string | null
   updated_by: string | null
+}
+
+/** Тип товара: учёт вариантов по цвету и размеру. */
+export type ProductTypeDictionaryItem = DictionaryItem & {
+  requires_color: boolean
+  requires_size: boolean
 }
 
 export type SizeItem = {
@@ -302,6 +320,13 @@ export type DictionaryListResponse = {
   limit: number
 }
 
+export type ProductTypeListResponse = {
+  items: ProductTypeDictionaryItem[]
+  total: number
+  page: number
+  limit: number
+}
+
 export type DictionaryListQueryParams = {
   page?: number
   limit?: number
@@ -453,6 +478,59 @@ export function updateSimpleDictionaryItem(
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(`${path}/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Пагинация списка типов товаров (с полями учёта по цвету и размеру). */
+export function fetchProductTypesPage(params?: SimpleDictionaryListParams) {
+  const sp = new URLSearchParams()
+  if (params?.page != null) sp.set('page', String(params.page))
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  if (params?.name != null && params.name.trim() !== '') {
+    sp.set('name', params.name.trim())
+  }
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
+    sp.set('date_from', params.date_from.trim())
+  }
+  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
+    sp.set('date_to', params.date_to.trim())
+  }
+  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
+  const q = sp.toString()
+  return request<ProductTypeListResponse>(q ? `/product-types?${q}` : '/product-types')
+}
+
+export function getProductTypeById(id: string) {
+  return request<ProductTypeDictionaryItem>(`/product-types/${id}`)
+}
+
+export function createProductType(payload: {
+  name: string
+  is_active: boolean
+  requires_color: boolean
+  requires_size: boolean
+}) {
+  return request<{ message: string }>('/product-types', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateProductType(
+  id: string,
+  payload: {
+    name?: string
+    is_active?: boolean
+    requires_color?: boolean
+    requires_size?: boolean
+  },
+) {
+  return request<{ message: string }>(`/product-types/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })

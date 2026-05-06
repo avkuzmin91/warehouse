@@ -2,8 +2,11 @@ from datetime import UTC, date, datetime, timedelta
 import json
 import re
 from pathlib import Path
-import sqlite3
+from typing import Any, Mapping
 from uuid import uuid4
+
+from dbconn import get_connection
+from psycopg.errors import IntegrityConstraintViolation, UndefinedColumn
 
 import bcrypt
 import jwt
@@ -17,7 +20,6 @@ from pydantic import BaseModel, EmailStr, Field
 JWT_SECRET = "replace-this-secret-in-production"
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_MINUTES = 60
-DB_PATH = Path(__file__).parent / "auth.db"
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
 
@@ -48,17 +50,17 @@ SQL_O_INFLOW_QTY = (
 SQL_WHERE_INV_OP_ACTIVE_O = "COALESCE(o.is_deleted, 0) = 0"
 
 CLIENT_LIST_SORT_COLUMNS: dict[str, str] = {
-    "name": "d.name COLLATE NOCASE",
+    "name": "LOWER(d.name)",
     "created_at": "d.created_at",
     "is_active": "d.is_active",
 }
 SIZE_LIST_SORT_COLUMNS: dict[str, str] = {
-    "name": "d.name COLLATE NOCASE",
+    "name": "LOWER(d.name)",
     "created_at": "d.created_at",
     "is_active": "d.is_active",
 }
 COLOR_LIST_SORT_COLUMNS: dict[str, str] = {
-    "name": "d.name COLLATE NOCASE",
+    "name": "LOWER(d.name)",
     "created_at": "d.created_at",
     "is_active": "d.is_active",
 }
@@ -67,31 +69,31 @@ INVENTORY_OPERATIONS_SORT_COLUMNS: dict[str, str] = {
     "receipt_status": "COALESCE(o.receipt_status, 'accepted')",
     "shipment_status": "COALESCE(o.shipment_status, 'shipped')",
     "quantity": "o.quantity",
-    "product_name": "p.name COLLATE NOCASE",
-    "product_type_name": "pt.name COLLATE NOCASE",
-    "client_name": "cl.name COLLATE NOCASE",
-    "supplier_name": "sp.name COLLATE NOCASE",
-    "color_name": "col.name COLLATE NOCASE",
-    "size_name": "sz.name COLLATE NOCASE",
-    "variant_sku": "LOWER(TRIM(COALESCE(o.variant_sku, pv.sku, p.sku, ''))) COLLATE NOCASE",
-    "product_sku": "LOWER(TRIM(COALESCE(p.sku, ''))) COLLATE NOCASE",
-    "created_by": "u.email COLLATE NOCASE",
+    "product_name": "LOWER(p.name)",
+    "product_type_name": "LOWER(pt.name)",
+    "client_name": "LOWER(cl.name)",
+    "supplier_name": "LOWER(sp.name)",
+    "color_name": "LOWER(col.name)",
+    "size_name": "LOWER(sz.name)",
+    "variant_sku": "LOWER(TRIM(COALESCE(o.variant_sku, pv.sku, p.sku, '')))",
+    "product_sku": "LOWER(TRIM(COALESCE(p.sku, '')))",
+    "created_by": "LOWER(u.email)",
 }
 INVENTORY_BALANCES_SORT_COLUMNS: dict[str, str] = {
-    "product_sku": "MAX(p.sku) COLLATE NOCASE",
-    "product_name": "MAX(p.name) COLLATE NOCASE",
-    "product_type_name": "MAX(pt.name) COLLATE NOCASE",
-    "client_name": "MAX(cl.name) COLLATE NOCASE",
-    "supplier_name": "MAX(sp.name) COLLATE NOCASE",
-    "color_name": "MAX(col.name) COLLATE NOCASE",
-    "size_name": "MAX(sz.name) COLLATE NOCASE",
+    "product_sku": "LOWER(MAX(p.sku))",
+    "product_name": "LOWER(MAX(p.name))",
+    "product_type_name": "LOWER(MAX(pt.name))",
+    "client_name": "LOWER(MAX(cl.name))",
+    "supplier_name": "LOWER(MAX(sp.name))",
+    "color_name": "LOWER(MAX(col.name))",
+    "size_name": "LOWER(MAX(sz.name))",
     "quantity": f"SUM({SQL_O_NET_QTY})",
 }
 PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
-    "sku_base": "p.sku COLLATE NOCASE",
-    "name": "p.name COLLATE NOCASE",
-    "type": "IFNULL(pt.name, '') COLLATE NOCASE",
-    "client": "IFNULL(c.name, '') COLLATE NOCASE",
+    "sku_base": "LOWER(p.sku)",
+    "name": "LOWER(p.name)",
+    "type": "LOWER(COALESCE(pt.name, ''))",
+    "client": "LOWER(COALESCE(c.name, ''))",
     "created_at": "p.created_at",
     "is_active": "p.is_active",
 }
@@ -309,6 +311,44 @@ class DictionaryBaseItem(BaseModel):
     updated_by: str | None = Field(
         default=None,
         description="Email последнего редактора (users.updated_by_id).",
+    )
+
+
+class ProductTypeDictionaryItem(DictionaryBaseItem):
+    """Тип товара: признаки учёта вариантов по цвету и размеру (для SKU)."""
+
+    requires_color: bool = Field(
+        description="Нужно указывать цвет у каждого варианта товара этого типа.",
+    )
+    requires_size: bool = Field(
+        description="Нужно указывать размер у каждого варианта товара этого типа.",
+    )
+
+
+class ProductTypeCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    is_active: bool = False
+    requires_color: bool = Field(
+        default=False,
+        description="Включить обязательный выбор цвета для вариантов.",
+    )
+    requires_size: bool = Field(
+        default=False,
+        description="Включить обязательный выбор размера для вариантов.",
+    )
+
+
+class ProductTypeUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+    requires_color: bool | None = Field(
+        default=None,
+        description="Обязательный цвет в вариантах; null — не менять.",
+    )
+    requires_size: bool | None = Field(
+        default=None,
+        description="Обязательный размер в вариантах; null — не менять.",
     )
 
 
@@ -615,8 +655,15 @@ class DictionaryListResponse(BaseModel):
     limit: int
 
 
+class ProductTypeListResponse(BaseModel):
+    items: list[ProductTypeDictionaryItem]
+    total: int
+    page: int
+    limit: int
+
+
 def _fold_ci_str(x: object) -> str:
-    """Нижний регистр для сравнения (Unicode, в т.ч. кириллица); в SQLite через fold_ci()."""
+    """Нижний регистр для сравнения (Unicode, в т.ч. кириллица); в БД функция fold_ci()."""
     if x is None:
         return ""
     return str(x).casefold()
@@ -626,15 +673,36 @@ def _ci_substring_like_param(raw: str) -> str:
     return f"%{_fold_ci_str(str(raw).strip())}%"
 
 
-def get_connection():
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    connection.create_function("fold_ci", 1, _fold_ci_str)
-    return connection
+def _table_column_names(connection: Any, table_name: str) -> set[str]:
+    rows = connection.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table_name.lower(),),
+    ).fetchall()
+    return {str(r["column_name"]).lower() for r in rows}
+
+
+def _ensure_fold_ci(connection: Any) -> None:
+    connection.execute(
+        """
+        CREATE OR REPLACE FUNCTION fold_ci(input text)
+        RETURNS text
+        LANGUAGE sql
+        IMMUTABLE
+        PARALLEL SAFE
+        AS $fold$
+            SELECT lower(COALESCE(input, ''))
+        $fold$
+        """
+    )
 
 
 def init_db():
     with get_connection() as connection:
+        _ensure_fold_ci(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -646,9 +714,7 @@ def init_db():
             )
             """
         )
-        columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()
-        }
+        columns = _table_column_names(connection, "users")
         if "role" not in columns:
             connection.execute(
                 "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
@@ -827,6 +893,7 @@ def init_db():
                 "creator_id": "TEXT",
                 "updated_at": "TEXT",
                 "updated_by_id": "TEXT",
+                "is_active": "INTEGER NOT NULL DEFAULT 1",
             },
         )
         _migrate_sizes_remove_code_column(connection)
@@ -861,18 +928,16 @@ def init_db():
         connection.commit()
 
 
-def _ensure_columns(connection: sqlite3.Connection, table_name: str, columns: dict[str, str]):
-    current_columns = {
-        row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
-    }
+def _ensure_columns(connection: Any, table_name: str, columns: dict[str, str]):
+    current_columns = _table_column_names(connection, table_name)
     for column_name, column_type in columns.items():
-        if column_name not in current_columns:
+        if column_name.lower() not in current_columns:
             connection.execute(
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
             )
 
 
-def _migrate_product_types_requires_seed(connection: sqlite3.Connection) -> None:
+def _migrate_product_types_requires_seed(connection: Any) -> None:
     """Однократно: проставить requires_color/requires_size по названию типа.
 
     «Одежда» → требуется и цвет, и размер; для прочих типов остаётся 0/0
@@ -901,19 +966,19 @@ def _migrate_product_types_requires_seed(connection: sqlite3.Connection) -> None
     )
 
 
-def _migrate_sizes_remove_code_column(connection: sqlite3.Connection) -> None:
+def _migrate_sizes_remove_code_column(connection: Any) -> None:
     """Удаление колонки code и индекса (поле убрано из модели)."""
-    cols = {row["name"] for row in connection.execute("PRAGMA table_info(sizes)").fetchall()}
+    cols = _table_column_names(connection, "sizes")
     if "code" not in cols:
         return
     connection.execute("DROP INDEX IF EXISTS sizes_code_unique")
     try:
         connection.execute("ALTER TABLE sizes DROP COLUMN code")
-    except sqlite3.OperationalError:
+    except UndefinedColumn:
         pass
 
 
-def _migrate_products_is_active_aktualen(connection: sqlite3.Connection) -> None:
+def _migrate_products_is_active_aktualen(connection: Any) -> None:
     """Однократно: старая семантика is_active у товара (1 = «не актуален») → новая (1 = «актуален»)."""
     connection.execute(
         """
@@ -934,9 +999,9 @@ def _migrate_products_is_active_aktualen(connection: sqlite3.Connection) -> None
     )
 
 
-def _ensure_seed_product_types_if_empty(connection: sqlite3.Connection) -> None:
+def _ensure_seed_product_types_if_empty(connection: Any) -> None:
     count = int(
-        connection.execute("SELECT COUNT(*) FROM product_types").fetchone()[0]
+        connection.execute("SELECT COUNT(*) AS cnt FROM product_types").fetchone()["cnt"]
     )
     if count > 0:
         return
@@ -951,7 +1016,7 @@ def _ensure_seed_product_types_if_empty(connection: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
+def _migrate_products_dictionary_fks(connection: Any) -> None:
     """Товары: type_id / client_id / supplier_id вместо legacy type / supplier TEXT."""
     connection.execute(
         """
@@ -965,7 +1030,7 @@ def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
     ).fetchone():
         return
 
-    cols = {row["name"] for row in connection.execute("PRAGMA table_info(products)").fetchall()}
+    cols = _table_column_names(connection, "products")
 
     if "type_id" in cols and "type" not in cols:
         connection.execute(
@@ -1006,7 +1071,7 @@ def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
         SET supplier_id = (
             SELECT s.id FROM suppliers s
             WHERE s.is_active = 1
-              AND TRIM(LOWER(IFNULL(s.name, ''))) = TRIM(LOWER(IFNULL(p.supplier, '')))
+              AND TRIM(LOWER(COALESCE(s.name, ''))) = TRIM(LOWER(COALESCE(p.supplier, '')))
             LIMIT 1
         )
         WHERE p.supplier_id IS NULL
@@ -1059,8 +1124,8 @@ def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
 
     remaining = int(
         connection.execute(
-            "SELECT COUNT(*) FROM products WHERE type_id IS NULL"
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS cnt FROM products WHERE type_id IS NULL"
+        ).fetchone()["cnt"]
     )
     if remaining:
         raise RuntimeError(
@@ -1106,7 +1171,7 @@ def _migrate_products_dictionary_fks(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_product_variants_v1(connection: sqlite3.Connection) -> None:
+def _migrate_product_variants_v1(connection: Any) -> None:
     """Таблица вариантов SKU + перенос legacy image/sku в одну строку variant на товар."""
     connection.execute(
         """
@@ -1201,7 +1266,7 @@ def _migrate_product_variants_v1(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_soft_delete_policy_v1(connection: sqlite3.Connection) -> None:
+def _migrate_soft_delete_policy_v1(connection: Any) -> None:
     """Мягкое удаление: is_deleted, deleted_at, deleted_by_id (ТЗ «Логика удаления элементов»)."""
     connection.execute(
         """
@@ -1237,7 +1302,7 @@ def _migrate_soft_delete_policy_v1(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_product_gallery_json_v1(connection: sqlite3.Connection) -> None:
+def _migrate_product_gallery_json_v1(connection: Any) -> None:
     """JSON-массив URL фото карточки (порядок); превью — первый элемент = image_url."""
     connection.execute(
         """
@@ -1269,7 +1334,7 @@ def _migrate_product_gallery_json_v1(connection: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_record_actuality(connection: sqlite3.Connection) -> None:
+def _ensure_record_actuality(connection: Any) -> None:
     """Системный справочник значений фильтра «актуальность»; не редактируется через UI."""
     connection.execute(
         """
@@ -1281,7 +1346,7 @@ def _ensure_record_actuality(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    n = int(connection.execute("SELECT COUNT(*) FROM record_actuality").fetchone()[0])
+    n = int(connection.execute("SELECT COUNT(*) AS cnt FROM record_actuality").fetchone()["cnt"])
     if n > 0:
         return
     connection.execute(
@@ -1357,7 +1422,7 @@ def get_user_by_email(email: str):
 
 
 def _user_client_id_opt(user) -> str | None:
-    """Значение users.client_id из sqlite3.Row (у Row нет метода .get)."""
+    """Значение users.client_id из результата SELECT (доступ по ключу, без .get)."""
     try:
         raw = user["client_id"]
     except (KeyError, IndexError):
@@ -1474,7 +1539,7 @@ def _normalize_sku(sku: str) -> str:
 
 
 def _variant_sku_in_use(
-    connection: sqlite3.Connection, sku: str, exclude_variant_id: str | None
+    connection: Any, sku: str, exclude_variant_id: str | None
 ) -> bool:
     q = (
         "SELECT 1 FROM product_variants WHERE sku = ? "
@@ -1488,7 +1553,7 @@ def _variant_sku_in_use(
 
 
 def _sku_taken_globally_except_product(
-    connection: sqlite3.Connection, sku: str, exclude_product_id: str
+    connection: Any, sku: str, exclude_product_id: str
 ) -> bool:
     if connection.execute(
         """
@@ -1510,7 +1575,7 @@ def _sku_taken_globally_except_product(
 
 
 def _rebase_variant_skus_for_new_product_base(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     product_id: str,
     old_base_sku: str,
@@ -1525,7 +1590,7 @@ def _rebase_variant_skus_for_new_product_base(
         SELECT id, sku, color_id, size_id
         FROM product_variants
         WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0
-        ORDER BY sku COLLATE NOCASE ASC
+        ORDER BY LOWER(sku) ASC
         """,
         (product_id,),
     ).fetchall()
@@ -1586,7 +1651,7 @@ def _rebase_variant_skus_for_new_product_base(
         )
 
 
-def _require_active_product_type(connection: sqlite3.Connection, type_id: str) -> str:
+def _require_active_product_type(connection: Any, type_id: str) -> str:
     tid = type_id.strip()
     row = connection.execute(
         "SELECT id FROM product_types WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
@@ -1600,7 +1665,7 @@ def _require_active_product_type(connection: sqlite3.Connection, type_id: str) -
     return tid
 
 
-def _require_active_client(connection: sqlite3.Connection, raw: str | None) -> str:
+def _require_active_client(connection: Any, raw: str | None) -> str:
     if raw is None or str(raw).strip() == "":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1619,7 +1684,7 @@ def _require_active_client(connection: sqlite3.Connection, raw: str | None) -> s
     return cid
 
 
-def _optional_active_client(connection: sqlite3.Connection, raw: str | None) -> str | None:
+def _optional_active_client(connection: Any, raw: str | None) -> str | None:
     if raw is None or str(raw).strip() == "":
         return None
     cid = str(raw).strip()
@@ -1635,7 +1700,7 @@ def _optional_active_client(connection: sqlite3.Connection, raw: str | None) -> 
     return cid
 
 
-def _optional_active_supplier(connection: sqlite3.Connection, raw: str | None) -> str | None:
+def _optional_active_supplier(connection: Any, raw: str | None) -> str | None:
     if raw is None or str(raw).strip() == "":
         return None
     sid = str(raw).strip()
@@ -1681,11 +1746,11 @@ def _product_card_image_urls(
 
 
 def _find_variant_row_for_receipt(
-    connection: sqlite3.Connection,
+    connection: Any,
     sku_norm: str,
     color_id: str,
     size_id: str | None,
-) -> tuple[sqlite3.Row | None, bool]:
+) -> tuple[Mapping[str, Any] | None, bool]:
     """Подбор варианта для приёмки: одежда — sku+color+size; техника — sku+color (size игнорируется).
 
     Возвращает (строка или None, needs_size — нужно выбрать размер в UI).
@@ -1695,7 +1760,7 @@ def _find_variant_row_for_receipt(
         SELECT v.id AS variant_id, v.product_id, v.sku AS variant_sku, p.sku AS product_sku,
                v.color_id, v.size_id, v.length, v.width, v.height,
                p.name AS product_name, p.gallery_json, p.image_url,
-               IFNULL(pt.requires_size, 0) AS requires_size,
+               COALESCE(pt.requires_size, 0) AS requires_size,
                pt.name AS product_type_name,
                cl.name AS client_name
         FROM product_variants v
@@ -1743,7 +1808,7 @@ def _sku_token_from_label(name: str) -> str:
     return s[:18]
 
 
-def _product_type_flags(connection: sqlite3.Connection, type_id: str) -> tuple[bool, bool]:
+def _product_type_flags(connection: Any, type_id: str) -> tuple[bool, bool]:
     row = connection.execute(
         "SELECT requires_color, requires_size FROM product_types WHERE id = ?",
         (type_id,),
@@ -1753,7 +1818,7 @@ def _product_type_flags(connection: sqlite3.Connection, type_id: str) -> tuple[b
     return bool(row["requires_color"]), bool(row["requires_size"])
 
 
-def _require_active_color_id(connection: sqlite3.Connection, cid: str) -> str:
+def _require_active_color_id(connection: Any, cid: str) -> str:
     rid = cid.strip()
     row = connection.execute(
         "SELECT id FROM colors WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
@@ -1767,7 +1832,7 @@ def _require_active_color_id(connection: sqlite3.Connection, cid: str) -> str:
     return rid
 
 
-def _require_active_size_id(connection: sqlite3.Connection, sid: str) -> str:
+def _require_active_size_id(connection: Any, sid: str) -> str:
     rid = sid.strip()
     row = connection.execute(
         "SELECT id FROM sizes WHERE id = ? AND is_active = 1 AND COALESCE(is_deleted, 0) = 0",
@@ -1782,7 +1847,7 @@ def _require_active_size_id(connection: sqlite3.Connection, sid: str) -> str:
 
 
 def _color_size_labels_for_skus(
-    connection: sqlite3.Connection, color_ids: set[str], size_ids: set[str]
+    connection: Any, color_ids: set[str], size_ids: set[str]
 ) -> tuple[dict[str, str], dict[str, str]]:
     colors: dict[str, str] = {}
     if color_ids:
@@ -1847,7 +1912,7 @@ def _sku_dim_token(length: float, width: float, height: float) -> str:
 
 
 def _build_variant_rows_for_create(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     requires_size: bool,
     sku_base: str,
@@ -1972,7 +2037,7 @@ def _build_variant_rows_for_create(
 
 
 def _generate_variant_sku_for_patch(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     sku_base: str,
     color_id: str,
@@ -2005,7 +2070,7 @@ def _generate_variant_sku_for_patch(
 
 
 def _soft_delete_variants_for_product(
-    connection: sqlite3.Connection,
+    connection: Any,
     product_id: str,
     admin_id: str,
     ts: str,
@@ -2022,14 +2087,14 @@ def _soft_delete_variants_for_product(
 
 
 def _sync_product_variants_from_request(
-    connection: sqlite3.Connection,
+    connection: Any,
     product_id: str,
     payload: ProductVariantsPatchRequest,
     admin_id: str,
 ) -> None:
     prow = connection.execute(
         """
-        SELECT p.sku AS sku_base, IFNULL(pt.requires_size, 0) AS requires_size,
+        SELECT p.sku AS sku_base, COALESCE(pt.requires_size, 0) AS requires_size,
                COALESCE(p.is_deleted, 0) AS is_deleted
         FROM products p
         JOIN product_types pt ON pt.id = p.type_id
@@ -2322,7 +2387,7 @@ def _create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, c
                 ),
             )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -2403,7 +2468,7 @@ def _update_dictionary_item(
                 tuple(values),
             )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -2426,7 +2491,7 @@ def _delete_dictionary_item(table_name: str, item_id: str, admin_id: str):
     )
 
 
-def _size_row_to_item(row: sqlite3.Row) -> SizeItem:
+def _size_row_to_item(row: Mapping[str, Any]) -> SizeItem:
     return SizeItem(
         id=row["id"],
         name=row["name"],
@@ -2452,6 +2517,8 @@ def _get_size_item(item_id: str, *, include_deleted: bool = False) -> SizeItem:
                 d.is_active,
                 COALESCE(d.is_deleted, 0) AS is_deleted,
                 d.deleted_at,
+                d.created_at,
+                d.updated_at,
                 creator.email AS created_by,
                 editor.email AS updated_by,
                 deleter.email AS deleted_by
@@ -2504,9 +2571,9 @@ def _list_sizes_page(
             where_sql = " AND ".join(conds)
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM sizes d WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt FROM sizes d WHERE {where_sql}",
                 params,
-            ).fetchone()[0]
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -2559,7 +2626,7 @@ def _create_size(payload: SizeCreateRequest, creator_id: str) -> MessageResponse
                 ),
             )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -2635,7 +2702,7 @@ def _update_size(item_id: str, payload: SizeUpdateRequest, editor_id: str) -> Me
                 tuple(values),
             )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -2870,7 +2937,7 @@ def delete_user(user_id: str, admin=Depends(get_current_admin)):
 
 
 def _resolve_actuality_filter(
-    connection: sqlite3.Connection, actuality_id: str | None
+    connection: Any, actuality_id: str | None
 ) -> bool | None:
     """Преобразует id системного справочника в фильтр по колонке is_active."""
     if actuality_id is None:
@@ -2929,9 +2996,9 @@ def _list_dictionary_items_page(
             where_sql = " AND ".join(conds)
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM {table_name} d WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt FROM {table_name} d WHERE {where_sql}",
                 params,
-            ).fetchone()[0]
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -2978,6 +3045,260 @@ def _list_dictionary_items_page(
     )
 
 
+def _product_type_row_to_item(row: Mapping[str, Any]) -> ProductTypeDictionaryItem:
+    return ProductTypeDictionaryItem(
+        id=row["id"],
+        name=row["name"],
+        is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
+        created_at=row["created_at"],
+        created_by=row["created_by"],
+        updated_at=row["updated_at"],
+        updated_by=row["updated_by"],
+        requires_color=bool(row["requires_color"]),
+        requires_size=bool(row["requires_size"]),
+    )
+
+
+def _list_product_types_page(
+    page: int,
+    limit: int,
+    *,
+    search: str | None,
+    actuality_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    sort: str | None,
+    include_deleted: bool = False,
+) -> ProductTypeListResponse:
+    table_name = "product_types"
+    _ensure_dictionary_table(table_name)
+    offset = (page - 1) * limit
+    conds = ["1=1"]
+    params: list = []
+    if search is not None and str(search).strip():
+        conds.append("fold_ci(d.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(search)))
+    if date_from is not None and str(date_from).strip():
+        conds.append("substr(d.created_at, 1, 10) >= ?")
+        params.append(str(date_from).strip())
+    if date_to is not None and str(date_to).strip():
+        conds.append("substr(d.created_at, 1, 10) <= ?")
+        params.append(str(date_to).strip())
+    if not include_deleted:
+        conds.append("COALESCE(d.is_deleted, 0) = 0")
+    where_sql = " AND ".join(conds)
+    order_sql = _order_sql_from_sort_param(sort, CLIENT_LIST_SORT_COLUMNS) or "d.created_at DESC"
+    with get_connection() as connection:
+        ia = _resolve_actuality_filter(connection, actuality_id)
+        if ia is not None:
+            conds.append("d.is_active = ?")
+            params.append(1 if ia else 0)
+            where_sql = " AND ".join(conds)
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) AS cnt FROM {table_name} d WHERE {where_sql}",
+                params,
+            ).fetchone()["cnt"]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                d.id,
+                d.name,
+                d.is_active,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
+                d.created_at,
+                d.updated_at,
+                COALESCE(d.requires_color, 0) AS requires_color,
+                COALESCE(d.requires_size, 0) AS requires_size,
+                creator.email AS created_by,
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
+            FROM {table_name} d
+            LEFT JOIN users creator ON creator.id = d.creator_id
+            LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
+            WHERE {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return ProductTypeListResponse(
+        items=[_product_type_row_to_item(row) for row in rows],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+def _get_product_type_item(item_id: str, *, include_deleted: bool = False) -> ProductTypeDictionaryItem:
+    _ensure_dictionary_table("product_types")
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                d.id,
+                d.name,
+                d.is_active,
+                COALESCE(d.is_deleted, 0) AS is_deleted,
+                d.deleted_at,
+                d.created_at,
+                d.updated_at,
+                COALESCE(d.requires_color, 0) AS requires_color,
+                COALESCE(d.requires_size, 0) AS requires_size,
+                creator.email AS created_by,
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
+            FROM product_types d
+            LEFT JOIN users creator ON creator.id = d.creator_id
+            LEFT JOIN users editor ON editor.id = d.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
+            WHERE d.id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Запись не найдена",
+        )
+    if bool(row["is_deleted"]) and not include_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Запись не найдена",
+        )
+    return _product_type_row_to_item(row)
+
+
+def _create_product_type(payload: ProductTypeCreateRequest, creator_id: str):
+    _ensure_dictionary_table("product_types")
+    item_id = str(uuid4())
+    name = _normalize_name(payload.name)
+    with get_connection() as connection:
+        try:
+            connection.execute(
+                """
+                INSERT INTO product_types (
+                    id, name, is_active, requires_color, requires_size, created_at, creator_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    name,
+                    1 if payload.is_active else 0,
+                    1 if payload.requires_color else 0,
+                    1 if payload.requires_size else 0,
+                    _now(),
+                    creator_id,
+                ),
+            )
+            connection.commit()
+        except IntegrityConstraintViolation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Запись с таким названием уже существует",
+            ) from exc
+    return MessageResponse(message="Создано")
+
+
+def _update_product_type(item_id: str, payload: ProductTypeUpdateRequest, editor_id: str):
+    _ensure_dictionary_table("product_types")
+    now = _now()
+    with get_connection() as connection:
+        meta = connection.execute(
+            "SELECT COALESCE(is_deleted, 0) AS del FROM product_types WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if not meta:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Запись не найдена",
+            )
+        is_del = bool(meta["del"])
+        if is_del and payload.is_deleted is not False:
+            if (
+                payload.name is not None
+                or payload.is_active is not None
+                or payload.requires_color is not None
+                or payload.requires_size is not None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена. Восстановите её перед редактированием.",
+                )
+            if payload.is_deleted is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Запись удалена",
+                )
+
+        fields: list[str] = []
+        values: list[object] = []
+        if payload.is_deleted is True:
+            fields.extend(
+                [
+                    "is_deleted = 1",
+                    "deleted_at = ?",
+                    "deleted_by_id = ?",
+                ]
+            )
+            values.extend([now, editor_id])
+        elif payload.is_deleted is False:
+            fields.extend(
+                [
+                    "is_deleted = 0",
+                    "deleted_at = NULL",
+                    "deleted_by_id = NULL",
+                ]
+            )
+        if payload.name is not None:
+            fields.append("name = ?")
+            values.append(_normalize_name(payload.name))
+        if payload.is_active is not None:
+            fields.append("is_active = ?")
+            values.append(1 if payload.is_active else 0)
+        if payload.requires_color is not None:
+            fields.append("requires_color = ?")
+            values.append(1 if payload.requires_color else 0)
+        if payload.requires_size is not None:
+            fields.append("requires_size = ?")
+            values.append(1 if payload.requires_size else 0)
+
+        if not fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нет данных для обновления",
+            )
+        fields.append("updated_at = ?")
+        values.append(now)
+        fields.append("updated_by_id = ?")
+        values.append(editor_id)
+        values.append(item_id)
+        try:
+            connection.execute(
+                f"UPDATE product_types SET {', '.join(fields)} WHERE id = ?",
+                tuple(values),
+            )
+            connection.commit()
+        except IntegrityConstraintViolation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Запись с таким названием уже существует",
+            ) from exc
+    msg = "Обновлено"
+    if payload.is_deleted is True:
+        msg = "Удалено"
+    elif payload.is_deleted is False:
+        msg = "Восстановлено"
+    return MessageResponse(message=msg)
+
+
 @app.get("/system/record-actuality", response_model=list[RecordActualityFilterItem])
 def list_record_actuality_filter_items(admin=Depends(get_current_admin)):
     """Системный справочник для фильтра «актуальность» (не отображается в разделе справочников)."""
@@ -2986,7 +3307,7 @@ def list_record_actuality_filter_items(admin=Depends(get_current_admin)):
         rows = connection.execute(
             """
             SELECT id, name FROM record_actuality
-            ORDER BY sort_order ASC, name COLLATE NOCASE ASC
+            ORDER BY sort_order ASC, LOWER(name) ASC
             """
         ).fetchall()
     return [RecordActualityFilterItem(id=r["id"], name=r["name"]) for r in rows]
@@ -3104,7 +3425,7 @@ def delete_color(item_id: str, admin=Depends(get_current_admin)):
     return _delete_dictionary_item("colors", item_id, admin["id"])
 
 
-@app.get("/product-types", response_model=DictionaryListResponse)
+@app.get("/product-types", response_model=ProductTypeListResponse)
 def list_product_types(
     admin=Depends(get_current_admin),
     page: int = Query(1, ge=1),
@@ -3119,8 +3440,7 @@ def list_product_types(
     _ = admin
     df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
     dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
-    return _list_dictionary_items_page(
-        "product_types",
+    return _list_product_types_page(
         page,
         limit,
         search=name,
@@ -3128,30 +3448,28 @@ def list_product_types(
         date_from=df,
         date_to=dt,
         sort=sort,
-        sort_columns=CLIENT_LIST_SORT_COLUMNS,
-        default_order="d.created_at DESC",
         include_deleted=include_deleted,
     )
 
 
 @app.post("/product-types", response_model=MessageResponse)
-def create_product_type(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
-    return _create_dictionary_item("product_types", payload, admin["id"])
+def create_product_type(payload: ProductTypeCreateRequest, admin=Depends(get_current_admin)):
+    return _create_product_type(payload, admin["id"])
 
 
-@app.get("/product-types/{item_id}", response_model=DictionaryBaseItem)
+@app.get("/product-types/{item_id}", response_model=ProductTypeDictionaryItem)
 def get_product_type(
     item_id: str,
     admin=Depends(get_current_admin),
     include_deleted: bool = Query(False),
 ):
     _ = admin
-    return _get_dictionary_item("product_types", item_id, include_deleted=include_deleted)
+    return _get_product_type_item(item_id, include_deleted=include_deleted)
 
 
 @app.patch("/product-types/{item_id}", response_model=MessageResponse)
-def update_product_type(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
-    return _update_dictionary_item("product_types", item_id, payload, admin["id"])
+def update_product_type(item_id: str, payload: ProductTypeUpdateRequest, admin=Depends(get_current_admin)):
+    return _update_product_type(item_id, payload, admin["id"])
 
 
 @app.delete("/product-types/{item_id}", response_model=MessageResponse)
@@ -3317,9 +3635,9 @@ def list_products(
         where_sql = " AND ".join(conds)
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) {join_sql} WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt {join_sql} WHERE {where_sql}",
                 params,
-            ).fetchone()[0]
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -3329,11 +3647,11 @@ def list_products(
                 p.type_id,
                 pt.name AS type_name,
                 p.sku AS sku_base,
-                IFNULL(pt.requires_color, 0) AS requires_color,
-                IFNULL(pt.requires_size, 0) AS requires_size,
+                COALESCE(pt.requires_color, 0) AS requires_color,
+                COALESCE(pt.requires_size, 0) AS requires_size,
                 p.client_id,
                 c.name AS client_name,
-                IFNULL(vcnt.cnt, 0) AS variant_count,
+                COALESCE(vcnt.cnt, 0) AS variant_count,
                 p.is_active,
                 COALESCE(p.is_deleted, 0) AS is_deleted,
                 p.deleted_at,
@@ -3398,11 +3716,11 @@ def get_product(
                 p.type_id,
                 pt.name AS type_name,
                 p.sku AS sku_base,
-                IFNULL(pt.requires_color, 0) AS requires_color,
-                IFNULL(pt.requires_size, 0) AS requires_size,
+                COALESCE(pt.requires_color, 0) AS requires_color,
+                COALESCE(pt.requires_size, 0) AS requires_size,
                 p.client_id,
                 c.name AS client_name,
-                IFNULL(vcnt.cnt, 0) AS variant_count,
+                COALESCE(vcnt.cnt, 0) AS variant_count,
                 p.is_active,
                 COALESCE(p.is_deleted, 0) AS is_deleted,
                 p.deleted_at,
@@ -3519,7 +3837,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             FROM product_variants
             WHERE product_id = ?
               AND COALESCE(is_deleted, 0) = 0
-            ORDER BY sku COLLATE NOCASE ASC
+            ORDER BY LOWER(sku) ASC
             """,
             (item_id,),
         ).fetchall()
@@ -3556,7 +3874,7 @@ def patch_product_variants(
                 (_now(), admin["id"], item_id),
             )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             connection.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3566,7 +3884,7 @@ def patch_product_variants(
 
 
 def _require_product_not_deleted_for_variants(
-    connection: sqlite3.Connection, product_id: str
+    connection: Any, product_id: str
 ) -> None:
     r = connection.execute(
         "SELECT COALESCE(is_deleted, 0) FROM products WHERE id = ?",
@@ -3780,7 +4098,7 @@ async def create_product(
                     ),
                 )
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             connection.rollback()
             raise HTTPException(
                 status_code=400,
@@ -3908,7 +4226,7 @@ def update_product(
             if payload.is_deleted is True:
                 _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
             connection.commit()
-        except sqlite3.IntegrityError as exc:
+        except IntegrityConstraintViolation as exc:
             connection.rollback()
             raise HTTPException(
                 status_code=400,
@@ -4060,7 +4378,7 @@ class InventoryBalanceListResponse(BaseModel):
     limit: int
 
 
-def _inventory_balance_item_from_row(r: sqlite3.Row) -> InventoryBalanceItem:
+def _inventory_balance_item_from_row(r: Mapping[str, Any]) -> InventoryBalanceItem:
     urls = _product_card_image_urls(r["gallery_json"], r["image_url"])
     preview = urls[0] if urls else None
     return InventoryBalanceItem(
@@ -4095,7 +4413,7 @@ def _active_lookup_dictionary(table_name: str) -> list[DictionaryBaseItem]:
                    NULL AS updated_at, NULL AS updated_by
             FROM {table_name}
             WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0
-            ORDER BY name COLLATE NOCASE ASC
+            ORDER BY LOWER(name) ASC
             """
         ).fetchall()
     return [
@@ -4113,7 +4431,7 @@ def _active_lookup_dictionary(table_name: str) -> list[DictionaryBaseItem]:
 
 
 def _balance_qty(
-    connection: sqlite3.Connection,
+    connection: Any,
     product_id: str,
     color_id: str | None,
     size_id: str | None,
@@ -4131,8 +4449,8 @@ def _balance_qty(
                 THEN quantity ELSE 0 END), 0) AS qty_out
         FROM inventory_operations
         WHERE product_id = ?
-          AND IFNULL(color_id, '') = IFNULL(?, '')
-          AND IFNULL(size_id, '') = IFNULL(?, '')
+          AND COALESCE(color_id, '') = COALESCE(?, '')
+          AND COALESCE(size_id, '') = COALESCE(?, '')
           AND COALESCE(is_deleted, 0) = 0
         """,
         (SHIPMENT_STATUS_SHIPPED, product_id, color_id, size_id),
@@ -4182,18 +4500,21 @@ def inventory_lookup_colors_for_sku(
         pid = str(prow["id"])
         rows = connection.execute(
             """
-            SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
-                   NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
-                   COALESCE(d.is_deleted, 0) AS is_deleted
-            FROM product_variants v
-            INNER JOIN colors d ON d.id = v.color_id
-            WHERE v.product_id = ?
-              AND COALESCE(v.is_deleted, 0) = 0
-              AND COALESCE(v.is_active, 1) = 1
-              AND v.color_id IS NOT NULL
-              AND d.is_active = 1
-              AND COALESCE(d.is_deleted, 0) = 0
-            ORDER BY d.name COLLATE NOCASE ASC
+            SELECT id, name, is_active, created_at, created_by, updated_at, updated_by, is_deleted
+            FROM (
+              SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
+                     NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
+                     COALESCE(d.is_deleted, 0) AS is_deleted
+              FROM product_variants v
+              INNER JOIN colors d ON d.id = v.color_id
+              WHERE v.product_id = ?
+                AND COALESCE(v.is_deleted, 0) = 0
+                AND COALESCE(v.is_active, 1) = 1
+                AND v.color_id IS NOT NULL
+                AND d.is_active = 1
+                AND COALESCE(d.is_deleted, 0) = 0
+            ) t
+            ORDER BY LOWER(t.name) ASC
             """,
             (pid,),
         ).fetchall()
@@ -4244,19 +4565,22 @@ def inventory_lookup_sizes_for_sku(
         pid = str(prow["id"])
         rows = connection.execute(
             """
-            SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
-                   NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
-                   COALESCE(d.is_deleted, 0) AS is_deleted
-            FROM product_variants v
-            INNER JOIN sizes d ON d.id = v.size_id
-            WHERE v.product_id = ?
-              AND v.color_id = ?
-              AND COALESCE(v.is_deleted, 0) = 0
-              AND COALESCE(v.is_active, 1) = 1
-              AND v.size_id IS NOT NULL
-              AND d.is_active = 1
-              AND COALESCE(d.is_deleted, 0) = 0
-            ORDER BY d.name COLLATE NOCASE ASC
+            SELECT id, name, is_active, created_at, created_by, updated_at, updated_by, is_deleted
+            FROM (
+              SELECT DISTINCT d.id, d.name, d.is_active, d.created_at,
+                     NULL AS created_by, NULL AS updated_at, NULL AS updated_by,
+                     COALESCE(d.is_deleted, 0) AS is_deleted
+              FROM product_variants v
+              INNER JOIN sizes d ON d.id = v.size_id
+              WHERE v.product_id = ?
+                AND v.color_id = ?
+                AND COALESCE(v.is_deleted, 0) = 0
+                AND COALESCE(v.is_active, 1) = 1
+                AND v.size_id IS NOT NULL
+                AND d.is_active = 1
+                AND COALESCE(d.is_deleted, 0) = 0
+            ) t
+            ORDER BY LOWER(t.name) ASC
             """,
             (pid, cid),
         ).fetchall()
@@ -4293,7 +4617,7 @@ def inventory_lookup_product_types(user=Depends(get_current_manager)):
             SELECT id, name, requires_color, requires_size
             FROM product_types
             WHERE is_active = 1
-            ORDER BY name COLLATE NOCASE ASC
+            ORDER BY LOWER(name) ASC
             """
         ).fetchall()
     return [
@@ -4336,7 +4660,7 @@ def inventory_lookup_products(
             LEFT JOIN product_types pt ON pt.id = p.type_id
             LEFT JOIN suppliers sp ON sp.id = p.supplier_id
             WHERE {where_sql}
-            ORDER BY p.name COLLATE NOCASE ASC
+            ORDER BY LOWER(p.name) ASC
             """,
             params,
         ).fetchall()
@@ -4363,12 +4687,14 @@ def inventory_lookup_skus(user=Depends(get_current_manager)):
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT DISTINCT TRIM(p.sku) AS sku
-            FROM products p
-            WHERE COALESCE(p.is_deleted, 0) = 0
-              AND p.is_active = 1
-              AND TRIM(COALESCE(p.sku, '')) != ''
-            ORDER BY sku COLLATE NOCASE ASC
+            SELECT sku FROM (
+              SELECT DISTINCT TRIM(p.sku) AS sku
+              FROM products p
+              WHERE COALESCE(p.is_deleted, 0) = 0
+                AND p.is_active = 1
+                AND TRIM(COALESCE(p.sku, '')) != ''
+            ) t
+            ORDER BY LOWER(sku) ASC
             """
         ).fetchall()
     return [str(r["sku"]).strip() for r in rows]
@@ -4499,8 +4825,8 @@ def list_inventory_operations(
     with get_connection() as connection:
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) {join_sql} WHERE {where_sql}", params
-            ).fetchone()[0]
+                f"SELECT COUNT(*) AS cnt {join_sql} WHERE {where_sql}", params
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -4791,7 +5117,7 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
 
 
 def _receipt_detail_from_connection(
-    connection: sqlite3.Connection, op_id: str
+    connection: Any, op_id: str
 ) -> ReceiptDetailResponse:
     row = connection.execute(
         """
@@ -4827,7 +5153,7 @@ def _receipt_detail_from_connection(
             """
             SELECT length, width, height, sku
             FROM product_variants
-            WHERE product_id = ? AND color_id = ? AND IFNULL(size_id, '') = IFNULL(?, '')
+            WHERE product_id = ? AND color_id = ? AND COALESCE(size_id, '') = COALESCE(?, '')
               AND COALESCE(is_deleted, 0) = 0
             LIMIT 1
             """,
@@ -4864,7 +5190,7 @@ def _receipt_detail_from_connection(
 
 
 def _shipment_detail_from_connection(
-    connection: sqlite3.Connection, op_id: str
+    connection: Any, op_id: str
 ) -> ShipmentDetailResponse:
     row = connection.execute(
         """
@@ -4900,7 +5226,7 @@ def _shipment_detail_from_connection(
             """
             SELECT length, width, height, sku
             FROM product_variants
-            WHERE product_id = ? AND color_id = ? AND IFNULL(size_id, '') = IFNULL(?, '')
+            WHERE product_id = ? AND color_id = ? AND COALESCE(size_id, '') = COALESCE(?, '')
               AND COALESCE(is_deleted, 0) = 0
             LIMIT 1
             """,
@@ -5494,10 +5820,10 @@ def list_inventory_balances(
         conds.append("p.supplier_id = ?")
         params.append(str(supplier_id).strip())
     if color_id is not None and str(color_id).strip():
-        conds.append("IFNULL(o.color_id, '') = ?")
+        conds.append("COALESCE(o.color_id, '') = ?")
         params.append(str(color_id).strip())
     if size_id is not None and str(size_id).strip():
-        conds.append("IFNULL(o.size_id, '') = ?")
+        conds.append("COALESCE(o.size_id, '') = ?")
         params.append(str(size_id).strip())
     if sku is not None and str(sku).strip():
         conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
@@ -5506,7 +5832,7 @@ def list_inventory_balances(
         conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))
     where_sql = " AND ".join(conds)
-    having_sql = "HAVING quantity > 0" if only_positive else ""
+    having_sql = f"HAVING SUM({SQL_O_NET_QTY}) > 0" if only_positive else ""
     base_sql = f"""
         FROM inventory_operations o
         LEFT JOIN products p ON p.id = o.product_id
@@ -5516,19 +5842,19 @@ def list_inventory_balances(
         LEFT JOIN colors col ON col.id = o.color_id
         LEFT JOIN sizes sz ON sz.id = o.size_id
         WHERE {where_sql}
-        GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+        GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
         {having_sql}
     """
     balances_order_sql = (
         _order_sql_from_sort_param(sort, INVENTORY_BALANCES_SORT_COLUMNS)
-        or "MAX(p.name) COLLATE NOCASE ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
+        or "LOWER(MAX(p.name)) ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
     )
     with get_connection() as connection:
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})",
+                f"SELECT COUNT(*) AS cnt FROM (SELECT 1 {base_sql})",
                 params,
-            ).fetchone()[0]
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -5544,9 +5870,9 @@ def list_inventory_balances(
                 MAX(cl.name) AS client_name,
                 MAX(p.supplier_id) AS supplier_id,
                 MAX(sp.name) AS supplier_name,
-                o.color_id,
+                MAX(o.color_id) AS color_id,
                 MAX(col.name) AS color_name,
-                o.size_id,
+                MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size_name,
                 SUM({SQL_O_NET_QTY}) AS quantity
             {base_sql}
@@ -5754,14 +6080,16 @@ def _ana_filter_sql(
 
 
 def _group_expr(group: str) -> str:
-    """SQL-выражение для бакета периода по дате создания операции."""
+    """SQL-выражение для бакета периода по дате создания операции (PostgreSQL, created_at — ISO-текст)."""
     g = (group or "day").lower()
     if g == "week":
-        # ISO-неделя через strftime — поддерживается SQLite.
-        return "strftime('%Y-W%W', o.created_at)"
+        return (
+            "to_char(o.created_at::timestamptz, 'IYYY') || '-W' || "
+            "to_char(o.created_at::timestamptz, 'IW')"
+        )
     if g == "month":
-        return "substr(o.created_at, 1, 7)"
-    return "substr(o.created_at, 1, 10)"
+        return "substring(o.created_at from 1 for 7)"
+    return "substring(o.created_at from 1 for 10)"
 
 
 def _explain_period(date_from: str, date_to: str) -> str:
@@ -5851,7 +6179,7 @@ def analytics_stock_snapshot(
     conds.append("substr(o.created_at, 1, 10) <= ?")
     params.append(at)
     where_sql = " AND ".join(conds)
-    having_sql = "HAVING stock > 0" if only_positive else ""
+    having_sql = f"HAVING SUM({SQL_O_NET_QTY}) > 0" if only_positive else ""
     with get_connection() as connection:
         rows = connection.execute(
             f"""
@@ -5862,9 +6190,9 @@ def analytics_stock_snapshot(
                 MAX(pt.name) AS type_name,
                 MAX(p.client_id) AS client_id,
                 MAX(cl.name) AS client,
-                o.color_id,
+                MAX(o.color_id) AS color_id,
                 MAX(col.name) AS color,
-                o.size_id,
+                MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size,
                 SUM({SQL_O_NET_QTY}) AS stock
             FROM inventory_operations o
@@ -5874,7 +6202,7 @@ def analytics_stock_snapshot(
             LEFT JOIN colors col ON col.id = o.color_id
             LEFT JOIN sizes sz ON sz.id = o.size_id
             WHERE {where_sql}
-            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+            GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
             {having_sql}
             ORDER BY stock DESC
             LIMIT ?
@@ -5996,9 +6324,9 @@ def analytics_dead_stock(
                 MAX(p.name) AS product,
                 MAX(p.client_id) AS client_id,
                 MAX(cl.name) AS client,
-                o.color_id,
+                MAX(o.color_id) AS color_id,
                 MAX(col.name) AS color,
-                o.size_id,
+                MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size,
                 SUM({SQL_O_NET_QTY}) AS stock,
                 MAX(o.created_at) AS last_movement_at
@@ -6008,8 +6336,8 @@ def analytics_dead_stock(
             LEFT JOIN colors col ON col.id = o.color_id
             LEFT JOIN sizes sz ON sz.id = o.size_id
             WHERE {where_sql}
-            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
-            HAVING stock > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
+            GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
+            HAVING SUM({SQL_O_NET_QTY}) > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
             ORDER BY stock DESC
             LIMIT ?
             """,
@@ -6116,7 +6444,7 @@ def analytics_client_activity(
 
 
 def _sum_in_out_for_range(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     df: str,
     dt: str,
@@ -6272,7 +6600,7 @@ def analytics_by_type(
                 LEFT JOIN products p ON p.id = o.product_id
                 LEFT JOIN product_types pt ON pt.id = p.type_id
                 WHERE {stock_where}
-                GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+                GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
             )
             WHERE stock > 0
             GROUP BY type_id, type_name
@@ -6339,7 +6667,7 @@ def _portal_bound_client_id(user) -> str:
     return _user_client_id_opt(user) or ""
 
 
-def _client_portal_total_positive_stock(connection: sqlite3.Connection, client_id: str) -> int:
+def _client_portal_total_positive_stock(connection: Any, client_id: str) -> int:
     row = connection.execute(
         f"""
         SELECT COALESCE(SUM(b.qty), 0) AS total
@@ -6348,8 +6676,8 @@ def _client_portal_total_positive_stock(connection: sqlite3.Connection, client_i
             FROM inventory_operations o
             INNER JOIN products p ON p.id = o.product_id
             WHERE p.client_id = ? AND {SQL_WHERE_INV_OP_ACTIVE_O}
-            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
-            HAVING qty > 0
+            GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
+            HAVING SUM({SQL_O_NET_QTY}) > 0
         ) AS b
         """,
         (client_id,),
@@ -6384,13 +6712,13 @@ def client_portal_list_balances(
         conds.append("p.type_id = ?")
         params.append(str(type_id).strip())
     if color_id is not None and str(color_id).strip():
-        conds.append("IFNULL(o.color_id, '') = ?")
+        conds.append("COALESCE(o.color_id, '') = ?")
         params.append(str(color_id).strip())
     if size_id is not None and str(size_id).strip():
-        conds.append("IFNULL(o.size_id, '') = ?")
+        conds.append("COALESCE(o.size_id, '') = ?")
         params.append(str(size_id).strip())
     where_sql = " AND ".join(conds)
-    having_sql = "HAVING quantity > 0" if only_positive else ""
+    having_sql = f"HAVING SUM({SQL_O_NET_QTY}) > 0" if only_positive else ""
     base_sql = f"""
         FROM inventory_operations o
         LEFT JOIN products p ON p.id = o.product_id
@@ -6400,19 +6728,19 @@ def client_portal_list_balances(
         LEFT JOIN colors col ON col.id = o.color_id
         LEFT JOIN sizes sz ON sz.id = o.size_id
         WHERE {where_sql}
-        GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
+        GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
         {having_sql}
     """
     balances_order_sql = (
         _order_sql_from_sort_param(sort, INVENTORY_BALANCES_SORT_COLUMNS)
-        or "MAX(p.name) COLLATE NOCASE ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
+        or "LOWER(MAX(p.name)) ASC, MAX(col.name) ASC, MAX(sz.name) ASC"
     )
     with get_connection() as connection:
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) FROM (SELECT 1 {base_sql})",
+                f"SELECT COUNT(*) AS cnt FROM (SELECT 1 {base_sql})",
                 params,
-            ).fetchone()[0]
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -6428,9 +6756,9 @@ def client_portal_list_balances(
                 MAX(cl.name) AS client_name,
                 MAX(p.supplier_id) AS supplier_id,
                 MAX(sp.name) AS supplier_name,
-                o.color_id,
+                MAX(o.color_id) AS color_id,
                 MAX(col.name) AS color_name,
-                o.size_id,
+                MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size_name,
                 SUM({SQL_O_NET_QTY}) AS quantity
             {base_sql}
@@ -6509,8 +6837,8 @@ def client_portal_list_operations(
     with get_connection() as connection:
         total = int(
             connection.execute(
-                f"SELECT COUNT(*) {join_sql} WHERE {where_sql}", params
-            ).fetchone()[0]
+                f"SELECT COUNT(*) AS cnt {join_sql} WHERE {where_sql}", params
+            ).fetchone()["cnt"]
         )
         rows = connection.execute(
             f"""
@@ -6593,7 +6921,7 @@ def client_portal_lookup_products(user=Depends(get_current_client_portal)):
             LEFT JOIN product_types pt ON pt.id = p.type_id
             LEFT JOIN suppliers sp ON sp.id = p.supplier_id
             WHERE p.is_active = 1 AND p.client_id = ? AND COALESCE(p.is_deleted, 0) = 0
-            ORDER BY p.name COLLATE NOCASE ASC
+            ORDER BY LOWER(p.name) ASC
             """,
             (portal_cid,),
         ).fetchall()
@@ -6625,7 +6953,7 @@ def client_portal_lookup_product_types(user=Depends(get_current_client_portal)):
             SELECT id, name, requires_color, requires_size
             FROM product_types
             WHERE is_active = 1
-            ORDER BY name COLLATE NOCASE ASC
+            ORDER BY LOWER(name) ASC
             """
         ).fetchall()
     return [
@@ -6815,9 +7143,9 @@ def client_portal_dashboard_dead_stock(
                 MAX(p.name) AS product,
                 MAX(p.client_id) AS client_id,
                 MAX(cl.name) AS client,
-                o.color_id,
+                MAX(o.color_id) AS color_id,
                 MAX(col.name) AS color,
-                o.size_id,
+                MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size,
                 SUM({SQL_O_NET_QTY}) AS stock,
                 MAX(o.created_at) AS last_movement_at
@@ -6827,8 +7155,8 @@ def client_portal_dashboard_dead_stock(
             LEFT JOIN colors col ON col.id = o.color_id
             LEFT JOIN sizes sz ON sz.id = o.size_id
             WHERE {where_sql}
-            GROUP BY o.product_id, IFNULL(o.color_id, ''), IFNULL(o.size_id, '')
-            HAVING stock > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
+            GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
+            HAVING SUM({SQL_O_NET_QTY}) > 0 AND substr(MAX(o.created_at), 1, 10) <= ?
             ORDER BY stock DESC
             LIMIT ?
             """,

@@ -1,4 +1,17 @@
 
+Итого порядок: Docker (Postgres) → .env с DATABASE_URL → alembic upgrade head → uvicorn → npm run dev → http://localhost:5173.
+
+Потом в терминале:
+cd /d z:\Проекты
+pip install alembic sqlalchemy "psycopg[binary]" python-dotenv
+alembic upgrade head
+
+Потом в терминале: ???????????
+cd /d z:\Проекты
+docker compose up -d
+
+
+
 cd /d z:\Проекты\backend
 pip install -r requirements.txt
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
@@ -12,3 +25,5 @@ cd /d z:\Проекты\frontend
 npm install
 npm run dev
 И открывайте http://localhost:5173
+
+

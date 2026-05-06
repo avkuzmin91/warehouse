@@ -10,7 +10,14 @@ import {
   simpleDictionaryDefinition,
   type SimpleDictionaryEntityKey,
 } from '../config/simpleDictionaryConfig'
-import { getSimpleDictionaryById, updateSimpleDictionaryItem, type DictionaryItem } from '../api'
+import {
+  getProductTypeById,
+  getSimpleDictionaryById,
+  updateProductType,
+  updateSimpleDictionaryItem,
+  type DictionaryItem,
+  type ProductTypeDictionaryItem,
+} from '../api'
 
 const IS_ACTIVE_LABEL = 'Актуален'
 
@@ -32,6 +39,8 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
 
   const [name, setName] = useState('')
   const [isActive, setIsActive] = useState(true)
+  const [requiresColor, setRequiresColor] = useState(false)
+  const [requiresSize, setRequiresSize] = useState(false)
 
   const [auditInfo, setAuditInfo] = useState<SystemInfo | null>(null)
 
@@ -52,15 +61,26 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
     setLoadError('')
     setName('')
     setIsActive(true)
+    setRequiresColor(false)
+    setRequiresSize(false)
     setAuditInfo(null)
     setTouchedName(false)
     setSubmitError('')
 
-    getSimpleDictionaryById(def.apiPath, routeId)
-      .then((row: DictionaryItem) => {
+    const loadRow =
+      entity === 'product-types'
+        ? getProductTypeById(routeId)
+        : getSimpleDictionaryById(def.apiPath, routeId)
+
+    loadRow
+      .then((row: DictionaryItem | ProductTypeDictionaryItem) => {
         if (generation !== fetchGeneration.current) return
         setName(row.name)
         setIsActive(row.is_active)
+        if (entity === 'product-types' && 'requires_color' in row) {
+          setRequiresColor(Boolean(row.requires_color))
+          setRequiresSize(Boolean(row.requires_size))
+        }
         setAuditInfo(
           systemInfoFromApi({
             created_at: row.created_at,
@@ -84,7 +104,7 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
     return () => {
       fetchGeneration.current += 1
     }
-  }, [def.apiPath, def.messages.loadFailed, routeId])
+  }, [def.apiPath, def.messages.loadFailed, entity, routeId])
 
   const isPending = loadState === 'loading'
   const isFormEnabled = loadState === 'ok'
@@ -99,10 +119,19 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
       return
     }
     try {
-      await updateSimpleDictionaryItem(def.apiPath, routeId, {
-        name: name.trim(),
-        is_active: isActive,
-      })
+      if (entity === 'product-types') {
+        await updateProductType(routeId, {
+          name: name.trim(),
+          is_active: isActive,
+          requires_color: requiresColor,
+          requires_size: requiresSize,
+        })
+      } else {
+        await updateSimpleDictionaryItem(def.apiPath, routeId, {
+          name: name.trim(),
+          is_active: isActive,
+        })
+      }
       navigate(basePath)
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : def.messages.saveFailed)
@@ -176,6 +205,37 @@ export function SimpleDictionaryEditPage({ entity }: SimpleDictionaryEditPagePro
             showNameError={showNameError}
             disabled={isPending}
           />
+          {entity === 'product-types' ? (
+            <div className="product-type-rules-block" style={{ marginTop: 12 }}>
+              <p className="field-hint" style={{ marginBottom: 8 }}>
+                Варианты SKU (цвет, размер)
+              </p>
+              <label className="remember product-create-remember" htmlFor={`${formId}-req-color`}>
+                <input
+                  id={`${formId}-req-color`}
+                  type="checkbox"
+                  checked={requiresColor}
+                  onChange={(e) => setRequiresColor(e.target.checked)}
+                  disabled={isPending}
+                />
+                <span className="remember__box" />
+                <span className="remember__text">Учёт по цвету</span>
+              </label>
+              <p className="field-hint">Для каждого варианта нужно выбирать цвет из справочника</p>
+              <label className="remember product-create-remember" htmlFor={`${formId}-req-size`}>
+                <input
+                  id={`${formId}-req-size`}
+                  type="checkbox"
+                  checked={requiresSize}
+                  onChange={(e) => setRequiresSize(e.target.checked)}
+                  disabled={isPending}
+                />
+                <span className="remember__box" />
+                <span className="remember__text">Учёт по размеру</span>
+              </label>
+              <p className="field-hint">Для каждого варианта нужно выбирать размер из справочника</p>
+            </div>
+          ) : null}
         </fieldset>
       </form>
 

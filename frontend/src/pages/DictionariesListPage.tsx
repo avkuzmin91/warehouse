@@ -7,7 +7,6 @@ const entries: { label: string; to: string }[] = [
   { label: 'Товары', to: '/dictionaries/products' },
   { label: 'Клиенты', to: '/dictionaries/clients' },
   { label: 'Типы товаров', to: '/dictionaries/product-types' },
-  { label: 'Поставщики', to: '/dictionaries/suppliers' },
   { label: 'Размеры', to: '/dictionaries/sizes' },
   { label: 'Цвета', to: '/dictionaries/colors' },
 ]

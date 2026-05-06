@@ -13,9 +13,11 @@ import {
 } from '../config/simpleDictionaryConfig'
 import {
   buildActualityFilterSelectOptions,
+  fetchProductTypesPage,
   fetchRecordActualityFilterItems,
   fetchSimpleDictionaryPage,
   type DictionaryItem,
+  type ProductTypeDictionaryItem,
   type RecordActualityFilterItem,
   type SimpleDictionaryListParams,
 } from '../api'
@@ -54,7 +56,7 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
   const { query, apiParams, setFilters, setPage, setLimit, cycleSortField, resetFilters } =
     useQueryState({ filterKeys: SIMPLE_DICT_FILTER_KEYS })
 
-  const [items, setItems] = useState<DictionaryItem[]>([])
+  const [items, setItems] = useState<(DictionaryItem | ProductTypeDictionaryItem)[]>([])
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -75,9 +77,29 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
 
   const fields = useMemo(() => filterFields(actualityItems), [actualityItems])
 
-  const columns: TableColumn<DictionaryItem>[] = useMemo(
-    () => [
+  const columns: TableColumn<DictionaryItem | ProductTypeDictionaryItem>[] = useMemo(() => {
+    const base: TableColumn<DictionaryItem | ProductTypeDictionaryItem>[] = [
       { key: 'name', title: 'Название', sortable: true },
+    ]
+    if (entity === 'product-types') {
+      base.push(
+        {
+          key: 'requires_color',
+          title: 'Учёт по цвету',
+          sortable: false,
+          render: (_, row) =>
+            'requires_color' in row && row.requires_color ? 'Да' : 'Нет',
+        },
+        {
+          key: 'requires_size',
+          title: 'Учёт по размеру',
+          sortable: false,
+          render: (_, row) =>
+            'requires_size' in row && row.requires_size ? 'Да' : 'Нет',
+        },
+      )
+    }
+    base.push(
       {
         key: 'is_active',
         title: 'Актуален',
@@ -90,9 +112,9 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
         sortable: true,
         render: (v) => formatDateDdMmYyyy(String(v)),
       },
-    ],
-    [],
-  )
+    )
+    return base
+  }, [entity])
 
   useEffect(() => {
     let cancelled = false
@@ -112,7 +134,12 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
       listParams.search = apiParams.search
     }
 
-    fetchSimpleDictionaryPage(def.apiPath, def.listNameQueryKey, listParams)
+    const listPromise =
+      entity === 'product-types'
+        ? fetchProductTypesPage(listParams)
+        : fetchSimpleDictionaryPage(def.apiPath, def.listNameQueryKey, listParams)
+
+    listPromise
       .then((res) => {
         if (cancelled) return
         setItems(res.items)
@@ -133,7 +160,7 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
     return () => {
       cancelled = true
     }
-  }, [apiParams, def.apiPath, def.listNameQueryKey, query.limit, query.page, setPage, reloadKey])
+  }, [apiParams, def.apiPath, def.listNameQueryKey, entity, query.limit, query.page, setPage, reloadKey])
 
   const basePath = `/dictionaries/${def.routeSegment}`
 
@@ -173,7 +200,7 @@ export function SimpleDictionaryListPage({ entity }: SimpleDictionaryListPagePro
         />
       }
       table={
-        <Table<DictionaryItem>
+        <Table<DictionaryItem | ProductTypeDictionaryItem>
           columns={columns}
           data={items}
           loading={loading}

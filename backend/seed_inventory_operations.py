@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import argparse
 import random
-import sqlite3
 import sys
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import uuid4
 
-DB_PATH = Path(__file__).parent / "auth.db"
+from dbconn import get_connection
+
 RNG = random.Random(20260502)
 
 CLIENTS_COUNT = 20
@@ -42,7 +41,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _admin_id(con: sqlite3.Connection) -> str | None:
+def _admin_id(con: Any) -> str | None:
     row = con.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1").fetchone()
     return row["id"] if row else None
 
@@ -80,15 +79,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not DB_PATH.exists():
-        print(f"БД не найдена: {DB_PATH}", file=sys.stderr)
-        return 1
-
     rng = RNG
     now_ts = _now()
 
-    with sqlite3.connect(DB_PATH) as con:
-        con.row_factory = sqlite3.Row
+    with get_connection() as con:
         admin_id = _admin_id(con)
 
         if args.reset:

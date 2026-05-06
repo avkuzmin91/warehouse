@@ -127,6 +127,8 @@ export function DictionaryFormCombobox({
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const portalListRef = useRef<HTMLDivElement>(null)
+  /** После выбора из списка (mousedown) браузер шлёт blur раньше, чем React применит setDraft — иначе applyCommit откатывает выбор. */
+  const skipNextBlurCommitRef = useRef(false)
 
   const choices = useMemo(() => {
     const mapped = items.map((i) => ({
@@ -174,10 +176,12 @@ export function DictionaryFormCombobox({
   const showEmptySearch =
     debouncedQuery.trim() !== '' && filtered.length === 0 && choices.length > 0
   const emptySearch = showEmptySearch
+  const showEmptyChoices = choices.length === 0
   const virtualCount = emptySearch ? 1 : filtered.length
   const listH = Math.min(LIST_MAX_H, Math.max(virtualCount * ROW_H, ROW_H))
 
-  const listOpen = open && !disabled && choices.length > 0 && (filtered.length > 0 || showEmptySearch)
+  const listOpen =
+    open && !disabled && (showEmptyChoices || filtered.length > 0 || showEmptySearch)
 
   const portalListStyle = useFixedDictionaryListPosition(
     listPortal,
@@ -185,6 +189,7 @@ export function DictionaryFormCombobox({
     disabled,
     wrapRef,
     portalListRef,
+    items.length,
   )
 
   useEffect(() => {
@@ -225,9 +230,13 @@ export function DictionaryFormCombobox({
 
   const pick = useCallback(
     (nextValue: string, label: string) => {
+      skipNextBlurCommitRef.current = true
       onChange(nextValue)
       setDraft(label)
       setOpen(false)
+      window.setTimeout(() => {
+        skipNextBlurCommitRef.current = false
+      }, 0)
     },
     [onChange],
   )
@@ -247,6 +256,11 @@ export function DictionaryFormCombobox({
       const next = e.relatedTarget as Node | null
       if (wrapRef.current?.contains(next)) return
       if (listPortal && portalListRef.current?.contains(next)) return
+      if (skipNextBlurCommitRef.current) {
+        skipNextBlurCommitRef.current = false
+        onBlurProp?.()
+        return
+      }
       applyCommit()
       onBlurProp?.()
     },
@@ -334,18 +348,24 @@ export function DictionaryFormCombobox({
       role="listbox"
       onWheel={stopWheelBubble}
     >
-      <FixedSizeList
-        height={listH}
-        width="100%"
-        itemCount={virtualCount}
-        itemSize={ROW_H}
-        itemData={itemData}
-        innerProps={{
-          className: 'dictionary-form-combobox__vscroll',
-        }}
-      >
-        {FormComboListRow}
-      </FixedSizeList>
+      {showEmptyChoices ? (
+        <div className="dictionary-form-combobox__empty-catalog" role="presentation">
+          <div className="dictionary-multiselect__empty-msg">Нет вариантов для выбора</div>
+        </div>
+      ) : (
+        <FixedSizeList
+          height={listH}
+          width="100%"
+          itemCount={virtualCount}
+          itemSize={ROW_H}
+          itemData={itemData}
+          innerProps={{
+            className: 'dictionary-form-combobox__vscroll',
+          }}
+        >
+          {FormComboListRow}
+        </FixedSizeList>
+      )}
     </div>
   ) : null
 

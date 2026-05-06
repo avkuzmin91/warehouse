@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
@@ -16,7 +16,6 @@ export function SizeEditPage() {
   const { id: routeId = '' } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const formId = useId()
-  const fetchGeneration = useRef(0)
 
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [loadError, setLoadError] = useState('')
@@ -37,7 +36,7 @@ export function SizeEditPage() {
       setLoadState('not_found')
       return
     }
-    const generation = ++fetchGeneration.current
+    let cancelled = false
     setLoadState('loading')
     setLoadError('')
     setName('')
@@ -48,7 +47,7 @@ export function SizeEditPage() {
 
     getSize(routeId)
       .then((row: SizeItem) => {
-        if (generation !== fetchGeneration.current) return
+        if (cancelled) return
         setName(row.name)
         setIsActive(row.is_active)
         setAuditInfo(
@@ -62,7 +61,7 @@ export function SizeEditPage() {
         setLoadState('ok')
       })
       .catch((e) => {
-        if (generation !== fetchGeneration.current) return
+        if (cancelled) return
         const msg = e instanceof Error ? e.message : ''
         if (msg.includes('не найдена') || msg.includes('404')) {
           setLoadState('not_found')
@@ -72,7 +71,7 @@ export function SizeEditPage() {
         setLoadError(msg || SIZE_FORM_CONFIG.messages.loadFailed)
       })
     return () => {
-      fetchGeneration.current += 1
+      cancelled = true
     }
   }, [routeId])
 

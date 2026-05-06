@@ -5,6 +5,8 @@
     python seed_test_data.py            # обычный режим (идемпотентно по имени)
     python seed_test_data.py --reset    # очистить inventory_operations и таблицы товаров/справочников
 
+Перед запуском создайте БД в PostgreSQL и задайте DATABASE_URL (см. backend/dbconn.py).
+
 Создаёт:
     - 30 клиентов (фантазийные названия)
     - 60 поставщиков (ООО / АО / ИП)
@@ -18,15 +20,15 @@ from __future__ import annotations
 
 import argparse
 import random
-import sqlite3
 import sys
 import unicodedata
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-DB_PATH = Path(__file__).parent / "auth.db"
-RNG = random.Random(20260502)
+import psycopg
+
+from dbconn import get_connection
 
 
 # ---------- справочные списки ----------------------------------------------
@@ -159,13 +161,13 @@ def _picsum(seed: str, size: int = 480) -> str:
     return f"https://picsum.photos/seed/{seed}/{size}/{size}"
 
 
-def _admin_id(con: sqlite3.Connection) -> str | None:
+def _admin_id(con: Any) -> str | None:
     row = con.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1").fetchone()
-    return row[0] if row else None
+    return row["id"] if row else None
 
 
 def _ensure_dictionary(
-    con: sqlite3.Connection,
+    con: Any,
     table: str,
     names: list[str],
     creator_id: str | None,
@@ -178,7 +180,7 @@ def _ensure_dictionary(
             f"SELECT id FROM {table} WHERE LOWER(name) = LOWER(?)", (name,)
         ).fetchone()
         if row:
-            out[name] = row[0]
+            out[name] = row["id"]
             continue
         new_id = str(uuid4())
         con.execute(
@@ -191,7 +193,7 @@ def _ensure_dictionary(
 
 
 def _ensure_product_types(
-    con: sqlite3.Connection, creator_id: str | None
+    con: Any, creator_id: str | None
 ) -> dict[str, str]:
     out: dict[str, str] = {}
     for name, req_color, req_size in PRODUCT_TYPES:
@@ -199,7 +201,7 @@ def _ensure_product_types(
             "SELECT id FROM product_types WHERE LOWER(name) = LOWER(?)", (name,)
         ).fetchone()
         if row:
-            type_id = row[0]
+            type_id = row["id"]
             con.execute(
                 "UPDATE product_types SET requires_color = ?, requires_size = ?, "
                 "is_active = 1 WHERE id = ?",
@@ -221,7 +223,7 @@ def _ensure_product_types(
 
 
 def _seed_products(
-    con: sqlite3.Connection,
+    con: Any,
     *,
     type_ids: dict[str, str],
     client_ids: list[str],
@@ -232,11 +234,10 @@ def _seed_products(
 ) -> int:
     """Создаёт 120 товаров; гарантирует, что каждому клиенту назначен ≥ 1 товар."""
     existing_skus = {
-        row[0] for row in con.execute("SELECT sku FROM products").fetchall()
+        row["sku"] for row in con.execute("SELECT sku FROM products").fetchall()
     }
-    # SQLite LOWER() не работает для кириллицы — лоуэркейсим в Python.
     existing_names = {
-        row[0].lower()
+        row["name"].lower()
         for row in con.execute("SELECT name FROM products").fetchall()
     }
 
@@ -321,7 +322,7 @@ def _seed_products(
     return inserted
 
 
-def _reset(con: sqlite3.Connection) -> None:
+def _reset(con: Any) -> None:
     con.execute("DELETE FROM inventory_operations")
     con.execute("DELETE FROM product_variants")
     con.execute("DELETE FROM products")
@@ -343,57 +344,52 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not DB_PATH.exists():
-        print(
-            f"БД не найдена: {DB_PATH}. Сначала запустите бэкенд один раз: "
-            "python -m uvicorn main:app --port 8000",
-            file=sys.stderr,
-        )
+    try:
+        with get_connection() as con:
+            admin_id = _admin_id(con)
+            if args.reset:
+                _reset(con)
+                print("Удалены: операции, товары и тестовые справочники")
+
+            clients = _ensure_dictionary(con, "clients", CLIENTS, admin_id)
+            suppliers = _ensure_dictionary(con, "suppliers", SUPPLIERS, admin_id)
+            sizes = _ensure_dictionary(con, "sizes", SIZES, admin_id)
+            colors = _ensure_dictionary(con, "colors", COLORS, admin_id)
+            types = _ensure_product_types(con, admin_id)
+
+            # Все активные клиенты в БД (включая возможные предсуществующие) — чтобы
+            # каждый получил минимум по 1 товару (правило ТЗ).
+            all_client_ids = [
+                row["id"]
+                for row in con.execute(
+                    "SELECT id FROM clients ORDER BY created_at ASC"
+                ).fetchall()
+            ]
+            product_inserts = _seed_products(
+                con,
+                type_ids=types,
+                client_ids=all_client_ids,
+                supplier_ids=list(suppliers.values()),
+                color_ids=list(colors.values()),
+                size_ids=list(sizes.values()),
+                creator_id=admin_id,
+            )
+            con.commit()
+
+            totals = {
+                "Клиенты": len(clients),
+                "Поставщики": len(suppliers),
+                "Размеры": len(sizes),
+                "Цвета": len(colors),
+                "Типы товаров": len(types),
+                "Товары (новых записей)": product_inserts,
+            }
+            for label, qty in totals.items():
+                print(f"  {label:.<32} {qty}")
+            print("Готово.")
+    except psycopg.Error as e:
+        print(f"Ошибка БД: {e}", file=sys.stderr)
         return 1
-
-    with sqlite3.connect(DB_PATH) as con:
-        con.row_factory = sqlite3.Row
-        admin_id = _admin_id(con)
-        if args.reset:
-            _reset(con)
-            print("Удалены: операции, товары и тестовые справочники")
-
-        clients = _ensure_dictionary(con, "clients", CLIENTS, admin_id)
-        suppliers = _ensure_dictionary(con, "suppliers", SUPPLIERS, admin_id)
-        sizes = _ensure_dictionary(con, "sizes", SIZES, admin_id)
-        colors = _ensure_dictionary(con, "colors", COLORS, admin_id)
-        types = _ensure_product_types(con, admin_id)
-
-        # Все активные клиенты в БД (включая возможные предсуществующие) — чтобы
-        # каждый получил минимум по 1 товару (правило ТЗ).
-        all_client_ids = [
-            row["id"]
-            for row in con.execute(
-                "SELECT id FROM clients ORDER BY created_at ASC"
-            ).fetchall()
-        ]
-        product_inserts = _seed_products(
-            con,
-            type_ids=types,
-            client_ids=all_client_ids,
-            supplier_ids=list(suppliers.values()),
-            color_ids=list(colors.values()),
-            size_ids=list(sizes.values()),
-            creator_id=admin_id,
-        )
-        con.commit()
-
-        totals = {
-            "Клиенты": len(clients),
-            "Поставщики": len(suppliers),
-            "Размеры": len(sizes),
-            "Цвета": len(colors),
-            "Типы товаров": len(types),
-            "Товары (новых записей)": product_inserts,
-        }
-        for label, qty in totals.items():
-            print(f"  {label:.<32} {qty}")
-        print("Готово.")
     return 0
 
 

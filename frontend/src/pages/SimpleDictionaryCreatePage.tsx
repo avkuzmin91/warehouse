@@ -9,7 +9,7 @@ import {
   simpleDictionaryDefinition,
   type SimpleDictionaryEntityKey,
 } from '../config/simpleDictionaryConfig'
-import { createSimpleDictionaryItem } from '../api'
+import { createProductType, createSimpleDictionaryItem } from '../api'
 
 const IS_ACTIVE_LABEL = 'Актуален'
 
@@ -23,6 +23,8 @@ export function SimpleDictionaryCreatePage({ entity }: SimpleDictionaryCreatePag
   const formId = useId()
   const [name, setName] = useState('')
   const [isActive, setIsActive] = useState(true)
+  const [requiresColor, setRequiresColor] = useState(false)
+  const [requiresSize, setRequiresSize] = useState(false)
   const [touchedName, setTouchedName] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
@@ -39,10 +41,19 @@ export function SimpleDictionaryCreatePage({ entity }: SimpleDictionaryCreatePag
       return
     }
     try {
-      await createSimpleDictionaryItem(def.apiPath, {
-        name: name.trim(),
-        is_active: isActive,
-      })
+      if (entity === 'product-types') {
+        await createProductType({
+          name: name.trim(),
+          is_active: isActive,
+          requires_color: requiresColor,
+          requires_size: requiresSize,
+        })
+      } else {
+        await createSimpleDictionaryItem(def.apiPath, {
+          name: name.trim(),
+          is_active: isActive,
+        })
+      }
       navigate(basePath)
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : def.messages.saveFailed)
@@ -66,6 +77,35 @@ export function SimpleDictionaryCreatePage({ entity }: SimpleDictionaryCreatePag
           onIsActiveChange={setIsActive}
           showNameError={showNameError}
         />
+        {entity === 'product-types' ? (
+          <div className="product-type-rules-block" style={{ marginTop: 12 }}>
+            <p className="field-hint" style={{ marginBottom: 8 }}>
+              Варианты SKU (цвет, размер)
+            </p>
+            <label className="remember product-create-remember" htmlFor={`${formId}-req-color`}>
+              <input
+                id={`${formId}-req-color`}
+                type="checkbox"
+                checked={requiresColor}
+                onChange={(e) => setRequiresColor(e.target.checked)}
+              />
+              <span className="remember__box" />
+              <span className="remember__text">Учёт по цвету</span>
+            </label>
+            <p className="field-hint">Для каждого варианта нужно выбирать цвет из справочника</p>
+            <label className="remember product-create-remember" htmlFor={`${formId}-req-size`}>
+              <input
+                id={`${formId}-req-size`}
+                type="checkbox"
+                checked={requiresSize}
+                onChange={(e) => setRequiresSize(e.target.checked)}
+              />
+              <span className="remember__box" />
+              <span className="remember__text">Учёт по размеру</span>
+            </label>
+            <p className="field-hint">Для каждого варианта нужно выбирать размер из справочника</p>
+          </div>
+        ) : null}
       </form>
 
       {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}

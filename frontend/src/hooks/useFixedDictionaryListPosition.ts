@@ -29,6 +29,8 @@ export function useFixedDictionaryListPosition(
   disabled: boolean,
   wrapRef: RefObject<HTMLDivElement | null>,
   listRef: RefObject<HTMLElement | null>,
+  /** Пробросьте число, меняющееся при смене содержимого списка (например items.length), чтобы пересчитать позицию после загрузки данных. */
+  layoutRevision = 0,
 ) {
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({})
 
@@ -83,7 +85,7 @@ export function useFixedDictionaryListPosition(
     updatePosition()
     const raf = requestAnimationFrame(() => updatePosition())
     return () => cancelAnimationFrame(raf)
-  }, [disabled, enabled, open, updatePosition])
+  }, [disabled, enabled, open, updatePosition, layoutRevision])
 
   useEffect(() => {
     if (!enabled || !open || disabled) return
@@ -100,7 +102,7 @@ export function useFixedDictionaryListPosition(
       vp?.removeEventListener('resize', updatePosition)
       vp?.removeEventListener('scroll', updatePosition)
     }
-  }, [disabled, enabled, open, updatePosition, wrapRef])
+  }, [disabled, enabled, open, updatePosition, wrapRef, layoutRevision])
 
   return menuStyle
 }

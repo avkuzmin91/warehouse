@@ -108,7 +108,6 @@ export function ReceiptForm({ receiptId }: Props) {
   const [receiptStatus, setReceiptStatus] = useState<'pending' | 'accepted'>('accepted')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [successFlash, setSuccessFlash] = useState('')
   const findSeq = useRef(0)
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
@@ -315,18 +314,7 @@ export function ReceiptForm({ receiptId }: Props) {
         receipt_date: receiptDate,
         receipt_status: intent,
       })
-      setSku('')
-      setColorId('')
-      setSizeId('')
-      setQuantityStr('')
-      setReceiptDate(localTodayYmd())
-      setComment('')
-      setFindRes(null)
-      findSeq.current += 1
-      setSuccessFlash(
-        intent === 'pending' ? 'Поступление запланировано' : 'Товар принят на склад',
-      )
-      window.setTimeout(() => setSuccessFlash(''), 5000)
+      navigate('/inventory/receipts')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -444,12 +432,6 @@ export function ReceiptForm({ receiptId }: Props) {
 
   return (
     <div className="receipt-form">
-      {successFlash ? (
-        <p className="receipt-form__success" role="status">
-          {successFlash}
-        </p>
-      ) : null}
-
       <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
         {showStatusAtTop ? (
           <div className="receipt-form__status-banner-wrap">
@@ -487,6 +469,7 @@ export function ReceiptForm({ receiptId }: Props) {
           }}
           required
           allowClear
+          listPortal
         />
 
         <label className="field-label" htmlFor={`${formId}-color`}>
@@ -506,6 +489,7 @@ export function ReceiptForm({ receiptId }: Props) {
           required
           allowClear
           disabled={!sku.trim()}
+          listPortal
         />
 
         {showSize ? (
@@ -524,6 +508,7 @@ export function ReceiptForm({ receiptId }: Props) {
               required
               allowClear
               disabled={!sku.trim() || !colorId.trim()}
+              listPortal
             />
           </>
         ) : null}

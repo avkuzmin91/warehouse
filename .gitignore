@@ -1,0 +1,17 @@
+# Локальные секреты
+.env
+backend/.env
+
+# Локальные файлы БД (проект на PostgreSQL)
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Загруженные пользователями файлы
+backend/uploads/
+
+# Временные файлы разработки
+tmp/

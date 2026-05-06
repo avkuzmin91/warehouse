@@ -2502,6 +2502,14 @@ body {
   border-radius: 10px;
 }
 
+/* Портал в body: иначе top:% от высоты вьюпорта — список вне экрана */
+.product-create-form .dictionary-form-combobox__list.dictionary-form-combobox__list--portal {
+  top: 0;
+  left: 0;
+  right: auto;
+  width: min(100vw - 16px, 560px);
+}
+
 .product-create-form .dictionary-form-combobox__option {
   padding: 7px 12px;
   font-size: var(--entity-form-fs);
@@ -2666,8 +2674,22 @@ body {
   margin-bottom: 0;
 }
 
+.dictionary-form-combobox__empty-catalog {
+  padding: 10px 14px;
+}
+
 .dictionary-form-combobox__list--portal {
   box-sizing: border-box;
+}
+
+/* Выпадашка в портале: не наследовать top/left/right от якоря «под полем» — у body нет той же геометрии */
+.dictionary-form-combobox__list.dictionary-form-combobox__list--portal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  width: min(100vw - 16px, 560px);
+  z-index: 10050;
 }
 
 .dictionary-form-combobox__list {

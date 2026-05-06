@@ -109,7 +109,6 @@ export function ShipmentForm({ shipmentId }: Props) {
   const [shipmentStatus, setShipmentStatus] = useState<'pending' | 'shipped'>('shipped')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [successFlash, setSuccessFlash] = useState('')
   const findSeq = useRef(0)
 
   const [balance, setBalance] = useState<number | null>(null)
@@ -356,18 +355,7 @@ export function ShipmentForm({ shipmentId }: Props) {
         shipment_date: shipmentDate,
         shipment_status: intent,
       })
-      setSku('')
-      setColorId('')
-      setSizeId('')
-      setQuantityStr('')
-      setShipmentDate(localTodayYmd())
-      setComment('')
-      setFindRes(null)
-      findSeq.current += 1
-      setSuccessFlash(
-        intent === 'pending' ? 'Отгрузка запланирована' : 'Отгрузка зарегистрирована',
-      )
-      window.setTimeout(() => setSuccessFlash(''), 5000)
+      navigate('/inventory/shipments')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -485,12 +473,6 @@ export function ShipmentForm({ shipmentId }: Props) {
 
   return (
     <div className="receipt-form">
-      {successFlash ? (
-        <p className="receipt-form__success" role="status">
-          {successFlash}
-        </p>
-      ) : null}
-
       <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
         {showStatusAtTop ? (
           <div className="receipt-form__status-banner-wrap">
@@ -528,6 +510,7 @@ export function ShipmentForm({ shipmentId }: Props) {
           }}
           required
           allowClear
+          listPortal
         />
 
         <label className="field-label" htmlFor={`${formId}-color`}>
@@ -547,6 +530,7 @@ export function ShipmentForm({ shipmentId }: Props) {
           required
           allowClear
           disabled={!sku.trim()}
+          listPortal
         />
 
         {showSize ? (
@@ -565,6 +549,7 @@ export function ShipmentForm({ shipmentId }: Props) {
               required
               allowClear
               disabled={!sku.trim() || !colorId.trim()}
+              listPortal
             />
           </>
         ) : null}

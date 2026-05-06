@@ -4,3 +4,5 @@ PyJWT
 bcrypt
 email-validator
 python-multipart
+psycopg[binary]>=3.2
+python-dotenv>=1.0
