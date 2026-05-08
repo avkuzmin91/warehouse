@@ -8,6 +8,7 @@ import { ListPageLayout } from '../components/ListPageLayout'
 import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
+import { getInventoryOpListRowPresentation } from '../utils/inventoryOperationRowVisual'
 import {
   type DictionaryItem,
   type InventoryOperationItem,
@@ -89,16 +90,16 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
   const filterFields: FilterFieldConfig[] = useMemo(() => {
     if (!isShipment) {
       return [
-        { type: 'date_range', placeholder: 'Дата поступления' },
+        { type: 'date_range', placeholder: 'Дата' },
         { name: 'client_id', type: 'dictionary_autocomplete', options: dictOptions(clients, 'Клиент') },
-        { name: 'sku', type: 'text', placeholder: 'Артикул' },
+        { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
         { name: 'name', type: 'text', placeholder: 'Название' },
         {
           name: 'receipt_status',
-          type: 'select',
+          type: 'dictionary_autocomplete',
           options: [
             { value: '', label: 'Статус' },
-            { value: 'pending', label: 'Ожидает приемки' },
+            { value: 'pending', label: 'Ожидает поступления' },
             { value: 'accepted', label: 'Принят' },
           ],
         },
@@ -107,13 +108,13 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
       ]
     }
     return [
-      { type: 'date_range', placeholder: 'Дата отгрузки (регистрация)' },
+      { type: 'date_range', placeholder: 'Дата' },
       { name: 'client_id', type: 'dictionary_autocomplete', options: dictOptions(clients, 'Клиент') },
-      { name: 'sku', type: 'text', placeholder: 'Артикул' },
+      { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
       { name: 'name', type: 'text', placeholder: 'Название' },
       {
         name: 'shipment_status',
-        type: 'select',
+        type: 'dictionary_autocomplete',
         options: [
           { value: '', label: 'Статус' },
           { value: 'pending', label: 'Ожидает отгрузки' },
@@ -140,7 +141,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           sortable: true,
           render: (_v, row) => {
             const s = row.receipt_status
-            if (s === 'pending') return 'Ожидает приемки'
+            if (s === 'pending') return 'Ожидает поступления'
             if (s === 'accepted') return 'Принят'
             return '—'
           },
@@ -148,7 +149,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
         { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },
         {
           key: 'product_sku',
-          title: 'Артикул',
+          title: 'Штрих-код',
           sortable: true,
           render: (_v, row) => (row.product_sku as string) || '—',
         },
@@ -214,7 +215,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
       { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },
       {
         key: 'product_sku',
-        title: 'Артикул',
+        title: 'Штрих-код',
         sortable: true,
         render: (_v, row) => (row.product_sku as string) || '—',
       },
@@ -329,7 +330,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
     <>
       <ListPageLayout
       wrapWithPageContainer
-      pageContainerProps={{ cardClassName: 'users-card product-dict-card' }}
+      pageContainerProps={{ cardClassName: 'users-card product-dict-card inv-operations-list' }}
       breadcrumbs={<Breadcrumbs />}
       filters={
         <FiltersPanel
@@ -354,6 +355,28 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           }
           actions={
             <CollectionActions
+              beforeCreate={
+                <button
+                  type="button"
+                  className="btn btn--secondary collection-actions__icon-btn collection-actions__import-excel"
+                  aria-label="Импорт Excel"
+                  title="Импорт Excel"
+                  disabled={loading}
+                  onClick={() =>
+                    navigate(isShipment ? '/inventory/shipments/import/excel' : '/inventory/receipts/import/excel')
+                  }
+                >
+                  <svg className="collection-actions__svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              }
               createHref={createHref}
               onResetFilters={resetFilters}
               disabled={loading}
@@ -370,18 +393,7 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           sort={query.sort}
           onSortClick={cycleSortField}
           wrapClassName="product-table-wrap"
-          rowClassName={(row) => {
-            if (!isShipment) {
-              const s = row.receipt_status
-              if (s === 'pending') return 'inv-receipt-row inv-receipt-row--pending'
-              if (s === 'accepted') return 'inv-receipt-row inv-receipt-row--accepted'
-              return undefined
-            }
-            const s = row.shipment_status
-            if (s === 'pending') return 'inv-shipment-row inv-shipment-row--pending'
-            if (s === 'shipped') return 'inv-shipment-row inv-shipment-row--shipped'
-            return undefined
-          }}
+          rowMeta={(row) => getInventoryOpListRowPresentation(isShipment ? 'out' : 'in', row)}
           onRowClick={(row) => {
             if (!isShipment) {
               navigate(`/inventory/receipts/${row.id}`)

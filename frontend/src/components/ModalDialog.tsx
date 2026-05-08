@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 export type ModalDialogProps = {
   open: boolean
@@ -47,7 +48,7 @@ export function ModalDialog({
   const labelledBy = ariaLabelledBy?.trim() || undefined
   const label = ariaLabel?.trim() || undefined
 
-  return (
+  const overlay = (
     <div
       className="modal-overlay"
       role="presentation"
@@ -68,6 +69,12 @@ export function ModalDialog({
       </div>
     </div>
   )
+
+  if (typeof document !== 'undefined') {
+    return createPortal(overlay, document.body)
+  }
+
+  return overlay
 }
 
 export type ConfirmDialogProps = {

@@ -14,6 +14,10 @@ export type DictionaryFilterKey =
   | 'product_id'
   | 'color_id'
   | 'size_id'
+  | 'receipt_status'
+  | 'shipment_status'
+  /** Статический список (напр. шаг графика на странице аналитики). */
+  | 'analytics_group'
 
 function splitOptions(options: { value: string; label: string }[]) {
   const placeholder = options.find((o) => o.value === '')
@@ -30,6 +34,9 @@ const CLEAR_ARIA: Partial<Record<DictionaryFilterKey, string>> = {
   product_id: 'Сбросить фильтр по товару',
   color_id: 'Сбросить фильтр по цвету',
   size_id: 'Сбросить фильтр по размеру',
+  receipt_status: 'Сбросить фильтр по статусу поступления',
+  shipment_status: 'Сбросить фильтр по статусу отгрузки',
+  analytics_group: 'Сбросить шаг графика к значению по умолчанию',
 }
 
 type Props = {
@@ -47,6 +54,8 @@ type Props = {
   clearAriaLabel?: string
   /** Подпись поля ввода для скринридеров. */
   ariaLabel?: string
+  /** После очистки значения снова открыть список (портал/выпадающий блок). */
+  openListAfterClear?: boolean
 }
 
 const ROW_H = 40
@@ -110,6 +119,7 @@ export function DictionaryFilterCombobox({
   listPortal = false,
   clearAriaLabel,
   ariaLabel,
+  openListAfterClear = false,
 }: Props) {
   const listboxId = useId()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -172,12 +182,25 @@ export function DictionaryFilterCombobox({
 
   const hasValue = valueStr !== ''
 
+  const reopenListAfterClear = useCallback(() => {
+    if (openListAfterClear && !disabled) {
+      setOpen(true)
+      requestAnimationFrame(() => inputRef.current?.focus())
+    } else {
+      setOpen(false)
+    }
+  }, [disabled, openListAfterClear])
+
   const applyCommit = useCallback(() => {
     const t = draft.trim()
     if (t === '') {
-      if (valueStr) onSelectChange(name, null)
-      setDraft('')
-      setOpen(false)
+      if (valueStr) {
+        onSelectChange(name, null)
+        setDraft('')
+        reopenListAfterClear()
+      } else {
+        setOpen(false)
+      }
       return
     }
     const exact = choices.find((c) => c.label.toLowerCase() === t.toLowerCase())
@@ -196,7 +219,7 @@ export function DictionaryFilterCombobox({
     }
     setDraft(committedLabel)
     setOpen(false)
-  }, [choices, committedLabel, draft, name, onSelectChange, valueStr])
+  }, [choices, committedLabel, draft, name, onSelectChange, reopenListAfterClear, valueStr])
 
   const pick = useCallback(
     (v: string, label: string) => {
@@ -211,8 +234,8 @@ export function DictionaryFilterCombobox({
   const clear = useCallback(() => {
     onSelectChange(name, null)
     setDraft('')
-    setOpen(false)
-  }, [name, onSelectChange])
+    reopenListAfterClear()
+  }, [name, onSelectChange, reopenListAfterClear])
 
   const onBlur = useCallback(
     (e: ReactFocusEvent) => {

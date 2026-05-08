@@ -5,6 +5,7 @@ import { ListPageLayout } from '../components/ListPageLayout'
 import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
+import { getInventoryOpListRowPresentation } from '../utils/inventoryOperationRowVisual'
 import {
   type InventoryOperationItem,
   type InventoryOpType,
@@ -154,6 +155,7 @@ export function ClientCabinetOperationsPage({ opType }: { opType: InventoryOpTyp
             sort={query.sort}
             onSortClick={cycleSortField}
             wrapClassName="product-table-wrap"
+            rowMeta={(row) => getInventoryOpListRowPresentation(opType, row)}
           />
         }
         pagination={

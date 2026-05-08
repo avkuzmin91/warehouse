@@ -4,6 +4,47 @@
 
 export type BreadcrumbItem = { label: string; to: string | null }
 
+/**
+ * Учёт → Поступления/Отгрузки → Импорт Excel (шаг 1 и предпросмотр).
+ */
+function buildInventoryExcelImportBreadcrumbs(parts: string[]): BreadcrumbItem[] | null {
+  if (parts.length < 4 || parts[0] !== 'inventory') {
+    return null
+  }
+  const section = parts[1]
+  if (section !== 'receipts' && section !== 'shipments') {
+    return null
+  }
+  if (parts[2] !== 'import' || parts[3] !== 'excel') {
+    return null
+  }
+
+  const sectionLabel = section === 'receipts' ? 'Поступления' : 'Отгрузки'
+  const sectionPath = `/inventory/${section}`
+  const importPath = `/inventory/${section}/import/excel`
+
+  if (parts.length === 4) {
+    return [
+      { label: 'Главная', to: '/home' },
+      { label: 'Учет товаров', to: '/inventory' },
+      { label: sectionLabel, to: sectionPath },
+      { label: 'Импорт данных из Excel', to: null },
+    ]
+  }
+
+  if (parts.length === 5 && parts[4] === 'preview') {
+    return [
+      { label: 'Главная', to: '/home' },
+      { label: 'Учет товаров', to: '/inventory' },
+      { label: sectionLabel, to: sectionPath },
+      { label: 'Импорт данных из Excel', to: importPath },
+      { label: 'Предпросмотр', to: null },
+    ]
+  }
+
+  return null
+}
+
 const STATIC: Record<string, string> = {
   home: 'Главная',
   dictionaries: 'Справочники',
@@ -162,6 +203,11 @@ export function buildBreadcrumbsFromPathname(pathname: string): BreadcrumbItem[]
       { label: 'Главная', to: '/home' },
       { label: 'Личный кабинет', to: null },
     ]
+  }
+
+  const inventoryExcel = buildInventoryExcelImportBreadcrumbs(parts)
+  if (inventoryExcel) {
+    return inventoryExcel
   }
 
   const items: BreadcrumbItem[] = [{ label: 'Главная', to: '/home' }]

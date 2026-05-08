@@ -1,100 +1,146 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
+import { ApplyFiltersIcon, ResetFiltersIcon } from '../components/CollectionActions'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { PageContainer } from '../components/PageContainer'
-import { BarChart, LineChart } from '../components/MiniCharts'
+import { DateRangeFilter } from '../components/DateRangeFilter'
+import { DictionaryFilterCombobox } from '../components/DictionaryFilterCombobox'
+import { DictionaryMultiSelect } from '../components/DictionaryMultiSelect'
 import {
+  HorizontalBarChart,
+  LineChart,
+  StackedHorizontalBarChart,
+} from '../components/MiniCharts'
+import {
+  type AdminDashboardReport,
   type AnalyticsCommonParams,
   type AnalyticsGroup,
-  type BalanceReport,
-  type ByTypeReport,
-  type ClientActivityReport,
-  type DeadStockReport,
   type DictionaryItem,
-  type InventoryProductLookup,
-  type InventoryProductTypeLookup,
   type MovementReport,
-  type StockSnapshotReport,
-  type TopProductsReport,
-  getAnalyticsBalance,
-  getAnalyticsByType,
-  getAnalyticsClientActivity,
-  getAnalyticsDeadStock,
+  getAnalyticsAdminDashboard,
   getAnalyticsMovement,
-  getAnalyticsStockSnapshot,
-  getAnalyticsTopProducts,
   getInventoryClients,
-  getInventoryProductTypes,
-  getInventoryProducts,
 } from '../api'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
 function isoMinusDays(days: number): string {
   const d = new Date()
   d.setUTCDate(d.getUTCDate() - days)
   return d.toISOString().slice(0, 10)
 }
 
-function fmtPct(value: number | null): string {
-  if (value == null) return '—'
-  const sign = value > 0 ? '+' : ''
-  return `${sign}${value}%`
+function fmtQty(n: number): string {
+  return new Intl.NumberFormat('ru-RU').format(n)
 }
 
-function pctTone(value: number | null, positiveIsGood: boolean): string {
-  if (value == null || value === 0) return ''
-  if (value > 0) return positiveIsGood ? 'qty-positive' : 'qty-zero'
-  return positiveIsGood ? 'qty-zero' : 'qty-positive'
+type PeriodPreset = 'today' | 'last7' | 'last30' | 'last90' | 'last365' | 'custom'
+
+function rangeForPreset(preset: Exclude<PeriodPreset, 'custom'>): { date_from: string; date_to: string } {
+  const to = todayIso()
+  if (preset === 'today') return { date_from: to, date_to: to }
+  if (preset === 'last7') return { date_from: isoMinusDays(6), date_to: to }
+  if (preset === 'last30') return { date_from: isoMinusDays(29), date_to: to }
+  if (preset === 'last90') return { date_from: isoMinusDays(89), date_to: to }
+  return { date_from: isoMinusDays(364), date_to: to }
+}
+
+function detectPreset(dateFrom: string, dateTo: string): PeriodPreset {
+  const to = todayIso()
+  if (dateFrom === to && dateTo === to) return 'today'
+  if (dateFrom === isoMinusDays(6) && dateTo === to) return 'last7'
+  if (dateFrom === isoMinusDays(29) && dateTo === to) return 'last30'
+  if (dateFrom === isoMinusDays(89) && dateTo === to) return 'last90'
+  if (dateFrom === isoMinusDays(364) && dateTo === to) return 'last365'
+  return 'custom'
 }
 
 type Filters = {
   date_from: string
   date_to: string
-  client_id: string
-  type_id: string
-  product_id: string
-  group: AnalyticsGroup
-  dead_days: number
-  top_n: number
+  client_ids: string[]
+  /** Не задан — шаг сброшен в форме; в запрос применяется «день». */
+  group?: AnalyticsGroup
 }
 
 const DEFAULT_FILTERS: Filters = {
-  date_from: isoMinusDays(29),
-  date_to: todayIso(),
-  client_id: '',
-  type_id: '',
-  product_id: '',
+  ...rangeForPreset('last30'),
+  client_ids: [],
   group: 'day',
-  dead_days: 30,
-  top_n: 10,
+}
+
+const GROUP_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Шаг графика' },
+  { value: 'day', label: 'День' },
+  { value: 'week', label: 'Неделя' },
+  { value: 'month', label: 'Месяц' },
+]
+
+function sortedIds(ids: string[]): string[] {
+  return [...ids].map((x) => x.trim()).filter(Boolean).sort()
+}
+
+function filtersEqual(a: Filters, b: Filters): boolean {
+  return (
+    a.date_from === b.date_from &&
+    a.date_to === b.date_to &&
+    a.group === b.group &&
+    sortedIds(a.client_ids).join('\0') === sortedIds(b.client_ids).join('\0')
+  )
+}
+
+function normalizeCommittedFilters(f: Filters): Filters {
+  return { ...f, group: f.group ?? 'day' }
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="analytics-dash-skeleton" aria-busy="true" aria-live="polite">
+      <span className="visually-hidden">Загрузка аналитики</span>
+      <div className="analytics-dash-skeleton__kpis">
+        <div className="analytics-dash-skeleton__kpi" />
+        <div className="analytics-dash-skeleton__kpi" />
+        <div className="analytics-dash-skeleton__kpi" />
+        <div className="analytics-dash-skeleton__kpi" />
+      </div>
+      <div className="analytics-dash-skeleton__chart" />
+      <div className="analytics-dash-skeleton__split">
+        <div className="analytics-dash-skeleton__chart" />
+        <div className="analytics-dash-skeleton__chart" />
+      </div>
+      <div className="analytics-dash-skeleton__chart" />
+      <div className="analytics-dash-skeleton__split">
+        <div className="analytics-dash-skeleton__chart" />
+        <div className="analytics-dash-skeleton__chart" />
+      </div>
+    </div>
+  )
 }
 
 export function AnalyticsPage() {
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
+  const formId = useId()
+  const clientsLegendId = `${formId}-clients-legend`
+
   const [draftFilters, setDraftFilters] = useState<Filters>(DEFAULT_FILTERS)
+  const [committedFilters, setCommittedFilters] = useState<Filters>(DEFAULT_FILTERS)
+
+  const dirty = useMemo(() => !filtersEqual(draftFilters, committedFilters), [draftFilters, committedFilters])
 
   const [clients, setClients] = useState<DictionaryItem[]>([])
-  const [types, setTypes] = useState<InventoryProductTypeLookup[]>([])
-  const [products, setProducts] = useState<InventoryProductLookup[]>([])
 
+  const [dash, setDash] = useState<AdminDashboardReport | null>(null)
   const [movement, setMovement] = useState<MovementReport | null>(null)
-  const [snapshot, setSnapshot] = useState<StockSnapshotReport | null>(null)
-  const [top, setTop] = useState<TopProductsReport | null>(null)
-  const [dead, setDead] = useState<DeadStockReport | null>(null)
-  const [activity, setActivity] = useState<ClientActivityReport | null>(null)
-  const [balance, setBalance] = useState<BalanceReport | null>(null)
-  const [byType, setByType] = useState<ByTypeReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  const activePreset = detectPreset(draftFilters.date_from, draftFilters.date_to)
+
   useEffect(() => {
     let cancelled = false
-    Promise.all([getInventoryClients(), getInventoryProductTypes()])
-      .then(([cs, ts]) => {
-        if (cancelled) return
-        setClients(cs)
-        setTypes(ts)
+    getInventoryClients()
+      .then((cs) => {
+        if (!cancelled) setClients(cs)
       })
       .catch(() => {})
     return () => {
@@ -102,68 +148,40 @@ export function AnalyticsPage() {
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    getInventoryProducts(filters.client_id || null)
-      .then((rows) => {
-        if (!cancelled) setProducts(rows)
-      })
-      .catch(() => {
-        if (!cancelled) setProducts([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [filters.client_id])
+  const common: AnalyticsCommonParams = useMemo(
+    () => ({
+      date_from: committedFilters.date_from,
+      date_to: committedFilters.date_to,
+      client_ids: committedFilters.client_ids.length ? committedFilters.client_ids : undefined,
+    }),
+    [committedFilters.date_from, committedFilters.date_to, committedFilters.client_ids],
+  )
+
+  const committedGroup = committedFilters.group ?? 'day'
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
-    const common: AnalyticsCommonParams = {
-      date_from: filters.date_from || undefined,
-      date_to: filters.date_to || undefined,
-      client_id: filters.client_id || undefined,
-      type_id: filters.type_id || undefined,
-      product_id: filters.product_id || undefined,
-    }
     Promise.all([
-      getAnalyticsMovement({ ...common, group: filters.group }),
-      getAnalyticsStockSnapshot({
-        client_id: filters.client_id || undefined,
-        type_id: filters.type_id || undefined,
-        product_id: filters.product_id || undefined,
-        at_date: filters.date_to || undefined,
-        only_positive: true,
-        limit: 200,
+      getAnalyticsAdminDashboard({
+        ...common,
+        movement_clients_limit: 14,
       }),
-      getAnalyticsTopProducts({ ...common, limit: filters.top_n }),
-      getAnalyticsDeadStock({
-        days: filters.dead_days,
-        client_id: filters.client_id || undefined,
-        type_id: filters.type_id || undefined,
-        limit: 200,
-      }),
-      getAnalyticsClientActivity({ ...common, limit: 20 }),
-      getAnalyticsBalance(common),
-      getAnalyticsByType({
-        date_from: common.date_from,
-        date_to: common.date_to,
-        client_id: common.client_id,
-      }),
+      getAnalyticsMovement({ ...common, group: committedGroup }),
     ])
-      .then(([mv, sn, tp, dd, ac, bl, bt]) => {
-        if (cancelled) return
-        setMovement(mv)
-        setSnapshot(sn)
-        setTop(tp)
-        setDead(dd)
-        setActivity(ac)
-        setBalance(bl)
-        setByType(bt)
+      .then(([d, mv]) => {
+        if (!cancelled) {
+          setDash(d)
+          setMovement(mv)
+        }
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Ошибка загрузки')
+        if (!cancelled) {
+          setDash(null)
+          setMovement(null)
+          setError(e instanceof Error ? e.message : 'Ошибка загрузки')
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -171,435 +189,288 @@ export function AnalyticsPage() {
     return () => {
       cancelled = true
     }
-  }, [filters])
+  }, [common, committedGroup])
 
-  const lineLabels = useMemo(
-    () => (movement?.data ?? []).map((b) => b.period),
-    [movement],
-  )
+  const lineLabels = useMemo(() => (movement?.data ?? []).map((b) => b.period), [movement])
   const lineSeries = useMemo(
     () => [
       {
-        name: 'Приход',
-        color: '#4ade80',
+        name: 'Поступления',
+        color: '#22c55e',
         values: (movement?.data ?? []).map((b) => b.inflow),
       },
       {
-        name: 'Расход',
-        color: '#ff6b8a',
+        name: 'Отгрузки',
+        color: '#ea580c',
         values: (movement?.data ?? []).map((b) => b.outflow),
       },
     ],
     [movement],
   )
 
+  const stockBars = useMemo(
+    () =>
+      (dash?.stock_by_client ?? []).map((r) => ({
+        label: r.client || r.client_id,
+        value: r.stock,
+      })),
+    [dash],
+  )
+
+  const stackedClients = useMemo(
+    () =>
+      (dash?.client_movement ?? []).map((r) => ({
+        label: r.client || r.client_id,
+        inflow: r.inflow,
+        outflow: r.outflow,
+      })),
+    [dash],
+  )
+
+  const topByShipment = useMemo(() => {
+    const rows = [...(dash?.client_movement ?? [])]
+    rows.sort((a, b) => b.outflow - a.outflow)
+    return rows.slice(0, 10).map((r) => ({
+      label: r.client || r.client_id,
+      value: r.outflow,
+    }))
+  }, [dash])
+
+  const topByStock = useMemo(
+    () =>
+      (dash?.stock_by_client ?? [])
+        .slice(0, 10)
+        .map((r) => ({ label: r.client || r.client_id, value: r.stock })),
+    [dash],
+  )
+
+  function applyFilters() {
+    const next = normalizeCommittedFilters(draftFilters)
+    setCommittedFilters(next)
+    setDraftFilters(next)
+  }
+
+  function resetAllFilters() {
+    setDraftFilters(DEFAULT_FILTERS)
+    setCommittedFilters(DEFAULT_FILTERS)
+  }
+
   return (
-    <PageContainer maxWidth={1280} cardClassName="users-card analytics-card">
+    <PageContainer maxWidth={1280} cardClassName="users-card analytics-card analytics-dash">
       <Breadcrumbs />
 
-      <h2 className="auth-card__subtitle" style={{ marginBottom: 12 }}>
-        Аналитика по складу
-      </h2>
-
-      {/* ===== Фильтры ===== */}
-      <div className="analytics-filters">
-        <div className="analytics-filters__row">
-          <label className="analytics-filters__field">
-            <span>С</span>
-            <input
-              type="date"
-              className="field-input"
-              value={draftFilters.date_from}
-              max={draftFilters.date_to || undefined}
-              onChange={(e) =>
-                setDraftFilters((f) => ({ ...f, date_from: e.target.value }))
-              }
-            />
-          </label>
-          <label className="analytics-filters__field">
-            <span>По</span>
-            <input
-              type="date"
-              className="field-input"
-              value={draftFilters.date_to}
-              min={draftFilters.date_from || undefined}
-              onChange={(e) =>
-                setDraftFilters((f) => ({ ...f, date_to: e.target.value }))
-              }
-            />
-          </label>
-          <label className="analytics-filters__field">
-            <span>Группировка</span>
-            <select
-              className="field-input"
-              value={draftFilters.group}
-              onChange={(e) =>
-                setDraftFilters((f) => ({
-                  ...f,
-                  group: e.target.value as AnalyticsGroup,
-                }))
-              }
-            >
-              <option value="day">По дням</option>
-              <option value="week">По неделям</option>
-              <option value="month">По месяцам</option>
-            </select>
-          </label>
-          <label className="analytics-filters__field">
-            <span>Клиент</span>
-            <select
-              className="field-input"
-              value={draftFilters.client_id}
-              onChange={(e) =>
-                setDraftFilters((f) => ({
-                  ...f,
-                  client_id: e.target.value,
-                  product_id: '',
-                }))
-              }
-            >
-              <option value="">Все</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="analytics-filters__field">
-            <span>Тип товара</span>
-            <select
-              className="field-input"
-              value={draftFilters.type_id}
-              onChange={(e) =>
-                setDraftFilters((f) => ({ ...f, type_id: e.target.value }))
-              }
-            >
-              <option value="">Все</option>
-              {types.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="analytics-filters__field">
-            <span>Товар</span>
-            <select
-              className="field-input"
-              value={draftFilters.product_id}
-              onChange={(e) =>
-                setDraftFilters((f) => ({ ...f, product_id: e.target.value }))
-              }
-              disabled={!draftFilters.client_id}
-            >
-              <option value="">{draftFilters.client_id ? 'Все' : 'Выберите клиента'}</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="analytics-filters__field analytics-filters__field--sm">
-            <span>TOP N</span>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              className="field-input"
-              value={draftFilters.top_n}
-              onChange={(e) =>
-                setDraftFilters((f) => ({
-                  ...f,
-                  top_n: Math.max(1, Math.min(50, Number(e.target.value) || 10)),
-                }))
-              }
-            />
-          </label>
-          <label className="analytics-filters__field analytics-filters__field--sm">
-            <span>«Мёртвые», дн.</span>
-            <input
-              type="number"
-              min={1}
-              max={365}
-              className="field-input"
-              value={draftFilters.dead_days}
-              onChange={(e) =>
-                setDraftFilters((f) => ({
-                  ...f,
-                  dead_days: Math.max(1, Math.min(365, Number(e.target.value) || 30)),
-                }))
-              }
-            />
-          </label>
-          <div className="analytics-filters__actions">
-            <button
-              type="button"
-              className="btn btn--primary analytics-filters__btn"
-              onClick={() => setFilters(draftFilters)}
+      <div className="analytics-admin-filters">
+        <div className="analytics-admin-filters__grid">
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--range">
+            <span className="analytics-admin-filters__label">Период</span>
+            <DateRangeFilter
+              placeholder="Период"
+              dateFrom={draftFilters.date_from}
+              dateTo={draftFilters.date_to}
               disabled={loading}
-            >
-              Применить
-            </button>
-            <button
-              type="button"
-              className="btn btn--secondary analytics-filters__btn"
-              onClick={() => {
-                setDraftFilters(DEFAULT_FILTERS)
-                setFilters(DEFAULT_FILTERS)
+              className="analytics-admin-filters__date-range"
+              quickPresets={[
+                { label: 'Сегодня', ...rangeForPreset('today') },
+                { label: '7 дней', ...rangeForPreset('last7') },
+                { label: '30 дней', ...rangeForPreset('last30') },
+                { label: '90 дней', ...rangeForPreset('last90') },
+                { label: '1 год', ...rangeForPreset('last365') },
+              ]}
+              onChange={(next) => {
+                if (next.date_from === undefined && next.date_to === undefined) {
+                  setDraftFilters((f) => ({ ...f, ...rangeForPreset('last30') }))
+                  return
+                }
+                setDraftFilters((f) => ({
+                  ...f,
+                  date_from: next.date_from ?? f.date_from,
+                  date_to: next.date_to ?? f.date_to,
+                }))
               }}
+            />
+          </div>
+
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--clients">
+            <fieldset className="product-colors-fieldset analytics-admin-filters__clients-fieldset">
+              <legend className="field-label analytics-admin-filters__filters-legend" id={clientsLegendId}>
+                Клиенты
+              </legend>
+              <DictionaryMultiSelect
+                id={`${formId}-clients-ms`}
+                aria-labelledby={clientsLegendId}
+                items={clients}
+                selectedIds={draftFilters.client_ids}
+                onChange={(ids) => setDraftFilters((f) => ({ ...f, client_ids: ids }))}
+                sortMode="alphabet"
+                disabled={loading}
+                placeholder="Все клиенты"
+                allowClearAll
+              />
+            </fieldset>
+          </div>
+
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--step">
+            <span className="analytics-admin-filters__label">Шаг графика</span>
+            <DictionaryFilterCombobox
+              name="analytics_group"
+              options={GROUP_FILTER_OPTIONS}
+              valueStr={draftFilters.group ?? ''}
+              onSelectChange={(_name, v) =>
+                setDraftFilters((f) => ({
+                  ...f,
+                  group: v === null ? undefined : (v as AnalyticsGroup),
+                }))
+              }
               disabled={loading}
-            >
-              Сбросить
-            </button>
+              listPortal
+              openListAfterClear
+              ariaLabel="Шаг графика"
+            />
+          </div>
+
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--actions">
+            <span className="analytics-admin-filters__label analytics-admin-filters__label--spacer" aria-hidden>
+              {'\u00a0'}
+            </span>
+            <div className="analytics-admin-filters__actions-toolbar">
+              <button
+                type="button"
+                className="btn btn--secondary collection-actions__icon-btn collection-actions__reset-filters analytics-admin-filters__toolbar-icon"
+                disabled={loading}
+                onClick={resetAllFilters}
+                aria-label="Сбросить фильтры"
+                title="Сбросить фильтры"
+              >
+                <ResetFiltersIcon />
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary collection-actions__icon-btn analytics-admin-filters__apply-icon analytics-admin-filters__toolbar-icon"
+                disabled={loading || !dirty}
+                onClick={applyFilters}
+                aria-label="Применить фильтры"
+                title="Применить фильтры"
+              >
+                <ApplyFiltersIcon />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {error ? <p className="error-text">{error}</p> : null}
-      {loading ? <p className="auth-card__subtitle">Загрузка...</p> : null}
-
-      {/* ===== KPI: Баланс ===== */}
-      {balance ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">Баланс за период</h3>
-          <p className="analytics-section__hint">{balance.explanation}</p>
-          <div className="analytics-kpi">
-            <KpiCard
-              label="Приход"
-              value={balance.inflow}
-              prev={balance.prev_inflow}
-              changePct={balance.inflow_change_pct}
-              positiveIsGood
-            />
-            <KpiCard
-              label="Расход"
-              value={balance.outflow}
-              prev={balance.prev_outflow}
-              changePct={balance.outflow_change_pct}
-              positiveIsGood={false}
-            />
-            <KpiCard
-              label="Дельта"
-              value={balance.delta}
-              prev={balance.prev_delta}
-              trend={balance.delta_trend}
-            />
-          </div>
-        </section>
+      {activePreset === 'custom' ? (
+        <p className="analytics-admin-filters__preset-note">Выбран произвольный период</p>
       ) : null}
 
-      {/* ===== Движение товаров (line) ===== */}
-      {movement ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">Движение товаров</h3>
-          <p className="analytics-section__hint">{movement.explanation}</p>
-          {movement.data.length === 0 ? (
-            <p className="auth-card__subtitle">Нет данных за период</p>
-          ) : (
-            <LineChart labels={lineLabels} series={lineSeries} />
-          )}
-        </section>
-      ) : null}
+      {error ? <p className="error-text analytics-dash__error">{error}</p> : null}
 
-      {/* ===== ТОП товаров (bar) ===== */}
-      {top ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">ТОП товаров по отгрузке</h3>
-          <p className="analytics-section__hint">{top.explanation}</p>
-          {top.data.length === 0 ? (
-            <p className="auth-card__subtitle">Нет отгрузок за период</p>
-          ) : (
-            <>
-              <BarChart
-                data={top.data.map((t) => ({ label: t.product, value: t.total_outflow }))}
-              />
-              <div className="analytics-table-wrap">
-                <table className="analytics-table">
-                  <thead>
-                    <tr>
-                      <th>Товар</th>
-                      <th>Тип</th>
-                      <th className="num">Отгружено</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {top.data.map((it) => (
-                      <tr key={it.product_id}>
-                        <td>{it.product}</td>
-                        <td>{it.type_name || '—'}</td>
-                        <td className="num">{it.total_outflow}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+      {loading ? <DashboardSkeleton /> : null}
+
+      {!loading && dash ? (
+        <>
+          <section className="analytics-dash-kpi" aria-label="Ключевые показатели">
+            <article className="analytics-dash-kpi__card">
+              <span className="analytics-dash-kpi__emoji" aria-hidden>
+                📦
+              </span>
+              <div className="analytics-dash-kpi__meta">
+                <span className="analytics-dash-kpi__label">Поступило</span>
+                <span className="analytics-dash-kpi__value">{fmtQty(dash.total_inflow)}</span>
               </div>
-            </>
-          )}
-        </section>
-      ) : null}
+            </article>
+            <article className="analytics-dash-kpi__card">
+              <span className="analytics-dash-kpi__emoji" aria-hidden>
+                🚚
+              </span>
+              <div className="analytics-dash-kpi__meta">
+                <span className="analytics-dash-kpi__label">Отгружено</span>
+                <span className="analytics-dash-kpi__value">{fmtQty(dash.total_outflow)}</span>
+              </div>
+            </article>
+            <article className="analytics-dash-kpi__card">
+              <span className="analytics-dash-kpi__emoji" aria-hidden>
+                🏷
+              </span>
+              <div className="analytics-dash-kpi__meta">
+                <span className="analytics-dash-kpi__label">Остаток</span>
+                <span className="analytics-dash-kpi__value">{fmtQty(dash.stock_total)}</span>
+                <span className="analytics-dash-kpi__hint">на {dash.at_date}</span>
+              </div>
+            </article>
+            <article className="analytics-dash-kpi__card">
+              <span className="analytics-dash-kpi__emoji" aria-hidden>
+                👥
+              </span>
+              <div className="analytics-dash-kpi__meta">
+                <span className="analytics-dash-kpi__label">Клиенты</span>
+                <span className="analytics-dash-kpi__value">{fmtQty(dash.active_clients)}</span>
+                <span className="analytics-dash-kpi__hint">активные</span>
+              </div>
+            </article>
+          </section>
 
-      {/* ===== Активность клиентов (bar) ===== */}
-      {activity ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">Активность клиентов</h3>
-          <p className="analytics-section__hint">{activity.explanation}</p>
-          {activity.data.length === 0 ? (
-            <p className="auth-card__subtitle">Нет данных за период</p>
-          ) : (
-            <BarChart
-              color="#aa7cff"
-              data={activity.data.map((c) => ({ label: c.client, value: c.total_outflow }))}
-            />
-          )}
-        </section>
-      ) : null}
+          <section className="analytics-dash-panel">
+            <h2 className="analytics-dash-panel__title">Динамика</h2>
+            {movement && movement.data.length > 0 ? (
+              <LineChart labels={lineLabels} series={lineSeries} height={260} yLabel="шт." />
+            ) : (
+              <p className="analytics-dash-panel__empty">Нет операций в периоде</p>
+            )}
+          </section>
 
-      {/* ===== Разрез по типам (bar + table) ===== */}
-      {byType ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">Разрез по типам товаров</h3>
-          <p className="analytics-section__hint">{byType.explanation}</p>
-          {byType.data.length === 0 ? (
-            <p className="auth-card__subtitle">Нет данных за период</p>
-          ) : (
-            <div className="analytics-table-wrap">
-              <table className="analytics-table">
-                <thead>
-                  <tr>
-                    <th>Тип</th>
-                    <th className="num">Остаток</th>
-                    <th className="num">Приход</th>
-                    <th className="num">Расход</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {byType.data.map((it) => (
-                    <tr key={it.type_id ?? '—'}>
-                      <td>{it.type_name}</td>
-                      <td className="num">{it.stock}</td>
-                      <td className="num">{it.inflow}</td>
-                      <td className="num">{it.outflow}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      ) : null}
+          <section className="analytics-dash-panel">
+            <h2 className="analytics-dash-panel__title">Остатки по клиентам</h2>
+            {stockBars.length > 0 ? (
+              <HorizontalBarChart items={stockBars} barColor="#64748b" />
+            ) : (
+              <p className="analytics-dash-panel__empty">Нет данных</p>
+            )}
+          </section>
 
-      {/* ===== Снапшот остатков ===== */}
-      {snapshot ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">
-            Срез остатков на {snapshot.at_date}
-          </h3>
-          <p className="analytics-section__hint">{snapshot.explanation}</p>
-          {snapshot.data.length === 0 ? (
-            <p className="auth-card__subtitle">Нет позиций с положительным остатком</p>
-          ) : (
-            <div className="analytics-table-wrap">
-              <table className="analytics-table">
-                <thead>
-                  <tr>
-                    <th>Товар</th>
-                    <th>Тип</th>
-                    <th>Клиент</th>
-                    <th>Цвет</th>
-                    <th>Размер</th>
-                    <th className="num">Остаток</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snapshot.data.map((it, i) => (
-                    <tr key={`${it.product_id}-${it.color_id ?? ''}-${it.size_id ?? ''}-${i}`}>
-                      <td>{it.product}</td>
-                      <td>{it.type_name || '—'}</td>
-                      <td>{it.client || '—'}</td>
-                      <td>{it.color || '—'}</td>
-                      <td>{it.size || '—'}</td>
-                      <td className="num qty-positive">{it.stock}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      ) : null}
-
-      {/* ===== Мёртвые остатки ===== */}
-      {dead ? (
-        <section className="analytics-section">
-          <h3 className="analytics-section__title">Мёртвые остатки</h3>
-          <p className="analytics-section__hint">{dead.explanation}</p>
-          {dead.data.length === 0 ? (
-            <p className="auth-card__subtitle">
-              Нет товаров без движения ≥ {dead.days_threshold} дней
+          <section className="analytics-dash-panel">
+            <h2 className="analytics-dash-panel__title">Баланс по клиентам</h2>
+            <p className="analytics-dash-panel__subtitle">
+              Поступления и отгрузки за период (топ по объёму движений).
             </p>
-          ) : (
-            <div className="analytics-table-wrap">
-              <table className="analytics-table">
-                <thead>
-                  <tr>
-                    <th>Товар</th>
-                    <th>Клиент</th>
-                    <th>Цвет</th>
-                    <th>Размер</th>
-                    <th className="num">Остаток</th>
-                    <th className="num">Дней без движения</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dead.data.map((it, i) => (
-                    <tr key={`${it.product_id}-${it.color_id ?? ''}-${it.size_id ?? ''}-${i}`}>
-                      <td>{it.product}</td>
-                      <td>{it.client || '—'}</td>
-                      <td>{it.color || '—'}</td>
-                      <td>{it.size || '—'}</td>
-                      <td className="num">{it.stock}</td>
-                      <td className="num qty-zero">{it.days_without_movement}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+            {stackedClients.length > 0 ? (
+              <StackedHorizontalBarChart
+                items={stackedClients}
+                inflowColor="#38bdf8"
+                outflowColor="#fb923c"
+              />
+            ) : (
+              <p className="analytics-dash-panel__empty">Нет данных</p>
+            )}
+          </section>
+
+          <div className="analytics-dash-split">
+            <section className="analytics-dash-panel analytics-dash-panel--compact">
+              <h2 className="analytics-dash-panel__title analytics-dash-panel__title--sm">
+                Топ по отгрузкам
+              </h2>
+              {topByShipment.length > 0 ? (
+                <HorizontalBarChart
+                  items={topByShipment}
+                  barColor="#ea580c"
+                  rowHeight={32}
+                />
+              ) : (
+                <p className="analytics-dash-panel__empty">—</p>
+              )}
+            </section>
+            <section className="analytics-dash-panel analytics-dash-panel--compact">
+              <h2 className="analytics-dash-panel__title analytics-dash-panel__title--sm">
+                Топ по остаткам
+              </h2>
+              {topByStock.length > 0 ? (
+                <HorizontalBarChart items={topByStock} barColor="#475569" rowHeight={32} />
+              ) : (
+                <p className="analytics-dash-panel__empty">—</p>
+              )}
+            </section>
+          </div>
+        </>
       ) : null}
     </PageContainer>
   )
-
-  function KpiCard({
-    label,
-    value,
-    prev,
-    changePct,
-    trend,
-    positiveIsGood = true,
-  }: {
-    label: string
-    value: number
-    prev: number
-    changePct?: number | null
-    trend?: 'up' | 'down' | 'flat'
-    positiveIsGood?: boolean
-  }) {
-    const tone = pctTone(changePct ?? null, positiveIsGood)
-    let trendIcon = ''
-    if (trend === 'up') trendIcon = '▲'
-    else if (trend === 'down') trendIcon = '▼'
-    return (
-      <div className="analytics-kpi__card">
-        <div className="analytics-kpi__label">{label}</div>
-        <div className="analytics-kpi__value">{value}</div>
-        <div className={`analytics-kpi__delta ${tone}`}>
-          {changePct != null ? <>vs {prev} ({fmtPct(changePct)})</> : <>vs {prev}</>}
-          {trendIcon ? <span style={{ marginLeft: 6 }}>{trendIcon}</span> : null}
-        </div>
-      </div>
-    )
-  }
 }

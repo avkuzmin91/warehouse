@@ -26,6 +26,12 @@ export type TableProps<TRow extends object> = {
   tableClassName?: string
   /** Подсветка строки (например статус поступления). */
   rowClassName?: (row: TRow) => string | undefined
+  /** Нативная подсказка на строке (например просрочка). */
+  rowTitle?: (row: TRow) => string | undefined
+  /**
+   * className + title за один вызов на строку. Если задан, имеет приоритет над rowClassName/rowTitle.
+   */
+  rowMeta?: (row: TRow) => { className?: string; title?: string }
 }
 
 function readCell(row: object, key: string): unknown {
@@ -54,6 +60,8 @@ export function Table<TRow extends object>({
   wrapClassName = '',
   tableClassName = '',
   rowClassName,
+  rowTitle,
+  rowMeta,
 }: TableProps<TRow>) {
   const interactive = Boolean(onRowClick)
   const tableClass = ['users-table', interactive ? 'users-table--interactive' : '', tableClassName]
@@ -108,10 +116,13 @@ export function Table<TRow extends object>({
                 </td>
               </tr>
             ) : (
-              data.map((row, index) => (
+              data.map((row, index) => {
+                const m = rowMeta?.(row)
+                return (
                 <tr
                   key={rowKey(row, index)}
-                  className={rowClassName?.(row)}
+                  className={m ? m.className : rowClassName?.(row)}
+                  title={m ? m.title : rowTitle?.(row)}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
                   {columns.map((col) => {
@@ -120,7 +131,8 @@ export function Table<TRow extends object>({
                     return <td key={col.key}>{content}</td>
                   })}
                 </tr>
-              ))
+                )
+              })
             )}
           </tbody>
         </table>

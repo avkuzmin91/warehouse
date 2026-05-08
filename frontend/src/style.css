@@ -1102,9 +1102,17 @@ body {
   margin-top: 4px;
 }
 
-/* Список товаров /dictionaries/products */
-.product-dict-card {
-  width: 100%;
+/* Список поступлений / отгрузок: меньше вертикальный зазор до таблицы */
+.page-container__card.inv-operations-list .page-container__stack {
+  gap: 10px;
+}
+
+.page-container__card.inv-operations-list .breadcrumbs {
+  margin-bottom: 10px;
+}
+
+.page-container__card.inv-operations-list .list-filters {
+  margin-bottom: 8px;
 }
 
 .product-dict-breadcrumbs {
@@ -1424,6 +1432,48 @@ body {
   line-height: 1.25;
 }
 
+.date-range-modal__presets {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0 0 12px;
+  min-width: 0;
+}
+
+.date-range-modal__preset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 6px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: rgba(35, 24, 73, 0.45);
+  color: var(--text-main);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    filter 0.12s ease;
+}
+
+.date-range-modal__preset-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+  border-color: rgba(177, 143, 255, 0.45);
+}
+
+.date-range-modal__preset-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .date-range-modal__fields {
   display: flex;
   flex-direction: column;
@@ -1481,7 +1531,7 @@ body {
 }
 
 .confirm-modal.date-range-modal {
-  max-width: 380px;
+  max-width: 440px;
   padding: 14px 16px;
   border-radius: 14px;
 }
@@ -1843,7 +1893,8 @@ body {
 }
 
 .list-filters .list-filters__input.field-input,
-.users-table__client-filter .list-filters__combobox-input.field-input {
+.users-table__client-filter .list-filters__combobox-input.field-input,
+.analytics-admin-filters .list-filters__combobox-input.field-input {
   margin-bottom: 0;
   height: 34px;
   min-height: 34px;
@@ -1950,28 +2001,33 @@ body {
 }
 
 .list-filters__combobox--has-value .list-filters__combobox-input.field-input,
-.users-table__client-filter .list-filters__combobox--has-value .list-filters__combobox-input.field-input {
+.users-table__client-filter .list-filters__combobox--has-value .list-filters__combobox-input.field-input,
+.analytics-admin-filters .list-filters__combobox--has-value .list-filters__combobox-input.field-input {
   padding-left: 42px;
 }
 
 .list-filters .list-filters__combobox-input.field-input,
-.users-table__client-filter .list-filters__combobox-input.field-input {
+.users-table__client-filter .list-filters__combobox-input.field-input,
+.analytics-admin-filters .list-filters__combobox-input.field-input {
   padding-right: 28px;
 }
 
 .list-filters__combobox .field-dropdown-chevron,
-.users-table__client-filter .list-filters__combobox .field-dropdown-chevron {
+.users-table__client-filter .list-filters__combobox .field-dropdown-chevron,
+.analytics-admin-filters .list-filters__combobox .field-dropdown-chevron {
   right: 8px;
 }
 
 .list-filters__combobox .field-dropdown-chevron__svg,
-.users-table__client-filter .list-filters__combobox .field-dropdown-chevron__svg {
+.users-table__client-filter .list-filters__combobox .field-dropdown-chevron__svg,
+.analytics-admin-filters .list-filters__combobox .field-dropdown-chevron__svg {
   width: 15px;
   height: 15px;
 }
 
 .list-filters__combobox-input.field-input:disabled + .field-dropdown-chevron,
-.users-table__client-filter .list-filters__combobox-input.field-input:disabled + .field-dropdown-chevron {
+.users-table__client-filter .list-filters__combobox-input.field-input:disabled + .field-dropdown-chevron,
+.analytics-admin-filters .list-filters__combobox-input.field-input:disabled + .field-dropdown-chevron {
   opacity: 0.38;
 }
 
@@ -2030,7 +2086,8 @@ body {
 }
 
 .list-filters .list-filters__combobox-input.field-input::placeholder,
-.users-table__client-filter .list-filters__combobox-input.field-input::placeholder {
+.users-table__client-filter .list-filters__combobox-input.field-input::placeholder,
+.analytics-admin-filters .list-filters__combobox-input.field-input::placeholder {
   font-size: inherit;
   font-weight: 400;
   color: rgba(214, 202, 255, 0.42);
@@ -3058,6 +3115,10 @@ body {
   margin: 0 0 8px;
 }
 
+.product-create-remember--readonly {
+  cursor: default;
+}
+
 .product-create-error {
   margin: 0 0 8px;
 }
@@ -3287,7 +3348,8 @@ body {
   align-items: center;
   justify-content: center;
   padding: 16px;
-  z-index: 20;
+  /* Выше портальных выпадашек фильтров (10050), ниже полноэкранных оверлеев при необходимости */
+  z-index: 10060;
 }
 
 .confirm-modal {
@@ -3528,6 +3590,603 @@ body {
   font-size: 14px;
 }
 
+/* Импорт движений Excel */
+.movements-import-modal {
+  max-width: 920px;
+  width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.movements-import-modal__title {
+  margin: 0 0 4px;
+  font-size: 1.25rem;
+}
+.movements-import-modal__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted, #9ca3af);
+  line-height: 1.45;
+}
+.movements-import-modal__actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.movements-import-modal__error {
+  margin: 0;
+}
+.movements-import-modal__done {
+  margin: 0;
+  color: #86efac;
+  font-weight: 500;
+}
+.movements-import-modal__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.movements-import-modal__partial {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.movements-import-modal__scroll {
+  overflow: auto;
+  max-height: 42vh;
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+}
+.movements-import-table {
+  width: 100%;
+  font-size: 13px;
+}
+.movements-import-table__name {
+  font-weight: 500;
+}
+.movements-import-table__muted {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.movements-import-table__warn {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #facc15;
+}
+.movements-import-table__row--warn {
+  background: rgba(250, 204, 21, 0.08);
+}
+.movements-import-table__row--error {
+  background: rgba(239, 68, 68, 0.1);
+}
+.movements-import-table__cell-errors {
+  margin: 0;
+  padding-left: 1.1em;
+  color: #fca5a5;
+  font-size: 12px;
+}
+.movements-import-table__cell-warnings {
+  margin: 0;
+  padding-left: 1.1em;
+  color: #facc15;
+  font-size: 12px;
+}
+.movements-import-modal__footer--split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.movements-import-modal__footer-start {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.movements-import-modal__delete-file {
+  min-width: 44px;
+}
+.movements-import-modal__errors {
+  border-top: 1px solid var(--card-border, rgba(255, 255, 255, 0.12));
+  padding-top: 8px;
+}
+.movements-import-modal__sub {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #fb7185;
+}
+.movements-import-modal__err-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #fb7185;
+  font-size: 13px;
+}
+.movements-import-modal__err-item {
+  margin-bottom: 4px;
+}
+.movements-import-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* Импорт Excel — широкая «стеклянная» карточка */
+.page-container__card.excel-import-page--glass {
+  position: relative;
+  border-radius: 18px;
+  padding: clamp(18px, 2.2vw, 28px);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background:
+    linear-gradient(125deg, rgba(255, 255, 255, 0.075) 0%, transparent 45%),
+    linear-gradient(165deg, rgba(38, 28, 82, 0.48), rgba(14, 10, 38, 0.36));
+  backdrop-filter: blur(20px) saturate(1.22);
+  -webkit-backdrop-filter: blur(20px) saturate(1.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 0 80px rgba(123, 63, 255, 0.035),
+    0 22px 56px rgba(3, 0, 18, 0.55);
+}
+
+.page-container__card.excel-import-page--glass .page-container__stack {
+  gap: 18px;
+}
+
+/* Импорт Excel (шаг 1 ТЗ) */
+.excel-import-page__title {
+  margin: 0 0 8px;
+  font-size: 1.35rem;
+}
+.excel-import-page__lead {
+  margin: 0 0 14px;
+  color: var(--text-soft);
+  line-height: 1.45;
+}
+.excel-import-page__section {
+  margin-bottom: 16px;
+}
+.excel-import-page__section-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.excel-import-page__download-row {
+  display: flex;
+  align-items: center;
+}
+.excel-import-page__download-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 0;
+  border: 1px solid rgba(180, 170, 220, 0.28);
+  border-radius: 10px;
+  background: rgba(35, 28, 62, 0.45);
+  color: var(--text-soft);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.excel-import-page__download-trigger:hover {
+  border-color: rgba(139, 92, 246, 0.45);
+  background: rgba(50, 42, 88, 0.55);
+  color: var(--text-main);
+}
+.excel-import-page__download-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.excel-import-page__dropzone {
+  border: 2px dashed rgba(180, 170, 220, 0.35);
+  border-radius: 12px;
+  padding: 18px 16px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(30, 28, 48, 0.35);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.excel-import-page__dropzone:hover {
+  border-color: rgba(180, 170, 220, 0.55);
+}
+.excel-import-page__dropzone--active {
+  border-color: rgba(139, 92, 246, 0.55);
+  background: rgba(50, 45, 80, 0.45);
+}
+.excel-import-page__upload-icon {
+  display: block;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 8px;
+  color: var(--text-soft);
+}
+.excel-import-page__dropzone-hint {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--text-main);
+}
+.excel-import-page__dropzone-formats {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.excel-import-page__inline-file-trigger {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #c4b5fd;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.excel-import-page__inline-file-trigger:hover {
+  color: var(--text-main);
+}
+.excel-import-page__hidden-form {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.page-container__card.excel-import-page .product-form-actions.action-bar {
+  margin-top: 12px;
+}
+.excel-import-page__file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.excel-import-page__progress {
+  margin-top: 10px;
+}
+.excel-import-page__progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.excel-import-page__progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.85), rgba(99, 102, 241, 0.95));
+  transition: width 0.12s ease-out;
+}
+.excel-import-page__progress-label {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.excel-import-page__file-done {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: rgba(35, 24, 73, 0.35);
+}
+.excel-import-page__file-done--preview-expanded {
+  border-color: rgba(139, 92, 246, 0.38);
+}
+.excel-import-page__file-done-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.excel-import-page__file-doc-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(180, 170, 220, 0.22);
+  color: var(--text-soft);
+}
+.excel-import-page__file-doc-icon svg {
+  width: 24px;
+  height: 24px;
+}
+.excel-import-page__file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.excel-import-page__file-main--static {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+.excel-import-page__file-name--plain {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.35;
+}
+.excel-import-page__file-preview-trigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  margin-left: -8px;
+  margin-right: -8px;
+  box-sizing: border-box;
+  max-width: calc(100% + 16px);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.excel-import-page__file-preview-trigger:hover:not(:disabled) {
+  border-color: rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.08);
+}
+.excel-import-page__file-preview-trigger:hover:not(:disabled) .excel-import-page__file-doc-icon {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(139, 92, 246, 0.18);
+  color: var(--text-main);
+}
+.excel-import-page__file-preview-trigger:hover:not(:disabled) .excel-import-page__file-name {
+  color: #ede9fe;
+}
+.excel-import-page__file-preview-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.45);
+}
+.excel-import-page__file-preview-trigger--open {
+  border-color: rgba(139, 92, 246, 0.35);
+  background: rgba(139, 92, 246, 0.07);
+}
+.excel-import-page__file-preview-trigger--open .excel-import-page__file-doc-icon {
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(139, 92, 246, 0.14);
+}
+.excel-import-page__file-preview-chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  color: var(--text-soft);
+  transition:
+    transform 0.2s ease,
+    color 0.15s ease;
+}
+.excel-import-page__file-preview-chevron svg {
+  width: 18px;
+  height: 18px;
+}
+.excel-import-page__file-preview-trigger--open .excel-import-page__file-preview-chevron {
+  transform: rotate(180deg);
+  color: rgba(196, 181, 253, 0.95);
+}
+.excel-import-page__file-name {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: break-word;
+  color: var(--text-main);
+  transition: color 0.15s ease;
+}
+.excel-import-page__file-meta-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-soft);
+}
+.excel-import-page__file-meta-sep {
+  margin: 0 0.35em;
+  opacity: 0.65;
+}
+.excel-import-page__file-status-inline {
+  color: rgba(167, 243, 208, 0.82);
+}
+.excel-import-page__file-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.excel-import-page__file-remove-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 10px;
+}
+.excel-import-page__file-action-svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.excel-import-page__file-remove-btn:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.1);
+}
+.excel-import-page__error {
+  margin-top: 10px;
+}
+.excel-import-page__loading {
+  margin: 8px 0;
+  color: var(--text-soft);
+}
+.excel-import-page__check-summary {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.12));
+  background: rgba(12, 18, 42, 0.35);
+}
+.excel-import-page__check-summary-lines {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.excel-import-page__file-status-badge {
+  margin: 0;
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+.excel-import-page__file-status-badge--ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: #86efac;
+}
+.excel-import-page__file-status-badge--bad {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+}
+.excel-import-page__check-footer {
+  padding-top: 4px;
+}
+.excel-import-page__check-footer--primary-only {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.excel-import-page__check-block {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(180, 170, 220, 0.18);
+}
+.excel-import-page__done-banner {
+  margin-top: 16px;
+}
+.excel-import-page__file-done--check-head {
+  margin-bottom: 8px;
+}
+.excel-import-page__file-meta-line--solo {
+  margin: 6px 0 0;
+  padding-left: 4px;
+}
+.excel-import-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.excel-import-page__actions--after-done {
+  justify-content: flex-start;
+}
+.excel-import-page__nav-hint {
+  margin: 20px 0 0;
+  font-size: 14px;
+}
+.excel-import-page__nav-hint a {
+  color: var(--text-soft);
+}
+.excel-import-page__nav-hint a:hover {
+  color: var(--text-main);
+}
+
+/* Встроенный предпросмотр Excel в карточке (шаг импорта). */
+.excel-import-page__inline-preview {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(180, 170, 220, 0.18);
+}
+.excel-import-page__inline-preview-status {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-soft);
+}
+.excel-import-page__inline-preview-scroll {
+  width: 100%;
+  max-height: min(560px, 62vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(200, 190, 255, 0.16);
+  background: rgba(6, 4, 18, 0.42);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.excel-import-page__inline-preview-table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.excel-import-page__inline-preview-table td {
+  padding: 8px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+  color: rgba(246, 242, 255, 0.97);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+.excel-import-page__inline-preview-table tr:last-child td {
+  border-bottom: none;
+}
+.excel-import-page__inline-preview-table td:last-child {
+  border-right: none;
+}
+.excel-import-page__inline-preview-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.excel-import-page__inline-preview-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 /* Analytics page — тёмная фиолетовая тема. */
 .analytics-card {
   padding-bottom: 24px;
@@ -3729,6 +4388,12 @@ body {
   font-size: 10px;
   fill: rgba(225, 217, 255, 0.55);
 }
+
+.mini-chart__stacked-bar-label {
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 .mini-chart__legend {
   display: flex;
   gap: 14px;
@@ -3747,6 +4412,428 @@ body {
   border-radius: 3px;
   display: inline-block;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Admin analytics dashboard — ТЗ «Аналитика админа» */
+.analytics-dash {
+  padding-bottom: 28px;
+}
+.analytics-dash__header {
+  margin-bottom: 10px;
+}
+.analytics-dash__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-main);
+}
+.analytics-dash__lead {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--text-soft);
+  max-width: 52ch;
+}
+.analytics-filters--dash {
+  margin-bottom: 20px;
+}
+.analytics-dash__error {
+  margin-bottom: 12px;
+}
+
+@keyframes analytics-dash-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.analytics-dash-skeleton__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+@media (max-width: 960px) {
+  .analytics-dash-skeleton__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .analytics-dash-skeleton__kpis {
+    grid-template-columns: 1fr;
+  }
+}
+.analytics-dash-skeleton__kpi {
+  height: 92px;
+  border-radius: 12px;
+  background: rgba(127, 92, 255, 0.12);
+  animation: analytics-dash-pulse 1.15s ease-in-out infinite;
+}
+.analytics-dash-skeleton__chart {
+  height: 220px;
+  border-radius: 12px;
+  background: rgba(127, 92, 255, 0.1);
+  animation: analytics-dash-pulse 1.15s ease-in-out infinite;
+  margin-bottom: 16px;
+}
+.analytics-dash-skeleton__split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) {
+  .analytics-dash-skeleton__split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analytics-dash-kpi {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+@media (max-width: 960px) {
+  .analytics-dash-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .analytics-dash-kpi {
+    grid-template-columns: 1fr;
+  }
+}
+.analytics-dash-kpi__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: linear-gradient(155deg, rgba(42, 28, 102, 0.55), rgba(16, 10, 48, 0.72));
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+}
+.analytics-dash-kpi__emoji {
+  font-size: 26px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+.analytics-dash-kpi__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.analytics-dash-kpi__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+}
+.analytics-dash-kpi__value {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-main);
+  line-height: 1.15;
+}
+.analytics-dash-kpi__hint {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.analytics-dash-panel {
+  margin-bottom: 22px;
+  padding: 18px 18px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: linear-gradient(165deg, rgba(32, 22, 78, 0.42), rgba(12, 8, 38, 0.55));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+}
+.analytics-dash-panel--compact {
+  margin-bottom: 0;
+  min-height: 120px;
+}
+.analytics-dash-panel__title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.analytics-dash-panel__title--sm {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.analytics-dash-panel__badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(127, 92, 255, 0.22);
+  color: var(--text-soft);
+}
+.analytics-dash-panel__subtitle {
+  margin: -6px 0 14px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.analytics-dash-panel__empty {
+  margin: 12px 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.analytics-dash-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+@media (max-width: 900px) {
+  .analytics-dash-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analytics-admin-filters {
+  margin-bottom: 14px;
+  padding: 8px 0 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.analytics-admin-filters__grid {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 240px)
+    minmax(260px, 1fr)
+    minmax(200px, 280px)
+    auto;
+  grid-template-areas: 'range clients step actions';
+  gap: 12px 14px;
+  align-items: end;
+}
+
+.analytics-admin-filters__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.analytics-admin-filters__cell--range {
+  grid-area: range;
+}
+
+.analytics-admin-filters__cell--clients {
+  grid-area: clients;
+}
+
+.analytics-admin-filters__cell--step {
+  grid-area: step;
+}
+
+.analytics-admin-filters__cell--actions {
+  grid-area: actions;
+}
+
+.analytics-admin-filters__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
+  min-height: 14px;
+}
+
+.analytics-admin-filters__label--spacer {
+  visibility: hidden;
+  user-select: none;
+}
+
+.analytics-admin-filters__clients-fieldset.product-colors-fieldset {
+  margin-bottom: 0;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect.dictionary-form-combobox {
+  margin-bottom: 0;
+}
+
+.analytics-admin-filters__filters-legend.field-label {
+  padding: 0;
+  margin: 0 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__control.field-input {
+  box-sizing: border-box;
+  align-items: center;
+  border-radius: 10px;
+  padding: 0 38px 0 10px;
+  margin-bottom: 0;
+}
+
+.analytics-admin-filters__clients-fieldset
+  .dictionary-multiselect:not(.dictionary-multiselect--has-chips)
+  .dictionary-multiselect__control.field-input {
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+}
+
+.analytics-admin-filters__clients-fieldset
+  .dictionary-multiselect.dictionary-multiselect--has-chips
+  .dictionary-multiselect__control.field-input {
+  height: auto;
+  min-height: 34px;
+  max-height: none;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-form-combobox--has-clear .dictionary-multiselect__control.field-input {
+  padding-left: 42px;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__chip {
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 400;
+  min-height: 22px;
+  padding: 1px 2px 1px 6px;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__chip-remove {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  font-size: 16px;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__input {
+  font-size: 14px;
+  font-weight: 400;
+  min-height: 0;
+  line-height: 1.2;
+}
+
+.analytics-admin-filters__clients-fieldset
+  .dictionary-multiselect:not(.dictionary-multiselect--has-chips)
+  .dictionary-multiselect__input {
+  height: 22px;
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__input::placeholder {
+  font-size: 14px;
+  font-weight: 400;
+  color: rgba(214, 202, 255, 0.42);
+}
+
+.analytics-admin-filters__clients-fieldset .dictionary-multiselect__option-label {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.analytics-admin-filters .list-filters__combobox-input.field-input {
+  background-color: var(--field-bg);
+}
+
+.analytics-admin-filters .analytics-admin-filters__date-range .date-range-filter__trigger.field-input {
+  height: 34px;
+  min-height: 34px;
+  background-color: var(--field-bg);
+}
+
+.analytics-admin-filters
+  .analytics-admin-filters__date-range
+  .date-range-filter__trigger.field-input.date-range-filter__trigger--placeholder {
+  color: rgba(214, 202, 255, 0.42);
+}
+
+.analytics-admin-filters__actions-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.analytics-admin-filters__toolbar-icon.collection-actions__icon-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  flex: 0 0 34px;
+}
+
+.analytics-admin-filters__apply-icon.btn--primary.collection-actions__icon-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.analytics-admin-filters__preset-note {
+  margin: 2px 0 14px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+@media (max-width: 1100px) {
+  .analytics-admin-filters__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'range range'
+      'clients clients'
+      'step actions';
+  }
+
+  .analytics-admin-filters__cell--actions {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 560px) {
+  .analytics-admin-filters {
+    padding: 8px 0 0;
+  }
+
+  .analytics-admin-filters__grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'range'
+      'clients'
+      'step'
+      'actions';
+  }
+
+  .analytics-admin-filters__cell--actions {
+    justify-self: start;
+  }
 }
 
 /* Товар: создание (цвета, габариты) и редактор вариантов */
@@ -4539,4 +5626,31 @@ body {
 .users-table--interactive .inv-shipment-row--pending:hover td,
 .users-table--interactive .inv-shipment-row--shipped:hover td {
   filter: brightness(1.06);
+}
+
+/* Просроченные ожидающие операции (поступления / отгрузки) */
+.inv-receipt-row--pending.inv-op-row--overdue td,
+.inv-shipment-row--pending.inv-op-row--overdue td {
+  background: rgba(220, 38, 38, 0.14);
+  color: var(--text-main);
+}
+.users-table--interactive .inv-receipt-row--pending.inv-op-row--overdue:hover td,
+.users-table--interactive .inv-shipment-row--pending.inv-op-row--overdue:hover td {
+  background: rgba(220, 38, 38, 0.19);
+  filter: none;
+}
+.inv-op-row--overdue td:first-child {
+  position: relative;
+  padding-left: 1.65rem;
+}
+.inv-op-row--overdue td:first-child::before {
+  content: '⚠';
+  position: absolute;
+  left: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.88;
+  pointer-events: none;
 }

@@ -86,9 +86,15 @@ export function LineChart({
             .join(' ')
           return (
             <g key={s.name}>
-              <path d={d} fill="none" stroke={s.color} strokeWidth={2} />
+              <path d={d} fill="none" stroke={s.color} strokeWidth={2}>
+                <title>
+                  {s.values.map((v, i) => `${labels[i] ?? i}: ${v}`).join('; ')}
+                </title>
+              </path>
               {s.values.map((v, i) => (
-                <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2.5} fill={s.color} />
+                <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2.5} fill={s.color}>
+                  <title>{`${labels[i] ?? String(i)} · ${s.name}: ${v}`}</title>
+                </circle>
               ))}
             </g>
           )
@@ -183,6 +189,211 @@ export function BarChart({ data, color = '#7f9bff', width = 720, height = 260 }:
                   <title>{d.label}</title>
                 </text>
               )}
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+export type HorizontalBarChartItem = { label: string; value: number }
+
+export type HorizontalBarChartProps = {
+  items: HorizontalBarChartItem[]
+  barColor?: string
+  /** Ширина области подписи слева */
+  labelWidth?: number
+  width?: number
+  rowHeight?: number
+}
+
+/** Горизонтальные столбцы: подпись слева, значение справа; tooltip через &lt;title&gt;. */
+export function HorizontalBarChart({
+  items,
+  barColor = '#64748b',
+  labelWidth = 168,
+  width = 720,
+  rowHeight = 36,
+}: HorizontalBarChartProps) {
+  const n = Math.max(1, items.length)
+  const padR = 56
+  const padT = 12
+  const padB = 12
+  const gap = 8
+  const height = padT + padB + n * rowHeight + (n - 1) * gap
+  const barAreaW = Math.max(80, width - labelWidth - padR - 16)
+  const maxVal = Math.max(1, ...items.map((i) => i.value))
+
+  return (
+    <div className="mini-chart mini-chart--horizontal" role="img" aria-label="Горизонтальная диаграмма">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
+        {items.map((it, idx) => {
+          const y = padT + idx * (rowHeight + gap)
+          const bw = (it.value / maxVal) * barAreaW
+          const ty = y + rowHeight / 2 + 5
+          const truncate = (s: string) => (s.length > 22 ? `${s.slice(0, 21)}…` : s)
+          return (
+            <g key={`${it.label}-${idx}`}>
+              <text
+                x={4}
+                y={ty}
+                className="mini-chart__axis mini-chart__axis--bar-label"
+                style={{ fontSize: 12 }}
+              >
+                {truncate(it.label)}
+                <title>{it.label}</title>
+              </text>
+              <rect
+                x={labelWidth}
+                y={y + 6}
+                width={Math.max(bw, it.value > 0 ? 3 : 0)}
+                height={rowHeight - 12}
+                fill={barColor}
+                rx={6}
+              >
+                <title>{`${it.label}: ${it.value}`}</title>
+              </rect>
+              <text
+                x={labelWidth + barAreaW + 8}
+                y={ty}
+                className="mini-chart__axis"
+                style={{ fontSize: 13 }}
+              >
+                {it.value}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+export type StackedHorizontalRow = {
+  label: string
+  inflow: number
+  outflow: number
+}
+
+export type StackedHorizontalBarChartProps = {
+  items: StackedHorizontalRow[]
+  inflowColor?: string
+  outflowColor?: string
+  labelWidth?: number
+  width?: number
+  rowHeight?: number
+}
+
+/** Составная полоса по клиенту: поступления + отгрузки (stacked). */
+export function StackedHorizontalBarChart({
+  items,
+  inflowColor = '#38bdf8',
+  outflowColor = '#fb923c',
+  labelWidth = 168,
+  width = 720,
+  rowHeight = 38,
+}: StackedHorizontalBarChartProps) {
+  const fmt = (n: number) => new Intl.NumberFormat('ru-RU').format(Math.max(0, n))
+  const n = Math.max(1, items.length)
+  const padR = 24
+  const padT = 12
+  const padB = 12
+  const gap = 10
+  const legendH = 28
+  const height = padT + padB + legendH + n * rowHeight + (n - 1) * gap
+  const barAreaW = Math.max(120, width - labelWidth - padR - 16)
+  const maxSum = Math.max(
+    1,
+    ...items.map((r) => Math.max(0, r.inflow) + Math.max(0, r.outflow)),
+  )
+
+  const truncate = (s: string) => (s.length > 22 ? `${s.slice(0, 21)}…` : s)
+  /** Минимальная ширина сегмента (px), при которой рисуем цифру на столбике */
+  const minSegWForLabel = 36
+  const barLabelFill = 'rgba(255, 255, 255, 0.92)'
+  const barLabelStroke = 'rgba(12, 8, 28, 0.35)'
+
+  return (
+    <div className="mini-chart mini-chart--stacked-h" role="img" aria-label="Составная диаграмма по клиентам">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
+        <g transform={`translate(0, ${padT})`}>
+          <rect x={labelWidth} y={0} width={12} height={12} fill={inflowColor} rx={2} />
+          <text x={labelWidth + 18} y={11} className="mini-chart__axis" style={{ fontSize: 11 }}>
+            Поступления
+          </text>
+          <rect x={labelWidth + 110} y={0} width={12} height={12} fill={outflowColor} rx={2} />
+          <text x={labelWidth + 126} y={11} className="mini-chart__axis" style={{ fontSize: 11 }}>
+            Отгрузки
+          </text>
+        </g>
+        {items.map((row, idx) => {
+          const y = padT + legendH + idx * (rowHeight + gap)
+          const total = Math.max(0, row.inflow) + Math.max(0, row.outflow)
+          const rowW = total <= 0 ? 0 : (total / maxSum) * barAreaW
+          const wIn = total <= 0 ? 0 : (row.inflow / total) * rowW
+          const wOut = total <= 0 ? 0 : (row.outflow / total) * rowW
+          const ty = y + rowHeight / 2 + 5
+          const barY = y + 7
+          const barH = rowHeight - 14
+          const barLabelY = barH / 2 + 4
+          return (
+            <g key={`${row.label}-${idx}`}>
+              <text x={4} y={ty} className="mini-chart__axis mini-chart__axis--bar-label" style={{ fontSize: 12 }}>
+                {truncate(row.label)}
+                <title>{row.label}</title>
+              </text>
+              <g transform={`translate(${labelWidth}, ${barY})`}>
+                {row.inflow > 0 ? (
+                  <>
+                    <rect width={wIn} height={barH} fill={inflowColor} rx={4}>
+                      <title>{`Поступления: ${fmt(row.inflow)}`}</title>
+                    </rect>
+                    {wIn >= minSegWForLabel ? (
+                      <text
+                        x={wIn / 2}
+                        y={barLabelY}
+                        textAnchor="middle"
+                        className="mini-chart__stacked-bar-label"
+                        fill={barLabelFill}
+                        stroke={barLabelStroke}
+                        strokeWidth={0.35}
+                        paintOrder="stroke fill"
+                        style={{ fontSize: 11, fontWeight: 700 }}
+                      >
+                        {fmt(row.inflow)}
+                      </text>
+                    ) : null}
+                  </>
+                ) : null}
+                {row.outflow > 0 ? (
+                  <>
+                    <rect x={wIn} width={wOut} height={barH} fill={outflowColor} rx={4}>
+                      <title>{`Отгрузки: ${fmt(row.outflow)}`}</title>
+                    </rect>
+                    {wOut >= minSegWForLabel ? (
+                      <text
+                        x={wIn + wOut / 2}
+                        y={barLabelY}
+                        textAnchor="middle"
+                        className="mini-chart__stacked-bar-label"
+                        fill={barLabelFill}
+                        stroke={barLabelStroke}
+                        strokeWidth={0.35}
+                        paintOrder="stroke fill"
+                        style={{ fontSize: 11, fontWeight: 700 }}
+                      >
+                        {fmt(row.outflow)}
+                      </text>
+                    ) : null}
+                  </>
+                ) : null}
+                {total === 0 ? (
+                  <text x={4} y={barLabelY} className="mini-chart__axis" style={{ fontSize: 11 }}>
+                    0 · 0
+                  </text>
+                ) : null}
+              </g>
             </g>
           )
         })}

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 /** Только внутри `FiltersPanel` (см. TZ Collection actions). */
@@ -8,6 +9,8 @@ export type CollectionActionsProps = {
   createLabel?: string
   resetFiltersLabel?: string
   disabled?: boolean
+  /** Слот левее кнопки «Создать» (ТЗ: импорт Excel). */
+  beforeCreate?: ReactNode
 }
 
 function PlusIcon() {
@@ -23,7 +26,16 @@ function PlusIcon() {
   )
 }
 
-function ResetFiltersIcon() {
+/** Иконка «Применить фильтры» (как отдельное действие рядом со сбросом). */
+export function ApplyFiltersIcon() {
+  return (
+    <svg className="collection-actions__svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M10 7.5v9l7.5-4.5L10 7.5z" fill="currentColor" />
+    </svg>
+  )
+}
+
+export function ResetFiltersIcon() {
   return (
     <svg className="collection-actions__svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
@@ -53,6 +65,7 @@ export function CollectionActions({
   createLabel = 'Создать',
   resetFiltersLabel = 'Сбросить фильтры',
   disabled,
+  beforeCreate,
 }: CollectionActionsProps) {
   const inner = <PlusIcon />
 
@@ -68,6 +81,7 @@ export function CollectionActions({
       >
         <ResetFiltersIcon />
       </button>
+      {beforeCreate}
       {createHref ? (
         disabled ? (
           <span

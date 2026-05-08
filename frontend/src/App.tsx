@@ -8,6 +8,8 @@ import { InventoryReceiptPage } from './pages/InventoryReceiptPage'
 import { InventoryReceiptEditPage } from './pages/InventoryReceiptEditPage'
 import { InventoryShipmentPage } from './pages/InventoryShipmentPage'
 import { InventoryShipmentEditPage } from './pages/InventoryShipmentEditPage'
+import { ExcelImportPreviewPage } from './pages/ExcelImportPreviewPage'
+import { ExcelImportStep1Page } from './pages/ExcelImportStep1Page'
 import { AnalyticsPage } from './pages/AnalyticsPage'
 import { DictionariesListPage } from './pages/DictionariesListPage'
 import { DictionariesPage } from './pages/DictionariesPage'
@@ -86,6 +88,22 @@ function App() {
           }
         />
         <Route
+          path="/inventory/receipts/import/excel/preview"
+          element={
+            <ManagerAdminRoute>
+              <ExcelImportPreviewPage opType="in" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/receipts/import/excel"
+          element={
+            <ManagerAdminRoute>
+              <ExcelImportStep1Page opType="in" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
           path="/inventory/receipts/:receiptId"
           element={
             <ManagerAdminRoute>
@@ -110,6 +128,22 @@ function App() {
           }
         />
         <Route
+          path="/inventory/shipments/import/excel/preview"
+          element={
+            <ManagerAdminRoute>
+              <ExcelImportPreviewPage opType="out" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
+          path="/inventory/shipments/import/excel"
+          element={
+            <ManagerAdminRoute>
+              <ExcelImportStep1Page opType="out" />
+            </ManagerAdminRoute>
+          }
+        />
+        <Route
           path="/inventory/shipments/:shipmentId"
           element={
             <ManagerAdminRoute>
@@ -120,9 +154,9 @@ function App() {
         <Route
           path="/analytics"
           element={
-            <ManagerAdminRoute>
+            <AdminRoute>
               <AnalyticsPage />
-            </ManagerAdminRoute>
+            </AdminRoute>
           }
         />
         <Route path="/users" element={<Navigate to="/dictionaries/users" replace />} />

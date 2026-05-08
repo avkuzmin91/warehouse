@@ -56,7 +56,7 @@ export function InventoryBalancesPage() {
   const filterFields: FilterFieldConfig[] = useMemo(
     () => [
       { name: 'client_id', type: 'dictionary_autocomplete', options: dictOptions(clients, 'Клиент') },
-      { name: 'sku', type: 'text', placeholder: 'Артикул' },
+      { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
       { name: 'name', type: 'text', placeholder: 'Название' },
       { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
       { name: 'size_id', type: 'dictionary_autocomplete', options: dictOptions(sizes, 'Размер') },
@@ -68,7 +68,7 @@ export function InventoryBalancesPage() {
     () => [
       {
         key: 'product_sku',
-        title: 'Артикул',
+        title: 'Штрих-код',
         sortable: true,
         render: (_v, row) => (String(row.product_sku ?? '').trim() ? String(row.product_sku) : '—'),
       },

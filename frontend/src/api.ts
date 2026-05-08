@@ -166,6 +166,80 @@ export function clearToken() {
   clearProfileCache()
 }
 
+/** Разбирает JSON-тело ошибки FastAPI/Starlette (detail строка, массив validation errors и т.д.). */
+function formatApiErrorDetail(body: unknown, httpStatus: number): string {
+  const fallback =
+    httpStatus > 0
+      ? `Запрос не выполнен (код ${httpStatus}). Повторите попытку или обратитесь к администратору.`
+      : 'Не удалось выполнить запрос. Повторите попытку или обратитесь к администратору.'
+
+  if (body === null || body === undefined) {
+    return fallback
+  }
+  if (typeof body === 'string' && body.trim()) {
+    return body.trim()
+  }
+  if (typeof body !== 'object') {
+    return fallback
+  }
+
+  const o = body as Record<string, unknown>
+  const detail = o.detail
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail.trim()
+  }
+
+  if (Array.isArray(detail)) {
+    const parts: string[] = []
+    for (const item of detail) {
+      if (typeof item === 'string' && item.trim()) {
+        parts.push(item.trim())
+        continue
+      }
+      if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>
+        const msg =
+          typeof rec.msg === 'string'
+            ? rec.msg.trim()
+            : typeof rec.message === 'string'
+              ? rec.message.trim()
+              : ''
+        if (msg) {
+          const locRaw = rec.loc
+          const loc =
+            Array.isArray(locRaw) && locRaw.length
+              ? locRaw
+                  .filter((x) => x !== 'body')
+                  .map((x) => String(x))
+                  .join('.')
+              : ''
+          parts.push(loc ? `${loc}: ${msg}` : msg)
+        }
+      }
+    }
+    if (parts.length) {
+      return parts.join(' ')
+    }
+  }
+
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const rec = detail as Record<string, unknown>
+    if (typeof rec.msg === 'string' && rec.msg.trim()) {
+      return rec.msg.trim()
+    }
+    if (typeof rec.message === 'string' && rec.message.trim()) {
+      return rec.message.trim()
+    }
+  }
+
+  if (typeof o.message === 'string' && o.message.trim()) {
+    return o.message.trim()
+  }
+
+  return fallback
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
   const headers: Record<string, string> = {
@@ -199,9 +273,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    const detail = typeof body?.detail === 'string' ? body.detail : 'Ошибка запроса'
-    throw new Error(detail)
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
   }
 
   return response.json() as Promise<T>
@@ -235,9 +308,8 @@ async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
     throw error
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    const detail = typeof body?.detail === 'string' ? body.detail : 'Ошибка запроса'
-    throw new Error(detail)
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
   }
   return response.json() as Promise<T>
 }
@@ -596,7 +668,7 @@ export type ProductListQueryParams = {
   page?: number
   limit?: number
   name?: string
-  /** Подстрока по полю артикула товара (p.sku). */
+  /** Подстрока по полю штрих-кода товара (p.sku). */
   sku?: string
   type_id?: string
   client_id?: string
@@ -662,7 +734,7 @@ export function updateProduct(
     client_id?: string | null
     is_active?: boolean
     is_deleted?: boolean
-    /** Базовый артикул (товар + при необходимости префикс у вариантов). */
+    /** Базовый штрих-код (товар + при необходимости префикс у вариантов). */
     sku_base?: string
     /** Галерея карточки; пустой массив — без фото. */
     image_urls?: string[]
@@ -750,7 +822,7 @@ export type InventoryOperationItem = {
   size_id: string | null
   size_name: string | null
   variant_sku?: string | null
-  /** Базовый артикул товара (карточка), products.sku */
+  /** Базовый штрих-код товара (карточка), products.sku */
   product_sku?: string | null
   preview_image_url?: string | null
   /** Поступление: ожидает / принят; для отгрузки null */
@@ -773,7 +845,7 @@ export type InventoryOperationListResponse = {
 export type InventoryBalanceItem = {
   product_id: string
   product_name: string
-  /** Базовый артикул карточки (products.sku) */
+  /** Базовый штрих-код карточки (products.sku) */
   product_sku: string
   preview_image_url?: string | null
   product_type_id: string | null
@@ -803,7 +875,7 @@ export function getInventoryColors() {
   return request<DictionaryItem[]>('/inventory/lookups/colors')
 }
 
-/** Цвета, для которых у товара с данным базовым артикулом есть варианты. */
+/** Цвета, для которых у товара с данным базовым штрих-кодом есть варианты. */
 export function getInventoryColorsForProductSku(sku: string) {
   const s = sku.trim()
   if (!s) return Promise.resolve([] as DictionaryItem[])
@@ -812,7 +884,7 @@ export function getInventoryColorsForProductSku(sku: string) {
   )
 }
 
-/** Размеры вариантов для артикула товара и выбранного цвета. */
+/** Размеры вариантов для штрих-кода товара и выбранного цвета. */
 export function getInventorySizesForProductSkuAndColor(sku: string, colorId: string) {
   const s = sku.trim()
   const c = colorId.trim()
@@ -838,7 +910,7 @@ export function getInventoryProducts(clientId?: string | null) {
   return request<InventoryProductLookup[]>(`/inventory/lookups/products${q}`)
 }
 
-/** Базовые артикулы товаров (`products.sku`) для формы приёмки. */
+/** Базовые штрих-коды товаров (`products.sku`) для формы приёмки. */
 export function getInventoryProductSkus() {
   return request<string[]>('/inventory/lookups/skus')
 }
@@ -878,7 +950,7 @@ export type ProductVariantFindResponse = {
   needs_size: boolean
 }
 
-/** Приёмка ТЗ: поиск варианта по артикулу и цвету (+ размер для одежды). */
+/** Приёмка ТЗ: поиск варианта по штрих-коду и цвету (+ размер для одежды). */
 export function findProductVariantForReceipt(params: {
   sku: string
   color_id: string
@@ -1044,7 +1116,7 @@ export type InventoryOperationsListParams = {
   supplier_id?: string
   color_id?: string
   size_id?: string
-  /** Подстрока по базовому артикулу товара (products.sku), не по SKU варианта. */
+  /** Подстрока по базовому штрих-коду товара (products.sku), не по SKU варианта. */
   sku?: string
   /** Подстрока по названию товара (products.name). */
   name?: string
@@ -1097,7 +1169,7 @@ export type InventoryBalancesListParams = {
   supplier_id?: string
   color_id?: string
   size_id?: string
-  /** Подстрока по базовому артикулу товара */
+  /** Подстрока по базовому штрих-коду товара */
   sku?: string
   /** Подстрока по названию товара */
   name?: string
@@ -1285,7 +1357,7 @@ export type ClientPortalDashboardMetrics = {
   period: AnalyticsPeriod
 }
 export type AnalyticsFilters = {
-  client_id: string | null
+  client_ids: string[]
   product_id: string | null
   type_id: string | null
 }
@@ -1409,9 +1481,40 @@ export type ByTypeReport = {
   data: ByTypeItem[]
 }
 
+export type AdminDashboardStockByClient = {
+  client_id: string
+  client: string
+  stock: number
+}
+
+export type AdminDashboardClientMovement = {
+  client_id: string
+  client: string
+  inflow: number
+  outflow: number
+}
+
+export type AdminDashboardReport = {
+  report: 'admin_dashboard'
+  period: AnalyticsPeriod
+  filters: AnalyticsFilters
+  at_date: string
+  total_inflow: number
+  total_outflow: number
+  stock_total: number
+  active_clients: number
+  movement_clients_limit: number
+  stock_by_client: AdminDashboardStockByClient[]
+  client_movement: AdminDashboardClientMovement[]
+  explanation: string
+}
+
 export type AnalyticsCommonParams = {
   date_from?: string
   date_to?: string
+  /** Несколько клиентов; пусто — все клиенты */
+  client_ids?: string[]
+  /** @deprecated Передаётся как один client_ids в запросе */
   client_id?: string
   product_id?: string
   type_id?: string
@@ -1421,7 +1524,14 @@ function appendCommon(sp: URLSearchParams, p: AnalyticsCommonParams | undefined)
   if (!p) return
   if (p.date_from && /^\d{4}-\d{2}-\d{2}$/.test(p.date_from)) sp.set('date_from', p.date_from)
   if (p.date_to && /^\d{4}-\d{2}-\d{2}$/.test(p.date_to)) sp.set('date_to', p.date_to)
-  if (p.client_id) sp.set('client_id', p.client_id)
+  if (p.client_ids?.length) {
+    for (const id of p.client_ids) {
+      const t = id.trim()
+      if (t) sp.append('client_ids', t)
+    }
+  } else if (p.client_id?.trim()) {
+    sp.append('client_ids', p.client_id.trim())
+  }
   if (p.product_id) sp.set('product_id', p.product_id)
   if (p.type_id) sp.set('type_id', p.type_id)
 }
@@ -1447,9 +1557,12 @@ export function getAnalyticsStockSnapshot(
   if (params?.at_date && /^\d{4}-\d{2}-\d{2}$/.test(params.at_date)) {
     sp.set('at_date', params.at_date)
   }
-  if (params?.client_id) sp.set('client_id', params.client_id)
-  if (params?.product_id) sp.set('product_id', params.product_id)
-  if (params?.type_id) sp.set('type_id', params.type_id)
+  appendCommon(sp, {
+    client_ids: params?.client_ids,
+    client_id: params?.client_id,
+    product_id: params?.product_id,
+    type_id: params?.type_id,
+  })
   if (params?.only_positive === false) sp.set('only_positive', 'false')
   if (params?.limit != null) sp.set('limit', String(params.limit))
   const q = sp.toString()
@@ -1472,13 +1585,19 @@ export function getAnalyticsTopProducts(
 
 export function getAnalyticsDeadStock(params?: {
   days?: number
+  client_ids?: string[]
   client_id?: string
   type_id?: string
   limit?: number
 }) {
   const sp = new URLSearchParams()
   if (params?.days != null) sp.set('days', String(params.days))
-  if (params?.client_id) sp.set('client_id', params.client_id)
+  if (params?.client_ids?.length) {
+    for (const id of params.client_ids) {
+      const t = id.trim()
+      if (t) sp.append('client_ids', t)
+    }
+  } else if (params?.client_id) sp.append('client_ids', params.client_id.trim())
   if (params?.type_id) sp.set('type_id', params.type_id)
   if (params?.limit != null) sp.set('limit', String(params.limit))
   const q = sp.toString()
@@ -1508,15 +1627,25 @@ export function getAnalyticsByType(
   params?: Omit<AnalyticsCommonParams, 'product_id' | 'type_id'>,
 ) {
   const sp = new URLSearchParams()
-  if (params?.date_from && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from)) {
-    sp.set('date_from', params.date_from)
-  }
-  if (params?.date_to && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to)) {
-    sp.set('date_to', params.date_to)
-  }
-  if (params?.client_id) sp.set('client_id', params.client_id)
+  appendCommon(sp, params)
   const q = sp.toString()
   return request<ByTypeReport>(q ? `/analytics/by-type?${q}` : '/analytics/by-type')
+}
+
+export function getAnalyticsAdminDashboard(
+  params?: AnalyticsCommonParams & {
+    movement_clients_limit?: number
+  },
+) {
+  const sp = new URLSearchParams()
+  appendCommon(sp, params)
+  if (params?.movement_clients_limit != null) {
+    sp.set('movement_clients_limit', String(params.movement_clients_limit))
+  }
+  const q = sp.toString()
+  return request<AdminDashboardReport>(
+    q ? `/analytics/admin-dashboard?${q}` : '/analytics/admin-dashboard',
+  )
 }
 
 export function createInventoryOperation(payload: {
@@ -1532,4 +1661,174 @@ export function createInventoryOperation(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export type MovementImportPreviewErrorItem = { row: number; error: string }
+export type MovementImportPreviewWarningItem = { row: number; warning: string }
+export type MovementImportPreviewRowResult = {
+  excel_row: number
+  date: string
+  barcode: string
+  color: string
+  size?: string | null
+  quantity: number | null
+  status_display: string
+  found_product_name?: string | null
+  errors: string[]
+  warnings: string[]
+}
+export type MovementImportPreviewRow = {
+  excel_row: number
+  date: string
+  name: string
+  barcode: string
+  color: string
+  size?: string | null
+  quantity: number
+  status: string
+  receipt_status?: string | null
+  shipment_status?: string | null
+  comment?: string | null
+  product_name: string
+  client_name?: string | null
+  preview_image_url?: string | null
+  warnings: string[]
+}
+
+export type MovementImportPreviewResponse = {
+  summary_total: number
+  summary_ok: number
+  summary_with_errors: number
+  import_ready: boolean
+  file_status_label: string
+  row_results: MovementImportPreviewRowResult[]
+  valid_rows: MovementImportPreviewRow[]
+  errors: MovementImportPreviewErrorItem[]
+  warnings: MovementImportPreviewWarningItem[]
+}
+
+export type MovementImportCommitResponse = {
+  total: number
+  success: number
+  failed: number
+  warnings: number
+}
+
+export type ImportExcelUploadResponse = {
+  file_id: string
+  file_name: string
+  file_size: number
+}
+
+const IMPORT_TEMPLATE_DOWNLOAD_NAME: Record<InventoryOpType, string> = {
+  in: 'Поступление.xlsx',
+  out: 'Отгрузка.xlsx',
+}
+
+export function postImportExcelUploadWithProgress(
+  params: { templateType: 'receipt' | 'shipment'; file: File },
+  onProgress: (percent: number) => void,
+): Promise<ImportExcelUploadResponse> {
+  const token = getToken()
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE_URL}/import/upload`)
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    }
+    xhr.responseType = 'json'
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        onProgress(Math.min(100, Math.round((100 * ev.loaded) / Math.max(ev.total, 1))))
+      }
+    }
+    xhr.onerror = () => reject(new Error('Ошибка сети при загрузке файла'))
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as ImportExcelUploadResponse)
+        return
+      }
+      const body = xhr.response
+      reject(new Error(formatApiErrorDetail(body, xhr.status)))
+    }
+    const form = new FormData()
+    form.append('template_type', params.templateType)
+    form.append('file', params.file)
+    xhr.send(form)
+  })
+}
+
+export async function deleteImportStaging(fileId: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${API_BASE_URL}/import/staging/${encodeURIComponent(fileId.trim())}`, {
+    method: 'DELETE',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, res.status))
+  }
+}
+
+export function postMovementsImportPreviewStaged(opType: InventoryOpType, fileId: string) {
+  const q = `op_type=${encodeURIComponent(opType)}&file_id=${encodeURIComponent(fileId.trim())}`
+  const form = new FormData()
+  return requestForm<MovementImportPreviewResponse>(`/import/movements/preview-staged?${q}`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function postMovementsImportCommitStaged(
+  opType: InventoryOpType,
+  fileId: string,
+  partial: boolean,
+) {
+  const p = partial ? '1' : '0'
+  const q = `op_type=${encodeURIComponent(opType)}&file_id=${encodeURIComponent(fileId.trim())}&partial=${p}`
+  const form = new FormData()
+  return requestForm<MovementImportCommitResponse>(`/import/movements/commit-staged?${q}`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function postMovementsImportPreview(opType: InventoryOpType, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<MovementImportPreviewResponse>(
+    `/import/movements/preview?op_type=${encodeURIComponent(opType)}`,
+    { method: 'POST', body: form },
+  )
+}
+
+export function postMovementsImportCommit(opType: InventoryOpType, file: File, partial: boolean) {
+  const form = new FormData()
+  form.append('file', file)
+  const p = partial ? '1' : '0'
+  return requestForm<MovementImportCommitResponse>(
+    `/import/movements/commit?op_type=${encodeURIComponent(opType)}&partial=${p}`,
+    { method: 'POST', body: form },
+  )
+}
+
+export async function downloadMovementsImportTemplate(opType: InventoryOpType) {
+  const token = getToken()
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  const r = await fetch(
+    `${API_BASE_URL}/import/movements/template?op_type=${encodeURIComponent(opType)}`,
+    { headers },
+  )
+  if (!r.ok) {
+    const body = await r.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, r.status))
+  }
+  const blob = await r.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = IMPORT_TEMPLATE_DOWNLOAD_NAME[opType]
+  a.click()
+  URL.revokeObjectURL(url)
 }

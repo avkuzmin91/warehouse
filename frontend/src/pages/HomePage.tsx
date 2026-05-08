@@ -30,7 +30,7 @@ const NAV: NavItem[] = [
     key: 'analytics',
     label: 'Аналитика',
     to: '/analytics',
-    visible: (role) => role === 'admin' || role === 'manager',
+    visible: (role) => role === 'admin',
   },
   {
     key: 'cabinet',

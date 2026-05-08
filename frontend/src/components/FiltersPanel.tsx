@@ -4,7 +4,7 @@ import { DateRangeFilter, type DateRangeFilterModel } from './DateRangeFilter'
 import { DictionaryFilterCombobox } from './DictionaryFilterCombobox'
 import { FilterStyleSelectWithClear } from './FilterStyleSelectWithClear'
 
-/** Текстовые поля с debounce (поиск по названию / артикулу / поставщику). */
+/** Текстовые поля с debounce (поиск по названию / штрих-коду / поставщику). */
 export type TextFilterFieldKey = 'search' | 'name' | 'sku' | 'supplier'
 
 export type SelectFilterFieldKey =
@@ -16,7 +16,6 @@ export type SelectFilterFieldKey =
   | 'color_id'
   | 'size_id'
   | 'op_type'
-  | 'receipt_status'
 
 export type DictionaryAutocompleteFilterKey =
   | 'type_id'
@@ -27,6 +26,8 @@ export type DictionaryAutocompleteFilterKey =
   | 'product_id'
   | 'color_id'
   | 'size_id'
+  | 'receipt_status'
+  | 'shipment_status'
 
 /** Ключ селекта / комбобокса в панели фильтров (native select или dictionary autocomplete). */
 export type FilterPanelSelectKey = SelectFilterFieldKey | DictionaryAutocompleteFilterKey
@@ -63,6 +64,7 @@ type FilterValues = {
   date_from?: string
   date_to?: string
   receipt_status?: string
+  shipment_status?: string
 }
 
 type Props = {
@@ -89,7 +91,6 @@ const SELECT_CLEAR_ARIA: Partial<Record<SelectFilterFieldKey, string>> = {
   color_id: 'Сбросить фильтр по цвету',
   size_id: 'Сбросить фильтр по размеру',
   op_type: 'Сбросить фильтр по типу операции',
-  receipt_status: 'Сбросить фильтр по статусу поступления',
 }
 
 function FilterSelectWithClear({
@@ -238,9 +239,6 @@ export function FiltersPanel({
           } else if (name === 'op_type') {
             const v = values.op_type
             selectVal = v === 'in' || v === 'out' ? v : ''
-          } else if (name === 'receipt_status') {
-            const v = values.receipt_status
-            selectVal = v === 'pending' || v === 'accepted' ? v : ''
           } else {
             const v = values[name]
             selectVal = typeof v === 'string' && v ? v : ''
@@ -259,15 +257,24 @@ export function FiltersPanel({
         }
         if (field.type === 'dictionary_autocomplete') {
           const name = field.name
-          const v = values[name]
-          const selectVal = typeof v === 'string' && v ? v : ''
+          let selectVal = ''
+          if (name === 'receipt_status') {
+            const v = values.receipt_status
+            selectVal = v === 'pending' || v === 'accepted' ? v : ''
+          } else if (name === 'shipment_status') {
+            const v = values.shipment_status
+            selectVal = v === 'pending' || v === 'shipped' ? v : ''
+          } else {
+            const v = values[name]
+            selectVal = typeof v === 'string' && v ? v : ''
+          }
           return (
             <div key={name} className="list-filters__field list-filters__field--text">
               <DictionaryFilterCombobox
                 name={name}
                 options={field.options}
                 valueStr={selectVal}
-                onSelectChange={(n, id) => onSelectChange(n, id)}
+                onSelectChange={(n, id) => onSelectChange(n as FilterPanelSelectKey, id)}
                 disabled={disabled}
               />
             </div>

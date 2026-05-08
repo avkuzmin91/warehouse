@@ -35,8 +35,8 @@ type FieldName = 'name' | 'sku_base' | 'client_id' | 'is_actual'
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'
 
 function mapProductUpdateError(msg: string): string {
-  if (msg.includes('артикул') || /sku/i.test(msg) || msg.toLowerCase().includes('sku')) {
-    return 'Конфликт артикула'
+  if (msg.includes('штрих-код') || /sku/i.test(msg) || msg.toLowerCase().includes('sku')) {
+    return 'Конфликт штрих-кода'
   }
   if (msg.includes('Нет данных')) {
     return 'Нет данных для обновления'
@@ -276,7 +276,7 @@ export function ProductEditPage() {
           />
 
           <label className="field-label" htmlFor={`${formId}-sku`}>
-            Артикул
+            Штрих-код
             <span className="field-label__required" aria-label="обязательное поле">
               *
             </span>
@@ -288,7 +288,7 @@ export function ProductEditPage() {
             onChange={(e) => setSkuBase(e.target.value)}
             onBlur={() => setTouched((t) => ({ ...t, sku_base: true }))}
             autoComplete="off"
-            title="При изменении артикулы вариантов обновятся при сохранении (проверка уникальности на сервере)"
+            title="После сохранения штрих-коды вариантов пересчитаются автоматически (проверка уникальности на сервере)"
             aria-invalid={showFieldError('sku_base') ? true : undefined}
           />
 

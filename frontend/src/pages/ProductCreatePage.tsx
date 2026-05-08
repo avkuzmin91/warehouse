@@ -43,9 +43,43 @@ function isTechBlockIncomplete(b: DimBlock): boolean {
   return b.length.trim() === '' || b.width.trim() === '' || b.height.trim() === ''
 }
 
+function roundDim4(n: number): number {
+  return Math.round(n * 10000) / 10000
+}
+
+/** Совпадает с ключом уникальности варианта на бэкенде при создании одежды. */
+function clothingDuplicateComboMessage(blocks: DimBlock[], colorIds: string[]): string | null {
+  const seen = new Set<string>()
+  for (const block of blocks) {
+    const L = roundDim4(parseNum(block.length))
+    const W = roundDim4(parseNum(block.width))
+    const H = roundDim4(parseNum(block.height))
+    for (const sz of block.sizes) {
+      const sid = sz.trim().toLowerCase()
+      for (const cid of colorIds) {
+        const key = `${cid.trim().toLowerCase()}\0${L}\0${W}\0${H}\0${sid}`
+        if (seen.has(key)) {
+          return (
+            'Дублируется комбинация цвета, габаритов и размера ' +
+            '(один размер не может повторяться для тех же габаритов в разных блоках).'
+          )
+        }
+        seen.add(key)
+      }
+    }
+  }
+  return null
+}
+
 function mapProductCreateError(msg: string): string {
-  if (msg.includes('артикул') || /sku/i.test(msg)) {
-    return 'Артикул или SKU варианта уже существует'
+  const lower = msg.toLowerCase()
+  if (
+    lower.includes('штрих-код') ||
+    lower.includes('sku') ||
+    lower.includes('unique') ||
+    lower.includes('duplicate key')
+  ) {
+    return 'Штрих-код или SKU варианта уже занят в системе. Укажите другой базовый штрих-код.'
   }
   return msg
 }
@@ -236,6 +270,12 @@ export function ProductCreatePage() {
       return
     }
 
+    const dupClothing = requiresSize ? clothingDuplicateComboMessage(clothBlocks, colorIds) : null
+    if (dupClothing) {
+      setSubmitError(dupClothing)
+      return
+    }
+
     const dimensions = requiresSize
       ? clothBlocks.map((b) => ({
           length: parseNum(b.length),
@@ -306,6 +346,11 @@ export function ProductCreatePage() {
             setTypeId(v)
             if (!typeFlags[v]?.requires_size) {
               setClothBlocks([{ length: '', width: '', height: '', sizes: [] }])
+              setTechBlocks((tb) => {
+                const empty: DimBlock = { length: '', width: '', height: '', sizes: [] }
+                const first = tb[0] ?? empty
+                return [first]
+              })
             }
           }}
           required
@@ -315,7 +360,7 @@ export function ProductCreatePage() {
         />
 
         <label className="field-label" htmlFor={`${formId}-sku`}>
-          Артикул
+          Штрих-код
           <span className="field-label__required" aria-label="обязательное поле">
             *
           </span>
@@ -480,7 +525,7 @@ export function ProductCreatePage() {
             className={`product-dim-fieldset${showFieldError('dimensions') ? ' product-dim-fieldset--error' : ''}`}
           >
             <legend className="field-label" id={`${formId}-tech-dims-legend`}>
-              Габариты (несколько блоков — варианты: цвет × блок)
+              Габариты
               <span className="field-label__required" aria-label="обязательное поле">
                 *
               </span>
@@ -553,11 +598,6 @@ export function ProductCreatePage() {
                 </div>
               )
             })}
-            <ProductDimAddBlockButton
-              onClick={() =>
-                setTechBlocks((b) => [...b, { length: '', width: '', height: '', sizes: [] }])
-              }
-            />
           </fieldset>
         )}
 

@@ -7,6 +7,12 @@ export type DateRangeFilterModel = {
   date_to?: string
 }
 
+export type DateRangeQuickPreset = {
+  label: string
+  date_from: string
+  date_to: string
+}
+
 export type DateRangeFilterProps = {
   dateFrom?: string
   dateTo?: string
@@ -16,6 +22,8 @@ export type DateRangeFilterProps = {
   onChange: (next: DateRangeFilterModel) => void
   disabled?: boolean
   className?: string
+  /** Быстрые пресеты периода внутри модального окна (применяются сразу). */
+  quickPresets?: DateRangeQuickPreset[]
 }
 
 export const DATE_RANGE_INVALID_MESSAGE = 'Неверный диапазон дат'
@@ -51,6 +59,7 @@ export function DateRangeFilter({
   onChange,
   disabled = false,
   className = '',
+  quickPresets,
 }: DateRangeFilterProps) {
   const titleId = useId()
   const dialogId = useId()
@@ -142,6 +151,31 @@ export function DateRangeFilter({
         <h2 id={titleId} className="date-range-modal__title">
           {placeholder}
         </h2>
+
+        {quickPresets?.length ? (
+          <div
+            className="date-range-modal__presets"
+            role="group"
+            aria-label="Быстрый выбор периода"
+          >
+            {quickPresets.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="date-range-modal__preset-btn"
+                disabled={disabled}
+                onClick={() => {
+                  if (disabled) return
+                  setModalError('')
+                  onChange({ date_from: p.date_from, date_to: p.date_to })
+                  setOpen(false)
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="date-range-modal__fields">
           <label className="date-range-modal__field-row">

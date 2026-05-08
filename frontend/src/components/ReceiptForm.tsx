@@ -290,7 +290,7 @@ export function ReceiptForm({ receiptId }: Props) {
   async function submitCreate(intent: 'pending' | 'accepted') {
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
-      setSubmitError('Сначала выберите артикул и цвет')
+      setSubmitError('Сначала выберите штрих-код и цвет')
       return
     }
     if (!quantityValid) {
@@ -325,9 +325,39 @@ export function ReceiptForm({ receiptId }: Props) {
   async function finalizeReceipt() {
     if (!receiptId?.trim()) return
     setSubmitError('')
+    if (!findRes?.found || !findRes.variant) {
+      setSubmitError('Сначала выберите штрих-код и цвет')
+      return
+    }
+    if (!quantityValid) {
+      setSubmitError('Укажите количество не менее 1')
+      return
+    }
+    if (!receiptDateFormatOk) {
+      setSubmitError('Укажите дату поступления')
+      return
+    }
+    if (!receiptDateOkAccepted) {
+      setSubmitError('Для принятого поступления дата не может быть позже сегодняшнего дня')
+      return
+    }
     setSubmitting(true)
     try {
-      await patchReceipt(receiptId, { receipt_status: 'accepted' })
+      const qty = Math.floor(quantityNum)
+      const note = comment.trim() || null
+      const nextVid = findRes.variant.variant_id
+      const base = {
+        quantity: qty,
+        comment: note,
+        receipt_date: receiptDate,
+        receipt_status: 'accepted' as const,
+      }
+      if (nextVid !== loadedVariantId) {
+        await patchReceipt(receiptId, { ...base, variant_id: nextVid })
+      } else {
+        await patchReceipt(receiptId, base)
+      }
+      setLoadedVariantId(nextVid)
       navigate('/inventory/receipts')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -374,7 +404,7 @@ export function ReceiptForm({ receiptId }: Props) {
     }
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
-      setSubmitError('Сначала выберите артикул и цвет')
+      setSubmitError('Сначала выберите штрих-код и цвет')
       return
     }
     if (!quantityValid) {
@@ -453,7 +483,7 @@ export function ReceiptForm({ receiptId }: Props) {
         />
 
         <label className="field-label" htmlFor={`${formId}-sku`}>
-          Артикул
+          Штрих-код
           <span className="field-label__required" aria-label="обязательное поле">
             *
           </span>

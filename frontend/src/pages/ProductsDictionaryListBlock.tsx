@@ -81,7 +81,7 @@ export function ProductsDictionaryListBlock() {
 
   const productFilterFields: FilterFieldConfig[] = useMemo(
     () => [
-      { name: 'sku', type: 'text', placeholder: 'Артикул' },
+      { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
       { name: 'name', type: 'text', placeholder: 'Название' },
       {
         name: 'type_id',
@@ -106,7 +106,7 @@ export function ProductsDictionaryListBlock() {
     () => [
       {
         key: 'sku_base',
-        title: 'Артикул',
+        title: 'Штрих-код',
         sortable: true,
         render: (_, row) => (row.sku_base?.trim() ? row.sku_base : '—'),
       },

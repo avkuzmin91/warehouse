@@ -359,9 +359,6 @@ export function DictionaryFormCombobox({
           itemCount={virtualCount}
           itemSize={ROW_H}
           itemData={itemData}
-          innerProps={{
-            className: 'dictionary-form-combobox__vscroll',
-          }}
         >
           {FormComboListRow}
         </FixedSizeList>

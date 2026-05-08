@@ -23,7 +23,7 @@ import { useConfirm } from './ConfirmDialogProvider'
 
 export type SaveVariantsOptions = {
   /**
-   * После сохранения карточки с новым базовым артикулом сервер пересчитывает SKU вариантов —
+   * После сохранения карточки с новым базовым штрих-кодом сервер пересчитывает SKU вариантов —
    * перед PATCH подставить актуальные sku с сервера (цвет/габариты остаются из локальной таблицы).
    */
   syncSkusFromServer?: boolean
@@ -35,7 +35,7 @@ export type ProductVariantsEditorHandle = {
 
 type Props = {
   productId: string
-  /** Базовый артикул товара — часть ключа уникальности варианта вместе с цветом и размером. */
+  /** Базовый штрих-код товара — часть ключа уникальности варианта вместе с цветом и размером. */
   skuBase: string
   requiresSize: boolean
   disabled?: boolean
@@ -103,8 +103,8 @@ function validateVariantUniqueness(
     const prev = map.get(key)
     if (prev !== undefined) {
       return requiresSize
-        ? 'Дублируется сочетание артикула товара, цвета и размера'
-        : 'Дублируется сочетание артикула товара и цвета'
+        ? 'Дублируется сочетание штрих-кода товара, цвета и размера'
+        : 'Дублируется сочетание штрих-кода товара и цвета'
     }
     map.set(key, i)
   }

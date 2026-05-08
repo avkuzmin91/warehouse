@@ -23,7 +23,8 @@ export function SimpleDictionaryCreatePage({ entity }: SimpleDictionaryCreatePag
   const formId = useId()
   const [name, setName] = useState('')
   const [isActive, setIsActive] = useState(true)
-  const [requiresColor, setRequiresColor] = useState(false)
+  /** Новые типы товаров: учёт по цвету всегда «Да», поле недоступно для изменения. */
+  const [requiresColor] = useState(true)
   const [requiresSize, setRequiresSize] = useState(false)
   const [touchedName, setTouchedName] = useState(false)
   const [submitError, setSubmitError] = useState('')
@@ -82,12 +83,16 @@ export function SimpleDictionaryCreatePage({ entity }: SimpleDictionaryCreatePag
             <p className="field-hint" style={{ marginBottom: 8 }}>
               Варианты SKU (цвет, размер)
             </p>
-            <label className="remember product-create-remember" htmlFor={`${formId}-req-color`}>
+            <label
+              className="remember product-create-remember product-create-remember--readonly"
+              htmlFor={`${formId}-req-color`}
+              title="Для новых типов товаров учёт по цвету всегда включён."
+            >
               <input
                 id={`${formId}-req-color`}
                 type="checkbox"
                 checked={requiresColor}
-                onChange={(e) => setRequiresColor(e.target.checked)}
+                disabled
               />
               <span className="remember__box" />
               <span className="remember__text">Учёт по цвету</span>

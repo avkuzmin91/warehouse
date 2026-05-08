@@ -203,7 +203,7 @@ render(value, row)
 <Table
   columns={[
     { key: "name", title: "Название", sortable: true },
-    { key: "sku", title: "Артикул", sortable: true },
+    { key: "sku", title: "Штрих-код", sortable: true },
     {
       key: "image",
       title: "Фото",

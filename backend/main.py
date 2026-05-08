@@ -1,7 +1,9 @@
 from datetime import UTC, date, datetime, timedelta
+import io
 import json
 import re
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -15,6 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
+
+import movements_excel_import as _mei
+from fastapi.responses import Response
 
 
 JWT_SECRET = "replace-this-secret-in-production"
@@ -230,6 +235,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 UPLOADS_DIR.mkdir(exist_ok=True)
+IMPORT_STAGING_DIR = UPLOADS_DIR / "import_staging"
+IMPORT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+IMPORT_STAGING_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
@@ -329,8 +337,8 @@ class ProductTypeCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     is_active: bool = False
     requires_color: bool = Field(
-        default=False,
-        description="Включить обязательный выбор цвета для вариантов.",
+        default=True,
+        description="При создании типа всегда сохраняется как true (поле в теле запроса игнорируется).",
     )
     requires_size: bool = Field(
         default=False,
@@ -633,7 +641,7 @@ class ProductUpdateRequest(BaseModel):
     sku_base: str | None = Field(
         default=None,
         min_length=1,
-        description="Базовый артикул (products.sku); при смене пересчитываются SKU вариантов.",
+        description="Базовый штрих-код (products.sku); при смене пересчитываются SKU вариантов.",
     )
     image_urls: list[str] | None = Field(
         default=None,
@@ -914,6 +922,22 @@ def init_db():
                 "deleted_by_id": "TEXT",
                 "shipment_status": "TEXT",
             },
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS import_movement_logs (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                op_type TEXT NOT NULL,
+                filename TEXT,
+                total INTEGER NOT NULL DEFAULT 0,
+                success INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                warnings INTEGER NOT NULL DEFAULT 0,
+                detail_json TEXT
+            )
+            """
         )
         connection.execute(
             """
@@ -1459,8 +1483,14 @@ def get_current_user(
 
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT id, email, role, created_at, client_id FROM users WHERE id = ? AND email = ?",
-            (user_id, email.lower()),
+            """
+            SELECT id, email, role, created_at, client_id
+            FROM users
+            WHERE id = ?
+              AND LOWER(TRIM(email)) = LOWER(TRIM(?))
+              AND COALESCE(is_deleted, 0) = 0
+            """,
+            (user_id, str(email)),
         ).fetchone()
 
     if not user:
@@ -1533,7 +1563,7 @@ def _normalize_sku(sku: str) -> str:
     if not normalized:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Поле Артикул товара обязательно",
+            detail="Поле Штрих-код товара обязательно",
         )
     return normalized
 
@@ -1582,7 +1612,7 @@ def _rebase_variant_skus_for_new_product_base(
     new_base_sku: str,
     updated_at: str,
 ) -> None:
-    """При смене базового артикула товара обновляет SKU неудалённых вариантов (префикс + проверка уникальности)."""
+    """При смене базового штрих-кода товара обновляет SKU неудалённых вариантов (префикс + проверка уникальности)."""
     old_b = old_base_sku.strip()
     new_b = new_base_sku.strip()
     rows = connection.execute(
@@ -1639,7 +1669,7 @@ def _rebase_variant_skus_for_new_product_base(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Не удалось подобрать уникальные артикулы вариантов",
+                detail="Не удалось подобрать уникальные штрих-коды вариантов",
             )
         used_local.add(p)
         finals.append((vid, p))
@@ -1887,7 +1917,7 @@ def _variant_identity_key(
     *,
     requires_size: bool,
 ) -> tuple[str, str, str]:
-    """Уникальность варианта: артикул товара + цвет варианта + размер варианта."""
+    """Уникальность варианта: штрих-код товара + цвет варианта + размер варианта."""
     base = str(sku_base).strip()
     cid = str(color_id).strip().lower()
     if requires_size:
@@ -1984,7 +2014,11 @@ def _build_variant_rows_for_create(
                     if key in seen_keys:
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Дублируется комбинация цвета, габаритов и размера",
+                            detail=(
+                                "Дублируется комбинация цвета, габаритов и размера "
+                                "(один размер не может повторяться для тех же габаритов "
+                                "в разных блоках)."
+                            ),
                         )
                     seen_keys.add(key)
                     out.append(
@@ -2140,9 +2174,9 @@ def _sync_product_variants_from_request(
             )
 
     dup_detail = (
-        "Дублируется сочетание артикула товара, цвета и размера"
+        "Дублируется сочетание штрих-кода товара, цвета и размера"
         if requires_size
-        else "Дублируется сочетание артикула товара и цвета"
+        else "Дублируется сочетание штрих-кода товара и цвета"
     )
 
     rows_to_apply: list[tuple] = []
@@ -2750,7 +2784,7 @@ def login(payload: LoginRequest):
             detail="Неверный email или пароль",
         )
 
-    token = create_token(user["id"], user["email"], user["role"])
+    token = create_token(str(user["id"]), str(user["email"]).strip().lower(), str(user["role"]))
     return LoginResponse(token=token)
 
 
@@ -3192,7 +3226,7 @@ def _create_product_type(payload: ProductTypeCreateRequest, creator_id: str):
                     item_id,
                     name,
                     1 if payload.is_active else 0,
-                    1 if payload.requires_color else 0,
+                    1,  # новые типы: учёт по цвету всегда включён
                     1 if payload.requires_size else 0,
                     _now(),
                     creator_id,
@@ -3776,7 +3810,7 @@ def get_product(
 
 @app.get("/product-variants/find", response_model=ProductVariantFindResponse)
 def find_product_variant_for_receipt(
-    sku: str = Query("", description="Артикул варианта или базовый артикул товара"),
+    sku: str = Query("", description="Штрих-код варианта или базовый штрих-код товара"),
     color_id: str = Query("", description="Идентификатор цвета"),
     size_id: str | None = Query(None, description="Размер; для одежды обязателен для однозначного поиска"),
     user=Depends(get_current_manager),
@@ -4102,7 +4136,7 @@ async def create_product(
             connection.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="Базовый артикул или SKU варианта уже существует",
+                detail="Базовый штрих-код или SKU варианта уже существует",
             ) from exc
     return MessageResponse(message="Создано")
 
@@ -4191,7 +4225,7 @@ def update_product(
                 if _sku_taken_globally_except_product(connection, new_sku, item_id):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Базовый артикул уже занят",
+                        detail="Базовый штрих-код уже занят",
                     )
                 _rebase_variant_skus_for_new_product_base(
                     connection,
@@ -4230,7 +4264,7 @@ def update_product(
             connection.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="Базовый артикул или SKU варианта уже существует",
+                detail="Базовый штрих-код или SKU варианта уже существует",
             ) from exc
     msg = "Обновлено"
     if payload.is_deleted is True:
@@ -4326,10 +4360,10 @@ class InventoryOperationItem(BaseModel):
     size_id: str | None
     size_name: str | None
     variant_sku: str | None = Field(
-        default=None, description="Артикул варианта (для сортировки/совместимости; в UI списка — product_sku)"
+        default=None, description="Штрих-код варианта (для сортировки/совместимости; в UI списка — product_sku)"
     )
     product_sku: str | None = Field(
-        default=None, description="Базовый артикул товара (products.sku)"
+        default=None, description="Базовый штрих-код товара (products.sku)"
     )
     preview_image_url: str | None = Field(default=None, description="Первое фото карточки товара")
     receipt_status: str | None = Field(
@@ -4356,7 +4390,7 @@ class InventoryOperationListResponse(BaseModel):
 class InventoryBalanceItem(BaseModel):
     product_id: str
     product_name: str
-    product_sku: str = Field("", description="Базовый артикул карточки товара")
+    product_sku: str = Field("", description="Базовый штрих-код карточки товара")
     preview_image_url: str | None = Field(None, description="Первое фото карточки товара")
     product_type_id: str | None
     product_type_name: str | None
@@ -4475,10 +4509,10 @@ def inventory_lookup_colors(user=Depends(get_current_manager)):
     response_model=list[DictionaryBaseItem],
 )
 def inventory_lookup_colors_for_sku(
-    sku: str = Query(..., description="Базовый артикул товара (products.sku)"),
+    sku: str = Query(..., description="Базовый штрих-код товара (products.sku)"),
     user=Depends(get_current_manager),
 ):
-    """Цвета, для которых у товара есть варианты (только по этому артикулу)."""
+    """Цвета, для которых у товара есть варианты (только по этому штрих-коду)."""
     _ = user
     s = str(sku).strip()
     if not s:
@@ -4538,11 +4572,11 @@ def inventory_lookup_colors_for_sku(
     response_model=list[DictionaryBaseItem],
 )
 def inventory_lookup_sizes_for_sku(
-    sku: str = Query(..., description="Базовый артикул товара (products.sku)"),
+    sku: str = Query(..., description="Базовый штрих-код товара (products.sku)"),
     color_id: str = Query(..., description="Цвет варианта"),
     user=Depends(get_current_manager),
 ):
-    """Размеры вариантов для пары товар (артикул) + цвет."""
+    """Размеры вариантов для пары товар (штрих-код) + цвет."""
     _ = user
     s = str(sku).strip()
     cid = str(color_id).strip()
@@ -4682,7 +4716,7 @@ def inventory_lookup_products(
 
 @app.get("/inventory/lookups/skus", response_model=list[str])
 def inventory_lookup_skus(user=Depends(get_current_manager)):
-    """Базовые артикулы товаров (`products.sku`) для выбора в приёмке (без артикулов вариантов)."""
+    """Базовые штрих-коды товаров (`products.sku`) для выбора в приёмке (без штрих-кодов вариантов)."""
     _ = user
     with get_connection() as connection:
         rows = connection.execute(
@@ -4729,7 +4763,7 @@ def list_inventory_operations(
     supplier_id: str | None = Query(None),
     color_id: str | None = Query(None),
     size_id: str | None = Query(None),
-    sku: str | None = Query(None, description="Подстрока по базовому артикулу товара (products.sku)"),
+    sku: str | None = Query(None, description="Подстрока по базовому штрих-коду товара (products.sku)"),
     name: str | None = Query(None, description="Подстрока по названию товара (products.name)"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
@@ -5797,7 +5831,7 @@ def list_inventory_balances(
     supplier_id: str | None = Query(None),
     color_id: str | None = Query(None),
     size_id: str | None = Query(None),
-    sku: str | None = Query(None, description="Подстрока по базовому артикулу (products.sku)"),
+    sku: str | None = Query(None, description="Подстрока по базовому штрих-коду (products.sku)"),
     name: str | None = Query(None, description="Подстрока по названию товара"),
     only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
     sort: str | None = Query(None),
@@ -5891,8 +5925,7 @@ def list_inventory_balances(
 
 # ============================================================================
 # Analytics: отчёты по операциям и остаткам.
-# Реализовано по ТЗ «analyst data.md».
-# Доступ — менеджер и админ. Период по умолчанию — последние 30 дней.
+# Доступ — только администратор (ТЗ «Аналитика админа»). Период по умолчанию — последние 30 дней.
 # Все эндпоинты возвращают {report, chart, explanation, period, filters, data}.
 # ============================================================================
 
@@ -5906,9 +5939,21 @@ class AnalyticsPeriod(BaseModel):
 
 
 class AnalyticsFilters(BaseModel):
-    client_id: str | None = None
+    client_ids: list[str] = Field(default_factory=list)
     product_id: str | None = None
     type_id: str | None = None
+
+
+def _normalize_analytics_client_ids(values: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in values or []:
+        s = str(x).strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
 
 
 class MovementBucket(BaseModel):
@@ -6040,6 +6085,34 @@ class ByTypeReport(BaseModel):
     data: list[ByTypeItem]
 
 
+class AdminDashboardStockByClient(BaseModel):
+    client_id: str
+    client: str
+    stock: int
+
+
+class AdminDashboardClientMovement(BaseModel):
+    client_id: str
+    client: str
+    inflow: int
+    outflow: int
+
+
+class AdminDashboardReport(BaseModel):
+    report: str = "admin_dashboard"
+    period: AnalyticsPeriod
+    filters: AnalyticsFilters
+    at_date: str
+    total_inflow: int
+    total_outflow: int
+    stock_total: int
+    active_clients: int
+    movement_clients_limit: int
+    stock_by_client: list[AdminDashboardStockByClient]
+    client_movement: list[AdminDashboardClientMovement]
+    explanation: str
+
+
 def _default_period(date_from: str | None, date_to: str | None) -> tuple[str, str]:
     """Если период не задан — последние 30 дней (включительно)."""
     today = datetime.now(UTC).date()
@@ -6057,18 +6130,22 @@ def _default_period(date_from: str | None, date_to: str | None) -> tuple[str, st
 
 def _ana_filter_sql(
     *,
-    client_id: str | None,
-    product_id: str | None,
-    type_id: str | None,
+    client_ids: list[str] | None = None,
+    product_id: str | None = None,
+    type_id: str | None = None,
 ) -> tuple[list[str], list[object]]:
     conds: list[str] = []
     params: list[object] = []
-    cid = (client_id or "").strip()
+    ids = _normalize_analytics_client_ids(client_ids)
     pid = (product_id or "").strip()
     tid = (type_id or "").strip()
-    if cid:
+    if len(ids) == 1:
         conds.append("p.client_id = ?")
-        params.append(cid)
+        params.append(ids[0])
+    elif len(ids) > 1:
+        placeholders = ",".join("?" * len(ids))
+        conds.append(f"p.client_id IN ({placeholders})")
+        params.extend(ids)
     if pid:
         conds.append("o.product_id = ?")
         params.append(pid)
@@ -6101,18 +6178,19 @@ def analytics_movement(
     group: str = Query("day", description="day | week | month"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    client_id: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
     product_id: str | None = Query(None),
     type_id: str | None = Query(None),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     g = (group or "day").lower()
     if g not in ANALYTICS_GROUPS:
         raise HTTPException(status_code=400, detail="group: допустимо day | week | month")
     df, dt = _default_period(date_from, date_to)
+    cids = _normalize_analytics_client_ids(client_ids)
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=product_id, type_id=type_id
+        client_ids=cids or None, product_id=product_id, type_id=type_id
     )
     conds.extend(
         [
@@ -6154,7 +6232,9 @@ def analytics_movement(
         explanation=explanation,
         group=g,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
+        filters=AnalyticsFilters(
+            client_ids=cids, product_id=product_id, type_id=type_id
+        ),
         data=data,
     )
 
@@ -6162,19 +6242,20 @@ def analytics_movement(
 @app.get("/analytics/stock-snapshot", response_model=StockSnapshotReport)
 def analytics_stock_snapshot(
     at_date: str | None = Query(None, description="YYYY-MM-DD; по умолчанию сегодня"),
-    client_id: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
     product_id: str | None = Query(None),
     type_id: str | None = Query(None),
     only_positive: bool = Query(True),
     limit: int = Query(500, ge=1, le=5000),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     at = _normalize_date_yyyy_mm_dd(at_date, "at_date")
     if not at:
         at = datetime.now(UTC).date().isoformat()
+    cids = _normalize_analytics_client_ids(client_ids)
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=product_id, type_id=type_id
+        client_ids=cids or None, product_id=product_id, type_id=type_id
     )
     conds.append("substr(o.created_at, 1, 10) <= ?")
     params.append(at)
@@ -6232,7 +6313,9 @@ def analytics_stock_snapshot(
     return StockSnapshotReport(
         explanation=explanation,
         at_date=at,
-        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
+        filters=AnalyticsFilters(
+            client_ids=cids, product_id=product_id, type_id=type_id
+        ),
         data=data,
     )
 
@@ -6242,14 +6325,15 @@ def analytics_top_products(
     limit: int = Query(10, ge=1, le=100),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    client_id: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
     type_id: str | None = Query(None),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     df, dt = _default_period(date_from, date_to)
+    cids = _normalize_analytics_client_ids(client_ids)
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=None, type_id=type_id
+        client_ids=cids or None, product_id=None, type_id=type_id
     )
     conds.extend(
         [
@@ -6294,7 +6378,7 @@ def analytics_top_products(
     return TopProductsReport(
         explanation=explanation,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=type_id),
+        filters=AnalyticsFilters(client_ids=cids, product_id=None, type_id=type_id),
         limit=limit,
         data=data,
     )
@@ -6303,17 +6387,18 @@ def analytics_top_products(
 @app.get("/analytics/dead-stock", response_model=DeadStockReport)
 def analytics_dead_stock(
     days: int = Query(30, ge=1, le=3650),
-    client_id: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
     type_id: str | None = Query(None),
     limit: int = Query(200, ge=1, le=5000),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     today = datetime.now(UTC).date()
     cutoff = (today - timedelta(days=days)).isoformat()
     today_iso = today.isoformat()
+    cids = _normalize_analytics_client_ids(client_ids)
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=None, type_id=type_id
+        client_ids=cids or None, product_id=None, type_id=type_id
     )
     where_sql = " AND ".join(conds) if conds else "1=1"
     with get_connection() as connection:
@@ -6375,7 +6460,7 @@ def analytics_dead_stock(
     return DeadStockReport(
         explanation=explanation,
         days_threshold=days,
-        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=type_id),
+        filters=AnalyticsFilters(client_ids=cids, product_id=None, type_id=type_id),
         data=data,
     )
 
@@ -6387,12 +6472,12 @@ def analytics_client_activity(
     type_id: str | None = Query(None),
     product_id: str | None = Query(None),
     limit: int = Query(20, ge=1, le=200),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     df, dt = _default_period(date_from, date_to)
     conds, params = _ana_filter_sql(
-        client_id=None, product_id=product_id, type_id=type_id
+        client_ids=None, product_id=product_id, type_id=type_id
     )
     conds.extend(
         [
@@ -6438,7 +6523,7 @@ def analytics_client_activity(
     return ClientActivityReport(
         explanation=explanation,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=None, product_id=product_id, type_id=type_id),
+        filters=AnalyticsFilters(client_ids=[], product_id=product_id, type_id=type_id),
         data=data,
     )
 
@@ -6448,12 +6533,12 @@ def _sum_in_out_for_range(
     *,
     df: str,
     dt: str,
-    client_id: str | None,
+    client_ids: list[str] | None,
     product_id: str | None,
     type_id: str | None,
 ) -> tuple[int, int]:
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=product_id, type_id=type_id
+        client_ids=client_ids, product_id=product_id, type_id=type_id
     )
     conds.extend(
         [
@@ -6487,13 +6572,15 @@ def _change_pct(current: int, previous: int) -> float | None:
 def analytics_balance(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    client_id: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
     product_id: str | None = Query(None),
     type_id: str | None = Query(None),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_admin),
 ):
     _ = user
     df, dt = _default_period(date_from, date_to)
+    cids = _normalize_analytics_client_ids(client_ids)
+    cid_param = cids or None
     df_d = datetime.fromisoformat(df).date()
     dt_d = datetime.fromisoformat(dt).date()
     span = (dt_d - df_d).days + 1
@@ -6504,7 +6591,7 @@ def analytics_balance(
             connection,
             df=df,
             dt=dt,
-            client_id=client_id,
+            client_ids=cid_param,
             product_id=product_id,
             type_id=type_id,
         )
@@ -6512,7 +6599,7 @@ def analytics_balance(
             connection,
             df=prev_df,
             dt=prev_dt,
-            client_id=client_id,
+            client_ids=cid_param,
             product_id=product_id,
             type_id=type_id,
         )
@@ -6531,8 +6618,9 @@ def analytics_balance(
     return BalanceReport(
         explanation=explanation,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=client_id, product_id=product_id, type_id=type_id),
-        inflow=cur_in,
+        filters=AnalyticsFilters(
+            client_ids=cids, product_id=product_id, type_id=type_id
+        ),
         outflow=cur_out,
         delta=delta,
         prev_inflow=prev_in,
@@ -6548,14 +6636,16 @@ def analytics_balance(
 def analytics_by_type(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    client_id: str | None = Query(None),
-    user=Depends(get_current_manager),
+    client_ids: list[str] | None = Query(None),
+    user=Depends(get_current_admin),
 ):
     _ = user
     df, dt = _default_period(date_from, date_to)
+    cids = _normalize_analytics_client_ids(client_ids)
+    cid_param = cids or None
     # 1) inflow / outflow в периоде по типу
     conds, params = _ana_filter_sql(
-        client_id=client_id, product_id=None, type_id=None
+        client_ids=cid_param, product_id=None, type_id=None
     )
     conds.extend(
         [
@@ -6583,7 +6673,7 @@ def analytics_by_type(
         ).fetchall()
         # 2) текущий остаток по типу (на сегодня, без учёта периода — это снапшот)
         stock_conds, stock_params = _ana_filter_sql(
-            client_id=client_id, product_id=None, type_id=None
+            client_ids=cid_param, product_id=None, type_id=None
         )
         stock_where = " AND ".join(stock_conds) if stock_conds else "1=1"
         stock_rows = connection.execute(
@@ -6646,8 +6736,160 @@ def analytics_by_type(
     return ByTypeReport(
         explanation=explanation,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=client_id, product_id=None, type_id=None),
+        filters=AnalyticsFilters(client_ids=cids, product_id=None, type_id=None),
         data=items,
+    )
+
+
+@app.get("/analytics/admin-dashboard", response_model=AdminDashboardReport)
+def analytics_admin_dashboard(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_ids: list[str] | None = Query(None),
+    product_id: str | None = Query(None),
+    type_id: str | None = Query(None),
+    movement_clients_limit: int = Query(12, ge=5, le=40),
+    admin=Depends(get_current_admin),
+):
+    _ = admin
+    df, dt = _default_period(date_from, date_to)
+    cids = _normalize_analytics_client_ids(client_ids)
+    cid_param = cids or None
+    conds_stock, params_stock = _ana_filter_sql(
+        client_ids=cid_param, product_id=product_id, type_id=type_id
+    )
+    conds_stock.append("substr(o.created_at, 1, 10) <= ?")
+    params_stock.append(dt)
+    where_stock = " AND ".join(conds_stock)
+
+    conds_mv, params_mv = _ana_filter_sql(
+        client_ids=cid_param, product_id=product_id, type_id=type_id
+    )
+    conds_mv.extend(
+        [
+            "substr(o.created_at, 1, 10) >= ?",
+            "substr(o.created_at, 1, 10) <= ?",
+        ]
+    )
+    params_mv.extend([df, dt])
+    where_mv = " AND ".join(conds_mv)
+
+    with get_connection() as connection:
+        total_in, total_out = _sum_in_out_for_range(
+            connection,
+            df=df,
+            dt=dt,
+            client_ids=cid_param,
+            product_id=product_id,
+            type_id=type_id,
+        )
+
+        row_tot = connection.execute(
+            f"""
+            SELECT COALESCE(SUM(b.qty), 0) AS total
+            FROM (
+                SELECT SUM({SQL_O_NET_QTY}) AS qty
+                FROM inventory_operations o
+                LEFT JOIN products p ON p.id = o.product_id
+                WHERE {where_stock}
+                GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
+                HAVING SUM({SQL_O_NET_QTY}) > 0
+            ) AS b
+            """,
+            params_stock,
+        ).fetchone()
+        stock_total = int(row_tot["total"] or 0)
+
+        row_ac = connection.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM clients
+            WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(is_active, 0) = 1
+            """
+        ).fetchone()
+        active_clients = int(row_ac["n"] or 0)
+
+        rows_sc = connection.execute(
+            f"""
+            SELECT pr.client_id AS client_id,
+                   MAX(cl.name) AS client,
+                   SUM(v.stock) AS stock
+            FROM (
+                SELECT o.product_id AS product_id,
+                       COALESCE(o.color_id, '') AS color_id,
+                       COALESCE(o.size_id, '') AS size_id,
+                       SUM({SQL_O_NET_QTY}) AS stock
+                FROM inventory_operations o
+                LEFT JOIN products p ON p.id = o.product_id
+                WHERE {where_stock}
+                GROUP BY o.product_id, COALESCE(o.color_id, ''), COALESCE(o.size_id, '')
+                HAVING SUM({SQL_O_NET_QTY}) > 0
+            ) v
+            INNER JOIN products pr ON pr.id = v.product_id
+            LEFT JOIN clients cl ON cl.id = pr.client_id
+            WHERE pr.client_id IS NOT NULL
+            GROUP BY pr.client_id
+            ORDER BY stock DESC
+            LIMIT ?
+            """,
+            [*params_stock, 15],
+        ).fetchall()
+
+        rows_cm = connection.execute(
+            f"""
+            SELECT p.client_id AS client_id,
+                   MAX(cl.name) AS client,
+                   COALESCE(SUM({SQL_O_INFLOW_QTY}), 0) AS inflow,
+                   COALESCE(SUM({SQL_O_SHIPPED_OUT_QTY}), 0) AS outflow
+            FROM inventory_operations o
+            LEFT JOIN products p ON p.id = o.product_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            WHERE {where_mv}
+              AND p.client_id IS NOT NULL
+            GROUP BY p.client_id
+            ORDER BY COALESCE(SUM({SQL_O_INFLOW_QTY}), 0)
+                + COALESCE(SUM({SQL_O_SHIPPED_OUT_QTY}), 0) DESC
+            LIMIT ?
+            """,
+            [*params_mv, movement_clients_limit],
+        ).fetchall()
+
+    stock_by_client = [
+        AdminDashboardStockByClient(
+            client_id=str(r["client_id"]),
+            client=r["client"] or "",
+            stock=int(r["stock"] or 0),
+        )
+        for r in rows_sc
+    ]
+    client_movement = [
+        AdminDashboardClientMovement(
+            client_id=str(r["client_id"]),
+            client=r["client"] or "",
+            inflow=int(r["inflow"] or 0),
+            outflow=int(r["outflow"] or 0),
+        )
+        for r in rows_cm
+    ]
+    explanation = (
+        f"Сводка админ-дашборда. {_explain_period(df, dt)}. Остатки на дату {dt}."
+    )
+    return AdminDashboardReport(
+        period=AnalyticsPeriod(date_from=df, date_to=dt),
+        filters=AnalyticsFilters(
+            client_ids=cids,
+            product_id=product_id,
+            type_id=type_id,
+        ),
+        at_date=dt,
+        total_inflow=total_in,
+        total_outflow=total_out,
+        stock_total=stock_total,
+        active_clients=active_clients,
+        movement_clients_limit=movement_clients_limit,
+        stock_by_client=stock_by_client,
+        client_movement=client_movement,
+        explanation=explanation,
     )
 
 
@@ -6981,7 +7223,7 @@ def client_portal_dashboard_metrics(
             connection,
             df=df,
             dt=dt,
-            client_id=portal_cid,
+            client_ids=[portal_cid],
             product_id=None,
             type_id=None,
         )
@@ -7008,7 +7250,7 @@ def client_portal_dashboard_movement(
         raise HTTPException(status_code=400, detail="group: допустимо day | week | month")
     df, dt = _default_period(date_from, date_to)
     conds, params = _ana_filter_sql(
-        client_id=portal_cid, product_id=product_id, type_id=type_id
+        client_ids=[portal_cid], product_id=product_id, type_id=type_id
     )
     conds.extend(
         [
@@ -7051,7 +7293,7 @@ def client_portal_dashboard_movement(
         group=g,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
         filters=AnalyticsFilters(
-            client_id=portal_cid, product_id=product_id, type_id=type_id
+            client_ids=[portal_cid], product_id=product_id, type_id=type_id
         ),
         data=data,
     )
@@ -7068,7 +7310,7 @@ def client_portal_dashboard_top_products(
     portal_cid = _portal_bound_client_id(user)
     df, dt = _default_period(date_from, date_to)
     conds, params = _ana_filter_sql(
-        client_id=portal_cid, product_id=None, type_id=type_id
+        client_ids=[portal_cid], product_id=None, type_id=type_id
     )
     conds.extend(
         [
@@ -7113,7 +7355,7 @@ def client_portal_dashboard_top_products(
     return TopProductsReport(
         explanation=explanation,
         period=AnalyticsPeriod(date_from=df, date_to=dt),
-        filters=AnalyticsFilters(client_id=portal_cid, product_id=None, type_id=type_id),
+        filters=AnalyticsFilters(client_ids=[portal_cid], product_id=None, type_id=type_id),
         limit=limit,
         data=data,
     )
@@ -7132,7 +7374,7 @@ def client_portal_dashboard_dead_stock(
     cutoff = (today - timedelta(days=days)).isoformat()
     today_iso = today.isoformat()
     conds, params = _ana_filter_sql(
-        client_id=portal_cid, product_id=None, type_id=type_id
+        client_ids=[portal_cid], product_id=None, type_id=type_id
     )
     where_sql = " AND ".join(conds) if conds else "1=1"
     with get_connection() as connection:
@@ -7194,6 +7436,1011 @@ def client_portal_dashboard_dead_stock(
     return DeadStockReport(
         explanation=explanation,
         days_threshold=days,
-        filters=AnalyticsFilters(client_id=portal_cid, product_id=None, type_id=type_id),
+        filters=AnalyticsFilters(client_ids=[portal_cid], product_id=None, type_id=type_id),
         data=data,
     )
+
+
+# --- Импорт движений из Excel (ТЗ «Загрузка excel») ---
+
+
+def _excel_filename_kind(filename: str) -> str | None:
+    lower = str(filename).strip().lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xlsm"):
+        return "xlsx"
+    if lower.endswith(".xls"):
+        return "xls"
+    return None
+
+
+def _template_type_to_op_type(template_type: str) -> str:
+    x = str(template_type).strip().lower()
+    if x in ("receipt", "in", "поступление", "поступления"):
+        return "in"
+    if x in ("shipment", "out", "отгрузка", "отгрузки"):
+        return "out"
+    raise HTTPException(status_code=400, detail="Неподдерживаемый тип шаблона")
+
+
+def _assert_excel_readable(raw: bytes, orig_name: str) -> None:
+    kind = _excel_filename_kind(orig_name)
+    if kind is None:
+        raise HTTPException(status_code=400, detail="Неподдерживаемый формат файла")
+    if kind == "xlsx":
+        try:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            wb.close()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Не удалось прочитать файл")
+        return
+    try:
+        import xlrd
+
+        xlrd.open_workbook(file_contents=raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Не удалось прочитать файл")
+
+
+def _save_staged_import(uid: str, op_type: str, raw: bytes, original_name: str) -> str:
+    fid = str(uuid4())
+    bin_path = IMPORT_STAGING_DIR / f"{fid}.bin"
+    meta_path = IMPORT_STAGING_DIR / f"{fid}.json"
+    template_label = "receipt" if op_type == "in" else "shipment"
+    meta = {
+        "user_id": uid,
+        "op_type": op_type,
+        "template_type": template_label,
+        "original_name": original_name,
+        "size": len(raw),
+    }
+    bin_path.write_bytes(raw)
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return fid
+
+
+def _load_staged_import(uid: str, file_id: str) -> tuple[bytes, dict[str, Any]]:
+    fid = str(file_id).strip()
+    if not fid:
+        raise HTTPException(status_code=400, detail="Укажите file_id")
+    meta_path = IMPORT_STAGING_DIR / f"{fid}.json"
+    bin_path = IMPORT_STAGING_DIR / f"{fid}.bin"
+    if not meta_path.is_file() or not bin_path.is_file():
+        raise HTTPException(status_code=404, detail="Файл импорта не найден или устарел")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if str(meta.get("user_id")) != uid:
+        raise HTTPException(status_code=403, detail="Нет доступа к файлу импорта")
+    return bin_path.read_bytes(), meta
+
+
+def _delete_staged_import(file_id: str) -> None:
+    fid = str(file_id).strip()
+    if not fid:
+        return
+    for suffix in (".bin", ".json"):
+        p = IMPORT_STAGING_DIR / f"{fid}{suffix}"
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+class MovementImportPreviewErrorItem(BaseModel):
+    row: int
+    error: str
+
+
+class MovementImportPreviewWarningItem(BaseModel):
+    row: int
+    warning: str
+
+
+class MovementImportPreviewRow(BaseModel):
+    excel_row: int
+    date: str
+    name: str
+    barcode: str
+    color: str
+    size: str | None = None
+    quantity: int
+    status: str
+    receipt_status: str | None = None
+    shipment_status: str | None = None
+    comment: str | None = None
+    product_name: str
+    client_name: str | None = None
+    preview_image_url: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MovementImportPreviewRowResult(BaseModel):
+    """Строка таблицы детализации проверки (ТЗ шаг 02)."""
+
+    excel_row: int
+    date: str
+    barcode: str
+    color: str
+    size: str | None = None
+    quantity: int | None = None
+    status_display: str
+    found_product_name: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MovementImportPreviewResponse(BaseModel):
+    summary_total: int = 0
+    summary_ok: int = 0
+    summary_with_errors: int = 0
+    import_ready: bool = False
+    file_status_label: str = ""
+    row_results: list[MovementImportPreviewRowResult] = Field(default_factory=list)
+    valid_rows: list[MovementImportPreviewRow] = Field(default_factory=list)
+    errors: list[MovementImportPreviewErrorItem] = Field(default_factory=list)
+    warnings: list[MovementImportPreviewWarningItem] = Field(default_factory=list)
+
+
+class MovementImportCommitResponse(BaseModel):
+    total: int
+    success: int
+    failed: int
+    warnings: int
+
+
+class ImportUploadResponse(BaseModel):
+    file_id: str
+    file_name: str
+    file_size: int
+
+
+def _date_iso_to_ru_display(date_iso: str | None) -> str:
+    if not date_iso or len(str(date_iso)) < 10:
+        return ""
+    s = str(date_iso)
+    try:
+        y, mo, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+        return f"{d:02d}.{mo:02d}.{y}"
+    except Exception:
+        return s
+
+
+def _import_status_field_error(status_display: str, op_type: str) -> str | None:
+    sd = _mei.normalize_excel_text(status_display)
+    if not sd:
+        return "Не указан статус"
+    if _mei.normalize_movement_import_status(sd, op_type) is not None:
+        return None
+    alt_ot = "out" if str(op_type).strip().lower() == "in" else "in"
+    if _mei.normalize_movement_import_status(sd, alt_ot) is not None:
+        return "Статус не соответствует типу операции"
+    return "Некорректный статус"
+
+
+def _lookup_client_id_for_import(connection: Any, client_name: str) -> tuple[str | None, str | None]:
+    cn = _mei.normalize_excel_text(client_name)
+    if not cn:
+        return None, "Клиент не найден"
+    rows = connection.execute(
+        """
+        SELECT id FROM clients
+        WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(is_active, 1) = 1
+          AND LOWER(TRIM(COALESCE(name, ''))) = LOWER(TRIM(?))
+        """,
+        (cn,),
+    ).fetchall()
+    if not rows:
+        return None, "Клиент не найден"
+    return str(rows[0]["id"]), None
+
+
+def _resolve_movement_variant_for_import(
+    connection: Any,
+    barcode: str,
+    color_name: str,
+    size_name: str,
+    product_name_excel: str,
+    client_id_file: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Поиск варианта по ШК + цвету + размеру (название только сверка). ТЗ шаг 02."""
+    bc = str(barcode).strip()
+    cn = str(color_name or "").strip()
+    sn = str(size_name or "").strip()
+    if not bc:
+        return None, "Не указан ШК"
+
+    prows = connection.execute(
+        """
+        SELECT p.id, p.name, p.client_id, p.gallery_json, p.image_url,
+               COALESCE(pt.requires_color, 0) AS requires_color,
+               COALESCE(pt.requires_size, 0) AS requires_size,
+               cl.name AS client_name
+        FROM products p
+        JOIN product_types pt ON pt.id = p.type_id
+        LEFT JOIN clients cl ON cl.id = p.client_id
+        WHERE COALESCE(p.is_deleted, 0) = 0 AND COALESCE(p.is_active, 1) = 1
+          AND LOWER(TRIM(COALESCE(p.sku, ''))) = LOWER(TRIM(?))
+        """,
+        (bc,),
+    ).fetchall()
+    if not prows:
+        return None, "Товар не найден"
+    if len(prows) > 1:
+        return None, "Найдено несколько вариантов товара"
+    pr = prows[0]
+    pid = str(pr["id"])
+    pname = str(pr["name"] or "").strip()
+    client_id = pr["client_id"]
+    client_name = str(pr["client_name"] or "").strip() if pr["client_name"] else None
+    if client_id is None or not str(client_id).strip():
+        return None, "Товар не привязан к клиенту"
+    if _fold_ci_str(product_name_excel) != _fold_ci_str(pname):
+        return None, f"Название в системе отличается: {pname}"
+    if client_id_file and str(client_id).strip() != str(client_id_file).strip():
+        return None, "Товар не принадлежит клиенту"
+
+    requires_color = bool(pr["requires_color"])
+    requires_size = bool(pr["requires_size"])
+
+    color_id: str | None = None
+    if requires_color:
+        if not cn:
+            return None, "Цвет не найден"
+        color_rows = connection.execute(
+            """
+            SELECT id FROM colors
+            WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
+              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+            """,
+            (cn,),
+        ).fetchall()
+        if not color_rows:
+            return None, "Цвет не найден"
+        color_id = str(color_rows[0]["id"])
+    else:
+        if cn:
+            color_rows = connection.execute(
+                """
+                SELECT id FROM colors
+                WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
+                  AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                """,
+                (cn,),
+            ).fetchall()
+            if not color_rows:
+                return None, "Цвет не найден"
+            color_id = str(color_rows[0]["id"])
+
+    if color_id is not None:
+        vrows = connection.execute(
+            """
+            SELECT v.id AS variant_id, v.sku AS variant_sku, v.product_id, v.color_id, v.size_id,
+                   s.name AS size_name
+            FROM product_variants v
+            LEFT JOIN sizes s ON s.id = v.size_id
+            WHERE v.product_id = ? AND v.color_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0 AND COALESCE(v.is_active, 1) = 1
+            """,
+            (pid, color_id),
+        ).fetchall()
+    else:
+        vrows = connection.execute(
+            """
+            SELECT v.id AS variant_id, v.sku AS variant_sku, v.product_id, v.color_id, v.size_id,
+                   s.name AS size_name
+            FROM product_variants v
+            LEFT JOIN sizes s ON s.id = v.size_id
+            WHERE v.product_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0 AND COALESCE(v.is_active, 1) = 1
+            """,
+            (pid,),
+        ).fetchall()
+
+    if not vrows:
+        return None, "Недопустимый цвет для товара" if color_id is not None else "Товар не найден"
+
+    size_id: str | None = None
+    if requires_size:
+        if not sn:
+            return None, "Размер не найден"
+        sz_rows = connection.execute(
+            """
+            SELECT id FROM sizes
+            WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
+              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+            """,
+            (sn,),
+        ).fetchall()
+        if not sz_rows:
+            return None, "Размер не найден"
+        size_id = str(sz_rows[0]["id"])
+    elif sn:
+        sz_rows = connection.execute(
+            """
+            SELECT id FROM sizes
+            WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
+              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+            """,
+            (sn,),
+        ).fetchall()
+        if not sz_rows:
+            return None, "Размер не найден"
+        size_id = str(sz_rows[0]["id"])
+
+    matches: list[Mapping[str, Any]] = []
+    if requires_size:
+        for vr in vrows:
+            if str(vr["size_id"] or "") == (size_id or ""):
+                matches.append(vr)
+        if not matches:
+            return None, "Недопустимый размер для товара"
+    else:
+        if sn:
+            for vr in vrows:
+                szn = str(vr["size_name"] or "").strip()
+                if _fold_ci_str(szn) == _fold_ci_str(sn):
+                    matches.append(vr)
+            if not matches:
+                return None, "Недопустимый размер для товара"
+        else:
+            if len(vrows) == 1:
+                matches = list(vrows)
+            else:
+                null_sz = [vr for vr in vrows if not vr["size_id"]]
+                if len(null_sz) == 1:
+                    matches = null_sz
+                elif len(null_sz) > 1:
+                    return None, "Найдено несколько вариантов товара"
+                else:
+                    return None, "Найдено несколько вариантов товара"
+
+    if len(matches) != 1:
+        if len(matches) > 1:
+            return None, "Найдено несколько вариантов товара"
+        return None, "Товар не найден"
+
+    vr = matches[0]
+    urls = _product_card_image_urls(pr["gallery_json"], pr["image_url"])
+    preview = urls[0] if urls else None
+    return {
+        "variant_id": str(vr["variant_id"]),
+        "variant_sku": str(vr["variant_sku"] or "").strip(),
+        "product_id": pid,
+        "color_id": str(vr["color_id"]) if vr["color_id"] else None,
+        "size_id": str(vr["size_id"]) if vr["size_id"] else None,
+        "product_name": pname,
+        "client_name": client_name,
+        "client_id": str(client_id).strip(),
+        "preview_image_url": preview,
+    }, None
+
+
+def _movement_import_process_rows(
+    connection: Any,
+    op_type: str,
+    parsed_rows: list[dict[str, Any]],
+) -> tuple[
+    list[MovementImportPreviewRow],
+    list[MovementImportPreviewErrorItem],
+    list[MovementImportPreviewWarningItem],
+    list[MovementImportPreviewRowResult],
+]:
+    """Полная проверка строк (ТЗ шаг 02): без записи в БД."""
+    today = datetime.now(UTC).date()
+    warn_flat: list[MovementImportPreviewWarningItem] = []
+    valid: list[MovementImportPreviewRow] = []
+    row_results: list[MovementImportPreviewRowResult] = []
+
+    for r in parsed_rows:
+        row_no = int(r["excel_row"])
+        row_errs: list[str] = []
+        row_warns: list[str] = []
+
+        status_display = str(r.get("status_display") or r.get("status") or "")
+        date_str = r.get("date")
+        date_disp = _date_iso_to_ru_display(date_str) if date_str else ""
+        name = str(r.get("name") or "").strip()
+        barcode = str(r.get("barcode") or "").strip()
+        color = str(r.get("color") or "").strip()
+        size = str(r.get("size") or "").strip()
+        qty = r.get("quantity")
+        qty_empty = bool(r.get("quantity_empty", False))
+        comment = r.get("comment")
+
+        client_id_file: str | None = None
+
+        if not date_str:
+            row_errs.append("Некорректная дата")
+        op_day: date | None = None
+        if date_str:
+            try:
+                y, mo, d = (int(date_str[0:4]), int(date_str[5:7]), int(date_str[8:10]))
+                op_day = date(y, mo, d)
+            except Exception:
+                row_errs.append("Некорректная дата")
+
+        if not barcode:
+            row_errs.append("Не указан ШК")
+
+        if not name:
+            row_errs.append("Не указано название")
+
+        if qty_empty:
+            row_errs.append("Не указано количество")
+        elif qty is None or not isinstance(qty, int):
+            row_errs.append("Некорректное количество")
+
+        st_msg = _import_status_field_error(status_display, op_type)
+        if st_msg:
+            row_errs.append(st_msg)
+        st_norm = _mei.normalize_movement_import_status(status_display, op_type) if not st_msg else None
+
+        cid_lookup, cerr = _lookup_client_id_for_import(connection, str(r.get("client") or ""))
+        if cerr:
+            row_errs.append(cerr)
+        else:
+            client_id_file = cid_lookup
+
+        resolved: dict[str, Any] | None = None
+        if not row_errs and op_day is not None and st_norm is not None:
+            if st_norm == "accepted" and op_day > today:
+                row_errs.append("Дата в будущем недопустима для подтверждённой операции")
+
+        if not row_errs and client_id_file:
+            res, err = _resolve_movement_variant_for_import(
+                connection,
+                barcode,
+                color,
+                size,
+                name,
+                client_id_file,
+            )
+            if err:
+                row_errs.append(err)
+            else:
+                resolved = res
+
+        if not row_errs and resolved is not None and op_day is not None:
+            if abs((today - op_day).days) > 365:
+                row_warns.append("Дата операции сильно отличается от текущей")
+            if isinstance(qty, int) and qty > 5000:
+                row_warns.append("Необычно большое количество (>5000)")
+
+        if not row_errs and resolved is not None and st_norm is not None:
+            st = st_norm
+            rec_st: str | None = None
+            ship_st: str | None = None
+            if op_type == "in":
+                rec_st = RECEIPT_STATUS_PENDING if st == "planned" else RECEIPT_STATUS_ACCEPTED
+            else:
+                ship_st = SHIPMENT_STATUS_PENDING if st == "planned" else SHIPMENT_STATUS_SHIPPED
+            valid.append(
+                MovementImportPreviewRow(
+                    excel_row=row_no,
+                    date=date_str or "",
+                    name=name,
+                    barcode=barcode,
+                    color=color,
+                    size=size or None,
+                    quantity=int(qty) if isinstance(qty, int) else 0,
+                    status=st,
+                    receipt_status=rec_st,
+                    shipment_status=ship_st,
+                    comment=str(comment).strip() if comment else None,
+                    product_name=str(resolved["product_name"]),
+                    client_name=resolved.get("client_name"),
+                    preview_image_url=resolved.get("preview_image_url"),
+                    warnings=list(row_warns),
+                )
+            )
+
+        row_results.append(
+            MovementImportPreviewRowResult(
+                excel_row=row_no,
+                date=date_disp or (date_str or ""),
+                barcode=barcode,
+                color=color,
+                size=size or None,
+                quantity=int(qty) if isinstance(qty, int) else None,
+                status_display=status_display,
+                found_product_name=str(resolved["product_name"]) if resolved else None,
+                errors=list(row_errs),
+                warnings=list(row_warns),
+            )
+        )
+
+    by_row = {rr.excel_row: rr for rr in row_results}
+
+    dup_map: dict[tuple[Any, ...], list[int]] = {}
+    for r in parsed_rows:
+        row_no = int(r["excel_row"])
+        rr = by_row[row_no]
+        if rr.errors:
+            continue
+        st_n = _mei.normalize_movement_import_status(str(r.get("status_display") or r.get("status") or ""), op_type)
+        cid, _cerr = _lookup_client_id_for_import(connection, str(r.get("client") or ""))
+        ds = r.get("date")
+        if not st_n or not cid or not ds:
+            continue
+        key = (
+            op_type,
+            ds,
+            cid,
+            _fold_ci_str(str(r.get("barcode") or "")),
+            _fold_ci_str(str(r.get("color") or "")),
+            _fold_ci_str(str(r.get("size") or "")),
+            st_n,
+        )
+        dup_map.setdefault(key, []).append(row_no)
+
+    dupped_rows: set[int] = set()
+    for _k, rows_d in dup_map.items():
+        rows_sorted = sorted(rows_d)
+        if len(rows_sorted) <= 1:
+            continue
+        for rn in rows_sorted[1:]:
+            dupped_rows.add(rn)
+            by_row[rn].errors.append("Дублирующаяся строка в файле")
+
+    if dupped_rows:
+        valid = [v for v in valid if v.excel_row not in dupped_rows]
+
+    if op_type == "out":
+        valid.sort(key=lambda x: x.excel_row)
+        running: dict[tuple[str, str | None, str | None], int] = {}
+        to_remove: set[int] = set()
+        for v in valid:
+            row_src = next((row for row in parsed_rows if int(row["excel_row"]) == v.excel_row), None)
+            if not row_src:
+                continue
+            cid_f, _ce = _lookup_client_id_for_import(connection, str(row_src.get("client") or ""))
+            res, _e = _resolve_movement_variant_for_import(
+                connection,
+                str(row_src.get("barcode") or ""),
+                str(row_src.get("color") or ""),
+                str(row_src.get("size") or ""),
+                str(row_src.get("name") or ""),
+                cid_f,
+            )
+            if not res:
+                continue
+            pid, cid, sid = res["product_id"], res["color_id"], res["size_id"]
+            key = (str(pid), cid, sid)
+            if key not in running:
+                running[key] = _balance_qty(connection, str(pid), cid, sid)
+            if (v.shipment_status or "") == SHIPMENT_STATUS_SHIPPED:
+                need = int(v.quantity)
+                if running[key] < need:
+                    to_remove.add(v.excel_row)
+                    by_row[v.excel_row].errors.append("Недостаточно остатка")
+                else:
+                    running[key] -= need
+        valid = [x for x in valid if x.excel_row not in to_remove]
+
+    errors_out: list[MovementImportPreviewErrorItem] = []
+    for rr in row_results:
+        for e in rr.errors:
+            errors_out.append(MovementImportPreviewErrorItem(row=rr.excel_row, error=e))
+        for w in rr.warnings:
+            warn_flat.append(MovementImportPreviewWarningItem(row=rr.excel_row, warning=w))
+
+    return valid, errors_out, warn_flat, row_results
+
+
+def _movement_import_insert_rows(
+    connection: Any,
+    op_type: str,
+    parsed_rows: list[dict[str, Any]],
+    user_id: str,
+) -> tuple[int, int, int]:
+    """Вставка всех валидных строк (строгий режим). Возвращает (total строк в файле, success, warnings)."""
+    valid, errors, warns, _rr = _movement_import_process_rows(connection, op_type, parsed_rows)
+    if errors:
+        raise HTTPException(status_code=400, detail="Файл содержит ошибки; загрузка отменена")
+    total_file = len(parsed_rows)
+    wcount = len(warns)
+    valid_sorted = sorted(valid, key=lambda v: v.excel_row)
+    for v in valid_sorted:
+        row_src = next((r for r in parsed_rows if int(r["excel_row"]) == v.excel_row), None)
+        if not row_src:
+            continue
+        cid_f, _ecl = _lookup_client_id_for_import(connection, str(row_src.get("client") or ""))
+        res, err = _resolve_movement_variant_for_import(
+            connection,
+            str(row_src.get("barcode") or ""),
+            str(row_src.get("color") or ""),
+            str(row_src.get("size") or ""),
+            str(row_src.get("name") or ""),
+            cid_f,
+        )
+        if err or not res:
+            raise HTTPException(status_code=400, detail=err or "Ошибка сопоставления")
+        note = (v.comment or "").strip() or None
+        vid = str(res["variant_id"])
+        vsku = str(res["variant_sku"]).strip()
+        pid = str(res["product_id"])
+        cid = str(res["color_id"]) if res["color_id"] else None
+        sid = str(res["size_id"]) if res["size_id"] else None
+        qty = int(v.quantity)
+        if op_type == "in":
+            rs = str(v.receipt_status or RECEIPT_STATUS_ACCEPTED)
+            allow_future = rs == RECEIPT_STATUS_PENDING
+            created_at = _created_at_for_receipt_date(v.date, allow_future=allow_future)
+            connection.execute(
+                """
+                INSERT INTO inventory_operations
+                    (id, op_type, product_id, color_id, size_id, quantity, note,
+                     created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
+                VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    str(uuid4()),
+                    pid,
+                    cid,
+                    sid,
+                    qty,
+                    note,
+                    created_at,
+                    user_id,
+                    vid,
+                    vsku,
+                    rs,
+                ),
+            )
+        else:
+            ss = str(v.shipment_status or SHIPMENT_STATUS_PENDING)
+            allow_future = ss == SHIPMENT_STATUS_PENDING
+            created_at = _created_at_for_shipment_date(v.date, allow_future=allow_future)
+            if ss == SHIPMENT_STATUS_SHIPPED:
+                cur = _balance_qty(connection, pid, cid, sid)
+                if cur < qty:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Недостаточно остатка: доступно {cur}, требуется {qty}",
+                    )
+            connection.execute(
+                """
+                INSERT INTO inventory_operations
+                    (id, op_type, product_id, color_id, size_id, quantity, note,
+                     created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
+                VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    str(uuid4()),
+                    pid,
+                    cid,
+                    sid,
+                    qty,
+                    note,
+                    created_at,
+                    user_id,
+                    vid,
+                    vsku,
+                    ss,
+                ),
+            )
+    return total_file, len(valid_sorted), wcount
+
+
+def _movement_import_insert_partial(
+    connection: Any,
+    op_type: str,
+    parsed_rows: list[dict[str, Any]],
+    user_id: str,
+) -> tuple[int, int, int, int]:
+    """Частичная загрузка: валидные строки по тем же правилам, что и превью; вставка по порядку строк файла."""
+    valid, errors, warns, _rr = _movement_import_process_rows(connection, op_type, parsed_rows)
+    total = len(parsed_rows)
+    wcount = len(warns)
+    success = 0
+    for v in sorted(valid, key=lambda x: x.excel_row):
+        row_src = next((r for r in parsed_rows if int(r["excel_row"]) == v.excel_row), None)
+        if not row_src:
+            continue
+        cid_f, _ecl = _lookup_client_id_for_import(connection, str(row_src.get("client") or ""))
+        res, err = _resolve_movement_variant_for_import(
+            connection,
+            str(row_src.get("barcode") or ""),
+            str(row_src.get("color") or ""),
+            str(row_src.get("size") or ""),
+            str(row_src.get("name") or ""),
+            cid_f,
+        )
+        if err or not res:
+            continue
+        note = (v.comment or "").strip() or None
+        vid = str(res["variant_id"])
+        vsku = str(res["variant_sku"]).strip()
+        pid = str(res["product_id"])
+        cid = str(res["color_id"]) if res["color_id"] else None
+        sid = str(res["size_id"]) if res["size_id"] else None
+        qty = int(v.quantity)
+        try:
+            if op_type == "in":
+                rs = str(v.receipt_status or RECEIPT_STATUS_ACCEPTED)
+                allow_future = rs == RECEIPT_STATUS_PENDING
+                created_at = _created_at_for_receipt_date(v.date, allow_future=allow_future)
+                connection.execute(
+                    """
+                    INSERT INTO inventory_operations
+                        (id, op_type, product_id, color_id, size_id, quantity, note,
+                         created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
+                    VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        str(uuid4()),
+                        pid,
+                        cid,
+                        sid,
+                        qty,
+                        note,
+                        created_at,
+                        user_id,
+                        vid,
+                        vsku,
+                        rs,
+                    ),
+                )
+            else:
+                ss = str(v.shipment_status or SHIPMENT_STATUS_PENDING)
+                allow_future = ss == SHIPMENT_STATUS_PENDING
+                created_at = _created_at_for_shipment_date(v.date, allow_future=allow_future)
+                if ss == SHIPMENT_STATUS_SHIPPED:
+                    cur = _balance_qty(connection, pid, cid, sid)
+                    if cur < qty:
+                        continue
+                connection.execute(
+                    """
+                    INSERT INTO inventory_operations
+                        (id, op_type, product_id, color_id, size_id, quantity, note,
+                         created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
+                    VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        pid,
+                        cid,
+                        sid,
+                        qty,
+                        note,
+                        created_at,
+                        user_id,
+                        vid,
+                        vsku,
+                        ss,
+                    ),
+                )
+            success += 1
+        except Exception:
+            continue
+    failed = max(0, total - success)
+    return total, success, failed, wcount
+
+
+def _movement_import_preview_from_raw(connection: Any, ot: str, raw: bytes) -> MovementImportPreviewResponse:
+    parsed, file_errors = _mei.parse_movements_excel(raw, ot)
+    if file_errors:
+        return MovementImportPreviewResponse(
+            summary_total=0,
+            summary_ok=0,
+            summary_with_errors=0,
+            import_ready=False,
+            file_status_label="Импорт невозможен",
+            row_results=[],
+            valid_rows=[],
+            errors=[MovementImportPreviewErrorItem(row=0, error=e) for e in file_errors],
+            warnings=[],
+        )
+    valid, row_errors, warns, row_results = _movement_import_process_rows(connection, ot, parsed)
+    total = len(row_results)
+    with_err = sum(1 for rr in row_results if rr.errors)
+    ok = total - with_err
+    ready = with_err == 0
+    return MovementImportPreviewResponse(
+        summary_total=total,
+        summary_ok=ok,
+        summary_with_errors=with_err,
+        import_ready=ready,
+        file_status_label="Готов к импорту" if ready else "Импорт невозможен",
+        row_results=row_results,
+        valid_rows=valid,
+        errors=row_errors,
+        warnings=warns,
+    )
+
+
+def _movement_import_commit_parsed(
+    connection: Any,
+    ot: str,
+    parsed: list[Any],
+    fname: str,
+    partial: bool,
+    uid: str,
+) -> MovementImportCommitResponse:
+    if partial:
+        total, success, failed, wcount = _movement_import_insert_partial(connection, ot, parsed, uid)
+        detail = {
+            "mode": "partial",
+            "filename": fname,
+            "total": total,
+            "success": success,
+            "failed": failed,
+            "warnings": wcount,
+        }
+        connection.execute(
+            """
+            INSERT INTO import_movement_logs
+                (id, user_id, created_at, op_type, filename, total, success, failed, warnings, detail_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                uid,
+                _now(),
+                ot,
+                fname,
+                total,
+                success,
+                failed,
+                wcount,
+                json.dumps(detail, ensure_ascii=False),
+            ),
+        )
+        connection.commit()
+        return MovementImportCommitResponse(total=total, success=success, failed=failed, warnings=wcount)
+
+    total, success, wcount = _movement_import_insert_rows(connection, ot, parsed, uid)
+    failed = max(0, total - success)
+    detail = {
+        "mode": "strict",
+        "filename": fname,
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "warnings": wcount,
+    }
+    connection.execute(
+        """
+        INSERT INTO import_movement_logs
+            (id, user_id, created_at, op_type, filename, total, success, failed, warnings, detail_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid4()),
+            uid,
+            _now(),
+            ot,
+            fname,
+            total,
+            success,
+            failed,
+            wcount,
+            json.dumps(detail, ensure_ascii=False),
+        ),
+    )
+    connection.commit()
+    return MovementImportCommitResponse(total=total, success=success, failed=failed, warnings=wcount)
+
+
+@app.delete("/import/staging/{file_id}", status_code=204)
+def import_delete_staging(file_id: str, user=Depends(get_current_manager)):
+    """Удаляет временный файл импорта и метаданные (ТЗ шаг 02: сброс перед повторной загрузкой)."""
+    uid = str(user["id"])
+    _load_staged_import(uid, file_id)
+    _delete_staged_import(file_id)
+
+
+@app.post("/import/upload", response_model=ImportUploadResponse)
+async def import_upload_excel(
+    template_type: str = Form(..., description="'receipt' или 'shipment' (или in/out)"),
+    file: UploadFile = File(...),
+    user=Depends(get_current_manager),
+):
+    """Шаг 1 ТЗ: техническая проверка и временное сохранение файла (без разбора строк движений)."""
+    uid = str(user["id"])
+    fname = (file.filename or "").strip() or "upload.xlsx"
+    if _excel_filename_kind(fname) is None:
+        raise HTTPException(status_code=400, detail="Неподдерживаемый формат файла")
+    raw = await file.read()
+    if len(raw) > IMPORT_UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Размер файла превышает допустимый лимит 20 MB")
+    _assert_excel_readable(raw, fname)
+    ot = _template_type_to_op_type(template_type)
+    fid = _save_staged_import(uid, ot, raw, fname)
+    return ImportUploadResponse(file_id=fid, file_name=fname, file_size=len(raw))
+
+
+@app.get("/import/movements/template")
+def import_movements_template(
+    op_type: str = Query(..., description="'in' или 'out'"),
+    user=Depends(get_current_manager),
+):
+    _ = user
+    ot = str(op_type).strip().lower()
+    if ot not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    body = _mei.build_template_workbook_bytes(ot)
+    fn_ru = "Поступление.xlsx" if ot == "in" else "Отгрузка.xlsx"
+    fn_ascii = "postuplenie.xlsx" if ot == "in" else "otgruzka.xlsx"
+    cd = f'attachment; filename="{fn_ascii}"; filename*=UTF-8\'\'{quote(fn_ru)}'
+    return Response(
+        content=body,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": cd},
+    )
+
+
+@app.post("/import/movements/preview", response_model=MovementImportPreviewResponse)
+async def import_movements_preview(
+    op_type: str = Query(..., description="'in' или 'out'"),
+    file: UploadFile = File(...),
+    user=Depends(get_current_manager),
+):
+    ot = str(op_type).strip().lower()
+    if ot not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    raw = await file.read()
+    with get_connection() as connection:
+        return _movement_import_preview_from_raw(connection, ot, raw)
+
+
+@app.post("/import/movements/preview-staged", response_model=MovementImportPreviewResponse)
+async def import_movements_preview_staged(
+    op_type: str = Query(..., description="'in' или 'out'"),
+    file_id: str = Query(...),
+    user=Depends(get_current_manager),
+):
+    ot = str(op_type).strip().lower()
+    if ot not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    uid = str(user["id"])
+    raw, meta = _load_staged_import(uid, file_id)
+    if str(meta.get("op_type")) != ot:
+        raise HTTPException(status_code=400, detail="Тип операции не совпадает с выбранным шаблоном")
+    with get_connection() as connection:
+        return _movement_import_preview_from_raw(connection, ot, raw)
+
+
+@app.post("/import/movements/commit", response_model=MovementImportCommitResponse)
+async def import_movements_commit(
+    op_type: str = Query(..., description="'in' или 'out'"),
+    partial: bool = Query(False, description="Если true — загружаются только валидные строки"),
+    file: UploadFile = File(...),
+    user=Depends(get_current_manager),
+):
+    ot = str(op_type).strip().lower()
+    if ot not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    raw = await file.read()
+    fname = (file.filename or "upload.xlsx").strip() or "upload.xlsx"
+    parsed, file_errors = _mei.parse_movements_excel(raw, ot)
+    if file_errors:
+        raise HTTPException(status_code=400, detail=file_errors[0])
+
+    uid = str(user["id"])
+    with get_connection() as connection:
+        return _movement_import_commit_parsed(connection, ot, parsed, fname, partial, uid)
+
+
+@app.post("/import/movements/commit-staged", response_model=MovementImportCommitResponse)
+async def import_movements_commit_staged(
+    op_type: str = Query(..., description="'in' или 'out'"),
+    file_id: str = Query(...),
+    partial: bool = Query(False, description="Если true — загружаются только валидные строки"),
+    user=Depends(get_current_manager),
+):
+    ot = str(op_type).strip().lower()
+    if ot not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="op_type: допустимо 'in' или 'out'")
+    uid = str(user["id"])
+    raw, meta = _load_staged_import(uid, file_id)
+    if str(meta.get("op_type")) != ot:
+        raise HTTPException(status_code=400, detail="Тип операции не совпадает с выбранным шаблоном")
+    fname = str(meta.get("original_name") or "upload.xlsx").strip() or "upload.xlsx"
+    parsed, file_errors = _mei.parse_movements_excel(raw, ot)
+    if file_errors:
+        raise HTTPException(status_code=400, detail=file_errors[0])
+    with get_connection() as connection:
+        out = _movement_import_commit_parsed(connection, ot, parsed, fname, partial, uid)
+    _delete_staged_import(file_id)
+    return out

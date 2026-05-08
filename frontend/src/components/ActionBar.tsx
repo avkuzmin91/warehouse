@@ -5,8 +5,10 @@ export type ActionBarProps = {
   primaryLabel: string
   secondaryLabel?: string
   onSecondary: () => void
-  /** `type="submit"` с `form={submitFormId}` — кнопка может стоять вне `<form>` */
-  submitFormId: string
+  /** Кнопка без отправки формы (например асинхронная проверка Excel). */
+  onPrimary?: () => void
+  /** `type="submit"` с `form={submitFormId}` — если не задан `onPrimary`. */
+  submitFormId?: string
   primaryDisabled?: boolean
   /** Доп. действия слева (например «Принять на склад» / «Подтвердить отгрузку») */
   leading?: ReactNode
@@ -22,6 +24,7 @@ export function ActionBar({
   primaryLabel,
   secondaryLabel = 'Отмена',
   onSecondary,
+  onPrimary,
   submitFormId,
   primaryDisabled,
   leading,
@@ -29,6 +32,7 @@ export function ActionBar({
   className = '',
 }: ActionBarProps) {
   const root = ['product-form-actions', 'action-bar', className].filter(Boolean).join(' ')
+  const primaryAsSubmit = onPrimary == null
 
   return (
     <div className={root}>
@@ -36,9 +40,10 @@ export function ActionBar({
       <div className="action-bar__trailing">
         <button
           className="btn btn--primary btn--form-action"
-          type="submit"
-          form={submitFormId}
+          type={primaryAsSubmit ? 'submit' : 'button'}
+          form={primaryAsSubmit ? submitFormId : undefined}
           disabled={primaryDisabled}
+          onClick={primaryAsSubmit ? undefined : () => onPrimary()}
         >
           {primaryLabel}
         </button>

@@ -323,7 +323,7 @@ export function ShipmentForm({ shipmentId }: Props) {
   async function submitCreate(intent: 'pending' | 'shipped') {
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
-      setSubmitError('Сначала выберите артикул и цвет')
+      setSubmitError('Сначала выберите штрих-код и цвет')
       return
     }
     if (!quantityValid) {
@@ -366,9 +366,45 @@ export function ShipmentForm({ shipmentId }: Props) {
   async function finalizeShipment() {
     if (!shipmentId?.trim()) return
     setSubmitError('')
+    if (!findRes?.found || !findRes.variant) {
+      setSubmitError('Сначала выберите штрих-код и цвет')
+      return
+    }
+    if (!quantityValid) {
+      setSubmitError('Укажите количество не менее 1')
+      return
+    }
+    if (!shipmentDateFormatOk) {
+      setSubmitError('Укажите дату отгрузки')
+      return
+    }
+    if (!shipmentDateOkShipped) {
+      setSubmitError('Для отгруженной позиции дата не может быть позже сегодняшнего дня')
+      return
+    }
+    if (!stockEnoughForShipped) {
+      setSubmitError(
+        `Недостаточно остатка: доступно ${balance ?? 0}, требуется ${Math.floor(quantityNum)}`,
+      )
+      return
+    }
     setSubmitting(true)
     try {
-      await patchShipment(shipmentId, { shipment_status: 'shipped' })
+      const qty = Math.floor(quantityNum)
+      const note = comment.trim() || null
+      const nextVid = findRes.variant.variant_id
+      const base = {
+        quantity: qty,
+        comment: note,
+        shipment_date: shipmentDate,
+        shipment_status: 'shipped' as const,
+      }
+      if (nextVid !== loadedVariantId) {
+        await patchShipment(shipmentId, { ...base, variant_id: nextVid })
+      } else {
+        await patchShipment(shipmentId, base)
+      }
+      setLoadedVariantId(nextVid)
       navigate('/inventory/shipments')
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -415,7 +451,7 @@ export function ShipmentForm({ shipmentId }: Props) {
     }
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
-      setSubmitError('Сначала выберите артикул и цвет')
+      setSubmitError('Сначала выберите штрих-код и цвет')
       return
     }
     if (!quantityValid) {
@@ -494,7 +530,7 @@ export function ShipmentForm({ shipmentId }: Props) {
         />
 
         <label className="field-label" htmlFor={`${formId}-sku`}>
-          Артикул
+          Штрих-код
           <span className="field-label__required" aria-label="обязательное поле">
             *
           </span>
