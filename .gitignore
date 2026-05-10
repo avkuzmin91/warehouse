@@ -1,6 +1,12 @@
 # Локальные секреты
 .env
+.env.dev
+.env.test
+.env.prod
 backend/.env
+
+# Дубликат у корня репозитория (в compose используется nginx/nginx.conf)
+/nginx.conf
 
 # Локальные файлы БД (проект на PostgreSQL)
 *.db

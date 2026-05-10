@@ -3,10 +3,7 @@ function resolveApiBaseUrl(): string {
   if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
     return fromEnv.trim().replace(/\/$/, '')
   }
-  if (import.meta.env.DEV) {
-    return '/api'
-  }
-  return 'http://127.0.0.1:8000'
+  return '/api'
 }
 
 /** База URL бэкенда: в dev — префикс `/api` (прокси в vite.config), иначе см. VITE_API_BASE_URL или 127.0.0.1:8000. */
