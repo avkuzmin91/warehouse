@@ -41,23 +41,34 @@ function localTodayYmd(): string {
   return `${y}-${m}-${day}`
 }
 
-function ReceiptStatusBadge({ status }: { status: 'pending' | 'accepted' }) {
+function ReceiptStatusBadge({
+  status,
+  overdue,
+}: {
+  status: 'pending' | 'accepted'
+  overdue?: boolean
+}) {
   const pending = status === 'pending'
+  const overdueActive = Boolean(pending && overdue)
+  const className = [
+    'receipt-form__status-badge',
+    pending ? 'receipt-form__status-badge--pending' : 'receipt-form__status-badge--accepted',
+    overdueActive ? 'receipt-form__status-badge--overdue' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   return (
     <div
-      className={
-        pending
-          ? 'receipt-form__status-badge receipt-form__status-badge--pending'
-          : 'receipt-form__status-badge receipt-form__status-badge--accepted'
-      }
+      className={className}
       role="status"
+      title={overdueActive ? 'Просроченное поступление' : undefined}
     >
       <span className="receipt-form__status-badge__mark" aria-hidden />
       <span className="receipt-form__status-badge__label">
         {pending ? 'Ожидает приемки' : 'Принят на склад'}
       </span>
       <span className="receipt-form__status-badge__hint">
-        {pending ? 'ещё не на остатках' : 'учтён на складе'}
+        {pending ? (overdueActive ? 'просрочено' : 'ещё не на остатках') : 'учтён на складе'}
       </span>
     </div>
   )
@@ -269,6 +280,11 @@ export function ReceiptForm({ receiptId }: Props) {
   const receiptDateFormatOk = /^\d{4}-\d{2}-\d{2}$/.test(receiptDate)
   const receiptDateOkAccepted =
     receiptDateFormatOk && receiptDate <= localTodayYmd()
+  /** Просрочка: «Ожидает», дата операции раньше сегодня (ТЗ поступления). */
+  const receiptPendingOverdue =
+    receiptStatus === 'pending' &&
+    receiptDateFormatOk &&
+    receiptDate < localTodayYmd()
 
   const canSubmitBase = Boolean(
     findRes?.found &&
@@ -465,7 +481,7 @@ export function ReceiptForm({ receiptId }: Props) {
       <form id={formId} className="auth-form product-create-form" onSubmit={onSubmit} noValidate>
         {showStatusAtTop ? (
           <div className="receipt-form__status-banner-wrap">
-            <ReceiptStatusBadge status={receiptStatus} />
+            <ReceiptStatusBadge status={receiptStatus} overdue={receiptPendingOverdue} />
           </div>
         ) : null}
         <label className="field-label" htmlFor={`${formId}-receipt-date`}>
@@ -573,7 +589,7 @@ export function ReceiptForm({ receiptId }: Props) {
         </label>
         <textarea
           id={`${formId}-comment`}
-          className="field-input"
+          className="field-input inventory-operation-comment"
           rows={3}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
@@ -584,26 +600,30 @@ export function ReceiptForm({ receiptId }: Props) {
             <p className="receipt-form__lookup-msg">Поиск варианта…</p>
           ) : findRes?.found && v ? (
             <div className="receipt-form__card">
-              <header className="receipt-form__card-head">
-                <p className="receipt-form__product-name receipt-form__product-name--head">{v.product_name}</p>
-              </header>
-              <p className="receipt-form__dims">
-                Клиент: {v.client_name?.trim() ? v.client_name : '—'}
-              </p>
-              {v.product_type_name ? (
-                <p className="receipt-form__dims">Тип товара: {v.product_type_name}</p>
-              ) : null}
-              <p className="receipt-form__dims">
-                Габариты (Д×Ш×В): {v.length} × {v.width} × {v.height} см
-              </p>
-              {imgSrc ? (
-                <>
-                  <div className="receipt-form__photo-wrap">
-                    <img src={imgSrc} alt="" className="receipt-form__photo" />
+              <div
+                className={
+                  imgSrc
+                    ? 'receipt-form__card-body'
+                    : 'receipt-form__card-body receipt-form__card-body--no-photo'
+                }
+              >
+                {imgSrc ? (
+                  <div className="receipt-form__card-media">
+                    <div className="receipt-form__photo-wrap">
+                      <img src={imgSrc} alt="" className="receipt-form__photo" />
+                    </div>
                   </div>
-                  <p className="receipt-form__photo-note">Фотография общая на все цвета товара.</p>
-                </>
-              ) : null}
+                ) : null}
+                <div className="receipt-form__card-details">
+                  <p className="receipt-form__product-name receipt-form__product-name--details">{v.product_name}</p>
+                  <p className="receipt-form__dims">
+                    Клиент: {v.client_name?.trim() ? v.client_name : '—'}
+                  </p>
+                  <p className="receipt-form__dims">
+                    Габариты: {v.length} × {v.width} × {v.height} см
+                  </p>
+                </div>
+              </div>
             </div>
           ) : debouncedSku.trim() && colorId.trim() && !findLoading ? (
             findRes?.needs_size && !sizeId.trim() ? (

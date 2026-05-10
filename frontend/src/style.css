@@ -1491,22 +1491,23 @@ body {
 
 .date-range-modal__short-label {
   flex: 0 0 28px;
-  font-size: 13px;
-  font-weight: 500;
-  color: rgba(214, 202, 255, 0.5);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.25;
   text-align: right;
+  align-self: center;
 }
 
-.date-range-modal__input.field-input {
+.date-range-modal__field-row .form-date-field.date-range-modal__form-date {
   flex: 1 1 auto;
-  margin-bottom: 0;
   min-width: 0;
-  height: 34px;
-  min-height: 34px;
-  padding: 0 10px;
-  font-size: 14px;
-  border-radius: 10px;
-  color-scheme: dark;
+}
+
+.confirm-modal.date-range-modal .form-date-field__popover {
+  z-index: 200;
 }
 
 .date-range-modal__error {
@@ -2439,6 +2440,61 @@ body {
 .product-create-form .field-hint {
   margin: -6px 0 var(--entity-form-gap);
   font-size: 13px;
+}
+
+/* Приёмка / отгрузка: количество — одна строка по высоте как combobox (убираем margin у вложенного input) */
+.receipt-form form.product-create-form .product-dim-num-field {
+  min-height: var(--entity-form-field-h);
+  height: var(--entity-form-field-h);
+  max-height: var(--entity-form-field-h);
+  max-width: min(200px, 100%);
+  border-radius: var(--entity-form-radius);
+  margin-bottom: var(--entity-form-gap);
+}
+
+.receipt-form form.product-create-form .product-dim-num-field__input.field-input.field-input--narrow {
+  height: 100%;
+  min-height: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  align-self: stretch;
+}
+
+.receipt-form form.product-create-form .product-dim-num-field__stepper {
+  align-self: stretch;
+}
+
+/* Комментарий: несколько строк, скролл в стиле приложения */
+.product-create-form textarea.field-input.inventory-operation-comment {
+  height: auto;
+  min-height: calc(3 * 1.35em + 20px);
+  padding-top: 10px;
+  padding-bottom: 10px;
+  line-height: 1.35;
+  resize: vertical;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(147, 110, 255, 0.55) rgba(18, 12, 40, 0.65);
+}
+
+.product-create-form textarea.field-input.inventory-operation-comment::-webkit-scrollbar {
+  width: 8px;
+}
+
+.product-create-form textarea.field-input.inventory-operation-comment::-webkit-scrollbar-track {
+  background: rgba(18, 12, 40, 0.65);
+  border-radius: 8px;
+}
+
+.product-create-form textarea.field-input.inventory-operation-comment::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(147, 110, 255, 0.65), rgba(98, 62, 197, 0.55));
+  border-radius: 8px;
+  border: 2px solid rgba(18, 12, 40, 0.65);
+}
+
+.product-create-form textarea.field-input.inventory-operation-comment::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(177, 143, 255, 0.75), rgba(127, 56, 255, 0.55));
 }
 
 .page-container__card.product-create-card .remember__text {
@@ -4634,6 +4690,15 @@ body {
   align-items: end;
 }
 
+.analytics-admin-filters__grid--cabinet {
+  grid-template-columns: minmax(200px, 1fr) minmax(180px, 320px) auto;
+  grid-template-areas: 'range step actions';
+}
+
+.analytics-admin-filters__grid--cabinet .analytics-admin-filters__cell--range {
+  min-width: min(100%, 320px);
+}
+
 .analytics-admin-filters__cell {
   display: flex;
   flex-direction: column;
@@ -4812,6 +4877,13 @@ body {
       'step actions';
   }
 
+  .analytics-admin-filters__grid--cabinet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'range range'
+      'step actions';
+  }
+
   .analytics-admin-filters__cell--actions {
     justify-self: end;
   }
@@ -4827,6 +4899,14 @@ body {
     grid-template-areas:
       'range'
       'clients'
+      'step'
+      'actions';
+  }
+
+  .analytics-admin-filters__grid--cabinet {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'range'
       'step'
       'actions';
   }
@@ -5429,14 +5509,6 @@ body {
   margin: 0 0 18px;
 }
 
-.receipt-form__card-head {
-  margin: 0 0 12px;
-}
-
-.receipt-form__card-head .receipt-form__product-name--head {
-  margin: 0;
-}
-
 .receipt-form__status-badge {
   display: flex;
   align-items: center;
@@ -5479,6 +5551,21 @@ body {
     0 12px 36px rgba(0, 0, 0, 0.4);
 }
 
+/* Просрочка: «Ожидает», дата операции в прошлом — красная подсветка бейджа */
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.42) 0%,
+    rgba(153, 27, 27, 0.28) 48%,
+    rgba(40, 18, 28, 0.9) 100%
+  );
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.2) inset,
+    0 0 28px rgba(239, 68, 68, 0.3),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
 .receipt-form__status-badge__mark {
   flex-shrink: 0;
   width: 12px;
@@ -5491,6 +5578,12 @@ body {
   background: radial-gradient(circle at 30% 30%, #fde68a, #f59e0b 55%, #b45309);
   color: rgba(251, 191, 36, 0.9);
   animation: receipt-status-pulse 2s ease-in-out infinite;
+}
+
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #fecaca, #ef4444 55%, #991b1b);
+  color: rgba(252, 165, 165, 0.95);
+  animation: receipt-status-overdue-pulse 2s ease-in-out infinite;
 }
 
 .receipt-form__status-badge--accepted .receipt-form__status-badge__mark {
@@ -5509,6 +5602,20 @@ body {
     opacity: 0.92;
     transform: scale(1.08);
     box-shadow: 0 0 18px rgba(251, 191, 36, 0.85);
+  }
+}
+
+@keyframes receipt-status-overdue-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(248, 113, 113, 0.55);
+  }
+  50% {
+    opacity: 0.92;
+    transform: scale(1.08);
+    box-shadow: 0 0 18px rgba(239, 68, 68, 0.85);
   }
 }
 
@@ -5540,6 +5647,12 @@ body {
   border-color: rgba(251, 191, 36, 0.35);
   background: rgba(120, 53, 15, 0.35);
   color: rgba(254, 243, 199, 0.95);
+}
+
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue .receipt-form__status-badge__hint {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.42);
+  color: rgba(254, 226, 226, 0.96);
 }
 
 .receipt-form__status-badge--accepted .receipt-form__status-badge__hint {
@@ -5574,6 +5687,38 @@ body {
   border: 1px solid rgba(147, 110, 255, 0.28);
   background: rgba(25, 18, 52, 0.45);
 }
+
+.receipt-form__card-body {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.receipt-form__card-body--no-photo {
+  display: block;
+}
+
+.receipt-form__card-media {
+  flex: 0 0 auto;
+  width: min(148px, 38vw);
+  max-width: 148px;
+}
+
+.receipt-form__card-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.receipt-form__card-details .receipt-form__dims:last-child {
+  margin-bottom: 0;
+}
+
+.receipt-form__card-details .receipt-form__product-name--details {
+  margin: 0 0 10px;
+  color: var(--text-main, rgba(255, 252, 245, 0.98));
+}
+
 .receipt-form__product-name {
   margin: 0 0 8px;
   font-weight: 600;
@@ -5585,7 +5730,7 @@ body {
   color: var(--text-soft, rgba(255, 250, 255, 0.72));
 }
 .receipt-form__photo-wrap {
-  max-width: 220px;
+  max-width: 148px;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgba(147, 110, 255, 0.25);
@@ -5596,12 +5741,20 @@ body {
   height: auto;
   vertical-align: middle;
 }
-.receipt-form__photo-note {
-  margin: 10px 0 0;
-  max-width: 240px;
-  font-size: 13px;
-  line-height: 1.35;
-  color: var(--text-soft, rgba(255, 250, 255, 0.62));
+
+@media (max-width: 520px) {
+  .receipt-form__card-body:not(.receipt-form__card-body--no-photo) {
+    flex-direction: column;
+  }
+
+  .receipt-form__card-media {
+    width: 100%;
+    max-width: 220px;
+  }
+
+  .receipt-form__photo-wrap {
+    max-width: 220px;
+  }
 }
 
 /* Список поступлений: подсветка по статусу */

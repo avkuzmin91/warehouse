@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { FixedSizeList, type ListChildComponentProps } from 'react-window'
 import type { DictionaryItem } from '../api'
 import { useFixedDictionaryListPosition } from '../hooks/useFixedDictionaryListPosition'
+import { foldCiSearch } from '../utils/foldCiSearch'
 import { FieldDropdownChevron } from './FieldDropdownChevron'
 
 const ROW_H = 40
@@ -122,9 +123,9 @@ export function DictionaryMultiSelect({
   }, [items, sortMode])
 
   const filtered = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase()
+    const q = foldCiSearch(debouncedQuery.trim())
     if (!q) return sortedItems
-    return sortedItems.filter((i) => choiceLabel(i).toLowerCase().includes(q))
+    return sortedItems.filter((i) => foldCiSearch(choiceLabel(i)).includes(q))
   }, [sortedItems, debouncedQuery])
 
   const showEmptySearch =

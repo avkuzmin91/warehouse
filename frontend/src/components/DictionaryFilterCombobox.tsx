@@ -3,6 +3,7 @@ import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent
 import { createPortal } from 'react-dom'
 import { FixedSizeList, type ListChildComponentProps } from 'react-window'
 import { useFixedDictionaryListPosition } from '../hooks/useFixedDictionaryListPosition'
+import { foldCiSearch } from '../utils/foldCiSearch'
 import { FieldDropdownChevron } from './FieldDropdownChevron'
 
 export type DictionaryFilterKey =
@@ -155,9 +156,9 @@ export function DictionaryFilterCombobox({
   }, [debouncedQuery, choices.length])
 
   const filtered = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase()
+    const q = foldCiSearch(debouncedQuery.trim())
     if (!q) return choices
-    return choices.filter((c) => c.label.toLowerCase().includes(q))
+    return choices.filter((c) => foldCiSearch(c.label).includes(q))
   }, [debouncedQuery, choices])
 
   const showEmptySearch =
@@ -203,14 +204,15 @@ export function DictionaryFilterCombobox({
       }
       return
     }
-    const exact = choices.find((c) => c.label.toLowerCase() === t.toLowerCase())
+    const tf = foldCiSearch(t)
+    const exact = choices.find((c) => foldCiSearch(c.label) === tf)
     if (exact) {
       if (exact.value !== valueStr) onSelectChange(name, exact.value)
       setDraft(exact.label)
       setOpen(false)
       return
     }
-    const insub = choices.filter((c) => c.label.toLowerCase().includes(t.toLowerCase()))
+    const insub = choices.filter((c) => foldCiSearch(c.label).includes(tf))
     if (insub.length === 1) {
       onSelectChange(name, insub[0].value)
       setDraft(insub[0].label)

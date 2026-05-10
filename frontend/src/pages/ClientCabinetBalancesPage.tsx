@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CollectionActions } from '../components/CollectionActions'
 import { FiltersPanel, type FilterFieldConfig } from '../components/FiltersPanel'
+import { ImageFullscreenLightbox } from '../components/ImageFullscreenLightbox'
 import { ListPageLayout } from '../components/ListPageLayout'
 import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
+  type DictionaryItem,
   type InventoryBalanceItem,
-  type InventoryProductLookup,
-  type InventoryProductTypeLookup,
   getClientPortalBalances,
-  getClientPortalProducts,
-  getClientPortalProductTypes,
+  getClientPortalColors,
+  getClientPortalSizes,
+  resolvePublicUploadSrc,
 } from '../api'
 
-const FILTER_KEYS = ['search', 'type_id', 'product_id'] as const
+const FILTER_KEYS = ['sku', 'name', 'color_id', 'size_id'] as const
 
 function dictOptions(items: { id: string; name: string }[], placeholder: string) {
   return [{ value: '', label: placeholder }, ...items.map((i) => ({ value: i.id, label: i.name }))]
@@ -29,17 +30,18 @@ export function ClientCabinetBalancesPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
-  const [products, setProducts] = useState<InventoryProductLookup[]>([])
-  const [types, setTypes] = useState<InventoryProductTypeLookup[]>([])
+  const [colors, setColors] = useState<DictionaryItem[]>([])
+  const [sizes, setSizes] = useState<DictionaryItem[]>([])
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([getClientPortalProductTypes(), getClientPortalProducts()])
-      .then(([ts, pr]) => {
+    Promise.all([getClientPortalColors(), getClientPortalSizes()])
+      .then(([cls, szs]) => {
         if (cancelled) return
-        setTypes(ts)
-        setProducts(pr)
+        setColors(cls)
+        setSizes(szs)
       })
       .catch(() => {})
     return () => {
@@ -49,30 +51,71 @@ export function ClientCabinetBalancesPage() {
 
   const filterFields: FilterFieldConfig[] = useMemo(
     () => [
-      { name: 'search', type: 'text', placeholder: 'Поиск по названию товара' },
-      { name: 'type_id', type: 'dictionary_autocomplete', options: dictOptions(types, 'Тип товара') },
-      { name: 'product_id', type: 'dictionary_autocomplete', options: dictOptions(products, 'Товар') },
+      { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
+      { name: 'name', type: 'text', placeholder: 'Название' },
+      { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
+      { name: 'size_id', type: 'dictionary_autocomplete', options: dictOptions(sizes, 'Размер') },
     ],
-    [products, types],
+    [colors, sizes],
   )
 
   const columns: TableColumn<InventoryBalanceItem>[] = useMemo(
     () => [
-      { key: 'product_name', title: 'Товар', sortable: true },
       {
-        key: 'product_type_name',
-        title: 'Тип',
+        key: 'product_sku',
+        title: 'Штрих-код',
         sortable: true,
-        render: (v) => (v as string) || '—',
+        render: (_v, row) => (String(row.product_sku ?? '').trim() ? String(row.product_sku) : '—'),
+      },
+      {
+        key: 'product_name',
+        title: 'Название',
+        sortable: true,
+        render: (v) => (String(v || '').trim() ? String(v) : '—'),
+      },
+      {
+        key: 'preview_image_url',
+        title: 'Фото',
+        sortable: false,
+        render: (_v, row) => {
+          const raw = row.preview_image_url
+          if (!raw?.trim()) {
+            return (
+              <span
+                className="product-thumb product-thumb--empty product-list-preview-placeholder"
+                aria-hidden
+              />
+            )
+          }
+          const src = resolvePublicUploadSrc(raw)
+          return (
+            <button
+              type="button"
+              className="product-list-preview-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setLightboxSrc(src)
+              }}
+              aria-label="Открыть фото"
+            >
+              <img src={src} alt="" className="product-thumb" width={40} height={40} loading="lazy" />
+            </button>
+          )
+        },
       },
       { key: 'color_name', title: 'Цвет', sortable: true, render: (v) => (v as string) || '—' },
-      { key: 'size_name', title: 'Размер', sortable: true, render: (v) => (v as string) || '—' },
+      {
+        key: 'size_name',
+        title: 'Размер',
+        sortable: true,
+        render: (v) => ((v as string)?.trim() ? String(v) : '—'),
+      },
       {
         key: 'quantity',
-        title: 'Количество',
+        title: 'Остаток',
         sortable: true,
         render: (v) => {
-          const n = Number(v) || 0
+          const n = Math.max(0, Number(v) || 0)
           const cls = n <= 0 ? 'qty-zero' : 'qty-positive'
           return <span className={cls}>{n}</span>
         },
@@ -88,9 +131,10 @@ export function ClientCabinetBalancesPage() {
     getClientPortalBalances({
       page: apiParams.page,
       limit: apiParams.limit,
-      product_id: apiParams.product_id,
-      type_id: apiParams.type_id,
-      search: apiParams.search,
+      sku: apiParams.sku,
+      name: apiParams.name,
+      color_id: apiParams.color_id,
+      size_id: apiParams.size_id,
       only_positive: true,
       sort: apiParams.sort,
     })
@@ -112,6 +156,12 @@ export function ClientCabinetBalancesPage() {
     }
   }, [apiParams, query.limit, query.page, setPage, reloadKey])
 
+  const onTextFilterDebounced = (name: 'search' | 'name' | 'sku' | 'supplier', value: string) => {
+    const v = value || undefined
+    if (name === 'sku') setFilters({ sku: v })
+    if (name === 'name') setFilters({ name: v })
+  }
+
   return (
     <>
       <h1 className="cabinet-page-title">Остатки</h1>
@@ -123,15 +173,14 @@ export function ClientCabinetBalancesPage() {
             disabled={loading}
             fields={filterFields}
             values={{
-              search: query.filters.search,
-              type_id: query.filters.type_id,
-              product_id: query.filters.product_id,
+              sku: query.filters.sku,
+              name: query.filters.name,
+              color_id: query.filters.color_id,
+              size_id: query.filters.size_id,
             }}
-            onTextFilterDebounced={(name, value) => {
-              if (name === 'search') setFilters({ search: value || undefined })
-            }}
+            onTextFilterDebounced={onTextFilterDebounced}
             onSelectChange={(name, value) => {
-              if (name === 'type_id' || name === 'product_id') {
+              if (name === 'color_id' || name === 'size_id') {
                 setFilters({ [name]: value ?? undefined })
               }
             }}
@@ -163,6 +212,11 @@ export function ClientCabinetBalancesPage() {
           setError('')
           setReloadKey((k) => k + 1)
         }}
+      />
+      <ImageFullscreenLightbox
+        open={lightboxSrc !== null}
+        src={lightboxSrc}
+        onClose={() => setLightboxSrc(null)}
       />
     </>
   )

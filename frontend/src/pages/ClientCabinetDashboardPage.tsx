@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ApplyFiltersIcon, ResetFiltersIcon } from '../components/CollectionActions'
+import { DateRangeFilter } from '../components/DateRangeFilter'
+import { DictionaryFilterCombobox } from '../components/DictionaryFilterCombobox'
 import { BarChart, LineChart } from '../components/MiniCharts'
 import {
   type AnalyticsGroup,
@@ -29,10 +32,64 @@ function formatDeadStockLastMovement(iso: string | null): string {
   return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+type PeriodPreset = 'today' | 'last7' | 'last30' | 'last90' | 'last365' | 'custom'
+
+function rangeForPreset(preset: Exclude<PeriodPreset, 'custom'>): { date_from: string; date_to: string } {
+  const to = todayIso()
+  if (preset === 'today') return { date_from: to, date_to: to }
+  if (preset === 'last7') return { date_from: isoMinusDays(6), date_to: to }
+  if (preset === 'last30') return { date_from: isoMinusDays(29), date_to: to }
+  if (preset === 'last90') return { date_from: isoMinusDays(89), date_to: to }
+  return { date_from: isoMinusDays(364), date_to: to }
+}
+
+function detectPreset(dateFrom: string, dateTo: string): PeriodPreset {
+  const to = todayIso()
+  if (dateFrom === to && dateTo === to) return 'today'
+  if (dateFrom === isoMinusDays(6) && dateTo === to) return 'last7'
+  if (dateFrom === isoMinusDays(29) && dateTo === to) return 'last30'
+  if (dateFrom === isoMinusDays(89) && dateTo === to) return 'last90'
+  if (dateFrom === isoMinusDays(364) && dateTo === to) return 'last365'
+  return 'custom'
+}
+
+type CabinetDashFilters = {
+  date_from: string
+  date_to: string
+  /** Не задан — в запрос уходит «день». */
+  group?: AnalyticsGroup
+}
+
+const DEFAULT_FILTERS: CabinetDashFilters = {
+  ...rangeForPreset('last30'),
+  group: 'day',
+}
+
+const GROUP_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Шаг графика' },
+  { value: 'day', label: 'День' },
+  { value: 'week', label: 'Неделя' },
+  { value: 'month', label: 'Месяц' },
+]
+
+function filtersEqual(a: CabinetDashFilters, b: CabinetDashFilters): boolean {
+  return (
+    a.date_from === b.date_from &&
+    a.date_to === b.date_to &&
+    a.group === b.group
+  )
+}
+
+function normalizeCommittedFilters(f: CabinetDashFilters): CabinetDashFilters {
+  return { ...f, group: f.group ?? 'day' }
+}
+
 export function ClientCabinetDashboardPage() {
-  const [dateFrom, setDateFrom] = useState(isoMinusDays(29))
-  const [dateTo, setDateTo] = useState(todayIso())
-  const [group, setGroup] = useState<AnalyticsGroup>('day')
+  const [draftFilters, setDraftFilters] = useState<CabinetDashFilters>(DEFAULT_FILTERS)
+  const [committedFilters, setCommittedFilters] = useState<CabinetDashFilters>(DEFAULT_FILTERS)
+
+  const dirty = useMemo(() => !filtersEqual(draftFilters, committedFilters), [draftFilters, committedFilters])
+
   const [metrics, setMetrics] = useState<ClientPortalDashboardMetrics | null>(null)
   const [movement, setMovement] = useState<MovementReport | null>(null)
   const [top, setTop] = useState<TopProductsReport | null>(null)
@@ -40,20 +97,26 @@ export function ClientCabinetDashboardPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  const activePreset = detectPreset(draftFilters.date_from, draftFilters.date_to)
+
+  const committedGroup = committedFilters.group ?? 'day'
+
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
+    const df = committedFilters.date_from
+    const dt = committedFilters.date_to
     Promise.all([
-      getClientPortalDashboardMetrics({ date_from: dateFrom, date_to: dateTo }),
+      getClientPortalDashboardMetrics({ date_from: df, date_to: dt }),
       getClientPortalDashboardMovement({
-        date_from: dateFrom,
-        date_to: dateTo,
-        group,
+        date_from: df,
+        date_to: dt,
+        group: committedGroup,
       }),
       getClientPortalDashboardTopProducts({
-        date_from: dateFrom,
-        date_to: dateTo,
+        date_from: df,
+        date_to: dt,
         limit: 8,
       }),
     ])
@@ -72,7 +135,7 @@ export function ClientCabinetDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [dateFrom, dateTo, group])
+  }, [committedFilters.date_from, committedFilters.date_to, committedGroup])
 
   useEffect(() => {
     let cancelled = false
@@ -117,42 +180,104 @@ export function ClientCabinetDashboardPage() {
     return { positions, units, days: deadStock.days_threshold }
   }, [deadStock])
 
+  function applyFilters() {
+    const next = normalizeCommittedFilters(draftFilters)
+    setCommittedFilters(next)
+    setDraftFilters(next)
+  }
+
+  function resetAllFilters() {
+    setDraftFilters(DEFAULT_FILTERS)
+    setCommittedFilters(DEFAULT_FILTERS)
+  }
+
   return (
     <div className="cabinet-dashboard">
       <h1 className="cabinet-dashboard__title">Сводка</h1>
 
-      <div className="cabinet-dashboard__toolbar">
-        <label className="cabinet-dashboard__field">
-          <span className="cabinet-dashboard__label">С</span>
-          <input
-            type="date"
-            className="cabinet-dashboard__input"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-          />
-        </label>
-        <label className="cabinet-dashboard__field">
-          <span className="cabinet-dashboard__label">По</span>
-          <input
-            type="date"
-            className="cabinet-dashboard__input"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-          />
-        </label>
-        <label className="cabinet-dashboard__field">
-          <span className="cabinet-dashboard__label">Группировка</span>
-          <select
-            className="cabinet-dashboard__input"
-            value={group}
-            onChange={(e) => setGroup(e.target.value as AnalyticsGroup)}
-          >
-            <option value="day">По дням</option>
-            <option value="week">По неделям</option>
-            <option value="month">По месяцам</option>
-          </select>
-        </label>
+      <div className="analytics-admin-filters cabinet-dashboard__filters">
+        <div className="analytics-admin-filters__grid analytics-admin-filters__grid--cabinet">
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--range">
+            <span className="analytics-admin-filters__label">Период</span>
+            <DateRangeFilter
+              placeholder="Период"
+              dateFrom={draftFilters.date_from}
+              dateTo={draftFilters.date_to}
+              disabled={loading}
+              className="analytics-admin-filters__date-range"
+              quickPresets={[
+                { label: 'Сегодня', ...rangeForPreset('today') },
+                { label: '7 дней', ...rangeForPreset('last7') },
+                { label: '30 дней', ...rangeForPreset('last30') },
+                { label: '90 дней', ...rangeForPreset('last90') },
+                { label: '1 год', ...rangeForPreset('last365') },
+              ]}
+              onChange={(next) => {
+                if (next.date_from === undefined && next.date_to === undefined) {
+                  setDraftFilters((f) => ({ ...f, ...rangeForPreset('last30') }))
+                  return
+                }
+                setDraftFilters((f) => ({
+                  ...f,
+                  date_from: next.date_from ?? f.date_from,
+                  date_to: next.date_to ?? f.date_to,
+                }))
+              }}
+            />
+          </div>
+
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--step">
+            <span className="analytics-admin-filters__label">Шаг графика</span>
+            <DictionaryFilterCombobox
+              name="analytics_group"
+              options={GROUP_FILTER_OPTIONS}
+              valueStr={draftFilters.group ?? ''}
+              onSelectChange={(_name, v) =>
+                setDraftFilters((f) => ({
+                  ...f,
+                  group: v === null ? undefined : (v as AnalyticsGroup),
+                }))
+              }
+              disabled={loading}
+              listPortal
+              openListAfterClear
+              ariaLabel="Шаг графика"
+            />
+          </div>
+
+          <div className="analytics-admin-filters__cell analytics-admin-filters__cell--actions">
+            <span className="analytics-admin-filters__label analytics-admin-filters__label--spacer" aria-hidden>
+              {'\u00a0'}
+            </span>
+            <div className="analytics-admin-filters__actions-toolbar">
+              <button
+                type="button"
+                className="btn btn--secondary collection-actions__icon-btn collection-actions__reset-filters analytics-admin-filters__toolbar-icon"
+                disabled={loading}
+                onClick={resetAllFilters}
+                aria-label="Сбросить фильтры"
+                title="Сбросить фильтры"
+              >
+                <ResetFiltersIcon />
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary collection-actions__icon-btn analytics-admin-filters__apply-icon analytics-admin-filters__toolbar-icon"
+                disabled={loading || !dirty}
+                onClick={applyFilters}
+                aria-label="Применить фильтры"
+                title="Применить фильтры"
+              >
+                <ApplyFiltersIcon />
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {activePreset === 'custom' ? (
+        <p className="analytics-admin-filters__preset-note">Выбран произвольный период</p>
+      ) : null}
 
       {error ? <p className="error-text">{error}</p> : null}
       {loading && !metrics ? <p className="auth-card__subtitle">Загрузка...</p> : null}

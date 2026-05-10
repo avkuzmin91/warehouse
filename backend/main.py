@@ -671,10 +671,17 @@ class ProductTypeListResponse(BaseModel):
 
 
 def _fold_ci_str(x: object) -> str:
-    """Нижний регистр для сравнения (Unicode, в т.ч. кириллица); в БД функция fold_ci()."""
+    """Совпадает с SQL fold_ci(): lower + ё→е (без учёта регистра; е и ё эквивалентны)."""
     if x is None:
         return ""
-    return str(x).casefold()
+    return str(x).lower().replace("ё", "е")
+
+
+def _fold_ci_import_match(x: object) -> str:
+    """Сверка строк импорта с данными системы (trim + fold_ci)."""
+    if x is None:
+        return ""
+    return _fold_ci_str(str(x).strip())
 
 
 def _ci_substring_like_param(raw: str) -> str:
@@ -702,7 +709,7 @@ def _ensure_fold_ci(connection: Any) -> None:
         IMMUTABLE
         PARALLEL SAFE
         AS $fold$
-            SELECT lower(COALESCE(input, ''))
+            SELECT replace(lower(COALESCE(input, '')), 'ё', 'е')
         $fold$
         """
     )
@@ -6935,7 +6942,9 @@ def client_portal_list_balances(
     type_id: str | None = Query(None),
     color_id: str | None = Query(None),
     size_id: str | None = Query(None),
-    search: str | None = Query(None, description="Подстрока в названии товара"),
+    sku: str | None = Query(None, description="Подстрока по базовому штрих-коду (products.sku)"),
+    name: str | None = Query(None, description="Подстрока по названию товара"),
+    search: str | None = Query(None, description="Устар.: используйте name"),
     only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
     sort: str | None = Query(None),
     user=Depends(get_current_client_portal),
@@ -6944,9 +6953,15 @@ def client_portal_list_balances(
     offset = (page - 1) * limit
     conds = ["p.client_id = ?", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = [portal_cid]
-    if search is not None and str(search).strip():
-        conds.append("fold_ci(p.name) LIKE ?")
-        params.append(_ci_substring_like_param(str(search)))
+    name_sub = (str(name).strip() if name is not None and str(name).strip() else None) or (
+        str(search).strip() if search is not None and str(search).strip() else None
+    )
+    if name_sub:
+        conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
+        params.append(_ci_substring_like_param(name_sub))
+    if sku is not None and str(sku).strip():
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
     if product_id is not None and str(product_id).strip():
         conds.append("o.product_id = ?")
         params.append(str(product_id).strip())
@@ -7025,9 +7040,19 @@ def client_portal_list_operations(
     product_id: str | None = Query(None),
     color_id: str | None = Query(None),
     size_id: str | None = Query(None),
+    sku: str | None = Query(None, description="Подстрока по базовому штрих-коду товара"),
+    name: str | None = Query(None, description="Подстрока по названию товара"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
-    search: str | None = Query(None, description="Подстрока в названии товара"),
+    search: str | None = Query(None, description="Устар.: используйте name"),
+    receipt_status: str | None = Query(
+        None,
+        description=f"Только приход: '{RECEIPT_STATUS_PENDING}' | '{RECEIPT_STATUS_ACCEPTED}'",
+    ),
+    shipment_status: str | None = Query(
+        None,
+        description=f"Только расход: '{SHIPMENT_STATUS_PENDING}' | '{SHIPMENT_STATUS_SHIPPED}'",
+    ),
     sort: str | None = Query(None),
     user=Depends(get_current_client_portal),
 ):
@@ -7037,9 +7062,15 @@ def client_portal_list_operations(
     offset = (page - 1) * limit
     conds = ["p.client_id = ?", SQL_WHERE_INV_OP_ACTIVE_O]
     params: list[object] = [portal_cid]
-    if search is not None and str(search).strip():
-        conds.append("fold_ci(p.name) LIKE ?")
-        params.append(_ci_substring_like_param(str(search)))
+    name_sub = (str(name).strip() if name is not None and str(name).strip() else None) or (
+        str(search).strip() if search is not None and str(search).strip() else None
+    )
+    if name_sub:
+        conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
+        params.append(_ci_substring_like_param(name_sub))
+    if sku is not None and str(sku).strip():
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
     if op_type is not None and str(op_type).strip():
         v = str(op_type).strip()
         if v not in ("in", "out"):
@@ -7061,6 +7092,29 @@ def client_portal_list_operations(
     if dt is not None:
         conds.append("substr(o.created_at, 1, 10) <= ?")
         params.append(dt)
+    if receipt_status is not None and str(receipt_status).strip():
+        rsq = str(receipt_status).strip().lower()
+        if rsq not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+            raise HTTPException(
+                status_code=400,
+                detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+            )
+        if op_type is None or str(op_type).strip() != "out":
+            conds.append("COALESCE(o.receipt_status, 'accepted') = ?")
+            params.append(rsq)
+    if shipment_status is not None and str(shipment_status).strip():
+        ssq = str(shipment_status).strip().lower()
+        if ssq not in (SHIPMENT_STATUS_PENDING, SHIPMENT_STATUS_SHIPPED):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
+                    f"{SHIPMENT_STATUS_SHIPPED}"
+                ),
+            )
+        if op_type is None or str(op_type).strip() != "in":
+            conds.append("COALESCE(o.shipment_status, 'shipped') = ?")
+            params.append(ssq)
     where_sql = " AND ".join(conds)
     join_sql = """
         FROM inventory_operations o
@@ -7207,6 +7261,18 @@ def client_portal_lookup_product_types(user=Depends(get_current_client_portal)):
         )
         for r in rows
     ]
+
+
+@app.get("/client-portal/lookups/colors", response_model=list[DictionaryBaseItem])
+def client_portal_lookup_colors(user=Depends(get_current_client_portal)):
+    _ = user
+    return _active_lookup_dictionary("colors")
+
+
+@app.get("/client-portal/lookups/sizes", response_model=list[DictionaryBaseItem])
+def client_portal_lookup_sizes(user=Depends(get_current_client_portal)):
+    _ = user
+    return _active_lookup_dictionary("sizes")
 
 
 @app.get("/client-portal/dashboard/metrics", response_model=ClientPortalDashboardMetrics)
@@ -7625,9 +7691,9 @@ def _lookup_client_id_for_import(connection: Any, client_name: str) -> tuple[str
         """
         SELECT id FROM clients
         WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(is_active, 1) = 1
-          AND LOWER(TRIM(COALESCE(name, ''))) = LOWER(TRIM(?))
+          AND replace(lower(trim(COALESCE(name, ''))), 'ё', 'е') = ?
         """,
-        (cn,),
+        (_fold_ci_import_match(cn),),
     ).fetchall()
     if not rows:
         return None, "Клиент не найден"
@@ -7674,7 +7740,7 @@ def _resolve_movement_variant_for_import(
     client_name = str(pr["client_name"] or "").strip() if pr["client_name"] else None
     if client_id is None or not str(client_id).strip():
         return None, "Товар не привязан к клиенту"
-    if _fold_ci_str(product_name_excel) != _fold_ci_str(pname):
+    if _fold_ci_import_match(product_name_excel) != _fold_ci_import_match(pname):
         return None, f"Название в системе отличается: {pname}"
     if client_id_file and str(client_id).strip() != str(client_id_file).strip():
         return None, "Товар не принадлежит клиенту"
@@ -7690,9 +7756,9 @@ def _resolve_movement_variant_for_import(
             """
             SELECT id FROM colors
             WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
-              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+              AND replace(lower(trim(COALESCE(name, ''))), 'ё', 'е') = ?
             """,
-            (cn,),
+            (_fold_ci_import_match(cn),),
         ).fetchall()
         if not color_rows:
             return None, "Цвет не найден"
@@ -7703,9 +7769,9 @@ def _resolve_movement_variant_for_import(
                 """
                 SELECT id FROM colors
                 WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
-                  AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                  AND replace(lower(trim(COALESCE(name, ''))), 'ё', 'е') = ?
                 """,
-                (cn,),
+                (_fold_ci_import_match(cn),),
             ).fetchall()
             if not color_rows:
                 return None, "Цвет не найден"
@@ -7747,9 +7813,9 @@ def _resolve_movement_variant_for_import(
             """
             SELECT id FROM sizes
             WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
-              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+              AND replace(lower(trim(COALESCE(name, ''))), 'ё', 'е') = ?
             """,
-            (sn,),
+            (_fold_ci_import_match(sn),),
         ).fetchall()
         if not sz_rows:
             return None, "Размер не найден"
@@ -7759,9 +7825,9 @@ def _resolve_movement_variant_for_import(
             """
             SELECT id FROM sizes
             WHERE COALESCE(is_deleted, 0) = 0 AND is_active = 1
-              AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+              AND replace(lower(trim(COALESCE(name, ''))), 'ё', 'е') = ?
             """,
-            (sn,),
+            (_fold_ci_import_match(sn),),
         ).fetchall()
         if not sz_rows:
             return None, "Размер не найден"
@@ -7778,7 +7844,7 @@ def _resolve_movement_variant_for_import(
         if sn:
             for vr in vrows:
                 szn = str(vr["size_name"] or "").strip()
-                if _fold_ci_str(szn) == _fold_ci_str(sn):
+                if _fold_ci_import_match(szn) == _fold_ci_import_match(sn):
                     matches.append(vr)
             if not matches:
                 return None, "Недопустимый размер для товара"
@@ -7967,8 +8033,8 @@ def _movement_import_process_rows(
             ds,
             cid,
             _fold_ci_str(str(r.get("barcode") or "")),
-            _fold_ci_str(str(r.get("color") or "")),
-            _fold_ci_str(str(r.get("size") or "")),
+            _fold_ci_import_match(str(r.get("color") or "")),
+            _fold_ci_import_match(str(r.get("size") or "")),
             st_n,
         )
         dup_map.setdefault(key, []).append(row_no)

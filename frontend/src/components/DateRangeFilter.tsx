@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type MouseEvent } from 'react'
+import { FormDateField } from './FormDateField'
 import { ModalDialog } from './ModalDialog'
 
 /** Значения в query/API: YYYY-MM-DD (ТЗ «Фильтр даты»). */
@@ -178,32 +179,40 @@ export function DateRangeFilter({
         ) : null}
 
         <div className="date-range-modal__fields">
-          <label className="date-range-modal__field-row">
-            <span className="date-range-modal__short-label">{LABEL_FROM}</span>
-            <input
-              className="field-input date-range-modal__input"
-              type="date"
-              lang="ru-RU"
+          <div className="date-range-modal__field-row">
+            <label className="date-range-modal__short-label" htmlFor={`${dialogId}-from`}>
+              {LABEL_FROM}
+            </label>
+            <FormDateField
+              id={`${dialogId}-from`}
               value={draftFrom}
-              onChange={(e) => {
-                setDraftFrom(e.target.value)
+              onChange={(next) => {
+                setDraftFrom(next)
                 setModalError('')
               }}
+              max={draftTo && /^\d{4}-\d{2}-\d{2}$/.test(draftTo) ? draftTo : undefined}
+              disabled={disabled}
+              ariaLabel="Дата начала периода"
+              className="date-range-modal__form-date"
             />
-          </label>
-          <label className="date-range-modal__field-row">
-            <span className="date-range-modal__short-label">{LABEL_TO}</span>
-            <input
-              className="field-input date-range-modal__input"
-              type="date"
-              lang="ru-RU"
+          </div>
+          <div className="date-range-modal__field-row">
+            <label className="date-range-modal__short-label" htmlFor={`${dialogId}-to`}>
+              {LABEL_TO}
+            </label>
+            <FormDateField
+              id={`${dialogId}-to`}
               value={draftTo}
-              onChange={(e) => {
-                setDraftTo(e.target.value)
+              onChange={(next) => {
+                setDraftTo(next)
                 setModalError('')
               }}
+              min={draftFrom && /^\d{4}-\d{2}-\d{2}$/.test(draftFrom) ? draftFrom : undefined}
+              disabled={disabled}
+              ariaLabel="Дата конца периода"
+              className="date-range-modal__form-date"
             />
-          </label>
+          </div>
         </div>
 
         {modalError ? (

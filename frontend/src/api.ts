@@ -1206,6 +1206,9 @@ export type ClientPortalBalancesParams = {
   type_id?: string
   color_id?: string
   size_id?: string
+  sku?: string
+  name?: string
+  /** @deprecated используйте name */
   search?: string
   only_positive?: boolean
   sort?: string
@@ -1219,7 +1222,9 @@ export function getClientPortalBalances(params?: ClientPortalBalancesParams) {
   if (params?.type_id) sp.set('type_id', params.type_id)
   if (params?.color_id) sp.set('color_id', params.color_id)
   if (params?.size_id) sp.set('size_id', params.size_id)
-  if (params?.search?.trim()) sp.set('search', params.search.trim())
+  if (params?.sku?.trim()) sp.set('sku', params.sku.trim())
+  if (params?.name?.trim()) sp.set('name', params.name.trim())
+  else if (params?.search?.trim()) sp.set('search', params.search.trim())
   if (params?.only_positive === false) sp.set('only_positive', 'false')
   if (params?.sort) sp.set('sort', params.sort)
   const q = sp.toString()
@@ -1235,9 +1240,14 @@ export type ClientPortalOperationsParams = {
   product_id?: string
   color_id?: string
   size_id?: string
+  sku?: string
+  name?: string
+  /** @deprecated используйте name */
+  search?: string
   date_from?: string
   date_to?: string
-  search?: string
+  receipt_status?: 'pending' | 'accepted'
+  shipment_status?: 'pending' | 'shipped'
   sort?: string
 }
 
@@ -1249,13 +1259,21 @@ export function getClientPortalOperations(params?: ClientPortalOperationsParams)
   if (params?.product_id) sp.set('product_id', params.product_id)
   if (params?.color_id) sp.set('color_id', params.color_id)
   if (params?.size_id) sp.set('size_id', params.size_id)
+  if (params?.sku?.trim()) sp.set('sku', params.sku.trim())
+  if (params?.name?.trim()) sp.set('name', params.name.trim())
+  else if (params?.search?.trim()) sp.set('search', params.search.trim())
   if (params?.date_from && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from)) {
     sp.set('date_from', params.date_from)
   }
   if (params?.date_to && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to)) {
     sp.set('date_to', params.date_to)
   }
-  if (params?.search?.trim()) sp.set('search', params.search.trim())
+  if (params?.receipt_status === 'pending' || params?.receipt_status === 'accepted') {
+    sp.set('receipt_status', params.receipt_status)
+  }
+  if (params?.shipment_status === 'pending' || params?.shipment_status === 'shipped') {
+    sp.set('shipment_status', params.shipment_status)
+  }
   if (params?.sort) sp.set('sort', params.sort)
   const q = sp.toString()
   return request<InventoryOperationListResponse>(
@@ -1269,6 +1287,14 @@ export function getClientPortalProducts() {
 
 export function getClientPortalProductTypes() {
   return request<InventoryProductTypeLookup[]>('/client-portal/lookups/product-types')
+}
+
+export function getClientPortalColors() {
+  return request<DictionaryItem[]>('/client-portal/lookups/colors')
+}
+
+export function getClientPortalSizes() {
+  return request<DictionaryItem[]>('/client-portal/lookups/sizes')
 }
 
 export function getClientPortalDashboardMetrics(params?: { date_from?: string; date_to?: string }) {
