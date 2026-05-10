@@ -225,7 +225,7 @@ def _assert_shipment_posting_day_not_after_today(created_at_val: str | None) -> 
 
 bearer_scheme = HTTPBearer()
 
-app = FastAPI(title="Auth Module API")
+app = FastAPI(root_path="/api")
 app.add_middleware(
     CORSMiddleware,
     # Локальная разработка: любой порт на localhost / 127.0.0.1 (Vite, preview, другой порт)
