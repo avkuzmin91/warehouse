@@ -105,6 +105,20 @@
 - Внутри скрипта **нет `sudo`**.
 - Рекомендуемый порядок выкладки: сначала **test**, затем **prod** после проверки staging — одной командой: **`deploy-promote`** (`scripts/deploy-promote.sh`).
 
+### Git: `fatal: detected dubious ownership` в `/app/wms-prod`
+
+Каталог репозитория обычно принадлежит пользователю **`dev`**, а Git вызывается от **`root`** (например, после `sudo su`). Git ≥ 2.35 по умолчанию **блокирует** работу в «чужом» дереве — это нормальная защита.
+
+**Рекомендация:** **`git pull`** и **`scripts/deploy.sh`** запускать от **`dev`** (SSH-сессия как `dev` или `sudo -u dev -H bash -lc 'cd /app/wms-prod && ./scripts/deploy.sh prod'`).
+
+Если Git от **`root`** всё же нужен, один раз для учётной записи root:
+
+```bash
+git config --global --add safe.directory /app/wms-prod
+```
+
+(пишет исключение в **`/root/.gitconfig`**; на пользователя **`dev`** это не влияет — у него свой `~/.gitconfig`.)
+
 ---
 
 ## Smoke-check (после `nginx -s reload` и поднятых стеков)
