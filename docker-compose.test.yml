@@ -16,11 +16,15 @@ services:
       - db_test_data:/var/lib/postgresql/data
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     container_name: wms_test_backend
     restart: always
     environment:
       APP_ENV: test
+      APP_VERSION: ${APP_VERSION:-}
     env_file:
       - .env.test
     depends_on:
@@ -29,7 +33,10 @@ services:
       - "127.0.0.1:11000:8000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_TITLE: "pack-men - test"
     container_name: wms_test_frontend
     restart: always
     env_file:

@@ -14,11 +14,15 @@ services:
       - db_data:/var/lib/postgresql/data
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     container_name: wms_prod_backend
     restart: always
     environment:
       APP_ENV: prod
+      APP_VERSION: ${APP_VERSION:-}
     env_file:
       - .env.prod
     depends_on:
@@ -27,7 +31,10 @@ services:
       - "127.0.0.1:10000:8000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_TITLE: "pack-men - prod"
     container_name: wms_prod_frontend
     restart: always
     env_file:

@@ -69,7 +69,13 @@
 
 `/app/wms-prod/scripts/deploy.sh`
 
-Он задаёт воспроизводимый и детерминированный порядок: переход в репозиторий → сокращённый статус Git → **проверка чистоты рабочего дерева** (см. **Deploy safety rules**) → **`git fetch`** и **`git pull --ff-only origin main`** (не выполняется при грязном дереве и не в **`--dry-run`**) → **проверка доступа к Docker API** (без sudo) → **`docker compose … config`** (валидация) → **`docker compose … up -d --build --pull always`** → **ожидание `/health` на loopback-бэкенде** (до 30 с) → **smoke-check через host nginx** → вывод **`docker compose ps`** и баннер успеха. После успешного pull в лог печатается **SHA коммита** (`git rev-parse HEAD` и последняя строка `git log -1`).
+Он задаёт воспроизводимый и детерминированный порядок: переход в репозиторий → сокращённый статус Git → **проверка чистоты рабочего дерева** (см. **Deploy safety rules**) → **`git fetch`** и **`git pull --ff-only origin main`** (не выполняется при грязном дереве и не в **`--dry-run`**) → **`APP_VERSION`** из **`git describe --tags --always`** (если переменная ещё не задана в окружении) → **проверка доступа к Docker API** (без sudo) → **`docker compose … config`** (валидация) → **`docker compose … up -d --build --pull always`** → **ожидание `/health` на loopback-бэкенде** (до 30 с) → **smoke-check через host nginx** → вывод **`docker compose ps`** и баннер успеха. После успешного pull в лог печатается **SHA коммита** (`git rev-parse HEAD` и последняя строка `git log -1`).
+
+### Версия системы и git-теги
+
+- **`GET /version`** (футер): строка версии берётся в бэкенде в порядке **`APP_VERSION`** из окружения → **`git describe --tags --always`** в корне репозитория на диске → **`1.0.1`**.
+- **`scripts/deploy.sh`** перед **`docker compose up`** выставляет **`export APP_VERSION="$(git describe --tags --always)"`** (если **`APP_VERSION`** уже не задан — тогда значение не перезаписывается). Compose и **build-args** образа backend подставляют это значение, поэтому в контейнере prod/test/dev не нужен каталог **`.git`**.
+- Релиз: **`git tag v1.0.2`**, **`git push origin v1.0.2`**, затем деплой с коммитом, на который указывает тег (или merge в **`main`** и тег на этот коммит) — в футере будет, например, **`v1.0.2`** или **`v1.0.2-3-gabcdef1`** (если коммиты после тега).
 
 Режим проверки без изменений: **`/app/wms-prod/scripts/deploy.sh <env> --dry-run`** (или **`--dry-run` перед `<env>`**) — без `git pull`, без `compose up`, без smoke; выполняются проверка дерева, Docker и **`docker compose config`**.
 

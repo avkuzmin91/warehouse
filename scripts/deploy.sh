@@ -12,6 +12,9 @@ usage() {
   deploy.sh [--dry-run] <dev|test|prod>
 
   --dry-run   только проверки и план шагов (без git pull, compose up, smoke)
+
+  Если в окружении уже задан APP_VERSION, он не перезаписывается; иначе
+  перед compose выставляется результат: git describe --tags --always
 EOS
   exit 2
 }
@@ -71,6 +74,26 @@ EOS
 validate_compose_file() {
   local f="$1"
   docker compose -f "${f}" config >/dev/null
+}
+
+# APP_VERSION для backend: git describe на хосте с репозиторием (релизы — git tag).
+export_deploy_app_version() {
+  if [[ -n "${APP_VERSION:-}" ]]; then
+    echo "=== APP_VERSION (уже задан в окружении, не перезаписываем) ==="
+    echo "${APP_VERSION}"
+    export APP_VERSION
+    return 0
+  fi
+  local described
+  described="$(git -C "${REPO_ROOT}" describe --tags --always 2>/dev/null || true)"
+  if [[ -n "${described}" ]]; then
+    APP_VERSION="${described}"
+  else
+    APP_VERSION="1.0.1"
+  fi
+  echo "=== APP_VERSION (git describe --tags --always → compose / build backend) ==="
+  echo "${APP_VERSION}"
+  export APP_VERSION
 }
 
 # Ожидание бэкенда на loopback (минует host nginx; порты — контракт репозитория).
@@ -199,16 +222,18 @@ assert_clean_worktree
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "=== DRY-RUN: план (изменений в репозитории не вносится) ==="
   echo "  1. git fetch + git pull --ff-only origin main  [пропущено в dry-run]"
-  echo "  2. docker compose -f docker-compose.${DEPLOY_ENV}.yml config  [будет выполнено для валидации]"
-  echo "  3. docker compose -f docker-compose.${DEPLOY_ENV}.yml up -d --build  [пропущено]"
-  echo "  4. ожидание /health на loopback backend  [пропущено]"
-  echo "  5. smoke-check через host nginx  [пропущено]"
+  echo "  2. APP_VERSION из git describe (если не задан в окружении)  [будет показан ниже]"
+  echo "  3. docker compose -f docker-compose.${DEPLOY_ENV}.yml config  [будет выполнено для валидации]"
+  echo "  4. docker compose -f docker-compose.${DEPLOY_ENV}.yml up -d --build  [пропущено]"
+  echo "  5. ожидание /health на loopback backend  [пропущено]"
+  echo "  6. smoke-check через host nginx  [пропущено]"
   verify_docker
   COMPOSE_FILE="docker-compose.${DEPLOY_ENV}.yml"
   if [[ ! -f "${COMPOSE_FILE}" ]]; then
     echo "Файл ${COMPOSE_FILE} не найден в ${REPO_ROOT}" >&2
     exit 1
   fi
+  export_deploy_app_version
   echo "=== docker compose config (валидация) ==="
   validate_compose_file "${COMPOSE_FILE}"
   echo "Dry-run OK: compose валиден, дерево чистое (с учётом исключений для untracked)."
@@ -221,6 +246,8 @@ git pull --ff-only origin main
 echo "=== ревизия после pull ==="
 git rev-parse HEAD
 git log -1 --oneline
+
+export_deploy_app_version
 
 verify_docker
 

@@ -1,8 +1,10 @@
 from datetime import UTC, date, datetime, timedelta
+import functools
 import io
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Mapping
@@ -258,13 +260,52 @@ def health() -> dict[str, str]:
 class SystemVersionResponse(BaseModel):
     """Версия и окружение для футера UI (ТЗ: Версия системы)."""
 
-    version: str = Field(description="Семантическая версия MAJOR.MINOR.PATCH")
+    version: str = Field(
+        description="Версия: APP_VERSION, иначе вывод git describe --tags --always, иначе 1.0.1",
+    )
     environment: str = Field(description="Окружение: dev | test | prod")
 
 
+def _git_repo_root() -> Path | None:
+    """Корень репозитория (каталог с .git), если он есть на диске."""
+    here = Path(__file__).resolve().parent
+    for p in (here, *here.parents):
+        if (p / ".git").exists():
+            return p
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _git_describe_version() -> str | None:
+    """Текущая метка git describe --tags --always из корня репо; None если git недоступен."""
+    root = _git_repo_root()
+    if root is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "describe", "--tags", "--always"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = (proc.stdout or "").strip()
+    return out if out else None
+
+
 def _app_version() -> str:
-    v = (os.environ.get("APP_VERSION") or "1.0.1").strip()
-    return v if v else "1.0.1"
+    env = (os.environ.get("APP_VERSION") or "").strip()
+    if env:
+        return env
+    git_v = _git_describe_version()
+    if git_v:
+        return git_v
+    return "1.0.1"
 
 
 def _app_environment() -> str:

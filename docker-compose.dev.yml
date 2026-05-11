@@ -17,13 +17,17 @@ services:
       - db_data_dev:/var/lib/postgresql/data
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     container_name: wms_dev_backend
     restart: unless-stopped
     working_dir: /app
     command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
     environment:
       APP_ENV: dev
+      APP_VERSION: ${APP_VERSION:-}
     env_file:
       - .env.dev
     volumes:

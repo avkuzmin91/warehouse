@@ -6,6 +6,18 @@ import App from './App'
 import { ConfirmDialogProvider } from './components/ConfirmDialogProvider'
 import { RootErrorBoundary } from './RootErrorBoundary'
 
+/** Заголовок вкладки: `VITE_APP_TITLE` при сборке (prod/test) или pack-men - dev в `npm run dev`. */
+function applyDocumentTitle(): void {
+  const raw = import.meta.env.VITE_APP_TITLE
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    document.title = raw.trim()
+    return
+  }
+  document.title = import.meta.env.DEV ? 'pack-men - dev' : 'pack-men - prod'
+}
+
+applyDocumentTitle()
+
 /** База из Vite (`vite.config` → `base`), без завершающего «/». Для деплоя в подкаталог. */
 function routerBasename(): string | undefined {
   const raw = import.meta.env.BASE_URL ?? '/'
