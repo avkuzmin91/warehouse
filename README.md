@@ -201,3 +201,9 @@ cd /app/wms-prod/frontend && npm install && npm run dev
 ## Cloudflare
 
 DNS на IP сервера; трафик на **80/443** хоста → nginx → **`127.0.0.1:…`** в Docker.
+
+В **`nginx/nginx.conf`** заданы заголовки **`Cache-Control` / `CDN-Cache-Control`**: HTML и API не кэшируются на границе, а **`/assets/*`** (хэш в имени Vite) — **`immutable`**, чтобы прод и тест не расходились из‑за старой оболочки при одинаковых Docker-образах.
+
+После правок nginx на сервере: **`sudo nginx -t && sudo systemctl reload nginx`** (или **`sudo nginx -s reload`**, если unit не используется).
+
+Если после деплоя боевой домен всё ещё «старый», в Cloudflare выполните **Purge Cache** (хотя бы **Custom Purge** для `https://pack-men.ru/` и `https://www.pack-men.ru/`) — политика origin не сбрасывает уже закэшированные ответы на edge мгновенно во всех режимах.
