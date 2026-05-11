@@ -7402,6 +7402,245 @@ def client_portal_lookup_sizes(user=Depends(get_current_client_portal)):
     return _active_lookup_dictionary("sizes")
 
 
+@app.get("/client-portal/lookups/record-actuality", response_model=list[RecordActualityFilterItem])
+def client_portal_record_actuality_lookup(user=Depends(get_current_client_portal)):
+    """Те же значения, что GET /system/record-actuality, для фильтра списка товаров ЛК."""
+    _ = user
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name FROM record_actuality
+            ORDER BY sort_order ASC, LOWER(name) ASC
+            """
+        ).fetchall()
+    return [RecordActualityFilterItem(id=r["id"], name=r["name"]) for r in rows]
+
+
+@app.get("/client-portal/products", response_model=ProductListResponse)
+def client_portal_list_products(
+    user=Depends(get_current_client_portal),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    sku: str | None = Query(None),
+    type_id: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    """Список товаров только текущего клиента; client_id из запроса не принимается (только портальный)."""
+    portal_cid = _portal_bound_client_id(user)
+    offset = (page - 1) * limit
+    conds = ["p.client_id = ?"]
+    params: list = [portal_cid]
+    if name is not None and str(name).strip():
+        conds.append("fold_ci(p.name) LIKE ?")
+        params.append(_ci_substring_like_param(str(name)))
+    if sku is not None and str(sku).strip():
+        conds.append("fold_ci(COALESCE(p.sku, '')) LIKE ?")
+        params.append(_ci_substring_like_param(str(sku)))
+    if type_id is not None and str(type_id).strip():
+        conds.append("p.type_id = ?")
+        params.append(str(type_id).strip())
+    if not include_deleted:
+        conds.append("COALESCE(p.is_deleted, 0) = 0")
+    join_sql = """
+            FROM products p
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            LEFT JOIN clients c ON c.id = p.client_id
+            LEFT JOIN (
+                SELECT product_id, COUNT(*) AS cnt
+                FROM product_variants
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY product_id
+            ) vcnt ON vcnt.product_id = p.id
+            LEFT JOIN users creator ON creator.id = p.creator_id
+            LEFT JOIN users editor ON editor.id = p.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
+            """
+    order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "p.created_at DESC"
+    with get_connection() as connection:
+        ia = _resolve_actuality_filter(connection, actuality_id)
+        if ia is not None:
+            conds.append("p.is_active = ?")
+            params.append(1 if ia else 0)
+        where_sql = " AND ".join(conds)
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) AS cnt {join_sql} WHERE {where_sql}",
+                params,
+            ).fetchone()["cnt"]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT
+                p.id,
+                p.name,
+                p.type_id,
+                pt.name AS type_name,
+                p.sku AS sku_base,
+                COALESCE(pt.requires_color, 0) AS requires_color,
+                COALESCE(pt.requires_size, 0) AS requires_size,
+                p.client_id,
+                c.name AS client_name,
+                COALESCE(vcnt.cnt, 0) AS variant_count,
+                p.is_active,
+                COALESCE(p.is_deleted, 0) AS is_deleted,
+                p.deleted_at,
+                p.image_url,
+                p.gallery_json,
+                p.created_at,
+                p.updated_at,
+                creator.email AS created_by,
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
+            {join_sql}
+            WHERE {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return ProductListResponse(
+        items=[
+            ProductItem(
+                id=row["id"],
+                name=row["name"],
+                type_id=row["type_id"],
+                type_name=row["type_name"],
+                sku_base=row["sku_base"],
+                requires_color=bool(row["requires_color"]),
+                requires_size=bool(row["requires_size"]),
+                client_id=row["client_id"],
+                client_name=row["client_name"],
+                variant_count=int(row["variant_count"] or 0),
+                is_active=bool(row["is_active"]),
+                is_deleted=bool(row["is_deleted"]),
+                deleted_at=row["deleted_at"],
+                deleted_by=row["deleted_by"],
+                image_urls=_product_card_image_urls(row["gallery_json"], row["image_url"]),
+                created_at=row["created_at"],
+                created_by=row["created_by"],
+                updated_at=row["updated_at"],
+                updated_by=row["updated_by"],
+            )
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@app.get("/client-portal/products/{item_id}", response_model=ProductItem)
+def client_portal_get_product(item_id: str, user=Depends(get_current_client_portal)):
+    portal_cid = _portal_bound_client_id(user)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                p.id,
+                p.name,
+                p.type_id,
+                pt.name AS type_name,
+                p.sku AS sku_base,
+                COALESCE(pt.requires_color, 0) AS requires_color,
+                COALESCE(pt.requires_size, 0) AS requires_size,
+                p.client_id,
+                c.name AS client_name,
+                COALESCE(vcnt.cnt, 0) AS variant_count,
+                p.is_active,
+                COALESCE(p.is_deleted, 0) AS is_deleted,
+                p.deleted_at,
+                p.image_url,
+                p.gallery_json,
+                p.created_at,
+                p.updated_at,
+                creator.email AS created_by,
+                editor.email AS updated_by,
+                deleter.email AS deleted_by
+            FROM products p
+            LEFT JOIN product_types pt ON pt.id = p.type_id
+            LEFT JOIN clients c ON c.id = p.client_id
+            LEFT JOIN (
+                SELECT product_id, COUNT(*) AS cnt
+                FROM product_variants
+                WHERE COALESCE(is_deleted, 0) = 0
+                GROUP BY product_id
+            ) vcnt ON vcnt.product_id = p.id
+            LEFT JOIN users creator ON creator.id = p.creator_id
+            LEFT JOIN users editor ON editor.id = p.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
+            WHERE p.id = ? AND p.client_id = ? AND COALESCE(p.is_deleted, 0) = 0
+            """,
+            (item_id, portal_cid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    return ProductItem(
+        id=row["id"],
+        name=row["name"],
+        type_id=row["type_id"],
+        type_name=row["type_name"],
+        sku_base=row["sku_base"],
+        requires_color=bool(row["requires_color"]),
+        requires_size=bool(row["requires_size"]),
+        client_id=row["client_id"],
+        client_name=row["client_name"],
+        variant_count=int(row["variant_count"] or 0),
+        is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
+        image_urls=_product_card_image_urls(row["gallery_json"], row["image_url"]),
+        created_at=row["created_at"],
+        created_by=row["created_by"],
+        updated_at=row["updated_at"],
+        updated_by=row["updated_by"],
+    )
+
+
+@app.get("/client-portal/products/{item_id}/variants", response_model=list[ProductVariantItem])
+def client_portal_list_product_variants(item_id: str, user=Depends(get_current_client_portal)):
+    portal_cid = _portal_bound_client_id(user)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT 1 FROM products p
+            WHERE p.id = ? AND p.client_id = ? AND COALESCE(p.is_deleted, 0) = 0
+            """,
+            (item_id, portal_cid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        rows = connection.execute(
+            """
+            SELECT id, color_id, size_id, length, width, height, sku, images_json, is_active
+            FROM product_variants
+            WHERE product_id = ?
+              AND COALESCE(is_deleted, 0) = 0
+            ORDER BY LOWER(sku) ASC
+            """,
+            (item_id,),
+        ).fetchall()
+    return [
+        ProductVariantItem(
+            id=str(r["id"]),
+            color_id=str(r["color_id"]),
+            dimension=ProductVariantDimension(
+                length=float(r["length"]),
+                width=float(r["width"]),
+                height=float(r["height"]),
+            ),
+            size_id=str(r["size_id"]) if r["size_id"] else None,
+            sku=str(r["sku"]),
+            images=_decode_images_json(r["images_json"]),
+            is_active=bool(r["is_active"]),
+        )
+        for r in rows
+    ]
+
+
 @app.get("/client-portal/dashboard/metrics", response_model=ClientPortalDashboardMetrics)
 def client_portal_dashboard_metrics(
     date_from: str | None = Query(None),

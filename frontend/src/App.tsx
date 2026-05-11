@@ -34,6 +34,8 @@ import { ClientCabinetLayout } from './routes/ClientCabinetLayout'
 import { ClientCabinetDashboardPage } from './pages/ClientCabinetDashboardPage'
 import { ClientCabinetBalancesPage } from './pages/ClientCabinetBalancesPage'
 import { ClientCabinetOperationsPage } from './pages/ClientCabinetOperationsPage'
+import { ClientCabinetProductViewPage } from './pages/ClientCabinetProductViewPage'
+import { ClientCabinetProductsPage } from './pages/ClientCabinetProductsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
 
 function App() {
@@ -52,6 +54,8 @@ function App() {
           <Route path="balances" element={<ClientCabinetBalancesPage />} />
           <Route path="receipts" element={<ClientCabinetOperationsPage opType="in" />} />
           <Route path="shipments" element={<ClientCabinetOperationsPage opType="out" />} />
+          <Route path="products" element={<ClientCabinetProductsPage />} />
+          <Route path="products/:id" element={<ClientCabinetProductViewPage />} />
         </Route>
         <Route
           path="/inventory"

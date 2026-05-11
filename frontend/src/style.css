@@ -1414,6 +1414,77 @@ body {
   display: block;
 }
 
+.client-product-view__gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.client-product-view__thumb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--card-border);
+  background: rgba(25, 16, 56, 0.35);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: zoom-in;
+  line-height: 0;
+  vertical-align: top;
+}
+
+.client-product-view__thumb-btn:focus-visible {
+  outline: 2px solid rgba(163, 120, 255, 0.95);
+  outline-offset: 2px;
+}
+
+.client-product-view__img {
+  display: block;
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+}
+
+.client-product-view__thumb-btn:hover .client-product-view__img {
+  filter: brightness(1.06);
+}
+
+.product-create-form .client-product-view__gallery {
+  margin-bottom: var(--entity-form-gap);
+}
+
+/* ЛК: просмотр товара — контент сразу в карточке layout (без вложенного PageContainer / второй «стеклянной» карточки) */
+.cabinet-product-view-root {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cabinet-product-view-root--message {
+  max-width: 640px;
+}
+
+.cabinet-product-view-root .product-form-actions {
+  margin-top: 4px;
+  gap: 10px;
+}
+
+.cabinet-product-view-root .btn--form-action {
+  height: 44px;
+  min-height: 44px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.cabinet-product-view-root .product-edit-loading-banner {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
 .product-na {
   display: inline-flex;
   align-items: center;
@@ -2580,6 +2651,10 @@ body {
   --entity-form-gap: 10px;
 }
 
+/* Карточка сущности (product-create-card), только просмотр: поля в
+   `div.auth-form.product-create-form` + `fieldset.product-edit-fieldset` — те же метрики,
+   что у формы редактирования (ProductEditPage); тег <form> не обязателен. */
+
 .product-create-form .field-label {
   margin-bottom: 5px;
   font-size: 13px;
@@ -3422,6 +3497,10 @@ body {
 
 .product-edit-loading-back:hover {
   text-decoration: underline;
+}
+
+.product-edit-loading-banner__back.btn {
+  margin-left: auto;
 }
 
 .product-edit-spinner {

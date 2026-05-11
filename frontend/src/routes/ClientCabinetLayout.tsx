@@ -8,10 +8,9 @@ import type { User } from '../api'
 const LINKS: { to: string; label: string }[] = [
   { to: '/cabinet', label: 'Сводка' },
   { to: '/cabinet/balances', label: 'Остатки' },
+  { to: '/cabinet/products', label: 'Товары' },
   { to: '/cabinet/receipts', label: 'Поступления' },
   { to: '/cabinet/shipments', label: 'Отгрузки' },
-  /** То же, что в меню шапки «Сменить пароль» — здесь видно без раскрытия меню (важно для prod/LK). */
-  { to: '/account/password', label: 'Пароль' },
 ]
 
 export function ClientCabinetLayout() {

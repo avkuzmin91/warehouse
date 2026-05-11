@@ -29,7 +29,7 @@ export type SystemInfoBlockProps = {
 
 /**
  * Служебный блок аудита: только Edit/View, не Create.
- * Порядок на странице: поля формы → ActionBar → при ошибке текст под кнопками → SystemInfoBlock.
+ * Порядок на странице редактирования: поля формы → ActionBar → при ошибке текст под кнопками → SystemInfoBlock.
  */
 export function SystemInfoBlock({ info, className = '' }: SystemInfoBlockProps) {
   if (!info.created_at?.trim()) {

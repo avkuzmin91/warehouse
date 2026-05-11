@@ -82,6 +82,17 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
     return 'Редактирование'
   }
   if (
+    parts[0] === 'cabinet' &&
+    parts[1] === 'products' &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s.length > 0) {
+      return 'Просмотр товара'
+    }
+  }
+  if (
     parts[0] === 'dictionaries' &&
     parts[1] === 'products' &&
     index === 2 &&

@@ -767,6 +767,34 @@ export function getProductVariants(productId: string) {
   return request<ProductVariantItem[]>(`/products/${productId}/variants`)
 }
 
+/** Список товаров ЛК клиента: сервер принудительно фильтрует по client_id пользователя. */
+export type ClientPortalProductListQueryParams = Omit<ProductListQueryParams, 'client_id'>
+
+export function getClientPortalProductCatalog(params?: ClientPortalProductListQueryParams) {
+  const sp = new URLSearchParams()
+  if (params?.page != null) sp.set('page', String(params.page))
+  if (params?.limit != null) sp.set('limit', String(params.limit))
+  if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
+  if (params?.sku != null && params.sku.trim() !== '') sp.set('sku', params.sku.trim())
+  if (params?.type_id != null && params.type_id.trim() !== '') {
+    sp.set('type_id', params.type_id.trim())
+  }
+  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
+    sp.set('actuality_id', params.actuality_id.trim())
+  }
+  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
+  const q = sp.toString()
+  return request<ProductListResponse>(q ? `/client-portal/products?${q}` : '/client-portal/products')
+}
+
+export function getClientPortalProduct(id: string) {
+  return request<ProductItem>(`/client-portal/products/${id}`)
+}
+
+export function getClientPortalProductVariants(productId: string) {
+  return request<ProductVariantItem[]>(`/client-portal/products/${productId}/variants`)
+}
+
 export function patchProductVariants(productId: string, variants: ProductVariantWriteItem[]) {
   return request<{ message: string }>(`/products/${productId}/variants`, {
     method: 'PATCH',
@@ -1298,12 +1326,12 @@ export function getClientPortalOperations(params?: ClientPortalOperationsParams)
   )
 }
 
-export function getClientPortalProducts() {
-  return request<InventoryProductLookup[]>('/client-portal/lookups/products')
-}
-
 export function getClientPortalProductTypes() {
   return request<InventoryProductTypeLookup[]>('/client-portal/lookups/product-types')
+}
+
+export function getClientPortalRecordActualityFilterItems() {
+  return request<RecordActualityFilterItem[]>('/client-portal/lookups/record-actuality')
 }
 
 export function getClientPortalColors() {

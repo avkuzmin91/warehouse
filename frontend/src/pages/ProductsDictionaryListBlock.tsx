@@ -12,6 +12,9 @@ import {
   buildActualityFilterSelectOptions,
   fetchAllDictionaryItemsForFilter,
   fetchRecordActualityFilterItems,
+  getClientPortalProductCatalog,
+  getClientPortalProductTypes,
+  getClientPortalRecordActualityFilterItems,
   getProducts,
   resolvePublicUploadSrc,
   type DictionaryItem,
@@ -19,7 +22,14 @@ import {
   type RecordActualityFilterItem,
 } from '../api'
 
-const PRODUCT_FILTER_KEYS = ['sku', 'name', 'type_id', 'client_id', 'actuality_id'] as const
+const PRODUCT_FILTER_KEYS_ADMIN = ['sku', 'name', 'type_id', 'client_id', 'actuality_id'] as const
+const PRODUCT_FILTER_KEYS_CLIENT_CABINET = ['sku', 'name', 'type_id', 'actuality_id'] as const
+
+export type ProductsDictionaryListVariant = 'dictionaries' | 'client_cabinet'
+
+export type ProductsDictionaryListBlockProps = {
+  variant?: ProductsDictionaryListVariant
+}
 
 function formatDateDdMmYyyy(iso: string) {
   const d = new Date(iso)
@@ -41,10 +51,29 @@ function dictionarySelectOptions(items: DictionaryItem[], placeholder: string) {
   ]
 }
 
-export function ProductsDictionaryListBlock() {
+function portalProductTypesAsDictionary(
+  pts: { id: string; name: string; requires_color: boolean; requires_size: boolean }[],
+): DictionaryItem[] {
+  const empty = ''
+  return pts.map((p) => ({
+    id: p.id,
+    name: p.name,
+    is_active: true,
+    created_at: empty,
+    created_by: null,
+    updated_at: null,
+    updated_by: null,
+  }))
+}
+
+export function ProductsDictionaryListBlock({
+  variant = 'dictionaries',
+}: ProductsDictionaryListBlockProps = {}) {
   const navigate = useNavigate()
+  const isClientCabinet = variant === 'client_cabinet'
+  const filterKeys = isClientCabinet ? PRODUCT_FILTER_KEYS_CLIENT_CABINET : PRODUCT_FILTER_KEYS_ADMIN
   const { query, apiParams, setFilters, setPage, setLimit, cycleSortField, resetFilters } =
-    useQueryState({ filterKeys: PRODUCT_FILTER_KEYS })
+    useQueryState({ filterKeys })
 
   const [productTypes, setProductTypes] = useState<DictionaryItem[]>([])
   const [clients, setClients] = useState<DictionaryItem[]>([])
@@ -59,28 +88,45 @@ export function ProductsDictionaryListBlock() {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      fetchAllDictionaryItemsForFilter('/product-types', 'name'),
-      fetchAllDictionaryItemsForFilter('/clients', 'search'),
-      fetchRecordActualityFilterItems(),
-    ])
-      .then(([pt, cl, act]) => {
-        if (!cancelled) {
-          setProductTypes(pt)
-          setClients(cl)
-          setActualityItems(act)
-        }
-      })
-      .catch(() => {
-        /* список фильтров подгрузится при следующем открытии; таблица покажет ошибку API */
-      })
+    if (isClientCabinet) {
+      Promise.all([
+        getClientPortalProductTypes().then(portalProductTypesAsDictionary),
+        getClientPortalRecordActualityFilterItems(),
+      ])
+        .then(([pt, act]) => {
+          if (!cancelled) {
+            setProductTypes(pt)
+            setClients([])
+            setActualityItems(act)
+          }
+        })
+        .catch(() => {
+          /* фильтры подгрузятся при следующем открытии */
+        })
+    } else {
+      Promise.all([
+        fetchAllDictionaryItemsForFilter('/product-types', 'name'),
+        fetchAllDictionaryItemsForFilter('/clients', 'search'),
+        fetchRecordActualityFilterItems(),
+      ])
+        .then(([pt, cl, act]) => {
+          if (!cancelled) {
+            setProductTypes(pt)
+            setClients(cl)
+            setActualityItems(act)
+          }
+        })
+        .catch(() => {
+          /* список фильтров подгрузится при следующем открытии; таблица покажет ошибку API */
+        })
+    }
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isClientCabinet])
 
-  const productFilterFields: FilterFieldConfig[] = useMemo(
-    () => [
+  const productFilterFields: FilterFieldConfig[] = useMemo(() => {
+    const base: FilterFieldConfig[] = [
       { name: 'sku', type: 'text', placeholder: 'Штрих-код' },
       { name: 'name', type: 'text', placeholder: 'Название' },
       {
@@ -88,19 +134,21 @@ export function ProductsDictionaryListBlock() {
         type: 'dictionary_autocomplete',
         options: dictionarySelectOptions(productTypes, 'Тип товара'),
       },
-      {
+    ]
+    if (!isClientCabinet) {
+      base.push({
         name: 'client_id',
         type: 'dictionary_autocomplete',
         options: dictionarySelectOptions(clients, 'Клиент'),
-      },
-      {
-        name: 'actuality_id',
-        type: 'dictionary_autocomplete',
-        options: buildActualityFilterSelectOptions(actualityItems, 'Актуальность'),
-      },
-    ],
-    [productTypes, clients, actualityItems],
-  )
+      })
+    }
+    base.push({
+      name: 'actuality_id',
+      type: 'dictionary_autocomplete',
+      options: buildActualityFilterSelectOptions(actualityItems, 'Актуальность'),
+    })
+    return base
+  }, [productTypes, clients, actualityItems, isClientCabinet])
 
   const productColumns = useMemo<TableColumn<ProductItem>[]>(
     () => [
@@ -188,16 +236,18 @@ export function ProductsDictionaryListBlock() {
     let cancelled = false
     setLoading(true)
     setError('')
-    getProducts({
+    const listParams = {
       page: apiParams.page,
       limit: apiParams.limit,
       name: apiParams.name,
       sku: apiParams.sku,
       type_id: apiParams.type_id,
-      client_id: apiParams.client_id,
+      client_id: isClientCabinet ? undefined : apiParams.client_id,
       actuality_id: apiParams.actuality_id,
       sort: apiParams.sort,
-    })
+    }
+    const req = isClientCabinet ? getClientPortalProductCatalog(listParams) : getProducts(listParams)
+    req
       .then((res) => {
         if (cancelled) return
         setProducts(res.items)
@@ -218,7 +268,15 @@ export function ProductsDictionaryListBlock() {
     return () => {
       cancelled = true
     }
-  }, [apiParams, query.limit, query.page, setPage, reloadKey])
+  }, [apiParams, query.limit, query.page, setPage, reloadKey, isClientCabinet])
+
+  const rowNavigate = (row: ProductItem) => {
+    if (isClientCabinet) {
+      navigate(`/cabinet/products/${row.id}`)
+    } else {
+      navigate(`/dictionaries/products/${row.id}`)
+    }
+  }
 
   return (
     <>
@@ -258,7 +316,7 @@ export function ProductsDictionaryListBlock() {
             }}
             actions={
               <CollectionActions
-                createHref="/dictionaries/products/new"
+                createHref={isClientCabinet ? undefined : '/dictionaries/products/new'}
                 onResetFilters={resetFilters}
                 disabled={loading}
               />
@@ -270,7 +328,7 @@ export function ProductsDictionaryListBlock() {
             columns={productColumns}
             data={products}
             loading={loading}
-            onRowClick={(row) => navigate(`/dictionaries/products/${row.id}`)}
+            onRowClick={rowNavigate}
             sort={query.sort}
             onSortClick={cycleSortField}
             wrapClassName="product-table-wrap"
@@ -286,11 +344,11 @@ export function ProductsDictionaryListBlock() {
             disabled={loading}
           />
         }
-      error={error || null}
-      onRetry={() => {
-        setError('')
-        setReloadKey((k) => k + 1)
-      }}
+        error={error || null}
+        onRetry={() => {
+          setError('')
+          setReloadKey((k) => k + 1)
+        }}
       />
       <ImageFullscreenLightbox
         open={lightboxSrc !== null}
