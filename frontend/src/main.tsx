@@ -13,7 +13,7 @@ function applyDocumentTitle(): void {
     document.title = raw.trim()
     return
   }
-  document.title = import.meta.env.DEV ? 'pack-men - dev' : 'pack-men - prod'
+  document.title = import.meta.env.DEV ? 'pack-men - dev' : 'Pack-men'
 }
 
 applyDocumentTitle()

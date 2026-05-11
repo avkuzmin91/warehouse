@@ -1,4 +1,7 @@
 :root {
+  /* Safe area (notch / home indicator); используется шапкой и футером */
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
   --bg-main: #08021c;
   --bg-deep: #050014;
   --card-bg: rgba(14, 10, 40, 0.54);
@@ -22,29 +25,44 @@
   box-sizing: border-box;
 }
 
-html,
-body {
+html {
+  color-scheme: dark;
+  background-color: var(--bg-deep);
   margin: 0;
   min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
+  margin: 0;
+  min-height: 100%;
+  min-height: 100dvh;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   color: var(--text-main);
-  background:
+  /* Сплошной подложка под градиент — overscroll и системные зоны без «белой вспышки» */
+  background-color: var(--bg-deep);
+  background-image:
     linear-gradient(rgba(8, 2, 28, 0.16), rgba(5, 0, 20, 0.3)),
-    url("/autorisation2.png") center center / cover no-repeat fixed;
+    url("/autorisation2.png");
+  background-position: center center, center center;
+  background-size: cover, cover;
+  background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed, fixed;
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Глобальная шапка (ТЗ: Header) */
 .app-shell {
   --app-header-height: 56px;
   --app-footer-height: 44px;
+  --app-header-total-height: calc(var(--app-header-height) + var(--app-safe-top));
+  --app-footer-total-height: calc(var(--app-footer-height) + var(--app-safe-bottom));
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .app-header {
@@ -53,11 +71,13 @@ body {
   left: 0;
   right: 0;
   z-index: 200;
-  height: var(--app-header-height);
   display: flex;
   align-items: center;
-  /* небольшой отступ слева у логотипа, справа — для блока пользователя */
-  padding: 0 12px 0 14px;
+  box-sizing: border-box;
+  min-height: var(--app-header-total-height);
+  height: auto;
+  /* сверху — safe area под «чёлку»; слева/справа как раньше */
+  padding: var(--app-safe-top) 12px 0 14px;
   background: linear-gradient(180deg, rgba(8, 2, 28, 0.95) 0%, rgba(5, 0, 20, 0.85) 100%);
   border-bottom: 1px solid var(--card-border);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
@@ -212,8 +232,9 @@ body {
 }
 
 .app-shell__outlet.app-shell__outlet--flex {
-  padding-top: var(--app-header-height);
+  padding-top: var(--app-header-total-height);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -226,11 +247,13 @@ body {
 }
 
 .app-shell__outlet-inner .page {
-  min-height: calc(100vh - var(--app-header-height) - var(--app-footer-height));
+  min-height: calc(100vh - var(--app-header-total-height) - var(--app-footer-total-height));
+  min-height: calc(100dvh - var(--app-header-total-height) - var(--app-footer-total-height));
 }
 
 .app-shell__outlet-inner .page-shell {
-  min-height: calc(100vh - var(--app-header-height) - var(--app-footer-height));
+  min-height: calc(100vh - var(--app-header-total-height) - var(--app-footer-total-height));
+  min-height: calc(100dvh - var(--app-header-total-height) - var(--app-footer-total-height));
 }
 
 /* Футер: версия и окружение (ТЗ: Версия системы) */
@@ -241,7 +264,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 8px 14px 10px;
+  padding: 8px 14px calc(10px + var(--app-safe-bottom));
   font-size: 12px;
   line-height: 1.35;
   color: var(--text-muted, rgba(230, 224, 255, 0.55));
@@ -259,7 +282,9 @@ body {
 /* Логин / регистрация: футер с версией под карточкой */
 .auth-shell {
   --app-footer-height: 44px;
+  --app-footer-total-height: calc(var(--app-footer-height) + var(--app-safe-bottom));
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -346,6 +371,7 @@ body {
   padding: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  /* Только полупрозрачный градиент — фон body (картинка + слой) остаётся видимым */
   background: linear-gradient(180deg, rgba(6, 2, 22, 0.55) 0%, rgba(5, 0, 20, 0.35) 40%, rgba(5, 0, 20, 0.2) 100%);
 }
 
@@ -391,10 +417,13 @@ body {
 
 .page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   justify-content: flex-end;
   align-items: center;
   padding: clamp(16px, 4vw, 48px);
+  padding-top: calc(var(--app-safe-top) + clamp(16px, 4vw, 48px));
+  padding-bottom: calc(var(--app-safe-bottom) + clamp(16px, 4vw, 48px));
   overflow: hidden;
 }
 
@@ -3769,6 +3798,8 @@ body {
   .page {
     justify-content: center;
     padding: 20px 14px 30px;
+    padding-top: calc(var(--app-safe-top) + 20px);
+    padding-bottom: calc(var(--app-safe-bottom) + 30px);
   }
 
   .auth-shell > .page {

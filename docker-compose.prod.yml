@@ -34,7 +34,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_APP_TITLE: "pack-men - prod"
+        VITE_APP_TITLE: "Pack-men"
     container_name: wms_prod_frontend
     restart: always
     env_file:

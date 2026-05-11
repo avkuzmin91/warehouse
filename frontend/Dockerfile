@@ -7,7 +7,7 @@ RUN npm install
 
 COPY . .
 
-ARG VITE_APP_TITLE="pack-men - prod"
+ARG VITE_APP_TITLE="Pack-men"
 ENV VITE_APP_TITLE=${VITE_APP_TITLE}
 
 RUN npm run build
