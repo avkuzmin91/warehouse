@@ -43,6 +43,7 @@ body {
 /* Глобальная шапка (ТЗ: Header) */
 .app-shell {
   --app-header-height: 56px;
+  --app-footer-height: 44px;
   min-height: 100vh;
 }
 
@@ -210,17 +211,70 @@ body {
   opacity: 0.88;
 }
 
-.app-shell__outlet {
+.app-shell__outlet.app-shell__outlet--flex {
   padding-top: var(--app-header-height);
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
-.app-shell__outlet .page {
-  min-height: calc(100vh - var(--app-header-height));
+.app-shell__outlet-inner {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
 }
 
-.app-shell__outlet .page-shell {
-  min-height: calc(100vh - var(--app-header-height));
+.app-shell__outlet-inner .page {
+  min-height: calc(100vh - var(--app-header-height) - var(--app-footer-height));
+}
+
+.app-shell__outlet-inner .page-shell {
+  min-height: calc(100vh - var(--app-header-height) - var(--app-footer-height));
+}
+
+/* Футер: версия и окружение (ТЗ: Версия системы) */
+.app-footer {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: var(--app-footer-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 14px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted, rgba(230, 224, 255, 0.55));
+  user-select: none;
+}
+
+.app-footer__version {
+  letter-spacing: 0.02em;
+}
+
+.app-footer__version--muted {
+  opacity: 0.45;
+}
+
+/* Логин / регистрация: футер с версией под карточкой */
+.auth-shell {
+  --app-footer-height: 44px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-shell > .page {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: 0;
+}
+
+.auth-shell .auth-card {
+  flex-shrink: 0;
 }
 
 /* Смена пароля: без лишнего заголовка; панель действий отделена от полей */
@@ -3715,6 +3769,10 @@ body {
   .page {
     justify-content: center;
     padding: 20px 14px 30px;
+  }
+
+  .auth-shell > .page {
+    justify-content: center;
   }
 
   .auth-card {

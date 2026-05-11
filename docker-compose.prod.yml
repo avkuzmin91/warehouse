@@ -17,6 +17,8 @@ services:
     build: ./backend
     container_name: wms_prod_backend
     restart: always
+    environment:
+      APP_ENV: prod
     env_file:
       - .env.prod
     depends_on:

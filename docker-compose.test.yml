@@ -19,6 +19,8 @@ services:
     build: ./backend
     container_name: wms_test_backend
     restart: always
+    environment:
+      APP_ENV: test
     env_file:
       - .env.test
     depends_on:

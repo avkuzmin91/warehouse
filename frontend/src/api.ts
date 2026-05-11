@@ -277,6 +277,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+/** Публичный GET /version: версия и окружение для футера (без Bearer). */
+export async function fetchSystemVersion(): Promise<{ version: string; environment: string }> {
+  const response = await fetch(`${API_BASE_URL}/version`, { method: 'GET' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
+  }
+  return response.json() as Promise<{ version: string; environment: string }>
+}
+
 async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
   const headers: Record<string, string> = {}

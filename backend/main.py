@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 import io
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -252,6 +253,31 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 def health() -> dict[str, str]:
     """Liveness для nginx / мониторинга; без обращения к БД."""
     return {"status": "ok"}
+
+
+class SystemVersionResponse(BaseModel):
+    """Версия и окружение для футера UI (ТЗ: Версия системы)."""
+
+    version: str = Field(description="Семантическая версия MAJOR.MINOR.PATCH")
+    environment: str = Field(description="Окружение: dev | test | prod")
+
+
+def _app_version() -> str:
+    v = (os.environ.get("APP_VERSION") or "1.0.1").strip()
+    return v if v else "1.0.1"
+
+
+def _app_environment() -> str:
+    raw = (os.environ.get("APP_ENV") or "dev").strip().lower()
+    if raw in ("dev", "test", "prod"):
+        return raw
+    return "dev"
+
+
+@app.get("/version", response_model=SystemVersionResponse, tags=["system"])
+def system_version() -> SystemVersionResponse:
+    """Публично: версия и окружение из конфигурации деплоя; без БД."""
+    return SystemVersionResponse(version=_app_version(), environment=_app_environment())
 
 
 class RegisterRequest(BaseModel):
