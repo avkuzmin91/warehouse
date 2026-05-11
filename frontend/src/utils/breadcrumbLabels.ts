@@ -204,6 +204,12 @@ export function buildBreadcrumbsFromPathname(pathname: string): BreadcrumbItem[]
       { label: 'Личный кабинет', to: null },
     ]
   }
+  if (parts.length === 2 && parts[0] === 'account' && parts[1] === 'password') {
+    return [
+      { label: 'Главная', to: '/home' },
+      { label: 'Смена пароля', to: null },
+    ]
+  }
 
   const inventoryExcel = buildInventoryExcelImportBreadcrumbs(parts)
   if (inventoryExcel) {

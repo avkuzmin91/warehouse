@@ -1,12 +1,15 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: true,
+    port: 5173,
+    strictPort: true,
+    // Запросы через nginx с Host: dev.pack-men.ru — иначе Vite отвечает 403
+    allowedHosts: ['dev.pack-men.ru', 'localhost', '127.0.0.1'],
     proxy: {
-      // В dev запросы идут на тот же origin, что и Vite (удобно при доступе по IP в LAN).
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,

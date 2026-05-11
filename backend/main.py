@@ -225,7 +225,14 @@ def _assert_shipment_posting_day_not_after_today(created_at_val: str | None) -> 
 
 bearer_scheme = HTTPBearer()
 
-app = FastAPI(root_path="/api")
+# Без root_path: маршруты на бэкенде — /..., /openapi.json и т.д. Префикс /api добавляют только
+# nginx и Vite-прокси (strip /api перед пробросом). Relative URL нужен Swagger UI при доступе через /api/docs.
+app = FastAPI(
+    openapi_url="/openapi.json",
+    swagger_ui_parameters={
+        "url": "./openapi.json",
+    },
+)
 app.add_middleware(
     CORSMiddleware,
     # Локальная разработка: любой порт на localhost / 127.0.0.1 (Vite, preview, другой порт)
@@ -239,6 +246,12 @@ IMPORT_STAGING_DIR = UPLOADS_DIR / "import_staging"
 IMPORT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 IMPORT_STAGING_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+
+@app.get("/health", tags=["system"])
+def health() -> dict[str, str]:
+    """Liveness для nginx / мониторинга; без обращения к БД."""
+    return {"status": "ok"}
 
 
 class RegisterRequest(BaseModel):
@@ -257,6 +270,11 @@ class RegisterResponse(BaseModel):
 
 class LoginResponse(BaseModel):
     token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
 
 
 class MeResponse(BaseModel):
@@ -2792,6 +2810,48 @@ def login(payload: LoginRequest):
         )
 
     token = create_token(str(user["id"]), str(user["email"]).strip().lower(), str(user["role"]))
+    return LoginResponse(token=token)
+
+
+@app.post("/auth/change-password", response_model=LoginResponse)
+def change_password(payload: ChangePasswordRequest, user=Depends(get_current_user)):
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Новый пароль должен отличаться от текущего",
+        )
+
+    user_id = user["id"]
+    email = str(user["email"]).strip().lower()
+    role = str(user["role"])
+    new_hash = hash_password(payload.new_password)
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, password_hash
+            FROM users
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Пользователь не найден",
+            )
+        if not verify_password(payload.current_password, row["password_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Неверный текущий пароль",
+            )
+        connection.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (new_hash, user_id),
+        )
+        connection.commit()
+
+    token = create_token(str(user_id), email, role)
     return LoginResponse(token=token)
 
 

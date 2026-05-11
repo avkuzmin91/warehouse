@@ -34,6 +34,7 @@ import { ClientCabinetLayout } from './routes/ClientCabinetLayout'
 import { ClientCabinetDashboardPage } from './pages/ClientCabinetDashboardPage'
 import { ClientCabinetBalancesPage } from './pages/ClientCabinetBalancesPage'
 import { ClientCabinetOperationsPage } from './pages/ClientCabinetOperationsPage'
+import { ChangePasswordPage } from './pages/ChangePasswordPage'
 
 function App() {
   return (
@@ -45,6 +46,7 @@ function App() {
       </Route>
       <Route element={<ProtectedLayout />}>
         <Route path="/home" element={<HomePage />} />
+        <Route path="/account/password" element={<ChangePasswordPage />} />
         <Route path="/cabinet" element={<ClientCabinetLayout />}>
           <Route index element={<ClientCabinetDashboardPage />} />
           <Route path="balances" element={<ClientCabinetBalancesPage />} />

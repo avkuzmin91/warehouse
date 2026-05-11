@@ -1,4 +1,5 @@
-# Локальная разработка: отдельные порты и тома БД, не затрагивает production.
+# Dev: Postgres + backend (--reload). UI — локально: npm run dev (Vite :5173).
+# name: обязателен — иначе project = имя каталога (wms-prod) и dev сломает prod compose.
 name: wms-dev
 
 services:
@@ -11,7 +12,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: app
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5435:5432"
     volumes:
       - db_data_dev:/var/lib/postgresql/data
 
@@ -19,35 +20,16 @@ services:
     build: ./backend
     container_name: wms_dev_backend
     restart: unless-stopped
+    working_dir: /app
+    command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
     env_file:
       - .env.dev
+    volumes:
+      - ./backend:/app
     depends_on:
       - db
-    expose:
-      - "8000"
     ports:
-      - "8001:8000"
-
-  frontend:
-    build: ./frontend
-    container_name: wms_dev_frontend
-    restart: unless-stopped
-    env_file:
-      - .env.dev
-    expose:
-      - "80"
-
-  nginx:
-    image: nginx:alpine
-    container_name: wms_dev_nginx
-    restart: unless-stopped
-    ports:
-      - "8080:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - backend
-      - frontend
+      - "127.0.0.1:8000:8000"
 
 volumes:
   db_data_dev:

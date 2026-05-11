@@ -101,47 +101,113 @@ body {
   flex: 1;
 }
 
-.app-header__user {
-  color: var(--text-soft);
-  font-size: 14px;
-  font-weight: 500;
-  max-width: min(46vw, 280px);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-}
-
-.app-header__logout {
+.app-header__user-menu {
+  position: relative;
   flex-shrink: 0;
-  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.app-header__user-trigger {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: min(100%, min(52vw, 320px));
   margin: 0;
-  padding: 0;
-  border: 1px solid var(--field-border);
+  padding: 6px 8px 6px 12px;
+  border: 1px solid transparent;
   border-radius: 12px;
-  background: var(--field-bg);
+  background: transparent;
   color: var(--text-soft);
+  font: inherit;
   cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
 
-.app-header__logout:hover {
-  border-color: rgba(145, 106, 255, 0.55);
+.app-header__user-trigger:hover {
+  border-color: rgba(145, 106, 255, 0.35);
+  background: rgba(35, 24, 73, 0.45);
   color: #f1edff;
-  background: rgba(35, 24, 73, 0.6);
 }
 
-.app-header__logout:focus-visible {
+.app-header__user-trigger[aria-expanded='true'] {
+  border-color: rgba(145, 106, 255, 0.55);
+  background: rgba(35, 24, 73, 0.55);
+  color: #f1edff;
+}
+
+.app-header__user-trigger:focus-visible {
   outline: 2px solid var(--primary-soft);
   outline-offset: 2px;
 }
 
-.app-header__logout-icon {
+.app-header__user-email {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  min-width: 0;
+}
+
+.app-header__user-trigger-icon {
+  flex-shrink: 0;
   display: block;
+  opacity: 0.92;
+}
+
+.app-header__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 260;
+  min-width: min(240px, calc(100vw - 24px));
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--card-border);
+  background: linear-gradient(160deg, rgba(28, 18, 62, 0.98), rgba(16, 10, 42, 0.98));
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.app-header__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(239, 231, 255, 0.95);
+  font-size: 15px;
+  font-weight: 500;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-header__menu-item:hover {
+  background: rgba(123, 63, 255, 0.18);
+  color: #fff;
+}
+
+.app-header__menu-item:focus-visible {
+  outline: 2px solid var(--primary-soft);
+  outline-offset: 0;
+}
+
+.app-header__menu-item-icon {
+  flex-shrink: 0;
+  display: block;
+  opacity: 0.88;
 }
 
 .app-shell__outlet {
@@ -155,6 +221,67 @@ body {
 
 .app-shell__outlet .page-shell {
   min-height: calc(100vh - var(--app-header-height));
+}
+
+/* Смена пароля: без лишнего заголовка; панель действий отделена от полей */
+.change-password-page .change-password-form {
+  margin-bottom: 0;
+}
+
+.change-password-form__message {
+  margin: 16px 0 0;
+}
+
+.change-password-form__message--success {
+  margin: 16px 0 0;
+  color: var(--primary-soft);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.change-password-page .change-password-actions.product-form-actions {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--card-border);
+}
+
+.change-password-page .change-password-actions .action-bar__trailing.change-password-actions__trailing {
+  width: 100%;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+@media (max-width: 420px) {
+  .change-password-page .change-password-actions .action-bar__trailing.change-password-actions__trailing {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .change-password-page .change-password-actions .btn--form-action {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+.change-password-page .change-password-actions .btn.btn--secondary.btn--form-action {
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.12s ease;
+}
+
+.change-password-page .change-password-actions .btn.btn--secondary.btn--form-action:hover:not(:disabled) {
+  border-color: rgba(175, 140, 255, 0.75);
+  background: rgba(40, 28, 82, 0.72);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(123, 63, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.change-password-page .change-password-actions .btn.btn--primary.btn--form-action:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
 /* COMPONENT: Page container — единая оболочка страниц (не /auth) */

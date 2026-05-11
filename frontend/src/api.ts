@@ -6,7 +6,7 @@ function resolveApiBaseUrl(): string {
   return '/api'
 }
 
-/** База URL бэкенда: в dev — префикс `/api` (прокси в vite.config), иначе см. VITE_API_BASE_URL или 127.0.0.1:8000. */
+/** База URL API: только относительный `/api`; прокси (Vite/nginx) отправляет запрос на backend без этого префикса. */
 export const API_BASE_URL = resolveApiBaseUrl()
 
 /** Пути с API (`/uploads/...`) в `<img>` на другом origin; полные URL не трогаем. */
@@ -322,6 +322,16 @@ export function login(email: string, password: string) {
   return request<AuthResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
+  })
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return request<AuthResponse>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
   })
 }
 

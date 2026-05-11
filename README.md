@@ -1,61 +1,194 @@
 # Warehouse (WMS)
 
-FastAPI + React (Vite) + nginx + Docker Compose.
+## Модель: host nginx + Docker (без edge-контейнера, без Docker DNS в nginx)
 
-## Ветки и окружения
+- **Один ingress:** **nginx на хосте** читает **`nginx/nginx.conf`** из репозитория.
+- **Три compose:** `docker-compose.prod.yml`, `docker-compose.test.yml`, `docker-compose.dev.yml` — стандартные сети Compose, без resolver/`set $upstream` в nginx.
+- **Порты на loopback:** см. контракт ниже; nginx проксирует **только на `127.0.0.1`**.
 
-| Ветка Git   | Окружение   | Compose-файл              |
-|------------|-------------|---------------------------|
-| `develop`  | Development | `docker-compose.dev.yml`  |
-| PR / CI    | Test        | `docker-compose.test.yml` |
-| `main`     | Production  | `docker-compose.prod.yml` |
+---
 
-- **develop → dev:** разработка и интеграция ветки `develop`, деплой dev-стека на отдельных портах.
-- **main → production:** только стабильные изменения в `main`, деплой на production.
+## Контракт портов (зафиксировано)
 
-## Переменные окружения
+Используйте **только** эти значения при настройке nginx, мониторинга и документации.
 
-Скопируйте примеры (секреты не в репозитории):
+| Окружение | Backend (API, loopback) | Frontend (loopback) | Примечание |
+|-----------|-------------------------|----------------------|------------|
+| **prod** | **10000** | **10080** | Статика после `npm run build` в Docker |
+| **test** | **11000** | **11080** | Как prod, другие env/том |
+| **dev** | **8000** | **5173** | Backend в Docker; UI — **Vite на хосте** (`npm run dev`) |
+
+Дополнительно (Postgres с хоста для миграций / отладки):
+
+| Окружение | Postgres (loopback) |
+|-----------|---------------------|
+| test | **5434** |
+| dev | **5435** |
+| Локальный-only стек `docker-compose.yml` | **5432** |
+
+**Health (через host nginx):** `GET /health` → бэкенд того же окружения (без префикса `/api`). Пример: `curl -fsSL http://localhost/health` (prod `server_name` включает `localhost`).
+
+### Dev frontend rule (важно)
+
+- В **dev** UI запускается **только на хосте**: **`npm run dev`** (Vite, порт **5173**).
+- **Frontend в `docker-compose.dev.yml` не используется** — не добавляйте сервис `frontend`/Vite в Docker для dev без отдельного ADR.
+
+**Почему:** сейчас зафиксирован **гибрид** (Postgres + API в Docker, исходники и Vite на диске/хосте). Параллельный «docker frontend» приведёт к путанице с портами (**5173** vs контейнер), **HMR** и **proxy** (`/api`).
+
+---
+
+## Postgres: одно окружение — одна логическая БД
+
+**Правило:** у каждого runtime-окружения **свой** экземпляр Postgres в своём compose и **свой** том данных. Не смешивать prod/test/dev в одной БД.
+
+| Compose | БД в контейнере (имя) | Том | Назначение |
+|---------|------------------------|-----|------------|
+| `docker-compose.prod.yml` | `app` (см. env) | `db_data` | Production |
+| `docker-compose.test.yml` | `app_test` | `db_test_data` | Staging / test |
+| `docker-compose.dev.yml` | `app` (dev-данные) | `db_data_dev` | Development |
+| `docker-compose.yml` (legacy) | `wms` | `postgres_data` | Отдельный локальный стек, **не** prod |
+
+**Чёткие схемы:** в `DATABASE_URL` имя БД и хост `db` должны совпадать с `POSTGRES_DB` / сервисом `db` **этого же** compose. Миграции запускать только против БД нужного окружения.
+
+---
+
+## Правило публикации портов Docker
+
+**Порты приложений и БД не публикуются на `0.0.0.0` — только на `127.0.0.1`.**
+
+- В `docker-compose*.yml` используйте форму **`"127.0.0.1:<порт>:<порт>"`**.
+- Внешний доступ — **только через nginx** (80/443 на хосте) или SSH-туннель; Cloudflare → IP VPS → nginx → loopback → контейнеры.
+
+Так меньше риска случайно открыть API или БД в интернет.
+
+---
+
+## Deploy
+
+**Поддерживаемый способ выкладки окружений** — только скрипт:
+
+`/app/wms-prod/scripts/deploy.sh`
+
+Он задаёт воспроизводимый и детерминированный порядок: переход в репозиторий → сокращённый статус Git → **проверка чистоты рабочего дерева** (см. **Deploy safety rules**) → **`git pull origin main`** (не выполняется при грязном дереве и не в **`--dry-run`**) → **проверка доступа к Docker API** (без sudo) → **`docker compose … config`** (валидация) → **`docker compose … up -d --build`** → **ожидание `/health` на loopback-бэкенде** (до 30 с) → **smoke-check через host nginx** → вывод **`docker compose ps`** и баннер успеха.
+
+Режим проверки без изменений: **`/app/wms-prod/scripts/deploy.sh <env> --dry-run`** (или **`--dry-run` перед `<env>`**) — без `git pull`, без `compose up`, без smoke; выполняются проверка дерева, Docker и **`docker compose config`**.
+
+Из интерактивной bash (после `source ~/.bashrc` или новой SSH-сессии):
+
+- **`deploy-prod`** — `/app/wms-prod/scripts/deploy.sh prod`
+- **`deploy-test`** — `/app/wms-prod/scripts/deploy.sh test`
+- **`deploy-dev`** — `/app/wms-prod/scripts/deploy.sh dev`
+
+Таблица smoke-check при деплое совпадает с разделом **Smoke-check** ниже. При **провале smoke** скрипт выводит **`docker compose ps`** и **`docker compose logs --tail=50`** для **backend** и **frontend** (для окружения **dev** лог **frontend** не запрашивается — UI вне Docker). При **таймауте ожидания `/health` на loopback-бэкенде** выводятся **`ps`** и логи **только backend**.
+
+`*` **deploy.sh** для смоука всегда запрашивает **финальный** ответ после редиректов nginx: **prod** и **test** — `curl -fsSL`; **dev** — `curl -fsSLk`, если виртуальный хост переводит на HTTPS и цепочка иначе обрывается на проверке сертификата (подробности в комментариях `scripts/deploy.sh`). Для ручных проверок используйте те же флаги, что в разделе **Smoke-check** ниже.
+
+При любой ошибке шаг или smoke скрипт завершается **с ненулевым кодом выхода** (контейнеры и тома **не** откатываются автоматически). Пользователь, запускающий деплой, должен иметь доступ к Docker (**`docker`** без sudo, членство в группе **`docker`**).
+
+---
+
+## Deploy safety rules
+
+- Деплой только через **`scripts/deploy.sh`** (или алиасы `deploy-*` в `~/.bashrc`); другие сценарии не поддерживаются.
+- Рабочее дерево Git должно быть **чистым**: не допускаются изменения в отслеживаемых файлах и staged-изменения. Исключение — **только** неотслеживаемые пути: файлы с именем **`.env*`** в каталоге, каталог **`logs/`**, пути с **`__pycache__`**, каталог **`.pytest_cache/`**.
+- **Откат (rollback)** только вручную оператором; скрипт **не** откатывает образы и **не** делает автоматический `down`.
+- Скрипт **не** вызывает **`docker compose down`**, **не** удаляет и **не** пересоздаёт **volumes**.
+- Внутри скрипта **нет `sudo`**.
+- Рекомендуемый порядок выкладки: сначала **test**, затем **prod** после проверки staging.
+
+---
+
+## Smoke-check (после `nginx -s reload` и поднятых стеков)
+
+Минимальная проверка: **liveness** и **OpenAPI UI** через тот же вход, что и пользователи (кроме прямых проверок бэкенда).
+
+### Через nginx (нужен заголовок `Host` для test/dev, если заходите на `127.0.0.1`)
+
+**Production** (`server_name` включает `localhost`):
 
 ```bash
-cp .env.dev.example .env.dev
-cp .env.test.example .env.test
-# production: только на сервере, из .env.prod.example → .env.prod
+curl -fsSL http://localhost/health
+curl -fsSL -o /dev/null -w "%{http_code}\n" http://localhost/api/docs
 ```
 
-## Development (`develop`)
+**Test** (`test.pack-men.ru`):
 
 ```bash
-git checkout develop
+curl -fsSL -H "Host: test.pack-men.ru" http://127.0.0.1/health
+curl -fsSL -o /dev/null -w "%{http_code}\n" -H "Host: test.pack-men.ru" http://127.0.0.1/api/docs
+```
+
+**Dev** (`dev.pack-men.ru`; для `/` при необходимости должен быть запущен Vite на **5173**):
+
+```bash
+curl -fsSLk -H "Host: dev.pack-men.ru" http://127.0.0.1/health
+curl -fsSLk -o /dev/null -w "%{http_code}\n" -H "Host: dev.pack-men.ru" http://127.0.0.1/api/docs
+```
+
+### Напрямую на backend (минуя nginx, тот же хост)
+
+```bash
+curl -fsS http://127.0.0.1:10000/health   # prod
+curl -fsS http://127.0.0.1:11000/health   # test
+curl -fsS http://127.0.0.1:8000/health   # dev
+```
+
+Ожидается HTTP **200** и тело **`/health`** с JSON `{"status":"ok"}`; для **`/api/docs`** — код **200** (HTML).
+
+---
+
+## Non-goals (намеренно не делаем)
+
+Чтобы архитектура не разъезжалась через месяц, следующие вещи **вне скоупа** этого репозитория:
+
+| Non-goal | Почему |
+|----------|--------|
+| **Docker DNS как runtime-маршрутизация** | Ingress — **host nginx** + фиксированные **`127.0.0.1:порт`**; имена контейнеров в `proxy_pass` не используются. |
+| **Отдельный edge-слой** (отдельный nginx-контейнер перед всеми env) | Уже было отклонено: лишняя связность и порядок запуска. |
+| **K8s-подобные абстракции** | Один VPS, Compose, предсказуемые порты — без Helm/service mesh. |
+| **`root_path` в FastAPI под `/api`** | Префикс снимает только nginx (и Vite в dev); приложение не знает о `/api` в URL. |
+
+Расширение (отдельное решение продуктовое): второй регион, Kubernetes, внутренний service mesh — оформлять отдельным ADR, а не наращивать текущий README «по тихому».
+
+---
+
+## Запуск стеков
+
+В каждом compose задано своё **`name:`** (`wms-prod`, `wms-test`, `wms-dev`), чтобы **не совпадать с именем каталога** (`wms-prod`). Иначе `docker compose -f docker-compose.dev.yml` использует project **`wms-prod`**, пересекается с продом (orphan-контейнеры, пересоздание БД, конфликт портов).
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.test.yml up -d --build
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-- UI: `http://<host>:8080`
-- Backend с хоста: порт `8001`
-- Postgres с хоста: `5433`
+Подключите **`nginx/nginx.conf`** к системному nginx и выполните **`nginx -t && nginx -s reload`**.
 
-## Test
+## Локальная разработка UI
 
-```bash
-cp .env.test.example .env.test
-docker compose -f docker-compose.test.yml up -d --build
-```
+Нужны **Node.js 20+** и **npm** на машине, где запускаете Vite (на VPS без Node команда `npm` не найдётся).
 
-- UI: `http://<host>:9080`
-
-Остановка тестового стека: `docker compose -f docker-compose.test.yml stop`  
-Полная очистка **только тестовых** томов: `docker compose -f docker-compose.test.yml down -v` (не использовать на production).
-
-## Production (`main`)
+Установка на Ubuntu (пример, от root):
 
 ```bash
-git checkout main
-git pull origin main
-docker compose -f docker-compose.prod.yml up -d --build
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
 ```
 
-Не удаляйте том `db_data` без явной необходимости — в нём данные PostgreSQL.
+Затем:
 
-## Nginx и API
+```bash
+docker compose -f docker-compose.dev.yml up -d
+cd /app/wms-prod/frontend && npm install && npm run dev
+```
 
-Production compose монтирует **`nginx/nginx.conf`**. Для `/api/` используется `proxy_pass http://backend:8000/;` (завершающий `/` обязателен). В коде: `FastAPI(root_path="/api")` в `backend/main.py`.
+Прокси Vite: **`/api` → `http://127.0.0.1:8000`**. Для входа через nginx на **`dev.pack-men.ru`** в **`vite.config.ts`** задано **`server.allowedHosts`** — без этого Vite отдаёт **403** на проксированный `/`.
+
+
+## API
+
+Префикс **`/api`** снимает nginx (или Vite в dev). FastAPI **без `root_path`**. Фронт: **`API_BASE_URL=/api`**.
+
+## Cloudflare
+
+DNS на IP сервера; трафик на **80/443** хоста → nginx → **`127.0.0.1:…`** в Docker.

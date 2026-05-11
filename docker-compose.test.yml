@@ -1,49 +1,41 @@
-# Тестовое окружение: изолированные контейнеры и том (не production).
+# Staging = test: та же схема, что prod, другие порты / env / том БД.
 name: wms-test
 
 services:
   db:
     image: postgres:16
     container_name: wms_test_db
-    restart: "no"
+    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: app_test
+    ports:
+      - "127.0.0.1:5434:5432"
     volumes:
-      - db_data_test:/var/lib/postgresql/data
+      - db_test_data:/var/lib/postgresql/data
 
   backend:
     build: ./backend
     container_name: wms_test_backend
-    restart: "no"
+    restart: always
     env_file:
       - .env.test
     depends_on:
       - db
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:11000:8000"
 
   frontend:
     build: ./frontend
     container_name: wms_test_frontend
-    restart: "no"
+    restart: always
     env_file:
       - .env.test
-    expose:
-      - "80"
-
-  nginx:
-    image: nginx:alpine
-    container_name: wms_test_nginx
-    restart: "no"
-    ports:
-      - "9080:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - backend
-      - frontend
+    ports:
+      - "127.0.0.1:11080:80"
 
 volumes:
-  db_data_test:
+  db_test_data:
