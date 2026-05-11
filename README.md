@@ -69,7 +69,7 @@
 
 `/app/wms-prod/scripts/deploy.sh`
 
-Он задаёт воспроизводимый и детерминированный порядок: переход в репозиторий → сокращённый статус Git → **проверка чистоты рабочего дерева** (см. **Deploy safety rules**) → **`git pull origin main`** (не выполняется при грязном дереве и не в **`--dry-run`**) → **проверка доступа к Docker API** (без sudo) → **`docker compose … config`** (валидация) → **`docker compose … up -d --build`** → **ожидание `/health` на loopback-бэкенде** (до 30 с) → **smoke-check через host nginx** → вывод **`docker compose ps`** и баннер успеха.
+Он задаёт воспроизводимый и детерминированный порядок: переход в репозиторий → сокращённый статус Git → **проверка чистоты рабочего дерева** (см. **Deploy safety rules**) → **`git fetch`** и **`git pull --ff-only origin main`** (не выполняется при грязном дереве и не в **`--dry-run`**) → **проверка доступа к Docker API** (без sudo) → **`docker compose … config`** (валидация) → **`docker compose … up -d --build --pull always`** → **ожидание `/health` на loopback-бэкенде** (до 30 с) → **smoke-check через host nginx** → вывод **`docker compose ps`** и баннер успеха. После успешного pull в лог печатается **SHA коммита** (`git rev-parse HEAD` и последняя строка `git log -1`).
 
 Режим проверки без изменений: **`/app/wms-prod/scripts/deploy.sh <env> --dry-run`** (или **`--dry-run` перед `<env>`**) — без `git pull`, без `compose up`, без smoke; выполняются проверка дерева, Docker и **`docker compose config`**.
 
@@ -78,6 +78,15 @@
 - **`deploy-prod`** — `/app/wms-prod/scripts/deploy.sh prod`
 - **`deploy-test`** — `/app/wms-prod/scripts/deploy.sh test`
 - **`deploy-dev`** — `/app/wms-prod/scripts/deploy.sh dev`
+- **`deploy-promote`** — `/app/wms-prod/scripts/deploy-promote.sh` — подряд **test**, затем **prod** (два полных деплоя с одним и тем же `deploy.sh`, чтобы не забыть прод после проверки staging).
+
+### Почему на dev «уже новое», на test тоже, а на prod будто старое
+
+1. **Backend в dev** в Docker смонтирован с хоста: **`./backend:/app`** (`docker-compose.dev.yml`). В контейнере выполняется **то, что лежит на диске**, даже без `git commit` / без merge в `main`. **Test и prod** собирают образ из контекста после **`git pull --ff-only origin main`** при **чистом** дереве — в релизных стеках оказывается только **то, что в удалённом `main`**.
+2. **Frontend в dev** по документированной схеме — **Vite на хосте** (`npm run dev`), не из образа prod/test. То, что вы видите в браузере на dev, **не обязано** совпадать с тем, что попадёт в Docker-образ фронта на test/prod, пока изменения **не в `main` и не задеплоены**.
+3. **Test и prod** используют **один и тот же** `deploy.sh` и **одну ветку** — **`origin/main`**. После одинакового успешного деплоя **образы из одного коммита** должны совпадать по коду приложения. Если prod «отстаёт», чаще всего: **не запускали `deploy-prod`** после проверки на test, смотрели **кэш браузера / CDN** на боевом домене, или деплой prod **упал** (смотрите вывод скрипта и `docker compose ps`).
+
+Сводка: **устранить разрыв test → prod** — явно запускать **`deploy-promote`** или **`deploy-prod`** сразу после зелёного **`deploy-test`**; сверять в логах **одинаковый SHA** после `pull` у обоих деплоев.
 
 Таблица smoke-check при деплое совпадает с разделом **Smoke-check** ниже. При **провале smoke** скрипт выводит **`docker compose ps`** и **`docker compose logs --tail=50`** для **backend** и **frontend** (для окружения **dev** лог **frontend** не запрашивается — UI вне Docker). При **таймауте ожидания `/health` на loopback-бэкенде** выводятся **`ps`** и логи **только backend**.
 
@@ -89,12 +98,12 @@
 
 ## Deploy safety rules
 
-- Деплой только через **`scripts/deploy.sh`** (или алиасы `deploy-*` в `~/.bashrc`); другие сценарии не поддерживаются.
+- Деплой только через **`scripts/deploy.sh`** (или алиасы `deploy-*` / **`scripts/deploy-promote.sh`** в `~/.bashrc`); другие сценарии не поддерживаются.
 - Рабочее дерево Git должно быть **чистым**: не допускаются изменения в отслеживаемых файлах и staged-изменения. Исключение — **только** неотслеживаемые пути: файлы с именем **`.env*`** в каталоге, каталог **`logs/`**, пути с **`__pycache__`**, каталог **`.pytest_cache/`**.
 - **Откат (rollback)** только вручную оператором; скрипт **не** откатывает образы и **не** делает автоматический `down`.
 - Скрипт **не** вызывает **`docker compose down`**, **не** удаляет и **не** пересоздаёт **volumes**.
 - Внутри скрипта **нет `sudo`**.
-- Рекомендуемый порядок выкладки: сначала **test**, затем **prod** после проверки staging.
+- Рекомендуемый порядок выкладки: сначала **test**, затем **prod** после проверки staging — одной командой: **`deploy-promote`** (`scripts/deploy-promote.sh`).
 
 ---
 

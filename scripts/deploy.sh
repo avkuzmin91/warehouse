@@ -198,7 +198,7 @@ assert_clean_worktree
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "=== DRY-RUN: план (изменений в репозитории не вносится) ==="
-  echo "  1. git pull origin main  [пропущено в dry-run]"
+  echo "  1. git fetch + git pull --ff-only origin main  [пропущено в dry-run]"
   echo "  2. docker compose -f docker-compose.${DEPLOY_ENV}.yml config  [будет выполнено для валидации]"
   echo "  3. docker compose -f docker-compose.${DEPLOY_ENV}.yml up -d --build  [пропущено]"
   echo "  4. ожидание /health на loopback backend  [пропущено]"
@@ -215,8 +215,12 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   exit 0
 fi
 
-echo "=== git pull origin main ==="
-git pull origin main
+echo "=== git fetch + pull (ff-only) origin/main ==="
+git fetch origin
+git pull --ff-only origin main
+echo "=== ревизия после pull ==="
+git rev-parse HEAD
+git log -1 --oneline
 
 verify_docker
 
@@ -230,7 +234,7 @@ echo "=== docker compose config (валидация перед up) ==="
 validate_compose_file "${COMPOSE_FILE}"
 
 echo "=== docker compose up (${DEPLOY_ENV}) ==="
-docker compose -f "${COMPOSE_FILE}" up -d --build
+docker compose -f "${COMPOSE_FILE}" up -d --build --pull always
 
 wait_for_backend_health
 
