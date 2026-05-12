@@ -62,6 +62,24 @@ jobs:
           echo "compose_file=${{ inputs.compose_file }}"
           echo "deploy_sha=${{ steps.rev.outputs.sha }}"
 
+      # До rsync: иначе в логе appleboy видно printf с пустым первым аргументом.
+      - name: Require prod secrets (non-empty)
+        if: inputs.deploy_kind == 'prod'
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTGRES_PASSWORD}" ]; then
+            echo "::error title=Prod secret missing::В GitHub нет непустого секрета POSTGRES_PASSWORD (Settings → Secrets and variables → Actions → Repository secrets). Имя должно совпадать точно: POSTGRES_PASSWORD (секрет POSTGRES_PASSWORD_TEST для prod не используется)."
+            exit 1
+          fi
+          if [ -z "${VITE_API_BASE_URL}" ]; then
+            echo "::error title=Prod secret missing::В GitHub нет непустого секрета VITE_API_BASE_URL (Repository secrets или Environment production)."
+            exit 1
+          fi
+          echo "Prod required secrets are set (values not logged)."
+
       - name: Rsync repository to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
