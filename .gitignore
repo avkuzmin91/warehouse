@@ -15,6 +15,8 @@ backend/.env
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+venv/
 
 # Загруженные пользователями файлы
 backend/uploads/
