@@ -1,9 +1,8 @@
 script: |
   cd /var/www/app-prod
 
-  cat > .env.prod << EOF
-DATABASE_URL=${{ secrets.DATABASE_URL }}
-VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
-EOF
+  printf "DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n" \
+    "${{ secrets.DATABASE_URL }}" \
+    "${{ secrets.VITE_API_BASE_URL }}" > .env.prod
 
   docker compose -f docker-compose.prod.yml up -d --build
