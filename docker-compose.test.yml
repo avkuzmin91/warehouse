@@ -8,12 +8,18 @@ services:
     restart: always
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: app_test
     ports:
       - "127.0.0.1:5434:5432"
     volumes:
       - db_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 90s
 
   backend:
     build:
@@ -28,7 +34,8 @@ services:
     env_file:
       - .env.test
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:11000:8000"
 
