@@ -1,0 +1,54 @@
+# Штатный деплой test/prod по ADR 0001: единый путь через reusable workflow + GitHub Environments.
+name: Deploy
+
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Целевое окружение GitHub (секреты и optional approval)"
+        type: choice
+        required: true
+        options:
+          - test
+          - production
+      git_ref:
+        description: "SHA, ветка или тег для checkout (rollback = прошлый SHA/тег)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: |
+      github.ref == 'refs/heads/develop' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment_name: test
+      remote_path: /var/www/app-test
+      compose_file: docker-compose.test.yml
+      env_file: .env.test
+      health_port: "11000"
+      deploy_kind: test
+      deploy_ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.git_ref != '' && inputs.git_ref || 'develop') || github.sha }}
+    secrets: inherit
+
+  production:
+    if: |
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment_name: production
+      remote_path: /var/www/app-prod
+      compose_file: docker-compose.prod.yml
+      env_file: .env.prod
+      health_port: "10000"
+      deploy_kind: prod
+      deploy_ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.git_ref != '' && inputs.git_ref || 'main') || github.sha }}
+    secrets: inherit

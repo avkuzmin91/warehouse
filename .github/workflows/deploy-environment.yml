@@ -1,0 +1,137 @@
+# Reusable: доставка репозитория на VPS (rsync) → env-файл → docker compose → health gate.
+# Секреты и (опционально) approval — через GitHub Environment `test` / `production`.
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: "GitHub Environment (test | production)"
+        type: string
+        required: true
+      remote_path:
+        description: "Каталог приложения на сервере"
+        type: string
+        required: true
+      compose_file:
+        description: "Compose-файл (например docker-compose.test.yml)"
+        type: string
+        required: true
+      env_file:
+        description: "Имя env-файла в remote_path (например .env.test)"
+        type: string
+        required: true
+      health_port:
+        description: "Loopback-порт backend для /health (README contract)"
+        type: string
+        required: true
+      deploy_kind:
+        description: "test | prod — шаблон записи env-файла"
+        type: string
+        required: true
+      deploy_ref:
+        description: "Git ref (SHA / branch / tag) для checkout"
+        type: string
+        required: true
+
+concurrency:
+  group: deploy-${{ inputs.environment_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment_name }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.deploy_ref }}
+
+      - name: Resolve deployed commit
+        id: rev
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log deployment
+        run: |
+          echo "environment=${{ inputs.environment_name }}"
+          echo "remote_path=${{ inputs.remote_path }}"
+          echo "compose_file=${{ inputs.compose_file }}"
+          echo "deploy_sha=${{ steps.rev.outputs.sha }}"
+
+      - name: Rsync repository to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avzr --delete --exclude=".git" --exclude="node_modules"
+          path: ./
+          remote_path: ${{ inputs.remote_path }}
+          remote_host: ${{ secrets.SSH_HOST }}
+          remote_user: ${{ secrets.SSH_USER }}
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Write env file and docker compose up (test)
+        if: inputs.deploy_kind == 'test'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
+          script: |
+            set -euo pipefail
+            cd "${{ inputs.remote_path }}"
+            umask 077
+            printf 'DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n' \
+              "${{ secrets.DATABASE_URL }}" \
+              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            export APP_VERSION
+            docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
+
+      - name: Write env file and docker compose up (prod)
+        if: inputs.deploy_kind == 'prod'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
+          script: |
+            set -euo pipefail
+            cd "${{ inputs.remote_path }}"
+            umask 077
+            printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
+              "${{ secrets.POSTGRES_PASSWORD }}" \
+              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            export APP_VERSION
+            docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
+
+      - name: Health gate (backend /health)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            port="${{ inputs.health_port }}"
+            waited=0
+            while [[ "${waited}" -lt 30 ]]; do
+              if body=$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null) && \
+                 printf '%s' "${body}" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1; then
+                echo "Health OK (${port})"
+                exit 0
+              fi
+              sleep 1
+              waited=$((waited + 1))
+            done
+            echo "Health check failed after 30s (127.0.0.1:${port}/health)" >&2
+            cd "${{ inputs.remote_path }}"
+            docker compose -f "${{ inputs.compose_file }}" ps >&2 || true
+            docker compose -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
+            exit 1
