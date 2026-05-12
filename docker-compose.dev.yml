@@ -1,5 +1,3 @@
-# Dev: Postgres + backend (--reload). UI — локально: npm run dev (Vite :5173).
-# name: обязателен — иначе project = имя каталога (wms-prod) и dev сломает prod compose.
 name: wms-dev
 
 services:
@@ -19,15 +17,12 @@ services:
   backend:
     build:
       context: ./backend
-      args:
-        APP_VERSION: ${APP_VERSION:-}
     container_name: wms_dev_backend
     restart: unless-stopped
     working_dir: /app
     command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
     environment:
       APP_ENV: dev
-      APP_VERSION: ${APP_VERSION:-}
     env_file:
       - .env.dev
     volumes:
@@ -36,6 +31,22 @@ services:
       - db
     ports:
       - "127.0.0.1:8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: wms_dev_frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    depends_on:
+      - backend
 
 volumes:
   db_data_dev:
