@@ -30,4 +30,4 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /var/www/app-prod
-            docker compose up -d --build
+            docker compose -f docker-compose.prod.yml up -d --build
