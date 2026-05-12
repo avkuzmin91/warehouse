@@ -141,8 +141,8 @@ cd frontend && npm install && npm run dev
 | `SSH_HOST` | да | да |
 | `SSH_USER` | да | да |
 | `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
-| `DATABASE_URL` | да (см. `.env.test.example`) | — |
-| `POSTGRES_PASSWORD` | — | да (см. `.env.prod.example`) |
+| `DATABASE_URL` | да (см. **`.env.test.example`**; пароль в URL должен совпадать с паролем БД в compose, по умолчанию **`postgres`**) | — |
+| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | да (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
