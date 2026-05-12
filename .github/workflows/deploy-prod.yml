@@ -1,33 +1,9 @@
-name: Deploy PROD
+script: |
+  cd /var/www/app-prod
 
-on:
-  push:
-    branches: [main]
+  cat > .env.prod << EOF
+DATABASE_URL=${{ secrets.DATABASE_URL }}
+VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
+EOF
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Sync to VPS
-        uses: burnett01/rsync-deployments@7.0.1
-        with:
-          switches: -avzr --delete --exclude=".git" --exclude="node_modules"
-          path: ./
-          remote_path: /var/www/app-prod
-          remote_host: ${{ secrets.SSH_HOST }}
-          remote_user: ${{ secrets.SSH_USER }}
-          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Deploy containers
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd /var/www/app-prod
-            docker compose -f docker-compose.prod.yml up -d --build
+  docker compose -f docker-compose.prod.yml up -d --build
