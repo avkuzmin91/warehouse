@@ -1,0 +1,13 @@
+name: Ping CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Echo
+        run: echo "WORKFLOWS ARE ALIVE"
