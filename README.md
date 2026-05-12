@@ -69,15 +69,17 @@ docker compose -f docker-compose.dev.yml up -d --build
 
 ## 2. Local-first model
 
+Каноническая модель деплоя test/prod — **[ADR 0001](docs/adr/0001-ci-only-deployment-via-github-actions.md)** (CI-only).
+
 - **Разработка** — прежде всего **локальный ПК**: клон, правки, **`docker-compose.dev.yml`** + **`npm run dev`** (Vite).
-- **Source of truth** — **GitHub**, ветка **`main`**; на VPS после **`git push`** попадает только то, что в удалённом репозитории.
-- **VPS** — **test / prod** (и при необходимости dev на сервере), только **`scripts/deploy.sh`**; не считать SSH на сервере основным местом **повседневных** правок.
+- **Source of truth** — **GitHub**: **`develop`** (интеграция), **`main`** (продакшен). На test/prod попадает только то, что успешно прошло **Deploy** в Actions (зафиксируйте **SHA** в логах).
+- **Штатный деплой** — только **GitHub Actions** (см. **§4**). **`scripts/deploy.sh`** — **не** релизный путь; только **emergency / диагностика** (см. ADR и **§4**).
 
-**Dev vs test/prod (один раз):** в dev compose **`./backend:/app`** — в контейнере выполняется **то, что в рабочем дереве на машине, где запущен compose**, до **`git push`**. UI — Vite на хосте, не образ prod/test. **Test и prod** на сервере: **`git pull --ff-only origin main`**, чистое дерево, образы из **`main`**.
+**Dev vs test/prod:** в dev compose **`./backend:/app`** — в контейнере то, что в рабочем дереве до **`git push`**. UI — Vite на хосте. Test/prod на сервере: дерево с раннера доставляется **rsync** в каталог приложения и поднимается **одним и тем же** пайплайном: env-файл → **`docker compose --env-file … -f … up -d --build`** → **health gate** на loopback backend.
 
-**Цикл:** локально dev → **`git commit`** → **`git push origin main`** → **`deploy-test`** → проверка → **`deploy-prod`** или **`deploy-promote`**. **`deploy-test`** / **`deploy-prod`** — после того, как коммиты уже в **`main`** на GitHub.
+**Цикл:** локально → **`git push origin develop`** → workflow **Deploy** (Environment **`test`**) → проверка staging → merge в **`main`** → **`git push origin main`** → **Deploy** (Environment **`production`**).
 
-**Релизы:** после зелёного **`deploy-test`** явно **`deploy-promote`** или **`deploy-prod`**; в логах деплоя сверять **одинаковый SHA** после `pull`.
+**Релизы / откат:** успешный **Deploy** и совпадение **SHA** с ожидаемым; откат — **workflow_dispatch** с ref на известный good **SHA** или **тег** (§4). Теги на коммитах — для учёта версий; штатная выкладка остаётся через ветки или dispatch.
 
 ---
 
@@ -115,39 +117,62 @@ cd frontend && npm install && npm run dev
 
 ## 4. Deploy system
 
-**Единственная поддерживаемая выкладка:** **`/app/wms-prod/scripts/deploy.sh`**
+Канон: **[ADR 0001](docs/adr/0001-ci-only-deployment-via-github-actions.md)**.
 
-Порядок: `cd` в репозиторий → краткий **`git status`** → **чистое дерево** (см. **Deploy safety rules**) → **`git fetch`** + **`git pull --ff-only origin main`** (не при грязном дереве и не в **`--dry-run`**) → **`APP_VERSION`** из **`git describe --tags --always`** (если не задан в окружении) → доступ к Docker API → **`docker compose -f docker-compose.<env>.yml config`** → **`docker compose … up -d --build --pull always`** → ожидание **`/health`** на loopback backend (до 30 с) → **smoke через host nginx** → **`docker compose ps`** и успех. После pull в лог — **SHA** (`git rev-parse HEAD`, **`git log -1`**).
+### Штатный деплой (GitHub Actions)
+
+Один входной workflow **`deploy.yml`** вызывает reusable **`deploy-environment.yml`**. Логика test и prod **одинаковая**: checkout → **rsync** репозитория на сервер → запись env-файла из секретов → **`docker compose --env-file … -f … up -d --build`** → **health gate** (до 30 с, `127.0.0.1` и порт backend по контракту README: test **11000**, prod **10000**).
+
+| Триггер | GitHub Environment | Checkout ref по умолчанию |
+|---------|--------------------|---------------------------|
+| `push` в **`develop`** | **`test`** | SHA текущего коммита |
+| `push` в **`main`** | **`production`** | SHA текущего коммита |
+
+Каталоги на сервере (см. `deploy.yml`): test **`/var/www/app-test`**, prod **`/var/www/app-prod`**. Файлы compose: **`docker-compose.test.yml`**, **`docker-compose.prod.yml`**.
+
+В reusable задан **`concurrency`** на имя Environment — параллельные деплои в одно окружение сериализуются.
+
+### GitHub Environments и секреты
+
+Создайте в репозитории окружения с именами **`test`** и **`production`** (как в `deploy.yml`). Секреты задаются **отдельно** на каждое окружение (разделение test/prod).
+
+| Секрет | `test` | `production` |
+|--------|--------|----------------|
+| `SSH_HOST` | да | да |
+| `SSH_USER` | да | да |
+| `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
+| `DATABASE_URL` | да (см. `.env.test.example`) | — |
+| `POSTGRES_PASSWORD` | — | да (см. `.env.prod.example`) |
+| `VITE_API_BASE_URL` | да | да |
+
+Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
+
+### Rollback и повторный деплой
+
+**Actions** → **Deploy** → **Run workflow** → выберите **`test`** или **`production`**, в **`git_ref`** укажите **SHA**, **тег** или **ветку** известного good (пусто = по умолчанию **`develop`** или **`main`**). После успеха сверьте SHA в логе шага **Resolve deployed commit**.
+
+### Миграции БД
+
+Схема БД должна соответствовать выкатанному коду (ADR 0001). Явный шаг миграций в CI не зафиксирован в этом README — добавьте его в **`deploy-environment.yml`**, когда утвердите порядок (например `alembic upgrade head` в backend-контейнере).
+
+### Emergency (`deploy.sh`, клон на VPS)
+
+**`scripts/deploy.sh`** и алиасы **`deploy-*`**, **`deploy-promote`** — только **аварийный** и диагностический контур для клона в **`/app/wms-prod`** (git, compose, smoke через nginx). **Не** использовать для штатного релиза. После emergency приведите состояние в соответствие с репозиторием и зафиксируйте инцидент.
+
+Порядок шагов, **`--dry-run`**, чистое дерево, smoke — в **`scripts/deploy.sh`** и комментариях внутри.
 
 ### Версия и теги
 
-- **`GET /version`:** **`APP_VERSION`** → **`git describe`** на диске репо → **`1.0.1`**.
-- **`deploy.sh`** перед compose выставляет **`APP_VERSION`** из **`git describe`**, если не задан; в контейнере **`.git`** не нужен.
-- Релиз: **`git tag v1.0.2`**, **`git push origin v1.0.2`**, деплой на нужный коммит (или merge в **`main`** + тег).
-
-**Dry-run:** **`/app/wms-prod/scripts/deploy.sh <env> --dry-run`** (или **`--dry-run`** перед `<env>`) — без pull, без up, без smoke; проверка дерева, Docker, **`docker compose config`**.
-
-**Алиасы** (после `source ~/.bashrc` на сервере):
-
-- **`deploy-prod`** — `/app/wms-prod/scripts/deploy.sh prod`
-- **`deploy-test`** — `/app/wms-prod/scripts/deploy.sh test`
-- **`deploy-dev`** — `/app/wms-prod/scripts/deploy.sh dev`
-- **`deploy-promote`** — `/app/wms-prod/scripts/deploy-promote.sh` — подряд **test**, затем **prod**.
-
-Если prod «отстаёт» при проверенном test: не запускали **`deploy-prod`**, кэш браузера/CDN, или деплой prod упал — смотреть лог скрипта и **`docker compose ps`**.
-
-При **провале smoke:** **`docker compose ps`** и **`logs --tail=50`** backend + frontend (**dev** — без логов frontend). При **таймауте `/health`:** **`ps`** и логи **только backend**.
-
-**Смоук deploy.sh:** финальный ответ после редиректов nginx — **prod/test:** `curl -fsSL`; **dev:** `curl -fsSLk` при HTTPS на vhost (детали в комментариях **`scripts/deploy.sh`**). Ручные проверки — те же команды, что в **Smoke-check** ниже.
-
-Ошибка на любом шаге — **ненулевой exit**; контейнеры и тома **не** откатываются автоматически. Нужен **`docker`** без sudo (пользователь в группе **`docker`**).
+- **CI:** на сервер передаётся **`APP_VERSION`** = полный SHA выкладки (после checkout на раннере).
+- **`GET /version`:** значение **`APP_VERSION`** в контейнере; при запуске **`deploy.sh`** — **`git describe`**, если переменная не задана.
+- Теги: **`git tag`**, **`git push origin <tag>`** — учёт версий; выкладка остаётся через **`develop`** / **`main`** или **workflow_dispatch**.
 
 ### Deploy safety rules
 
-- Только **`scripts/deploy.sh`** / алиасы **`deploy-*`** / **`scripts/deploy-promote.sh`**.
-- Дерево **чистое**; из untracked допустимы: **`.env*`**, **`logs/`**, **`__pycache__`**, **`.pytest_cache/`**.
-- **Rollback** — вручную; скрипт **не** откатывает образы, **не** делает **`compose down`**, **не** трогает **volumes**. **Без `sudo`**.
-- Рекомендуемый порядок: сначала **test**, затем **prod** после проверки staging — **`deploy-promote`** (`scripts/deploy-promote.sh`).
+- Штатная новая версия на test/prod — **только** **`deploy.yml`** / **`deploy-environment.yml`**. Не обходить их произвольным **`docker compose`** «с ноги».
+- **`deploy.sh`** — не релиз; только runbook / emergency.
+- **Rollback** — через **workflow_dispatch** с известным ref, не «правки на проде» как норма.
+- При падении health gate job завершается с ошибкой; **авто-rollback** образов и томов нет — разбор по логам **`docker compose`**.
 
 ### Git: `fatal: detected dubious ownership` в `/app/wms-prod`
 
@@ -159,7 +184,7 @@ git config --global --add safe.directory /app/wms-prod
 
 ### Smoke-check (после reload nginx и поднятых стеков)
 
-Те же проверки, что использует deploy: **liveness** и **`/api/docs`** через тот же вход, что пользователи (кроме прямого curl к backend).
+Те же проверки, что использует **`deploy.sh`** (emergency) для smoke, или выполняйте после успешного **Deploy** в Actions: **liveness** и **`/api/docs`** через тот же вход, что пользователи (кроме прямого curl к backend).
 
 **Через nginx** (для test/dev на **`127.0.0.1`** нужен заголовок **`Host`**):
 

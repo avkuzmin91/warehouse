@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Единственная поддерживаемая точка входа для деплоя dev/test/prod (см. README).
+# Emergency / диагностика / runbook (ADR 0001). Штатный деплой test/prod — только GitHub Actions.
 # Без sudo, без rollback, без compose down / без трогания volumes.
 set -euo pipefail
 
