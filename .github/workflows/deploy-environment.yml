@@ -62,21 +62,39 @@ jobs:
           echo "compose_file=${{ inputs.compose_file }}"
           echo "deploy_sha=${{ steps.rev.outputs.sha }}"
 
+      - name: Require test secrets (non-empty)
+        if: inputs.deploy_kind == 'test'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_PASSWORD_TEST: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error title=Test secret missing::Секрет DATABASE_URL пуст или не задан (Repository secrets / Environment test)."
+            exit 1
+          fi
+          if [ -z "${POSTGRES_PASSWORD_TEST}" ]; then
+            echo "::error title=Test secret missing::Секрет POSTGRES_PASSWORD_TEST пуст или не задан — CI пишет им пароль в .env.test для сервиса db и синхронизирует DATABASE_URL (scripts/ci-normalize-database-url-test.py)."
+            exit 1
+          fi
+          if [ -z "${VITE_API_BASE_URL}" ]; then
+            echo "::error title=Test secret missing::Секрет VITE_API_BASE_URL пуст или не задан."
+            exit 1
+          fi
+          echo "Test required secrets are set (values not logged)."
+
       # До rsync: иначе в логе appleboy видно printf с пустым первым аргументом.
       - name: Require prod secrets (non-empty)
         if: inputs.deploy_kind == 'prod'
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          POSTGRES_PASSWORD_TEST: ${{ secrets.POSTGRES_PASSWORD_TEST }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: |
           set -euo pipefail
-          if [ -z "${POSTGRES_PASSWORD}" ] && [ -z "${POSTGRES_PASSWORD_TEST}" ]; then
-            echo "::error title=Prod secret missing::Нужен непустой POSTGRES_PASSWORD или POSTGRES_PASSWORD_TEST (Settings → Secrets and variables → Actions → Repository secrets). Для prod предпочтительно отдельный POSTGRES_PASSWORD."
+          if [ -z "${POSTGRES_PASSWORD}" ]; then
+            echo "::error title=Prod secret missing::Секрет POSTGRES_PASSWORD пуст или не задан (Settings → Secrets and variables → Actions → Repository secrets или Environment production)."
             exit 1
-          fi
-          if [ -z "${POSTGRES_PASSWORD}" ] && [ -n "${POSTGRES_PASSWORD_TEST}" ]; then
-            echo "::notice::Prod: POSTGRES_PASSWORD пуст — для пароля БД будет использован POSTGRES_PASSWORD_TEST (имеет смысл только если пароль совпадает с тем, что ожидает prod-контейнер Postgres)."
           fi
           if [ -z "${VITE_API_BASE_URL}" ]; then
             echo "::error title=Prod secret missing::В GitHub нет непустого секрета VITE_API_BASE_URL (Repository secrets или Environment production)."
@@ -107,9 +125,11 @@ jobs:
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
-            printf 'DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n' \
+            printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
+              "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            sed -i 's/\r//g' "${{ inputs.env_file }}"
             python3 scripts/ci-normalize-database-url-test.py "${{ inputs.env_file }}"
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
@@ -127,16 +147,12 @@ jobs:
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
-            PG_PRIMARY="${{ secrets.POSTGRES_PASSWORD }}"
-            PG_FALLBACK="${{ secrets.POSTGRES_PASSWORD_TEST }}"
-            PG="${PG_PRIMARY}"
-            if [ -z "${PG}" ]; then PG="${PG_FALLBACK}"; fi
             printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
-              "${PG}" \
+              "${{ secrets.POSTGRES_PASSWORD }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
             sed -i 's/\r//g' "${{ inputs.env_file }}"
             if ! grep -qE '^POSTGRES_PASSWORD=.+$' "${{ inputs.env_file }}"; then
-              echo "ERROR: пароль БД пуст после подстановки. Задайте POSTGRES_PASSWORD или POSTGRES_PASSWORD_TEST (Repository secrets / Environment production)." >&2
+              echo "ERROR: пароль БД пуст после подстановки. Задайте секрет POSTGRES_PASSWORD (Repository secrets / Environment production)." >&2
               exit 1
             fi
             if ! grep -qE '^VITE_API_BASE_URL=.+$' "${{ inputs.env_file }}"; then
@@ -171,6 +187,6 @@ jobs:
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" ps >&2 || true
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
             if [ "${{ inputs.deploy_kind }}" = "prod" ]; then
-              echo "Подсказка (prod): password authentication failed часто значит: пароль в секрете не совпадает с паролем пользователя postgres В УЖЕ СУЩЕСТВУЮЩЕМ томе. POSTGRES_PASSWORD в compose меняет пароль только при ПЕРВОМ init тома; смена секрета в GitHub сама по себе пароль в БД не обновляет. См. README «Prod: password authentication failed»." >&2
+              echo "Подсказка (prod): password authentication failed часто значит: пароль в секрете POSTGRES_PASSWORD не совпадает с паролем пользователя postgres В УЖЕ СУЩЕСТВУЮЩЕМ томе. POSTGRES_PASSWORD в compose меняет пароль только при ПЕРВОМ init тома; смена секрета в GitHub сама по себе пароль в БД не обновляет. См. README «Prod: password authentication failed»." >&2
             fi
             exit 1

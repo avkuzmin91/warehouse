@@ -141,15 +141,16 @@ cd frontend && npm install && npm run dev
 | `SSH_HOST` | да | да |
 | `SSH_USER` | да | да |
 | `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
-| `DATABASE_URL` | да (см. **`.env.test.example`**). На сервере CI приводит URL к **`...@db:5432/app_test`** (`scripts/ci-normalize-database-url-test.py`: `wms_*_db`, `127.0.0.1`/`localhost`, `/app` → test-стек). Лучше задать канон в секрете. | — |
-| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | **да** для prod: секрет **`POSTGRES_PASSWORD`**; если он пуст, CI подставляет **`POSTGRES_PASSWORD_TEST`** (fallback — только если пароль совпадает с данными prod-Postgres; см. **`.env.prod.example`**) |
+| `DATABASE_URL` | да (см. **`.env.test.example`**). На сервере CI приводит URL к **`...@db:5432/app_test`** (`scripts/ci-normalize-database-url-test.py`: `wms_*_db`, `127.0.0.1`/`localhost`, `/app` → test-стек). Пароль в URL **перезаписывается** значением из **`POSTGRES_PASSWORD_TEST`** (строка `POSTGRES_PASSWORD=` в `.env.test`), чтобы совпадал с сервисом **`db`**. Лучше задать канон хоста/БД в секрете. | — |
+| `POSTGRES_PASSWORD_TEST` | **да** — CI пишет в **`.env.test`** как `POSTGRES_PASSWORD=…` для **`docker-compose.test.yml`** (сервис **`db`**) и синхронизирует **`DATABASE_URL`**. | — |
+| `POSTGRES_PASSWORD` | — | **да** (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
 
 ### Prod: `password authentication failed for user "postgres"`
 
-Пароль в **`.env.prod`** (секрет **`POSTGRES_PASSWORD`** или fallback **`POSTGRES_PASSWORD_TEST`**) в **`DATABASE_URL` backend** должен совпадать с паролем пользователя **`postgres` в уже существующем кластере** в томе **`db_data`**.
+Пароль в **`.env.prod`** (секрет **`POSTGRES_PASSWORD`**) в **`DATABASE_URL` backend** должен совпадать с паролем пользователя **`postgres` в уже существующем кластере** в томе **`db_data`**.
 
 **Важно про Docker + Postgres:** переменная **`POSTGRES_PASSWORD`** для сервиса **`db`** учитывается образом **только при первом создании данных** в томе. Если том уже есть, смена секрета в GitHub **не меняет** пароль внутри БД — backend начинает ходить с новым паролем из `.env.prod`, а Postgres по-прежнему ждёт старый → `password authentication failed`.
 
