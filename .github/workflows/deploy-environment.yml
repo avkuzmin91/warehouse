@@ -96,13 +96,14 @@ jobs:
               -e 's/@wms_test_db\//@db:5432\//g' \
               "${{ inputs.env_file }}"
             # Prod URL часто заканчивается на /app; в test compose только БД app_test (POSTGRES_DB).
-            sed -i -E 's|(@db:)[0-9]+(/app)([?#]|$)|@db:5432/app_test\3|g' "${{ inputs.env_file }}"
+            # В YAML для GitHub Actions литеральный $ в sed — через $$ (иначе ломается regex).
+            sed -i -E 's|(@db:)[0-9]+(/app)([?#]|$$)|@db:5432/app_test\3|g' "${{ inputs.env_file }}"
             url_line="$(grep '^DATABASE_URL=' "${{ inputs.env_file }}" || true)"
-            if echo "${url_line}" | grep -qiE 'wms_(prod|test)_db'; then
+            if echo "$${url_line}" | grep -qiE 'wms_(prod|test)_db'; then
               echo "ERROR: DATABASE_URL must use compose service host db (see .env.test.example); auto-fix did not apply." >&2
               exit 1
             fi
-            if ! echo "${url_line}" | grep -qiE '@db:[0-9]+/app_test'; then
+            if ! echo "$${url_line}" | grep -qiE '@db:[0-9]+/app_test'; then
               echo "ERROR: test DATABASE_URL must use database app_test (compose POSTGRES_DB), e.g. ...@db:5432/app_test" >&2
               exit 1
             fi
@@ -139,16 +140,16 @@ jobs:
             set -euo pipefail
             port="${{ inputs.health_port }}"
             waited=0
-            while [[ "${waited}" -lt 30 ]]; do
-              if body=$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null) && \
-                 printf '%s' "${body}" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1; then
-                echo "Health OK (${port})"
+            while [[ "$${waited}" -lt 30 ]]; do
+              if body=$(curl -fsS --max-time 2 "http://127.0.0.1:$${port}/health" 2>/dev/null) && \
+                 printf '%s' "$${body}" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' >/dev/null 2>&1; then
+                echo "Health OK ($${port})"
                 exit 0
               fi
               sleep 1
-              waited=$((waited + 1))
+              waited=$$((waited + 1))
             done
-            echo "Health check failed after 30s (127.0.0.1:${port}/health)" >&2
+            echo "Health check failed after 30s (127.0.0.1:$${port}/health)" >&2
             cd "${{ inputs.remote_path }}"
             docker compose -f "${{ inputs.compose_file }}" ps >&2 || true
             docker compose -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
