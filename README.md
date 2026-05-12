@@ -193,3 +193,5 @@ curl -fsS http://127.0.0.1:8000/health   # dev
 ```
 
 Ожидается **`/health`:** HTTP **200**, JSON с **`"status":"ok"`**; **`/api/docs`:** **200** (HTML).
+
+(Test CI/CD)
