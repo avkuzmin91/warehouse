@@ -88,6 +88,8 @@ jobs:
             printf 'DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            # Секреты из буфера обмена Windows часто с \r — ломают perl \z и grep.
+            sed -i 's/\r//g' "${{ inputs.env_file }}"
             # Частая ошибка: в URL скопирован container_name prod/test вместо сервиса compose `db`.
             sed -i \
               -e 's/@wms_prod_db:/@db:/g' \
@@ -95,14 +97,14 @@ jobs:
               -e 's/@wms_prod_db\//@db:5432\//g' \
               -e 's/@wms_test_db\//@db:5432\//g' \
               "${{ inputs.env_file }}"
-            # /app (prod) → /app_test; без символа $ в шаблоне (ssh-action не раскрывает $$ как в run:).
-            perl -pi -e 's/@db:\d+\/app(?=[?#]|\z)/@db:5432\/app_test/g' "${{ inputs.env_file }}"
+            # /app (prod) → /app_test (perl: без $ в шаблоне; \z и опциональный \r в lookahead).
+            perl -pi -e 's/@db:\d+\/app(?=[?#\r]|\z)/@db:5432\/app_test/g; s/@db\/app(?=[?#\r]|\z)/@db:5432\/app_test/g' "${{ inputs.env_file }}"
             if grep -qEi 'wms_(prod|test)_db' "${{ inputs.env_file }}"; then
               echo "ERROR: DATABASE_URL must use compose service host db (see .env.test.example); auto-fix did not apply." >&2
               exit 1
             fi
-            if ! grep -qEi '^DATABASE_URL=.*@db:[0-9]+/app_test' "${{ inputs.env_file }}"; then
-              echo "ERROR: test DATABASE_URL must use database app_test (compose POSTGRES_DB), e.g. ...@db:5432/app_test" >&2
+            if ! grep -qEi '^DATABASE_URL=.*@db(:[0-9]+)?/app_test' "${{ inputs.env_file }}"; then
+              echo "ERROR: test DATABASE_URL must use database app_test (compose POSTGRES_DB), e.g. ...@db:5432/app_test or ...@db/app_test" >&2
               exit 1
             fi
             export APP_VERSION
