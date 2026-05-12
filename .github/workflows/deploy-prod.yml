@@ -1,8 +1,8 @@
-name: Deploy TEST
+name: Deploy PROD
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
 
 jobs:
   deploy:
@@ -12,22 +12,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy to TEST via rsync
+      - name: Sync to VPS
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avzr --delete --exclude=".git" --exclude="node_modules"
           path: ./
-          remote_path: /var/www/app-test
+          remote_path: /var/www/app-prod
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Build & restart TEST
+      - name: Deploy containers
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /var/www/app-test
+            cd /var/www/app-prod
             docker compose up -d --build
