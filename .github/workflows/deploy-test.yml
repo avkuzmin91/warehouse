@@ -21,22 +21,18 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
 
           script: |
-            set -e
+  set -e
 
-            cd /var/www/app-test
+  cd /var/www/app-test
 
-            # ===== ENV FILE =====
-            cat > .env.test << EOF
-POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_TEST }}
-DATABASE_URL=postgresql://postgres:${{ secrets.POSTGRES_PASSWORD_TEST }}@db:5432/app_test
-VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL_TEST }}
-APP_VERSION=${{ github.sha }}
-EOF
+  printf "POSTGRES_PASSWORD=%s\nDATABASE_URL=postgresql://postgres:%s@db:5432/app_test\nVITE_API_BASE_URL=%s\nAPP_VERSION=%s\n" \
+    "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
+    "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
+    "${{ secrets.VITE_API_BASE_URL_TEST }}" \
+    "${{ github.sha }}" > .env.test
 
-            # ===== DEPLOY =====
-            docker compose -f docker-compose.test.yml down --remove-orphans
-            docker compose -f docker-compose.test.yml up -d --build --force-recreate
+  docker compose -f docker-compose.test.yml down --remove-orphans
+  docker compose -f docker-compose.test.yml up -d --build --force-recreate
 
-            # ===== HEALTH CHECK =====
-            sleep 10
-            docker ps
+  sleep 10
+  docker ps
