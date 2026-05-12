@@ -134,7 +134,7 @@ cd frontend && npm install && npm run dev
 
 ### GitHub Environments и секреты
 
-Создайте в репозитории окружения с именами **`test`** и **`production`** (как в `deploy.yml`). Секреты задаются **отдельно** на каждое окружение (разделение test/prod).
+Создайте в репозитории окружения с именами **`test`** и **`production`** (как в `deploy.yml`). Если в Environment **нет** своих секретов, job всё равно видит **репозиторные** секреты — пустая страница *Environment secrets* сама по себе не ошибка. Для изоляции test/prod можно продублировать секреты на каждый Environment; **секрет с тем же именем на Environment перекрывает репозиторный** — пустое значение там даст пустую подстановку и ошибку БД (`fe_sendauth: no password supplied`). См. [Using environments for deployment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment).
 
 | Секрет | `test` | `production` |
 |--------|--------|----------------|
@@ -142,7 +142,7 @@ cd frontend && npm install && npm run dev
 | `SSH_USER` | да | да |
 | `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
 | `DATABASE_URL` | да (см. **`.env.test.example`**). На сервере CI приводит URL к **`...@db:5432/app_test`** (`scripts/ci-normalize-database-url-test.py`: `wms_*_db`, `127.0.0.1`/`localhost`, `/app` → test-стек). Лучше задать канон в секрете. | — |
-| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | да (см. **`.env.prod.example`**) |
+| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | **да**, отдельный секрет (не путать с **`POSTGRES_PASSWORD_TEST`**; см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.

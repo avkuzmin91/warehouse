@@ -108,6 +108,16 @@ jobs:
             printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.POSTGRES_PASSWORD }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            sed -i 's/\r//g' "${{ inputs.env_file }}"
+            if ! grep -qE '^POSTGRES_PASSWORD=.+$' "${{ inputs.env_file }}"; then
+              echo "ERROR: POSTGRES_PASSWORD пустой или отсутствует. Добавьте репозиторный секрет **POSTGRES_PASSWORD** (Settings → Secrets and variables → Actions → Repository secrets) или тот же ключ в Environment **production**." >&2
+              echo "Подсказка: это не POSTGRES_PASSWORD_TEST — prod compose ждёт именно POSTGRES_PASSWORD; иначе fe_sendauth / no password supplied." >&2
+              exit 1
+            fi
+            if ! grep -qE '^VITE_API_BASE_URL=.+$' "${{ inputs.env_file }}"; then
+              echo "ERROR: VITE_API_BASE_URL пустой или отсутствует. Добавьте репозиторный секрет **VITE_API_BASE_URL** (Actions → Repository secrets) или в Environment **production** (часто значение **/api**)." >&2
+              exit 1
+            fi
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
