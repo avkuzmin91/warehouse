@@ -88,6 +88,15 @@ jobs:
             printf 'DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            url_line="$(grep '^DATABASE_URL=' "${{ inputs.env_file }}" || true)"
+            if echo "${url_line}" | grep -qiE 'wms_(prod|test)_db'; then
+              echo "ERROR: DATABASE_URL uses Docker container_name (wms_*_db). Inside compose the DB host must be the service name: db (see .env.test.example)." >&2
+              exit 1
+            fi
+            if ! echo "${url_line}" | grep -qiE '@db[:/]'; then
+              echo "ERROR: DATABASE_URL must target compose service db, e.g. postgresql://postgres:postgres@db:5432/app_test" >&2
+              exit 1
+            fi
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
