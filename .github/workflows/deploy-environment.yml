@@ -171,6 +171,6 @@ jobs:
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" ps >&2 || true
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
             if [ "${{ inputs.deploy_kind }}" = "prod" ]; then
-              echo "Подсказка (prod): в логах backend часто бывает FATAL password authentication failed — пароль в секретах (POSTGRES_PASSWORD / fallback POSTGRES_PASSWORD_TEST) не совпадает с паролем кластера в томе Postgres. Задайте секрет под существующий кластер или смените пароль в БД; см. README." >&2
+              echo "Подсказка (prod): password authentication failed часто значит: пароль в секрете не совпадает с паролем пользователя postgres В УЖЕ СУЩЕСТВУЮЩЕМ томе. POSTGRES_PASSWORD в compose меняет пароль только при ПЕРВОМ init тома; смена секрета в GitHub сама по себе пароль в БД не обновляет. См. README «Prod: password authentication failed»." >&2
             fi
             exit 1

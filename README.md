@@ -149,7 +149,14 @@ cd frontend && npm install && npm run dev
 
 ### Prod: `password authentication failed for user "postgres"`
 
-Пароль в **`.env.prod`** (секреты **`POSTGRES_PASSWORD`** или fallback **`POSTGRES_PASSWORD_TEST`**) должен совпадать с паролем, с которым **изначально** инициализирован кластер в Docker-томе **`db_data`** (`docker-compose.prod.yml`). Если prod-БД когда-то поднималась с другим значением — либо выставите в GitHub тот же пароль, либо один раз смените пароль у `postgres` внутри контейнера БД под секрет (без смены тома данные сохраняются).
+Пароль в **`.env.prod`** (секрет **`POSTGRES_PASSWORD`** или fallback **`POSTGRES_PASSWORD_TEST`**) в **`DATABASE_URL` backend** должен совпадать с паролем пользователя **`postgres` в уже существующем кластере** в томе **`db_data`**.
+
+**Важно про Docker + Postgres:** переменная **`POSTGRES_PASSWORD`** для сервиса **`db`** учитывается образом **только при первом создании данных** в томе. Если том уже есть, смена секрета в GitHub **не меняет** пароль внутри БД — backend начинает ходить с новым паролем из `.env.prod`, а Postgres по-прежнему ждёт старый → `password authentication failed`.
+
+**Что сделать:**
+
+- Знали старый пароль: подключитесь к prod-Postgres (как раньше), выполните `ALTER USER postgres WITH PASSWORD '…';` под **тот же** пароль, что в секрете GitHub, затем redeploy.
+- Нужен «чистый» кластер с паролем из секрета (допустима **потеря данных** в prod-томе): остановите compose, удалите том **`db_data`** для этого compose (имя на хосте смотрите через `docker volume ls`), снова **`up`** — init создаст пользователя с текущим **`POSTGRES_PASSWORD`**.
 
 ### Rollback и повторный деплой
 
