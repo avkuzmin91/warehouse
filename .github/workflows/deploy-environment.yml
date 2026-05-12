@@ -95,13 +95,15 @@ jobs:
               -e 's/@wms_prod_db\//@db:5432\//g' \
               -e 's/@wms_test_db\//@db:5432\//g' \
               "${{ inputs.env_file }}"
+            # Prod URL часто заканчивается на /app; в test compose только БД app_test (POSTGRES_DB).
+            sed -i -E 's|(@db:)[0-9]+(/app)([?#]|$)|@db:5432/app_test\3|g' "${{ inputs.env_file }}"
             url_line="$(grep '^DATABASE_URL=' "${{ inputs.env_file }}" || true)"
             if echo "${url_line}" | grep -qiE 'wms_(prod|test)_db'; then
               echo "ERROR: DATABASE_URL must use compose service host db (see .env.test.example); auto-fix did not apply." >&2
               exit 1
             fi
-            if ! echo "${url_line}" | grep -qiE '@db[:/]'; then
-              echo "ERROR: DATABASE_URL must target compose service db, e.g. postgresql://postgres:postgres@db:5432/app_test" >&2
+            if ! echo "${url_line}" | grep -qiE '@db:[0-9]+/app_test'; then
+              echo "ERROR: test DATABASE_URL must use database app_test (compose POSTGRES_DB), e.g. ...@db:5432/app_test" >&2
               exit 1
             fi
             export APP_VERSION
