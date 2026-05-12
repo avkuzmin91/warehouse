@@ -121,7 +121,7 @@ cd frontend && npm install && npm run dev
 
 ### Штатный деплой (GitHub Actions)
 
-Один входной workflow **`deploy.yml`** вызывает reusable **`deploy-environment.yml`**. Логика test и prod **одинаковая**: checkout → **rsync** репозитория на сервер → запись env-файла из секретов → **`docker compose --env-file … -f … up -d --build`** → **health gate** (до 30 с, `127.0.0.1` и порт backend по контракту README: test **11000**, prod **10000**).
+Один входной workflow **`deploy.yml`** вызывает reusable **`deploy-environment.yml`**. Логика test и prod **одинаковая**: checkout → **rsync** репозитория на сервер → запись env-файла из секретов → для **test** нормализация **`DATABASE_URL`** скриптом **`scripts/ci-normalize-database-url-test.py`** → **`docker compose --env-file … -f … up -d --build`** → **health gate** (до 30 с, `127.0.0.1` и порт backend по контракту README: test **11000**, prod **10000**).
 
 | Триггер | GitHub Environment | Checkout ref по умолчанию |
 |---------|--------------------|---------------------------|
@@ -141,7 +141,7 @@ cd frontend && npm install && npm run dev
 | `SSH_HOST` | да | да |
 | `SSH_USER` | да | да |
 | `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
-| `DATABASE_URL` | да: **`...@db:5432/app_test`** (сервис **`db`**, БД **`app_test`**). Неверный хост `wms_*_db` CI подменяет на **`db`**; хвост **`/app`** (как в prod) — на **`/app_test`**. Секрет в GitHub лучше привести к канону. | — |
+| `DATABASE_URL` | да (см. **`.env.test.example`**). На сервере CI приводит URL к **`...@db:5432/app_test`** (`scripts/ci-normalize-database-url-test.py`: `wms_*_db`, `127.0.0.1`/`localhost`, `/app` → test-стек). Лучше задать канон в секрете. | — |
 | `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | да (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
 
