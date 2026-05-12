@@ -142,7 +142,7 @@ cd frontend && npm install && npm run dev
 | `SSH_USER` | да | да |
 | `SSH_PRIVATE_KEY` | да (желательно отдельный ключ) | да |
 | `DATABASE_URL` | да (см. **`.env.test.example`**). На сервере CI приводит URL к **`...@db:5432/app_test`** (`scripts/ci-normalize-database-url-test.py`: `wms_*_db`, `127.0.0.1`/`localhost`, `/app` → test-стек). Лучше задать канон в секрете. | — |
-| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | **да**, отдельный секрет (не путать с **`POSTGRES_PASSWORD_TEST`**; см. **`.env.prod.example`**) |
+| `POSTGRES_PASSWORD` | опционально: если задан в GitHub, CI может писать его в `.env.test` для compose (иначе в compose используется **`postgres`**) | **да** для prod: секрет **`POSTGRES_PASSWORD`**; если он пуст, CI подставляет **`POSTGRES_PASSWORD_TEST`** (fallback — только если пароль совпадает с данными prod-Postgres; см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
