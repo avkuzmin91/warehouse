@@ -88,9 +88,16 @@ jobs:
             printf 'DATABASE_URL=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+            # Частая ошибка: в URL скопирован container_name prod/test вместо сервиса compose `db`.
+            sed -i \
+              -e 's/@wms_prod_db:/@db:/g' \
+              -e 's/@wms_test_db:/@db:/g' \
+              -e 's/@wms_prod_db\//@db:5432\//g' \
+              -e 's/@wms_test_db\//@db:5432\//g' \
+              "${{ inputs.env_file }}"
             url_line="$(grep '^DATABASE_URL=' "${{ inputs.env_file }}" || true)"
             if echo "${url_line}" | grep -qiE 'wms_(prod|test)_db'; then
-              echo "ERROR: DATABASE_URL uses Docker container_name (wms_*_db). Inside compose the DB host must be the service name: db (see .env.test.example)." >&2
+              echo "ERROR: DATABASE_URL must use compose service host db (see .env.test.example); auto-fix did not apply." >&2
               exit 1
             fi
             if ! echo "${url_line}" | grep -qiE '@db[:/]'; then
