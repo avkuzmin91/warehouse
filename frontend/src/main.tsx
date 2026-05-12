@@ -5,6 +5,7 @@ import './style.css'
 import App from './App'
 import { ConfirmDialogProvider } from './components/ConfirmDialogProvider'
 import { RootErrorBoundary } from './RootErrorBoundary'
+import { routerBasename } from './utils/routerBase'
 
 /** Заголовок вкладки: `VITE_APP_TITLE` при сборке (prod/test) или pack-men - dev в `npm run dev`. */
 function applyDocumentTitle(): void {
@@ -17,13 +18,6 @@ function applyDocumentTitle(): void {
 }
 
 applyDocumentTitle()
-
-/** База из Vite (`vite.config` → `base`), без завершающего «/». Для деплоя в подкаталог. */
-function routerBasename(): string | undefined {
-  const raw = import.meta.env.BASE_URL ?? '/'
-  if (raw === '/' || raw === './') return undefined
-  return raw.endsWith('/') ? raw.slice(0, -1) : raw
-}
 
 const rootEl = document.getElementById('root')
 if (!rootEl) {
