@@ -1,3 +1,6 @@
+import { SessionExpiredError } from './auth/sessionError'
+import { scheduleHardRedirectToAuth } from './auth/redirectToAuth'
+
 function resolveApiBaseUrl(): string {
   const fromEnv = import.meta.env.VITE_API_BASE_URL
   if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
@@ -8,6 +11,8 @@ function resolveApiBaseUrl(): string {
 
 /** База URL API: только относительный `/api`; прокси (Vite/nginx) отправляет запрос на backend без этого префикса. */
 export const API_BASE_URL = resolveApiBaseUrl()
+
+const AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401 = new Set(['/auth/login', '/auth/register'])
 
 /** Пути с API (`/uploads/...`) в `<img>` на другом origin; полные URL не трогаем. */
 export function resolvePublicUploadSrc(url: string): string {
@@ -140,8 +145,32 @@ export type ProductListResponse = {
   limit: number
 }
 
-function getToken() {
+export function getToken() {
   return localStorage.getItem('token')
+}
+
+function headerHasBearerAuthorization(headers: Record<string, string>): boolean {
+  const a = headers.Authorization
+  return typeof a === 'string' && a.startsWith('Bearer ')
+}
+
+function apiPathWithoutQuery(path: string): string {
+  const q = path.indexOf('?')
+  return q === -1 ? path : path.slice(0, q)
+}
+
+/**
+ * Централизованная реакция на 401: только если запрос ушёл с Bearer (иначе это, например, неверный пароль на /auth/login).
+ * Гонки: повторные 401 не делают второй редирект (`scheduleHardRedirectToAuth`).
+ */
+function throwIfUnauthorizedApi(path: string, response: Response, headers: Record<string, string>): void {
+  if (response.status !== 401) return
+  if (!headerHasBearerAuthorization(headers)) return
+  const key = apiPathWithoutQuery(path)
+  if (AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401.has(key)) return
+  clearToken()
+  scheduleHardRedirectToAuth()
+  throw new SessionExpiredError()
 }
 
 const ME_CACHE_MS = 15_000
@@ -248,7 +277,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (token) {
-    const publicAuth = path === '/auth/login' || path === '/auth/register'
+    const pathKey = apiPathWithoutQuery(path)
+    const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
     if (!publicAuth) {
       headers.Authorization = `Bearer ${token}`
     }
@@ -268,6 +298,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw error
   }
+
+  throwIfUnauthorizedApi(path, response, headers)
 
   if (!response.ok) {
     const body = await response.json().catch(() => null)
@@ -294,7 +326,8 @@ async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
     Object.assign(headers, init.headers as Record<string, string>)
   }
   if (token) {
-    const publicAuth = path === '/auth/login' || path === '/auth/register'
+    const pathKey = apiPathWithoutQuery(path)
+    const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
     if (!publicAuth) {
       headers.Authorization = `Bearer ${token}`
     }
@@ -314,6 +347,7 @@ async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw error
   }
+  throwIfUnauthorizedApi(path, response, headers)
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, response.status))
@@ -1819,6 +1853,12 @@ export function postImportExcelUploadWithProgress(
         resolve(xhr.response as ImportExcelUploadResponse)
         return
       }
+      if (xhr.status === 401 && token) {
+        clearToken()
+        scheduleHardRedirectToAuth()
+        reject(new SessionExpiredError())
+        return
+      }
       const body = xhr.response
       reject(new Error(formatApiErrorDetail(body, xhr.status)))
     }
@@ -1831,10 +1871,14 @@ export function postImportExcelUploadWithProgress(
 
 export async function deleteImportStaging(fileId: string): Promise<void> {
   const token = getToken()
-  const res = await fetch(`${API_BASE_URL}/import/staging/${encodeURIComponent(fileId.trim())}`, {
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  const path = `/import/staging/${encodeURIComponent(fileId.trim())}`
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'DELETE',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
   })
+  throwIfUnauthorizedApi(path, res, headers)
   if (!res.ok) {
     const body = await res.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, res.status))
@@ -1887,10 +1931,9 @@ export async function downloadMovementsImportTemplate(opType: InventoryOpType) {
   const token = getToken()
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
-  const r = await fetch(
-    `${API_BASE_URL}/import/movements/template?op_type=${encodeURIComponent(opType)}`,
-    { headers },
-  )
+  const path = `/import/movements/template?op_type=${encodeURIComponent(opType)}`
+  const r = await fetch(`${API_BASE_URL}${path}`, { headers })
+  throwIfUnauthorizedApi(path, r, headers)
   if (!r.ok) {
     const body = await r.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, r.status))
@@ -1903,3 +1946,5 @@ export async function downloadMovementsImportTemplate(opType: InventoryOpType) {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+export { SessionExpiredError, isSessionExpiredError } from './auth/sessionError'
