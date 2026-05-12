@@ -147,6 +147,10 @@ cd frontend && npm install && npm run dev
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
 
+### Prod: `password authentication failed for user "postgres"`
+
+Пароль в **`.env.prod`** (секреты **`POSTGRES_PASSWORD`** или fallback **`POSTGRES_PASSWORD_TEST`**) должен совпадать с паролем, с которым **изначально** инициализирован кластер в Docker-томе **`db_data`** (`docker-compose.prod.yml`). Если prod-БД когда-то поднималась с другим значением — либо выставите в GitHub тот же пароль, либо один раз смените пароль у `postgres` внутри контейнера БД под секрет (без смены тома данные сохраняются).
+
 ### Rollback и повторный деплой
 
 **Actions** → **Deploy** → **Run workflow** → выберите **`test`** или **`production`**, в **`git_ref`** укажите **SHA**, **тег** или **ветку** известного good (пусто = по умолчанию **`develop`** или **`main`**). После успеха сверьте SHA в логе шага **Resolve deployed commit**.

@@ -168,6 +168,9 @@ jobs:
             done
             echo "Health check failed after 30s (127.0.0.1:${port}/health)" >&2
             cd "${{ inputs.remote_path }}"
-            docker compose -f "${{ inputs.compose_file }}" ps >&2 || true
-            docker compose -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
+            docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" ps >&2 || true
+            docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" logs --tail=50 backend >&2 || true
+            if [ "${{ inputs.deploy_kind }}" = "prod" ]; then
+              echo "Подсказка (prod): в логах backend часто бывает FATAL password authentication failed — пароль в секретах (POSTGRES_PASSWORD / fallback POSTGRES_PASSWORD_TEST) не совпадает с паролем кластера в томе Postgres. Задайте секрет под существующий кластер или смените пароль в БД; см. README." >&2
+            fi
             exit 1
