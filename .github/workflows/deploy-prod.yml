@@ -17,11 +17,4 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /var/www/app-prod
-
-            if [ ! -d ".git" ]; then
-              git clone -b main YOUR_REPO_URL .
-            else
-              git pull origin main
-            fi
-
             docker compose up -d --build
