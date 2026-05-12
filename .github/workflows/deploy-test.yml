@@ -2,32 +2,47 @@ name: Deploy TEST
 
 on:
   push:
-    branches: [develop]
+    branches:
+      - develop
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to TEST via rsync
-        uses: burnett01/rsync-deployments@7.0.1
-        with:
-          switches: -avzr --delete --exclude=".git" --exclude="node_modules"
-          path: ./
-          remote_path: /var/www/app-test
-          remote_host: ${{ secrets.SSH_HOST }}
-          remote_user: ${{ secrets.SSH_USER }}
-          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Build & restart TEST
+      - name: Deploy to TEST server
         uses: appleboy/ssh-action@v1.0.3
+
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+
           script: |
+            set -e
+
             cd /var/www/app-test
-            docker compose up -d --build
+
+            cat > .env.test <<EOF
+POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_TEST }}
+DATABASE_URL=postgresql://postgres:${{ secrets.POSTGRES_PASSWORD_TEST }}@db:5432/app_test
+VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL_TEST }}
+APP_VERSION=${{ github.sha }}
+EOF
+
+            docker compose \
+              -p wms_test \
+              -f docker-compose.test.yml \
+              pull
+
+            docker compose \
+              -p wms_test \
+              -f docker-compose.test.yml \
+              up -d --build --force-recreate --remove-orphans
+
+            docker image prune -f

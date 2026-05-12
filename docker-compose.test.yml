@@ -1,50 +1,78 @@
-# Staging = test: та же схема, что prod, другие порты / env / том БД.
 name: wms-test
 
 services:
   db:
     image: postgres:16
     container_name: wms_test_db
-    restart: always
+    restart: unless-stopped
+
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_TEST}
       POSTGRES_DB: app_test
+
     ports:
       - "127.0.0.1:5434:5432"
+
     volumes:
       - db_test_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks:
+      - wms_test_network
 
   backend:
     build:
       context: ./backend
       args:
         APP_VERSION: ${APP_VERSION:-}
+
     container_name: wms_test_backend
-    restart: always
-    environment:
-      APP_ENV: test
-      APP_VERSION: ${APP_VERSION:-}
+    restart: unless-stopped
+
     env_file:
       - .env.test
+
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+
     ports:
       - "127.0.0.1:11000:8000"
+
+    networks:
+      - wms_test_network
 
   frontend:
     build:
       context: ./frontend
       args:
-        VITE_APP_TITLE: "pack-men - test"
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-pack-men-test}
+
     container_name: wms_test_frontend
-    restart: always
+    restart: unless-stopped
+
     env_file:
       - .env.test
+
     depends_on:
       - backend
+
     ports:
       - "127.0.0.1:11080:80"
 
+    networks:
+      - wms_test_network
+
 volumes:
   db_test_data:
+    name: wms_test_db_data
+
+networks:
+  wms_test_network:
+    name: wms_test_network
