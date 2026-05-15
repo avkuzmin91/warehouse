@@ -1,5 +1,6 @@
 import { SessionExpiredError } from './auth/sessionError'
 import { scheduleHardRedirectToAuth } from './auth/redirectToAuth'
+import { broadcastAuthLogout } from './auth/tabSync'
 
 function resolveApiBaseUrl(): string {
   const fromEnv = import.meta.env.VITE_API_BASE_URL
@@ -11,6 +12,8 @@ function resolveApiBaseUrl(): string {
 
 /** База URL API: только относительный `/api`; прокси (Vite/nginx) отправляет запрос на backend без этого префикса. */
 export const API_BASE_URL = resolveApiBaseUrl()
+
+const AUTH_FETCH_CREDENTIALS: RequestCredentials = 'include'
 
 const AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401 = new Set(['/auth/login', '/auth/register'])
 
@@ -35,7 +38,9 @@ export type User = {
 }
 
 type AuthResponse = {
-  token: string
+  access_token: string
+  token_type: string
+  expires_in: number
 }
 
 export type UserListItem = {
@@ -145,8 +150,12 @@ export type ProductListResponse = {
   limit: number
 }
 
-export function getToken() {
-  return localStorage.getItem('token')
+let accessTokenMemory: string | null = null
+
+let refreshAccessTokenPromise: Promise<string | null> | null = null
+
+export function getToken(): string | null {
+  return accessTokenMemory
 }
 
 function headerHasBearerAuthorization(headers: Record<string, string>): boolean {
@@ -169,6 +178,7 @@ function throwIfUnauthorizedApi(path: string, response: Response, headers: Recor
   const key = apiPathWithoutQuery(path)
   if (AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401.has(key)) return
   clearToken()
+  broadcastAuthLogout()
   scheduleHardRedirectToAuth()
   throw new SessionExpiredError()
 }
@@ -182,14 +192,80 @@ export function clearProfileCache() {
   meInFlight = null
 }
 
-export function saveToken(token: string) {
-  localStorage.setItem('token', token)
+export function saveToken(token: string): void {
+  accessTokenMemory = token
   clearProfileCache()
 }
 
-export function clearToken() {
-  localStorage.removeItem('token')
+export function clearToken(): void {
+  accessTokenMemory = null
   clearProfileCache()
+}
+
+async function fetchAccessTokenViaRefreshOnce(): Promise<string | null> {
+  const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+    method: 'POST',
+    credentials: AUTH_FETCH_CREDENTIALS,
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  if (res.status === 401) {
+    return null
+  }
+  if (!res.ok) {
+    throw new Error(`refresh ${res.status}`)
+  }
+  const data = (await res.json()) as AuthResponse
+  saveToken(data.access_token)
+  return data.access_token
+}
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshAccessTokenPromise) {
+    refreshAccessTokenPromise = (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await fetchAccessTokenViaRefreshOnce()
+        } catch {
+          if (attempt === 2) {
+            return null
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 300 * (attempt + 1)))
+        }
+      }
+      return null
+    })().finally(() => {
+      refreshAccessTokenPromise = null
+    })
+  }
+  return refreshAccessTokenPromise
+}
+
+export async function ensureSessionBootstrapped(): Promise<boolean> {
+  if (getToken()) {
+    return true
+  }
+  const t = await refreshAccessToken()
+  return t != null && getToken() != null
+}
+
+export async function authLogout(): Promise<void> {
+  const token = getToken()
+  try {
+    await fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      credentials: AUTH_FETCH_CREDENTIALS,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: '{}',
+    })
+  } catch {
+  } finally {
+    clearToken()
+    broadcastAuthLogout()
+  }
 }
 
 /** Разбирает JSON-тело ошибки FastAPI/Starlette (detail строка, массив validation errors и т.д.). */
@@ -288,6 +364,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
+      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
       headers,
     })
   } catch (error) {
@@ -311,7 +388,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** Публичный GET /version: версия и окружение для футера (без Bearer). */
 export async function fetchSystemVersion(): Promise<{ version: string; environment: string }> {
-  const response = await fetch(`${API_BASE_URL}/version`, { method: 'GET' })
+  const response = await fetch(`${API_BASE_URL}/version`, {
+    method: 'GET',
+    credentials: AUTH_FETCH_CREDENTIALS,
+  })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, response.status))
@@ -337,6 +417,7 @@ async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
+      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
       headers,
     })
   } catch (error) {
@@ -1838,6 +1919,7 @@ export function postImportExcelUploadWithProgress(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `${API_BASE_URL}/import/upload`)
+    xhr.withCredentials = true
     if (token) {
       xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     }
@@ -1876,6 +1958,7 @@ export async function deleteImportStaging(fileId: string): Promise<void> {
   const path = `/import/staging/${encodeURIComponent(fileId.trim())}`
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'DELETE',
+    credentials: AUTH_FETCH_CREDENTIALS,
     headers,
   })
   throwIfUnauthorizedApi(path, res, headers)
@@ -1932,7 +2015,10 @@ export async function downloadMovementsImportTemplate(opType: InventoryOpType) {
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
   const path = `/import/movements/template?op_type=${encodeURIComponent(opType)}`
-  const r = await fetch(`${API_BASE_URL}${path}`, { headers })
+  const r = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: AUTH_FETCH_CREDENTIALS,
+    headers,
+  })
   throwIfUnauthorizedApi(path, r, headers)
   if (!r.ok) {
     const body = await r.json().catch(() => null)

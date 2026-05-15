@@ -1,10 +1,15 @@
 from datetime import UTC, date, datetime, timedelta
 import functools
+import hashlib
 import io
 import json
+import logging
 import os
 import re
+import secrets
 import subprocess
+import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Mapping
@@ -15,21 +20,35 @@ from psycopg.errors import IntegrityConstraintViolation, UndefinedColumn
 
 import bcrypt
 import jwt
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 
 import movements_excel_import as _mei
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 
 JWT_SECRET = "replace-this-secret-in-production"
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_MINUTES = 60
+
+AUTH_REFRESH_COOKIE_NAME = "wms_rt"
+AUTH_REFRESH_COOKIE_PATH = "/api"
+AUTH_REFRESH_TTL_DAYS = 30
+_AUTH_REFRESH_COOKIE_SAMESITE = "lax"
+
+AUTH_RL_LOGIN_MAX = int(os.environ.get("AUTH_RATE_LIMIT_LOGIN_MAX", "20"))
+AUTH_RL_LOGIN_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_LOGIN_WINDOW_SEC", "60"))
+AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
+AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
+AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))
+AUTH_JTI_DENYLIST_MAX = int(os.environ.get("AUTH_JTI_DENYLIST_MAX", "5000"))
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
+
+_auth_log = logging.getLogger("warehouse.auth")
 
 # Поступления (op_type = 'in'): в остатках учитываются только со статусом «accepted».
 RECEIPT_STATUS_PENDING = "pending"
@@ -227,6 +246,7 @@ def _assert_shipment_posting_day_not_after_today(created_at_val: str | None) -> 
 
 
 bearer_scheme = HTTPBearer()
+optional_bearer = HTTPBearer(auto_error=False)
 
 # Без root_path: маршруты на бэкенде — /..., /openapi.json и т.д. Префикс /api добавляют только
 # nginx и Vite-прокси (strip /api перед пробросом). Relative URL нужен Swagger UI при доступе через /api/docs.
@@ -236,14 +256,24 @@ app = FastAPI(
         "url": "./openapi.json",
     },
 )
-app.add_middleware(
-    CORSMiddleware,
-    # Локальная разработка: любой порт на localhost / 127.0.0.1 (Vite, preview, другой порт)
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_allow_origins = [o.strip() for o in (os.environ.get("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+if _cors_allow_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        # Локальная разработка: любой порт на localhost / 127.0.0.1 (Vite, preview, другой порт)
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 UPLOADS_DIR.mkdir(exist_ok=True)
 IMPORT_STAGING_DIR = UPLOADS_DIR / "import_staging"
 IMPORT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
@@ -335,8 +365,10 @@ class RegisterResponse(BaseModel):
     success: bool
 
 
-class LoginResponse(BaseModel):
-    token: str
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
 
 
 class ChangePasswordRequest(BaseModel):
@@ -1002,6 +1034,8 @@ def init_db():
         _migrate_product_variants_v1(connection)
         _migrate_soft_delete_policy_v1(connection)
         _migrate_product_gallery_json_v1(connection)
+        _migrate_auth_sessions_v1(connection)
+        _migrate_auth_refresh_superseded_v1(connection)
         _ensure_columns(
             connection,
             "inventory_operations",
@@ -1450,6 +1484,77 @@ def _migrate_product_gallery_json_v1(connection: Any) -> None:
     )
 
 
+def _migrate_auth_sessions_v1(connection: Any) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            id TEXT PRIMARY KEY
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'auth_sessions_v1'"
+    ).fetchone():
+        return
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            refresh_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx
+        ON auth_sessions (user_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_refresh_hash_active_uq
+        ON auth_sessions (refresh_hash)
+        WHERE revoked_at IS NULL
+        """
+    )
+
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('auth_sessions_v1')"
+    )
+
+
+def _migrate_auth_refresh_superseded_v1(connection: Any) -> None:
+    """Хранит хеши refresh после ротации (PR5: детект повторного использования старого токена)."""
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'auth_refresh_superseded_v1'"
+    ).fetchone():
+        return
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_refresh_superseded (
+            superseded_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            superseded_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS auth_refresh_superseded_user_id_idx
+        ON auth_refresh_superseded (user_id)
+        """
+    )
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('auth_refresh_superseded_v1')"
+    )
+
+
 def _ensure_record_actuality(connection: Any) -> None:
     """Системный справочник значений фильтра «актуальность»; не редактируется через UI."""
     connection.execute(
@@ -1515,6 +1620,7 @@ def create_token(user_id: str, email: str, role: str) -> str:
         "userId": user_id,
         "email": email,
         "role": role,
+        "jti": str(uuid4()),
         "exp": datetime.now(UTC) + timedelta(minutes=TOKEN_TTL_MINUTES),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -1526,6 +1632,156 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+def _auth_refresh_cookie_secure() -> bool:
+    return _app_environment() == "prod"
+
+
+def _auth_refresh_max_age_seconds() -> int:
+    return AUTH_REFRESH_TTL_DAYS * 24 * 60 * 60
+
+
+def _hash_refresh_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _refresh_cookie_binding_kwargs() -> dict[str, Any]:
+    return {
+        "path": AUTH_REFRESH_COOKIE_PATH,
+        "httponly": True,
+        "secure": _auth_refresh_cookie_secure(),
+        "samesite": _AUTH_REFRESH_COOKIE_SAMESITE,
+    }
+
+
+def _set_refresh_cookie(response: Response, raw_refresh: str) -> None:
+    value = str(raw_refresh).strip()
+    if not value:
+        raise ValueError("refresh cookie value must be non-empty")
+    response.set_cookie(
+        key=AUTH_REFRESH_COOKIE_NAME,
+        value=value,
+        max_age=_auth_refresh_max_age_seconds(),
+        **_refresh_cookie_binding_kwargs(),
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(AUTH_REFRESH_COOKIE_NAME, **_refresh_cookie_binding_kwargs())
+
+
+_rl_lock = threading.Lock()
+_rl_login_hits: dict[str, list[float]] = {}
+_rl_refresh_hits: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    h = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if h:
+        part = h.split(",")[0].strip()
+        if part:
+            return part
+    if request.client and request.client.host:
+        return str(request.client.host)
+    return "unknown"
+
+
+def _rate_limit_consume(
+    store: dict[str, list[float]],
+    key: str,
+    *,
+    max_requests: int,
+    window_sec: float,
+) -> bool:
+    if max_requests <= 0 or window_sec <= 0:
+        return True
+    now = time.monotonic()
+    cutoff = now - window_sec
+    with _rl_lock:
+        lst = store.setdefault(key, [])
+        while lst and lst[0] < cutoff:
+            lst.pop(0)
+        if len(lst) >= max_requests:
+            return False
+        lst.append(now)
+    return True
+
+
+@app.middleware("http")
+async def _auth_login_refresh_rate_limit_middleware(request: Request, call_next):
+    if request.method == "POST":
+        p = request.url.path
+        if p == "/auth/login":
+            if not _rate_limit_consume(
+                _rl_login_hits,
+                _client_ip(request),
+                max_requests=AUTH_RL_LOGIN_MAX,
+                window_sec=AUTH_RL_LOGIN_WINDOW_SEC,
+            ):
+                _auth_log.warning("auth rate limit login ip=%s", _client_ip(request))
+                return JSONResponse({"detail": "Too many requests"}, status_code=429)
+        elif p == "/auth/refresh":
+            if not _rate_limit_consume(
+                _rl_refresh_hits,
+                _client_ip(request),
+                max_requests=AUTH_RL_REFRESH_MAX,
+                window_sec=AUTH_RL_REFRESH_WINDOW_SEC,
+            ):
+                _auth_log.warning("auth rate limit refresh ip=%s", _client_ip(request))
+                return JSONResponse({"detail": "Too many requests"}, status_code=429)
+    return await call_next(request)
+
+
+_JTI_DENY: dict[str, float] = {}
+_JTI_DENY_LOCK = threading.Lock()
+
+
+def _jti_denylist_prune_unlocked(now: float) -> None:
+    dead = [k for k, exp in _JTI_DENY.items() if exp <= now]
+    for k in dead:
+        _JTI_DENY.pop(k, None)
+
+
+def _jti_denylist_add(jti: str, exp_unix: float) -> None:
+    with _JTI_DENY_LOCK:
+        now = time.time()
+        _jti_denylist_prune_unlocked(now)
+        _JTI_DENY[jti] = exp_unix
+        if len(_JTI_DENY) > AUTH_JTI_DENYLIST_MAX:
+            overflow = len(_JTI_DENY) - AUTH_JTI_DENYLIST_MAX
+            for k in list(_JTI_DENY.keys())[: max(overflow, 0)]:
+                _JTI_DENY.pop(k, None)
+
+
+def _jti_denylist_contains(jti: str) -> bool:
+    with _JTI_DENY_LOCK:
+        _jti_denylist_prune_unlocked(time.time())
+        return jti in _JTI_DENY
+
+
+def _insert_auth_session_row(connection: Any, user_id: str) -> str:
+    sid = str(uuid4())
+    raw = secrets.token_urlsafe(32)
+    h = _hash_refresh_token(raw)
+    exp = (datetime.now(UTC) + timedelta(days=AUTH_REFRESH_TTL_DAYS)).isoformat()
+    now = _now()
+    connection.execute(
+        """
+        INSERT INTO auth_sessions (id, user_id, refresh_hash, expires_at, revoked_at, created_at, last_used_at)
+        VALUES (?, ?, ?, ?, NULL, ?, ?)
+        """,
+        (sid, user_id, h, exp, now, now),
+    )
+    return raw
+
+
+def _parse_session_expires_at(value: str) -> datetime:
+    s = str(value).strip()
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 def get_user_by_email(email: str):
@@ -1567,10 +1823,16 @@ def get_current_user(
     user_id = payload.get("userId")
     email = payload.get("email")
     role = payload.get("role")
+    jti = payload.get("jti")
     if not user_id or not email or not role:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный токен",
+        )
+    if jti and _jti_denylist_contains(str(jti)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Сессия завершена",
         )
 
     with get_connection() as connection:
@@ -2867,8 +3129,8 @@ def register(payload: RegisterRequest):
     return RegisterResponse(success=True)
 
 
-@app.post("/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest):
+@app.post("/auth/login", response_model=AuthTokenResponse)
+def login(payload: LoginRequest, response: Response):
     user = get_user_by_email(payload.email)
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(
@@ -2876,12 +3138,23 @@ def login(payload: LoginRequest):
             detail="Неверный email или пароль",
         )
 
-    token = create_token(str(user["id"]), str(user["email"]).strip().lower(), str(user["role"]))
-    return LoginResponse(token=token)
+    user_id = str(user["id"])
+    with get_connection() as connection:
+        raw_refresh = _insert_auth_session_row(connection, user_id)
+        connection.commit()
+
+    token = create_token(user_id, str(user["email"]).strip().lower(), str(user["role"]))
+    _set_refresh_cookie(response, raw_refresh)
+    _auth_log.info("auth login ok user_id_prefix=%s", str(user_id)[:8])
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="Bearer",
+        expires_in=TOKEN_TTL_MINUTES * 60,
+    )
 
 
-@app.post("/auth/change-password", response_model=LoginResponse)
-def change_password(payload: ChangePasswordRequest, user=Depends(get_current_user)):
+@app.post("/auth/change-password", response_model=AuthTokenResponse)
+def change_password(payload: ChangePasswordRequest, response: Response, user=Depends(get_current_user)):
     if payload.new_password == payload.current_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2916,10 +3189,223 @@ def change_password(payload: ChangePasswordRequest, user=Depends(get_current_use
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (new_hash, user_id),
         )
+        now_ts = _now()
+        connection.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = ?
+            WHERE user_id = ? AND revoked_at IS NULL
+            """,
+            (now_ts, user_id),
+        )
+        raw_refresh = _insert_auth_session_row(connection, str(user_id))
         connection.commit()
 
     token = create_token(str(user_id), email, role)
-    return LoginResponse(token=token)
+    _set_refresh_cookie(response, raw_refresh)
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="Bearer",
+        expires_in=TOKEN_TTL_MINUTES * 60,
+    )
+
+
+@app.post("/auth/refresh", response_model=AuthTokenResponse)
+def auth_refresh(response: Response, wms_rt: str | None = Cookie(None)):
+    if not wms_rt or not str(wms_rt).strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Сессия истекла или отсутствует",
+        )
+    raw_in = str(wms_rt).strip()
+    h = _hash_refresh_token(raw_in)
+    now_ts = _now()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT s.user_id, s.expires_at, u.email, u.role
+            FROM auth_sessions s
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE s.refresh_hash = ?
+              AND s.revoked_at IS NULL
+              AND COALESCE(u.is_deleted, 0) = 0
+            """,
+            (h,),
+        ).fetchone()
+        if not row:
+            sup = connection.execute(
+                """
+                SELECT user_id, superseded_at
+                FROM auth_refresh_superseded
+                WHERE superseded_hash = ?
+                """,
+                (h,),
+            ).fetchone()
+            if not sup:
+                _auth_log.info("auth refresh invalid hash prefix=%s", h[:12])
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Сессия недействительна",
+                )
+            try:
+                sup_at = _parse_session_expires_at(str(sup["superseded_at"]))
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Сессия недействительна",
+                ) from None
+            replay_uid = str(sup["user_id"])
+            age_sec = (datetime.now(UTC) - sup_at).total_seconds()
+            if age_sec >= AUTH_REPLAY_REVOKE_MIN_SECONDS:
+                connection.execute(
+                    """
+                    UPDATE auth_sessions
+                    SET revoked_at = ?
+                    WHERE user_id = ? AND revoked_at IS NULL
+                    """,
+                    (now_ts, replay_uid),
+                )
+                connection.commit()
+                _auth_log.warning(
+                    "auth refresh replay revoke_all user_id=%s age_sec=%.1f",
+                    replay_uid,
+                    age_sec,
+                )
+            else:
+                _auth_log.info(
+                    "auth refresh replay grace user_id=%s age_sec=%.1f",
+                    replay_uid,
+                    age_sec,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия недействительна",
+            )
+
+        try:
+            exp_at = _parse_session_expires_at(str(row["expires_at"]))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия недействительна",
+            ) from None
+        if exp_at < datetime.now(UTC):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия истекла",
+            )
+
+        user_id = str(row["user_id"])
+        email = str(row["email"]).strip().lower()
+        role = str(row["role"])
+        new_raw = secrets.token_urlsafe(32)
+        new_h = _hash_refresh_token(new_raw)
+        new_exp = (datetime.now(UTC) + timedelta(days=AUTH_REFRESH_TTL_DAYS)).isoformat()
+        upd = connection.execute(
+            """
+            UPDATE auth_sessions
+            SET refresh_hash = ?, expires_at = ?, last_used_at = ?
+            WHERE refresh_hash = ? AND revoked_at IS NULL
+            RETURNING id
+            """,
+            (new_h, new_exp, now_ts, h),
+        ).fetchone()
+        if not upd:
+            sup = connection.execute(
+                """
+                SELECT user_id, superseded_at
+                FROM auth_refresh_superseded
+                WHERE superseded_hash = ?
+                """,
+                (h,),
+            ).fetchone()
+            if sup:
+                try:
+                    sup_at = _parse_session_expires_at(str(sup["superseded_at"]))
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Сессия недействительна",
+                    ) from None
+                replay_uid = str(sup["user_id"])
+                age_sec = (datetime.now(UTC) - sup_at).total_seconds()
+                if age_sec >= AUTH_REPLAY_REVOKE_MIN_SECONDS:
+                    connection.execute(
+                        """
+                        UPDATE auth_sessions
+                        SET revoked_at = ?
+                        WHERE user_id = ? AND revoked_at IS NULL
+                        """,
+                        (now_ts, replay_uid),
+                    )
+                    connection.commit()
+                    _auth_log.warning(
+                        "auth refresh replay_after_race revoke_all user_id=%s age_sec=%.1f",
+                        replay_uid,
+                        age_sec,
+                    )
+                else:
+                    _auth_log.info(
+                        "auth refresh race_lost user_id=%s age_sec=%.1f",
+                        replay_uid,
+                        age_sec,
+                    )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Сессия недействительна",
+            )
+        connection.execute(
+            """
+            INSERT INTO auth_refresh_superseded (superseded_hash, user_id, superseded_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (superseded_hash) DO NOTHING
+            """,
+            (h, user_id, now_ts),
+        )
+        connection.commit()
+
+    token = create_token(user_id, email, role)
+    _set_refresh_cookie(response, new_raw)
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="Bearer",
+        expires_in=TOKEN_TTL_MINUTES * 60,
+    )
+
+
+@app.post("/auth/logout")
+def auth_logout(
+    wms_rt: str | None = Cookie(None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer),
+):
+    if credentials and credentials.credentials:
+        try:
+            pl = jwt.decode(
+                credentials.credentials,
+                JWT_SECRET,
+                algorithms=[JWT_ALGORITHM],
+            )
+            jti = pl.get("jti")
+            exp = pl.get("exp")
+            if jti is not None and exp is not None:
+                _jti_denylist_add(str(jti), float(exp))
+        except jwt.PyJWTError:
+            pass
+    if wms_rt and str(wms_rt).strip():
+        h = _hash_refresh_token(str(wms_rt).strip())
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = ?
+                WHERE refresh_hash = ? AND revoked_at IS NULL
+                """,
+                (_now(), h),
+            )
+            connection.commit()
+    r = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_refresh_cookie(r)
+    return r
 
 
 @app.get("/auth/me", response_model=MeResponse)

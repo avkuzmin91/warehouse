@@ -37,16 +37,19 @@ import { ClientCabinetOperationsPage } from './pages/ClientCabinetOperationsPage
 import { ClientCabinetProductViewPage } from './pages/ClientCabinetProductViewPage'
 import { ClientCabinetProductsPage } from './pages/ClientCabinetProductsPage'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
+import { AuthTabSync } from './auth/AuthTabSync'
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/auth" replace />} />
-      <Route element={<AuthLayout />}>
-        <Route path="/auth" element={<LoginPage />} />
-        <Route path="/auth/register" element={<RegisterPage />} />
-      </Route>
-      <Route element={<ProtectedLayout />}>
+    <>
+      <AuthTabSync />
+      <Routes>
+        <Route path="/" element={<Navigate to="/auth" replace />} />
+        <Route element={<AuthLayout />}>
+          <Route path="/auth" element={<LoginPage />} />
+          <Route path="/auth/register" element={<RegisterPage />} />
+        </Route>
+        <Route element={<ProtectedLayout />}>
         <Route path="/home" element={<HomePage />} />
         <Route path="/account/password" element={<ChangePasswordPage />} />
         <Route path="/cabinet" element={<ClientCabinetLayout />}>
@@ -345,6 +348,7 @@ function App() {
       </Route>
       <Route path="*" element={<Navigate to="/auth" replace />} />
     </Routes>
+    </>
   )
 }
 
