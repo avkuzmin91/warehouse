@@ -120,13 +120,17 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
-          envs: APP_VERSION=${{ steps.rev.outputs.sha }},DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }},DOCKERHUB_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
           script: |
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
-            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-              printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io
+            # Учётные данные Hub подставляются здесь (не через envs action): иначе значение с «=» в PAT
+            # обрезается парсером envs и docker login не выполняется → 429 unauthenticated.
+            if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+              printf '%s' "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin docker.io
+            else
+              echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
             printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
@@ -145,13 +149,15 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
-          envs: APP_VERSION=${{ steps.rev.outputs.sha }},DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }},DOCKERHUB_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
           script: |
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
-            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-              printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io
+            if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+              printf '%s' "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin docker.io
+            else
+              echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
             printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.POSTGRES_PASSWORD }}" \

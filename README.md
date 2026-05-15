@@ -148,7 +148,7 @@ cd frontend && npm install && npm run dev
 | `DOCKERHUB_USERNAME` | опционально | опционально |
 | `DOCKERHUB_TOKEN` | опционально | опционально |
 
-**Docker Hub 429 на деплое:** сборка на VPS тянет `python:3.11-slim`, `node:20-alpine`, `postgres:16` с Docker Hub; для анонимных запросов действует [rate limit](https://docs.docker.com/docker-hub/download-rate-limit/). Задайте репозиторные секреты **`DOCKERHUB_USERNAME`** (логин Hub) и **`DOCKERHUB_TOKEN`** ([Access Token](https://hub.docker.com/settings/security), достаточно read) — workflow перед `docker compose up --build` выполнит на сервере **`docker login`**. Если секреты пустые, шаг логина пропускается (как раньше).
+**Docker Hub 429 на деплое:** сборка на VPS тянет `python:3.11-slim`, `node:20-alpine`, `postgres:16` с Docker Hub; для анонимных запросов действует [rate limit](https://docs.docker.com/docker-hub/download-rate-limit/). Задайте репозиторные секреты **`DOCKERHUB_USERNAME`** (логин Hub) и **`DOCKERHUB_TOKEN`** ([Access Token](https://hub.docker.com/settings/security), достаточно read) — workflow перед `docker compose up --build` выполнит на сервере **`docker login`**. Секреты подставляются в удалённый скрипт напрямую из GitHub (не через `envs` ssh-action): иначе PAT с символом **`=`** может обрезаться и логин не сработает (снова **429 unauthenticated**). Если секреты пустые, логин пропускается и в лог пишется предупреждение.
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
 
