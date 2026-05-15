@@ -54,6 +54,8 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
   const formId = useId()
   const imagesInputRef = useRef<HTMLInputElement>(null)
   const [previews, setPreviews] = useState<string[]>([])
+  /** Remote URL вернул 404/ошибку — показываем плейсхолдер и всегда доступное «Удалить». */
+  const [failedRemoteUrls, setFailedRemoteUrls] = useState<Set<string>>(() => new Set())
   const [photoDragOver, setPhotoDragOver] = useState<number | null>(null)
   const [photoDragging, setPhotoDragging] = useState<number | null>(null)
   const [photoLightboxSrc, setPhotoLightboxSrc] = useState<string | null>(null)
@@ -67,6 +69,18 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
         if (u.startsWith('blob:')) URL.revokeObjectURL(u)
       }
     }
+  }, [slots])
+
+  useEffect(() => {
+    const urls = new Set(slots.filter((s): s is Extract<ProductGallerySlot, { kind: 'remote' }> => s.kind === 'remote').map((s) => s.url))
+    setFailedRemoteUrls((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Set<string>()
+      for (const u of prev) {
+        if (urls.has(u)) next.add(u)
+      }
+      return next.size === prev.size ? prev : next
+    })
   }, [slots])
 
   const reorderSlots = useCallback(
@@ -97,6 +111,8 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
       >
         {previews.map((src, i) => {
           const s = slots[i]
+          const remoteUrl = s?.kind === 'remote' ? s.url : null
+          const loadFailed = remoteUrl !== null && failedRemoteUrls.has(remoteUrl)
           const key =
             s?.kind === 'local'
               ? `local-${s.file.name}-${s.file.size}-${s.file.lastModified}`
@@ -104,7 +120,7 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
           return (
             <div
               key={key}
-              className={`product-multi-preview__card${photoDragOver === i ? ' product-multi-preview__card--over' : ''}${photoDragging === i ? ' product-multi-preview__card--dragging' : ''}`.trim()}
+              className={`product-multi-preview__card${loadFailed ? ' product-multi-preview__card--broken' : ''}${photoDragOver === i ? ' product-multi-preview__card--over' : ''}${photoDragging === i ? ' product-multi-preview__card--dragging' : ''}`.trim()}
               role="listitem"
               draggable={!disabled}
               title="Перетащите, чтобы изменить порядок"
@@ -142,7 +158,23 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
               }}
             >
               <div className="product-multi-preview__frame">
-                <img src={src} alt="" className="product-create-preview__img" draggable={false} />
+                {loadFailed ? (
+                  <div className="product-multi-preview__broken" role="status">
+                    Файл недоступен (удалён на сервере или неверный путь). Удалите слот или загрузите фото снова.
+                  </div>
+                ) : (
+                  <img
+                    src={src}
+                    alt=""
+                    className="product-create-preview__img"
+                    draggable={false}
+                    onError={() => {
+                      if (remoteUrl !== null) {
+                        setFailedRemoteUrls((prev) => new Set(prev).add(remoteUrl))
+                      }
+                    }}
+                  />
+                )}
               </div>
               <div className="product-multi-preview__actions">
                 <button
@@ -172,11 +204,11 @@ export function ProductPhotoGalleryEditor({ slots, onSlotsChange, disabled = fal
                   className="product-multi-preview__action product-multi-preview__action--expand"
                   aria-label="Открыть на весь экран"
                   title="На весь экран"
-                  disabled={disabled}
+                  disabled={disabled || loadFailed}
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setPhotoLightboxSrc(src)
+                    if (!loadFailed) setPhotoLightboxSrc(src)
                   }}
                 >
                   <PhotoExpandIcon className="product-multi-preview__action-icon" />
