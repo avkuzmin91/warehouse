@@ -5601,6 +5601,25 @@ body {
   overflow: hidden;
   border-radius: inherit;
   background: rgba(25, 16, 56, 0.45);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-multi-preview__broken {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(255, 245, 250, 0.88);
+  text-align: center;
+}
+
+.product-multi-preview__card--broken .product-multi-preview__actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .product-multi-preview__card .product-create-preview__img {
