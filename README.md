@@ -145,6 +145,10 @@ cd frontend && npm install && npm run dev
 | `POSTGRES_PASSWORD_TEST` | **да** — CI пишет в **`.env.test`** как `POSTGRES_PASSWORD=…` для **`docker-compose.test.yml`** (сервис **`db`**) и синхронизирует **`DATABASE_URL`**. | — |
 | `POSTGRES_PASSWORD` | — | **да** (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
+| `DOCKERHUB_USERNAME` | опционально | опционально |
+| `DOCKERHUB_TOKEN` | опционально | опционально |
+
+**Docker Hub 429 на деплое:** сборка на VPS тянет `python:3.11-slim`, `node:20-alpine`, `postgres:16` с Docker Hub; для анонимных запросов действует [rate limit](https://docs.docker.com/docker-hub/download-rate-limit/). Задайте репозиторные секреты **`DOCKERHUB_USERNAME`** (логин Hub) и **`DOCKERHUB_TOKEN`** ([Access Token](https://hub.docker.com/settings/security), достаточно read) — workflow перед `docker compose up --build` выполнит на сервере **`docker login`**. Если секреты пустые, шаг логина пропускается (как раньше).
 
 Опционально: для **`production`** включите **Required reviewers** / wait timer в настройках Environment.
 
