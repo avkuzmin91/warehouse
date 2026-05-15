@@ -10,17 +10,19 @@ import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
   buildActualityFilterSelectOptions,
-  fetchAllDictionaryItemsForFilter,
-  fetchRecordActualityFilterItems,
   getClientPortalProductCatalog,
   getClientPortalProductTypes,
   getClientPortalRecordActualityFilterItems,
-  getProducts,
   resolvePublicUploadSrc,
   type DictionaryItem,
   type ProductItem,
   type RecordActualityFilterItem,
 } from '../api'
+import {
+  fetchAllDictionaryItemsForFilter,
+  fetchRecordActualityFilterItems,
+  getProducts,
+} from '../api/adminApi'
 
 const PRODUCT_FILTER_KEYS_ADMIN = ['sku', 'name', 'type_id', 'client_id', 'actuality_id'] as const
 const PRODUCT_FILTER_KEYS_CLIENT_CABINET = ['sku', 'name', 'type_id', 'actuality_id'] as const

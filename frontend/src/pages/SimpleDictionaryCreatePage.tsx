@@ -9,7 +9,7 @@ import {
   simpleDictionaryDefinition,
   type SimpleDictionaryEntityKey,
 } from '../config/simpleDictionaryConfig'
-import { createProductType, createSimpleDictionaryItem } from '../api'
+import { createProductType, createSimpleDictionaryItem } from '../api/adminApi'
 
 const IS_ACTIVE_LABEL = 'Актуален'
 

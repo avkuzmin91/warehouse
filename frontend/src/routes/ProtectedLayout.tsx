@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { ensureSessionBootstrapped, getToken, me } from '../api'
+import { ensureSessionBootstrapped, getToken, me } from '../api/sessionAuth'
 import { isSessionExpiredError } from '../auth/sessionError'
+import { ConfirmDialogProvider } from '../components/ConfirmDialogProvider'
 import { AppLayout } from '../components/AppLayout'
+import '../App.css'
 
 type BootState = 'pending' | 'guest' | 'checking' | 'ready'
 
@@ -46,5 +48,9 @@ export function ProtectedLayout() {
     return <Navigate to="/auth" replace />
   }
 
-  return <AppLayout />
+  return (
+    <ConfirmDialogProvider>
+      <AppLayout />
+    </ConfirmDialogProvider>
+  )
 }

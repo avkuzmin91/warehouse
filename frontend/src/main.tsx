@@ -1,9 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import './style.css'
+import './auth-critical.css'
 import App from './App'
-import { ConfirmDialogProvider } from './components/ConfirmDialogProvider'
 import { RootErrorBoundary } from './RootErrorBoundary'
 import { routerBasename } from './utils/routerBase'
 
@@ -28,9 +27,7 @@ if (!rootEl) {
     <StrictMode>
       <RootErrorBoundary>
         <BrowserRouter basename={routerBasename()}>
-          <ConfirmDialogProvider>
-            <App />
-          </ConfirmDialogProvider>
+          <App />
         </BrowserRouter>
       </RootErrorBoundary>
     </StrictMode>,

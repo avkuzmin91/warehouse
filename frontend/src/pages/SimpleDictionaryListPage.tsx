@@ -13,14 +13,16 @@ import {
 } from '../config/simpleDictionaryConfig'
 import {
   buildActualityFilterSelectOptions,
-  fetchProductTypesPage,
-  fetchRecordActualityFilterItems,
-  fetchSimpleDictionaryPage,
   type DictionaryItem,
   type ProductTypeDictionaryItem,
   type RecordActualityFilterItem,
   type SimpleDictionaryListParams,
 } from '../api'
+import {
+  fetchProductTypesPage,
+  fetchRecordActualityFilterItems,
+  fetchSimpleDictionaryPage,
+} from '../api/adminApi'
 
 const SIMPLE_DICT_FILTER_KEYS = ['name', 'actuality_id', 'date_from', 'date_to'] as const
 

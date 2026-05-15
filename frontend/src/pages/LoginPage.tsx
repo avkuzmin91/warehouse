@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { login, me, saveToken } from '../api'
+import { login, me, saveToken } from '../api/sessionAuth'
 import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
 export function LoginPage() {

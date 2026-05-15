@@ -9,11 +9,10 @@ import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
   buildActualityFilterSelectOptions,
-  fetchRecordActualityFilterItems,
-  getSizes,
   type RecordActualityFilterItem,
   type SizeItem,
 } from '../api'
+import { fetchRecordActualityFilterItems, getSizes } from '../api/adminApi'
 
 const SIZE_FILTER_KEYS = ['name', 'actuality_id'] as const
 

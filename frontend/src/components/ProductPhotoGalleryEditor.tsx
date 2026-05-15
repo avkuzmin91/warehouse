@@ -8,7 +8,8 @@ import {
   type SetStateAction,
 } from 'react'
 import { ImageFullscreenLightbox, PhotoExpandIcon } from './ImageFullscreenLightbox'
-import { resolvePublicUploadSrc, uploadProductDictionaryImage } from '../api'
+import { resolvePublicUploadSrc } from '../api'
+import { uploadProductDictionaryImage } from '../api/adminApi'
 
 export type ProductGallerySlot =
   | { kind: 'remote'; url: string }

@@ -16,10 +16,9 @@ import {
   type AnalyticsGroup,
   type DictionaryItem,
   type MovementReport,
-  getAnalyticsAdminDashboard,
-  getAnalyticsMovement,
   getInventoryClients,
 } from '../api'
+import { getAnalyticsAdminDashboard, getAnalyticsMovement } from '../api/adminApi'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)

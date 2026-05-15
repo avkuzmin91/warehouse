@@ -6,7 +6,7 @@ import { PageContainer } from '../components/PageContainer'
 import { ActionBar } from '../components/ActionBar'
 import { ClientFormFields } from '../components/ClientFormFields'
 import { CLIENT_FORM_CONFIG, mapClientFormApiError } from '../config/clientFormConfig'
-import { createDictionaryItem } from '../api'
+import { createDictionaryItem } from '../api/adminApi'
 
 export function ClientCreatePage() {
   const navigate = useNavigate()

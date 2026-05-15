@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { register } from '../api'
+import { register } from '../api/sessionAuth'
 
 const PASSWORD_MIN_LENGTH = 8
 

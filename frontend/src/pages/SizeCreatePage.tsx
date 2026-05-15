@@ -6,7 +6,7 @@ import { PageContainer } from '../components/PageContainer'
 import { ActionBar } from '../components/ActionBar'
 import { SizeFormFields } from '../components/SizeFormFields'
 import { SIZE_FORM_CONFIG } from '../config/sizeFormConfig'
-import { createSize } from '../api'
+import { createSize } from '../api/adminApi'
 
 export function SizeCreatePage() {
   const navigate = useNavigate()

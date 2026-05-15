@@ -1,47 +1,33 @@
-import { SessionExpiredError } from './auth/sessionError'
 import { scheduleHardRedirectToAuth } from './auth/redirectToAuth'
-import { broadcastAuthLogout } from './auth/tabSync'
+import { SessionExpiredError, isSessionExpiredError } from './auth/sessionError'
 
-function resolveApiBaseUrl(): string {
-  const fromEnv = import.meta.env.VITE_API_BASE_URL
-  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') {
-    return fromEnv.trim().replace(/\/$/, '')
-  }
-  return '/api'
-}
+export { SessionExpiredError, isSessionExpiredError }
 
-/** База URL API: только относительный `/api`; прокси (Vite/nginx) отправляет запрос на backend без этого префикса. */
-export const API_BASE_URL = resolveApiBaseUrl()
+export type { User } from './api/typesUser'
+export {
+  authLogout,
+  changePassword,
+  clearProfileCache,
+  clearToken,
+  ensureSessionBootstrapped,
+  fetchSystemVersion,
+  getToken,
+  login,
+  me,
+  refreshAccessToken,
+  register,
+  saveToken,
+} from './api/sessionAuth'
 
-const AUTH_FETCH_CREDENTIALS: RequestCredentials = 'include'
+export {
+  API_BASE_URL,
+  RECORD_ACTUALITY_YES_ID,
+  resolvePublicUploadSrc,
+} from './api/constants'
 
-const AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401 = new Set(['/auth/login', '/auth/register'])
-
-/** Пути с API (`/uploads/...`) в `<img>` на другом origin; полные URL не трогаем. */
-export function resolvePublicUploadSrc(url: string): string {
-  const s = String(url).trim()
-  if (!s) return s
-  if (/^https?:\/\//i.test(s)) return s
-  if (s.startsWith('/')) return `${API_BASE_URL}${s}`
-  return s
-}
-
-/** ID «Актуален» в системном справочнике актуальности (совпадает с backend `RECORD_ACTUALITY_YES_ID`). */
-export const RECORD_ACTUALITY_YES_ID = '00000000-0000-4000-8000-000000000001'
-
-export type User = {
-  id: string
-  email: string
-  role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager'
-  /** Справочник клиента (роль client); задаётся администратором. */
-  client_id?: string | null
-}
-
-type AuthResponse = {
-  access_token: string
-  token_type: string
-  expires_in: number
-}
+import { API_BASE_URL, AUTH_FETCH_CREDENTIALS } from './api/constants'
+import { formatApiErrorDetail, request, requestForm, throwIfUnauthorizedApi } from './api/http'
+import { clearToken, getToken } from './api/sessionAuth'
 
 export type UserListItem = {
   id: string
@@ -150,372 +136,8 @@ export type ProductListResponse = {
   limit: number
 }
 
-let accessTokenMemory: string | null = null
-
-let refreshAccessTokenPromise: Promise<string | null> | null = null
-
-export function getToken(): string | null {
-  return accessTokenMemory
-}
-
-function headerHasBearerAuthorization(headers: Record<string, string>): boolean {
-  const a = headers.Authorization
-  return typeof a === 'string' && a.startsWith('Bearer ')
-}
-
-function apiPathWithoutQuery(path: string): string {
-  const q = path.indexOf('?')
-  return q === -1 ? path : path.slice(0, q)
-}
-
-/**
- * Централизованная реакция на 401: только если запрос ушёл с Bearer (иначе это, например, неверный пароль на /auth/login).
- * Гонки: повторные 401 не делают второй редирект (`scheduleHardRedirectToAuth`).
- */
-function throwIfUnauthorizedApi(path: string, response: Response, headers: Record<string, string>): void {
-  if (response.status !== 401) return
-  if (!headerHasBearerAuthorization(headers)) return
-  const key = apiPathWithoutQuery(path)
-  if (AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401.has(key)) return
-  clearToken()
-  broadcastAuthLogout()
-  scheduleHardRedirectToAuth()
-  throw new SessionExpiredError()
-}
-
-const ME_CACHE_MS = 15_000
-let meCache: { user: User; token: string; expires: number } | null = null
-let meInFlight: Promise<User> | null = null
-
-export function clearProfileCache() {
-  meCache = null
-  meInFlight = null
-}
-
-export function saveToken(token: string): void {
-  accessTokenMemory = token
-  clearProfileCache()
-}
-
-export function clearToken(): void {
-  accessTokenMemory = null
-  clearProfileCache()
-}
-
-async function fetchAccessTokenViaRefreshOnce(): Promise<string | null> {
-  const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
-    method: 'POST',
-    credentials: AUTH_FETCH_CREDENTIALS,
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  })
-  if (res.status === 401) {
-    return null
-  }
-  if (!res.ok) {
-    throw new Error(`refresh ${res.status}`)
-  }
-  const data = (await res.json()) as AuthResponse
-  saveToken(data.access_token)
-  return data.access_token
-}
-
-export async function refreshAccessToken(): Promise<string | null> {
-  if (!refreshAccessTokenPromise) {
-    refreshAccessTokenPromise = (async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          return await fetchAccessTokenViaRefreshOnce()
-        } catch {
-          if (attempt === 2) {
-            return null
-          }
-          await new Promise<void>((resolve) => setTimeout(resolve, 300 * (attempt + 1)))
-        }
-      }
-      return null
-    })().finally(() => {
-      refreshAccessTokenPromise = null
-    })
-  }
-  return refreshAccessTokenPromise
-}
-
-export async function ensureSessionBootstrapped(): Promise<boolean> {
-  if (getToken()) {
-    return true
-  }
-  const t = await refreshAccessToken()
-  return t != null && getToken() != null
-}
-
-export async function authLogout(): Promise<void> {
-  const token = getToken()
-  try {
-    await fetch(`${API_BASE_URL}/auth/logout`, {
-      method: 'POST',
-      credentials: AUTH_FETCH_CREDENTIALS,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: '{}',
-    })
-  } catch {
-  } finally {
-    clearToken()
-    broadcastAuthLogout()
-  }
-}
-
-/** Разбирает JSON-тело ошибки FastAPI/Starlette (detail строка, массив validation errors и т.д.). */
-function formatApiErrorDetail(body: unknown, httpStatus: number): string {
-  const fallback =
-    httpStatus > 0
-      ? `Запрос не выполнен (код ${httpStatus}). Повторите попытку или обратитесь к администратору.`
-      : 'Не удалось выполнить запрос. Повторите попытку или обратитесь к администратору.'
-
-  if (body === null || body === undefined) {
-    return fallback
-  }
-  if (typeof body === 'string' && body.trim()) {
-    return body.trim()
-  }
-  if (typeof body !== 'object') {
-    return fallback
-  }
-
-  const o = body as Record<string, unknown>
-  const detail = o.detail
-
-  if (typeof detail === 'string' && detail.trim()) {
-    return detail.trim()
-  }
-
-  if (Array.isArray(detail)) {
-    const parts: string[] = []
-    for (const item of detail) {
-      if (typeof item === 'string' && item.trim()) {
-        parts.push(item.trim())
-        continue
-      }
-      if (item && typeof item === 'object') {
-        const rec = item as Record<string, unknown>
-        const msg =
-          typeof rec.msg === 'string'
-            ? rec.msg.trim()
-            : typeof rec.message === 'string'
-              ? rec.message.trim()
-              : ''
-        if (msg) {
-          const locRaw = rec.loc
-          const loc =
-            Array.isArray(locRaw) && locRaw.length
-              ? locRaw
-                  .filter((x) => x !== 'body')
-                  .map((x) => String(x))
-                  .join('.')
-              : ''
-          parts.push(loc ? `${loc}: ${msg}` : msg)
-        }
-      }
-    }
-    if (parts.length) {
-      return parts.join(' ')
-    }
-  }
-
-  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
-    const rec = detail as Record<string, unknown>
-    if (typeof rec.msg === 'string' && rec.msg.trim()) {
-      return rec.msg.trim()
-    }
-    if (typeof rec.message === 'string' && rec.message.trim()) {
-      return rec.message.trim()
-    }
-  }
-
-  if (typeof o.message === 'string' && o.message.trim()) {
-    return o.message.trim()
-  }
-
-  return fallback
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken()
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
-
-  if (init?.headers) {
-    Object.assign(headers, init.headers as Record<string, string>)
-  }
-
-  if (token) {
-    const pathKey = apiPathWithoutQuery(path)
-    const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
-    if (!publicAuth) {
-      headers.Authorization = `Bearer ${token}`
-    }
-  }
-
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
-      headers,
-    })
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(
-        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn main:app --host 127.0.0.1 --port 8000',
-      )
-    }
-    throw error
-  }
-
-  throwIfUnauthorizedApi(path, response, headers)
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(formatApiErrorDetail(body, response.status))
-  }
-
-  return response.json() as Promise<T>
-}
-
-/** Публичный GET /version: версия и окружение для футера (без Bearer). */
-export async function fetchSystemVersion(): Promise<{ version: string; environment: string }> {
-  const response = await fetch(`${API_BASE_URL}/version`, {
-    method: 'GET',
-    credentials: AUTH_FETCH_CREDENTIALS,
-  })
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(formatApiErrorDetail(body, response.status))
-  }
-  return response.json() as Promise<{ version: string; environment: string }>
-}
-
-async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken()
-  const headers: Record<string, string> = {}
-  if (init?.headers) {
-    Object.assign(headers, init.headers as Record<string, string>)
-  }
-  if (token) {
-    const pathKey = apiPathWithoutQuery(path)
-    const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
-    if (!publicAuth) {
-      headers.Authorization = `Bearer ${token}`
-    }
-  }
-
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
-      headers,
-    })
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(
-        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn main:app --host 127.0.0.1 --port 8000',
-      )
-    }
-    throw error
-  }
-  throwIfUnauthorizedApi(path, response, headers)
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(formatApiErrorDetail(body, response.status))
-  }
-  return response.json() as Promise<T>
-}
-
-export function register(email: string, password: string) {
-  return request<{ success: boolean }>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  })
-}
-
-export function login(email: string, password: string) {
-  return request<AuthResponse>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  })
-}
-
-export function changePassword(currentPassword: string, newPassword: string) {
-  return request<AuthResponse>('/auth/change-password', {
-    method: 'POST',
-    body: JSON.stringify({
-      current_password: currentPassword,
-      new_password: newPassword,
-    }),
-  })
-}
-
-export function me(): Promise<User> {
-  const token = getToken()
-  if (!token) {
-    return Promise.reject(new Error('Недействительный токен'))
-  }
-  if (meCache && meCache.token === token && Date.now() < meCache.expires) {
-    return Promise.resolve(meCache.user)
-  }
-  if (meInFlight) {
-    return meInFlight
-  }
-  meInFlight = request<User>('/auth/me')
-    .then((user) => {
-      const t = getToken()
-      if (t) {
-        meCache = { user, token: t, expires: Date.now() + ME_CACHE_MS }
-      }
-      return user
-    })
-    .catch((e) => {
-      clearProfileCache()
-      throw e
-    })
-    .finally(() => {
-      meInFlight = null
-    })
-  return meInFlight
-}
-
-export function getUsers() {
-  return request<UserListItem[]>('/users')
-}
-
 /** Роли, которые можно назначить через PATCH /users/:id/role (не admin). */
 export type AssignableUserRole = 'user' | 'manager' | 'client'
-
-export function updateUserRole(userId: string, role: AssignableUserRole) {
-  return request<{ message: string }>(`/users/${userId}/role`, {
-    method: 'PATCH',
-    body: JSON.stringify({ role }),
-  })
-}
-
-export function updateUserClient(userId: string, clientId: string | null) {
-  return request<{ message: string }>(`/users/${userId}/client`, {
-    method: 'PATCH',
-    body: JSON.stringify({ client_id: clientId }),
-  })
-}
-
-export function deleteUser(userId: string) {
-  return request<{ message: string }>(`/users/${userId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_deleted: true }),
-  })
-}
 
 export type DictionaryListResponse = {
   items: DictionaryItem[]
@@ -547,10 +169,6 @@ export type RecordActualityFilterItem = {
   name: string
 }
 
-export function fetchRecordActualityFilterItems() {
-  return request<RecordActualityFilterItem[]>('/system/record-actuality')
-}
-
 /** Опции `<select>` фильтра актуальности (как у справочных селектов). */
 export function buildActualityFilterSelectOptions(
   items: RecordActualityFilterItem[],
@@ -559,25 +177,6 @@ export function buildActualityFilterSelectOptions(
   return [{ value: '', label: placeholderLabel }, ...items.map((i) => ({ value: i.id, label: i.name }))]
 }
 
-/** Список клиентов с пагинацией (GET /clients) */
-export function getClients(params?: DictionaryListQueryParams) {
-  const sp = new URLSearchParams()
-  if (params?.page != null) sp.set('page', String(params.page))
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (params?.search != null && params.search.trim() !== '') sp.set('search', params.search.trim())
-  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
-    sp.set('actuality_id', params.actuality_id.trim())
-  }
-  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
-    sp.set('date_from', params.date_from.trim())
-  }
-  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
-    sp.set('date_to', params.date_to.trim())
-  }
-  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
-  const q = sp.toString()
-  return request<DictionaryListResponse>(q ? `/clients?${q}` : '/clients')
-}
 
 export type SizeListQueryParams = {
   page?: number
@@ -585,37 +184,6 @@ export type SizeListQueryParams = {
   name?: string
   actuality_id?: string
   sort?: string
-}
-
-export function getSizes(params?: SizeListQueryParams) {
-  const sp = new URLSearchParams()
-  if (params?.page != null) sp.set('page', String(params.page))
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
-  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
-    sp.set('actuality_id', params.actuality_id.trim())
-  }
-  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
-  const q = sp.toString()
-  return request<SizeListResponse>(q ? `/sizes?${q}` : '/sizes')
-}
-
-export function getSize(id: string) {
-  return request<SizeItem>(`/sizes/${id}`)
-}
-
-export function createSize(payload: { name: string; is_active: boolean }) {
-  return request<{ message: string }>('/sizes', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function updateSize(id: string, payload: { name?: string; is_active?: boolean }) {
-  return request<{ message: string }>(`/sizes/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
 }
 
 /** Параметры списка простых справочников (GET с пагинацией): цвета, типы товаров, поставщики */
@@ -630,172 +198,6 @@ export type SimpleDictionaryListParams = {
   date_to?: string
 }
 
-export function fetchSimpleDictionaryPage(
-  apiPath: string,
-  nameQueryKey: 'name' | 'search',
-  params?: SimpleDictionaryListParams,
-) {
-  const sp = new URLSearchParams()
-  if (params?.page != null) sp.set('page', String(params.page))
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (nameQueryKey === 'name' && params?.name != null && params.name.trim() !== '') {
-    sp.set('name', params.name.trim())
-  }
-  if (nameQueryKey === 'search' && params?.search != null && params.search.trim() !== '') {
-    sp.set('search', params.search.trim())
-  }
-  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
-    sp.set('actuality_id', params.actuality_id.trim())
-  }
-  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
-    sp.set('date_from', params.date_from.trim())
-  }
-  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
-    sp.set('date_to', params.date_to.trim())
-  }
-  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
-  const q = sp.toString()
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  return request<DictionaryListResponse>(q ? `${path}?${q}` : path)
-}
-
-export function getSimpleDictionaryById(apiPath: string, id: string) {
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  return request<DictionaryItem>(`${path}/${id}`)
-}
-
-export function createSimpleDictionaryItem(
-  apiPath: string,
-  payload: { name: string; is_active: boolean },
-) {
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  return request<{ message: string }>(path, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function updateSimpleDictionaryItem(
-  apiPath: string,
-  id: string,
-  payload: { name?: string; is_active?: boolean },
-) {
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  return request<{ message: string }>(`${path}/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-/** Пагинация списка типов товаров (с полями учёта по цвету и размеру). */
-export function fetchProductTypesPage(params?: SimpleDictionaryListParams) {
-  const sp = new URLSearchParams()
-  if (params?.page != null) sp.set('page', String(params.page))
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (params?.name != null && params.name.trim() !== '') {
-    sp.set('name', params.name.trim())
-  }
-  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
-    sp.set('actuality_id', params.actuality_id.trim())
-  }
-  if (params?.date_from != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_from.trim())) {
-    sp.set('date_from', params.date_from.trim())
-  }
-  if (params?.date_to != null && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to.trim())) {
-    sp.set('date_to', params.date_to.trim())
-  }
-  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
-  const q = sp.toString()
-  return request<ProductTypeListResponse>(q ? `/product-types?${q}` : '/product-types')
-}
-
-export function getProductTypeById(id: string) {
-  return request<ProductTypeDictionaryItem>(`/product-types/${id}`)
-}
-
-export function createProductType(payload: {
-  name: string
-  is_active: boolean
-  requires_color: boolean
-  requires_size: boolean
-}) {
-  return request<{ message: string }>('/product-types', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function updateProductType(
-  id: string,
-  payload: {
-    name?: string
-    is_active?: boolean
-    requires_color?: boolean
-    requires_size?: boolean
-  },
-) {
-  return request<{ message: string }>(`/product-types/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function getDictionaryItem(kind: 'clients', id: string) {
-  return request<DictionaryItem>(`/${kind}/${id}`)
-}
-
-export function createDictionaryItem(kind: 'clients', payload: { name: string; is_active: boolean }) {
-  return request<{ message: string }>(`/${kind}`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function updateDictionaryItem(
-  kind: 'clients',
-  id: string,
-  payload: { name?: string; is_active?: boolean },
-) {
-  return request<{ message: string }>(`/${kind}/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function fetchActiveDictionaryItems(apiPath: string): Promise<DictionaryItem[]> {
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  const nameQueryKey: 'name' | 'search' = path === '/clients' ? 'search' : 'name'
-  const res = await fetchSimpleDictionaryPage(path, nameQueryKey, {
-    page: 1,
-    limit: 100,
-    actuality_id: RECORD_ACTUALITY_YES_ID,
-    sort: 'name_asc',
-  })
-  return res.items
-}
-
-/** Все записи справочника для фильтров списков (активные и неактивные), с постраничной подгрузкой. */
-export async function fetchAllDictionaryItemsForFilter(
-  apiPath: string,
-  nameQueryKey: 'name' | 'search' = 'name',
-): Promise<DictionaryItem[]> {
-  const limit = 100
-  let page = 1
-  const all: DictionaryItem[] = []
-  const maxPages = 50
-  while (page <= maxPages) {
-    const res = await fetchSimpleDictionaryPage(apiPath, nameQueryKey, {
-      page,
-      limit,
-      sort: 'name_asc',
-    })
-    all.push(...res.items)
-    if (res.items.length < limit || all.length >= res.total) break
-    page += 1
-  }
-  return all
-}
-
 export type ProductListQueryParams = {
   page?: number
   limit?: number
@@ -806,80 +208,6 @@ export type ProductListQueryParams = {
   client_id?: string
   actuality_id?: string
   sort?: string
-}
-
-export function getProducts(params?: ProductListQueryParams) {
-  const sp = new URLSearchParams()
-  if (params?.page != null) sp.set('page', String(params.page))
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
-  if (params?.sku != null && params.sku.trim() !== '') sp.set('sku', params.sku.trim())
-  if (params?.type_id != null && params.type_id.trim() !== '') {
-    sp.set('type_id', params.type_id.trim())
-  }
-  if (params?.client_id != null && params.client_id.trim() !== '') {
-    sp.set('client_id', params.client_id.trim())
-  }
-  if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
-    sp.set('actuality_id', params.actuality_id.trim())
-  }
-  if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
-  const q = sp.toString()
-  return request<ProductListResponse>(q ? `/products?${q}` : '/products')
-}
-
-export function getProduct(id: string) {
-  return request<ProductItem>(`/products/${id}`)
-}
-
-export function createProduct(payload: {
-  meta: {
-    product: {
-      name: string
-      type_id: string
-      sku_base: string
-      client_id: string
-      is_active: boolean
-    }
-    colors: string[]
-    dimensions: { length: number; width: number; height: number; sizes: string[] }[]
-  }
-  images: File[]
-}) {
-  const form = new FormData()
-  form.append('meta', JSON.stringify(payload.meta))
-  for (const file of payload.images) {
-    form.append('images', file)
-  }
-  return requestForm<{ message: string }>('/products', {
-    method: 'POST',
-    body: form,
-  })
-}
-
-export function updateProduct(
-  id: string,
-  payload: {
-    name?: string
-    /** На бэкенде смена типа запрещена; поле игнорируйте. */
-    type_id?: string
-    client_id?: string | null
-    is_active?: boolean
-    is_deleted?: boolean
-    /** Базовый штрих-код (товар + при необходимости префикс у вариантов). */
-    sku_base?: string
-    /** Галерея карточки; пустой массив — без фото. */
-    image_urls?: string[]
-  },
-) {
-  return request<{ message: string }>(`/products/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function getProductVariants(productId: string) {
-  return request<ProductVariantItem[]>(`/products/${productId}/variants`)
 }
 
 /** Список товаров ЛК клиента: сервер принудительно фильтрует по client_id пользователя. */
@@ -908,36 +236,6 @@ export function getClientPortalProduct(id: string) {
 
 export function getClientPortalProductVariants(productId: string) {
   return request<ProductVariantItem[]>(`/client-portal/products/${productId}/variants`)
-}
-
-export function patchProductVariants(productId: string, variants: ProductVariantWriteItem[]) {
-  return request<{ message: string }>(`/products/${productId}/variants`, {
-    method: 'PATCH',
-    body: JSON.stringify({ variants }),
-  })
-}
-
-export function deleteProductVariant(productId: string, variantId: string) {
-  return request<{ message: string }>(`/products/${productId}/variants/${variantId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_deleted: true }),
-  })
-}
-
-export function uploadProductDictionaryImage(file: File) {
-  const form = new FormData()
-  form.append('image', file)
-  return requestForm<{ url: string }>('/products/upload-image', {
-    method: 'POST',
-    body: form,
-  })
-}
-
-export function deleteProduct(id: string) {
-  return request<{ message: string }>(`/products/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_deleted: true }),
-  })
 }
 
 // =====================================================================
@@ -1189,20 +487,6 @@ export function patchReceipt(
   return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
-  })
-}
-
-/** Удаление поступления (только роль admin). */
-export function deleteReceipt(receiptId: string) {
-  return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
-    method: 'DELETE',
-  })
-}
-
-/** Удаление отгрузки (только роль admin). */
-export function deleteShipment(shipmentId: string) {
-  return request<{ message: string }>(`/shipments/${encodeURIComponent(shipmentId.trim())}`, {
-    method: 'DELETE',
   })
 }
 
@@ -1706,134 +990,6 @@ export type AnalyticsCommonParams = {
   type_id?: string
 }
 
-function appendCommon(sp: URLSearchParams, p: AnalyticsCommonParams | undefined) {
-  if (!p) return
-  if (p.date_from && /^\d{4}-\d{2}-\d{2}$/.test(p.date_from)) sp.set('date_from', p.date_from)
-  if (p.date_to && /^\d{4}-\d{2}-\d{2}$/.test(p.date_to)) sp.set('date_to', p.date_to)
-  if (p.client_ids?.length) {
-    for (const id of p.client_ids) {
-      const t = id.trim()
-      if (t) sp.append('client_ids', t)
-    }
-  } else if (p.client_id?.trim()) {
-    sp.append('client_ids', p.client_id.trim())
-  }
-  if (p.product_id) sp.set('product_id', p.product_id)
-  if (p.type_id) sp.set('type_id', p.type_id)
-}
-
-export function getAnalyticsMovement(
-  params?: AnalyticsCommonParams & { group?: AnalyticsGroup },
-) {
-  const sp = new URLSearchParams()
-  if (params?.group) sp.set('group', params.group)
-  appendCommon(sp, params)
-  const q = sp.toString()
-  return request<MovementReport>(q ? `/analytics/movement?${q}` : '/analytics/movement')
-}
-
-export function getAnalyticsStockSnapshot(
-  params?: Omit<AnalyticsCommonParams, 'date_from' | 'date_to'> & {
-    at_date?: string
-    only_positive?: boolean
-    limit?: number
-  },
-) {
-  const sp = new URLSearchParams()
-  if (params?.at_date && /^\d{4}-\d{2}-\d{2}$/.test(params.at_date)) {
-    sp.set('at_date', params.at_date)
-  }
-  appendCommon(sp, {
-    client_ids: params?.client_ids,
-    client_id: params?.client_id,
-    product_id: params?.product_id,
-    type_id: params?.type_id,
-  })
-  if (params?.only_positive === false) sp.set('only_positive', 'false')
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  const q = sp.toString()
-  return request<StockSnapshotReport>(
-    q ? `/analytics/stock-snapshot?${q}` : '/analytics/stock-snapshot',
-  )
-}
-
-export function getAnalyticsTopProducts(
-  params?: AnalyticsCommonParams & { limit?: number },
-) {
-  const sp = new URLSearchParams()
-  appendCommon(sp, params)
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  const q = sp.toString()
-  return request<TopProductsReport>(
-    q ? `/analytics/top-products?${q}` : '/analytics/top-products',
-  )
-}
-
-export function getAnalyticsDeadStock(params?: {
-  days?: number
-  client_ids?: string[]
-  client_id?: string
-  type_id?: string
-  limit?: number
-}) {
-  const sp = new URLSearchParams()
-  if (params?.days != null) sp.set('days', String(params.days))
-  if (params?.client_ids?.length) {
-    for (const id of params.client_ids) {
-      const t = id.trim()
-      if (t) sp.append('client_ids', t)
-    }
-  } else if (params?.client_id) sp.append('client_ids', params.client_id.trim())
-  if (params?.type_id) sp.set('type_id', params.type_id)
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  const q = sp.toString()
-  return request<DeadStockReport>(q ? `/analytics/dead-stock?${q}` : '/analytics/dead-stock')
-}
-
-export function getAnalyticsClientActivity(
-  params?: AnalyticsCommonParams & { limit?: number },
-) {
-  const sp = new URLSearchParams()
-  appendCommon(sp, params)
-  if (params?.limit != null) sp.set('limit', String(params.limit))
-  const q = sp.toString()
-  return request<ClientActivityReport>(
-    q ? `/analytics/client-activity?${q}` : '/analytics/client-activity',
-  )
-}
-
-export function getAnalyticsBalance(params?: AnalyticsCommonParams) {
-  const sp = new URLSearchParams()
-  appendCommon(sp, params)
-  const q = sp.toString()
-  return request<BalanceReport>(q ? `/analytics/balance?${q}` : '/analytics/balance')
-}
-
-export function getAnalyticsByType(
-  params?: Omit<AnalyticsCommonParams, 'product_id' | 'type_id'>,
-) {
-  const sp = new URLSearchParams()
-  appendCommon(sp, params)
-  const q = sp.toString()
-  return request<ByTypeReport>(q ? `/analytics/by-type?${q}` : '/analytics/by-type')
-}
-
-export function getAnalyticsAdminDashboard(
-  params?: AnalyticsCommonParams & {
-    movement_clients_limit?: number
-  },
-) {
-  const sp = new URLSearchParams()
-  appendCommon(sp, params)
-  if (params?.movement_clients_limit != null) {
-    sp.set('movement_clients_limit', String(params.movement_clients_limit))
-  }
-  const q = sp.toString()
-  return request<AdminDashboardReport>(
-    q ? `/analytics/admin-dashboard?${q}` : '/analytics/admin-dashboard',
-  )
-}
-
 export function createInventoryOperation(payload: {
   op_type: InventoryOpType
   client_id: string
@@ -2032,5 +1188,3 @@ export async function downloadMovementsImportTemplate(opType: InventoryOpType) {
   a.click()
   URL.revokeObjectURL(url)
 }
-
-export { SessionExpiredError, isSessionExpiredError } from './auth/sessionError'

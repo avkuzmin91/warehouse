@@ -11,13 +11,15 @@ import {
   type SimpleDictionaryEntityKey,
 } from '../config/simpleDictionaryConfig'
 import {
+  type DictionaryItem,
+  type ProductTypeDictionaryItem,
+} from '../api'
+import {
   getProductTypeById,
   getSimpleDictionaryById,
   updateProductType,
   updateSimpleDictionaryItem,
-  type DictionaryItem,
-  type ProductTypeDictionaryItem,
-} from '../api'
+} from '../api/adminApi'
 
 const IS_ACTIVE_LABEL = 'Актуален'
 

@@ -3,7 +3,6 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   createShipment,
-  deleteShipment,
   findProductVariantForReceipt,
   getInventoryColorsForProductSku,
   getInventoryProductSkus,
@@ -17,6 +16,7 @@ import {
   type ProductVariantFindResponse,
   type User,
 } from '../api'
+import { deleteShipment } from '../api/adminApi'
 import { ConfirmDialog } from './ModalDialog'
 import { DictionaryFormCombobox, mergeDictionaryItemsWithCurrent } from './DictionaryFormCombobox'
 import { FormDateField } from './FormDateField'
