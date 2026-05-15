@@ -1,6 +1,6 @@
 /**
- * Минимальные стили для /auth, /auth/register и Suspense-fallback до загрузки app.css.
- * Полная тема приложения — в app.css (подключается из ProtectedLayout).
+ * Минимальные стили для /auth, /auth/register и Suspense-fallback до загрузки App.css.
+ * Полная тема приложения — в App.css (подключается из ProtectedLayout).
  */
 :root {
   --app-safe-top: env(safe-area-inset-top, 0px);

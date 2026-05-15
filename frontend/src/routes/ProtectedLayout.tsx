@@ -4,7 +4,7 @@ import { ensureSessionBootstrapped, getToken, me } from '../api/sessionAuth'
 import { isSessionExpiredError } from '../auth/sessionError'
 import { ConfirmDialogProvider } from '../components/ConfirmDialogProvider'
 import { AppLayout } from '../components/AppLayout'
-import '../app.css'
+import '../App.css'
 
 type BootState = 'pending' | 'guest' | 'checking' | 'ready'
 
