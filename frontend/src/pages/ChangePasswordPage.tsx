@@ -42,7 +42,7 @@ export function ChangePasswordPage() {
     try {
       setIsLoading(true)
       const response = await changePassword(currentPassword, newPassword)
-      saveToken(response.token)
+      saveToken(response.access_token)
       setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')

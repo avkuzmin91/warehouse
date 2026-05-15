@@ -23,7 +23,7 @@ export function LoginPage() {
     try {
       setIsLoading(true)
       const response = await login(email, password)
-      saveToken(response.token)
+      saveToken(response.access_token)
       const user = await me()
       navigate(postAuthLandingPath(user))
     } catch (requestError) {

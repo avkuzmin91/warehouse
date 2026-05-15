@@ -1,38 +1,38 @@
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { getToken, me } from '../api'
+import { ensureSessionBootstrapped, getToken, me } from '../api'
 import { isSessionExpiredError } from '../auth/sessionError'
 import { AppLayout } from '../components/AppLayout'
 
-/**
- * Защищённые маршруты: наличие токена + проверка `/auth/me` до рендера приложения.
- * При 401 централизованно — редирект на `/auth` из `api.ts`, без «тихого» доступа к layout.
- */
+type BootState = 'pending' | 'guest' | 'checking' | 'ready'
+
 export function ProtectedLayout() {
-  const token = getToken()
-  const [sessionChecked, setSessionChecked] = useState(false)
+  const [boot, setBoot] = useState<BootState>('pending')
 
   useEffect(() => {
-    if (!token) return
     let cancelled = false
-    me()
-      .then(() => {
-        if (!cancelled) setSessionChecked(true)
-      })
-      .catch((e) => {
+    ;(async () => {
+      const ok = await ensureSessionBootstrapped()
+      if (cancelled) return
+      if (!ok) {
+        setBoot('guest')
+        return
+      }
+      setBoot('checking')
+      try {
+        await me()
+        if (!cancelled) setBoot('ready')
+      } catch (e) {
         if (isSessionExpiredError(e)) return
-        if (!cancelled) setSessionChecked(true)
-      })
+        if (!cancelled) setBoot('ready')
+      }
+    })()
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [])
 
-  if (!token) {
-    return <Navigate to="/auth" replace />
-  }
-
-  if (!sessionChecked) {
+  if (boot === 'pending' || boot === 'checking') {
     return (
       <div className="auth-shell">
         <div className="page" style={{ padding: 24 }}>
@@ -40,6 +40,10 @@ export function ProtectedLayout() {
         </div>
       </div>
     )
+  }
+
+  if (boot === 'guest' || !getToken()) {
+    return <Navigate to="/auth" replace />
   }
 
   return <AppLayout />

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { clearToken, me } from '../api'
+import { authLogout, me } from '../api'
 import type { User } from '../api'
 import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
@@ -79,9 +79,9 @@ export function Header() {
     }
   }, [menuOpen])
 
-  function handleLogout() {
+  async function handleLogout() {
     setMenuOpen(false)
-    clearToken()
+    await authLogout()
     navigate('/auth', { replace: true })
   }
 
