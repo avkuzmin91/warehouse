@@ -1,11 +1,20 @@
 """Очистка тестовых данных: товары, варианты, приёмка/отгрузка/остатки (через inventory_operations)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dbconn import get_connection
 
-UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
+
+def _resolve_uploads_dir() -> Path:
+    raw = (os.environ.get("WAREHOUSE_UPLOADS_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parent / "uploads"
+
+
+UPLOADS_DIR = _resolve_uploads_dir()
 
 
 def main() -> None:

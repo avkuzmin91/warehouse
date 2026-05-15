@@ -20,6 +20,8 @@ venv/
 
 # Загруженные пользователями файлы
 backend/uploads/
+# Docker dev: том из корня репозитория (docker-compose.dev.yml)
+/uploads/
 
 # Временные файлы разработки
 tmp/
