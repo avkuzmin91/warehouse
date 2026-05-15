@@ -51,7 +51,17 @@ AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
 AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
 AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))
 AUTH_JTI_DENYLIST_MAX = int(os.environ.get("AUTH_JTI_DENYLIST_MAX", "5000"))
-UPLOADS_DIR = Path(__file__).parent / "uploads"
+
+
+def _resolve_uploads_dir() -> Path:
+    """Каталог файлов товаров и import staging: по умолчанию `backend/uploads`; в Docker prod/test — том (compose)."""
+    raw = (os.environ.get("WAREHOUSE_UPLOADS_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path(__file__).resolve().parent / "uploads")
+
+
+UPLOADS_DIR = _resolve_uploads_dir()
 DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
 
 _auth_log = logging.getLogger("warehouse.auth")

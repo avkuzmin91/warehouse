@@ -27,6 +27,9 @@ services:
       - .env.dev
     volumes:
       - ./backend:/app
+      # Фото товаров и import staging вне bind-mount кода: корень репозитория ./uploads → /app/uploads.
+      # Переопределение пути на хосте: WAREHOUSE_UPLOADS_HOST_PATH_DEV.
+      - ${WAREHOUSE_UPLOADS_HOST_PATH_DEV:-./uploads}:/app/uploads
     depends_on:
       - db
     ports:

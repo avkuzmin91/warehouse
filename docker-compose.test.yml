@@ -35,6 +35,10 @@ services:
       APP_VERSION: ${APP_VERSION:-}
     env_file:
       - .env.test
+    # Фото товаров и import staging — на хосте (как prod, отдельный каталог).
+    # Путь на хосте: по умолчанию /var/www/app-test/uploads; переопределение: WAREHOUSE_UPLOADS_HOST_PATH_TEST.
+    volumes:
+      - ${WAREHOUSE_UPLOADS_HOST_PATH_TEST:-/var/www/app-test/uploads}:/app/uploads
     depends_on:
       db:
         condition: service_healthy
