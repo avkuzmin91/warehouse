@@ -120,11 +120,14 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
-          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }},DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }},DOCKERHUB_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}
           script: |
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
+            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+              printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io
+            fi
             printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
               "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
@@ -142,11 +145,14 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
-          envs: APP_VERSION=${{ steps.rev.outputs.sha }}
+          envs: APP_VERSION=${{ steps.rev.outputs.sha }},DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }},DOCKERHUB_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}
           script: |
             set -euo pipefail
             cd "${{ inputs.remote_path }}"
             umask 077
+            if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+              printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin docker.io
+            fi
             printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
               "${{ secrets.POSTGRES_PASSWORD }}" \
               "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
