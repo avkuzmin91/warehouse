@@ -123,6 +123,8 @@ cd frontend && npm install && npm run dev
 
 Один входной workflow **`deploy.yml`** вызывает reusable **`deploy-environment.yml`**. Логика test и prod **одинаковая**: checkout → **rsync** репозитория на сервер → запись env-файла из секретов → для **test** нормализация **`DATABASE_URL`** скриптом **`scripts/ci-normalize-database-url-test.py`** → **`docker compose --env-file … -f … up -d --build`** → **health gate** (до 30 с, `127.0.0.1` и порт backend по контракту README: test **11000**, prod **10000**).
 
+**Rsync и `uploads/`:** каталоги **`uploads/`** (корень деплоя, dev) и **`backend/uploads/`** не удаляются и не затираются из CI (`--filter=protect` + `--exclude` в **`deploy-environment.yml`**). Иначе при **`--delete`** rsync пытается убрать на сервере файлы, созданные backend-контейнером под **root**, и падает с **Permission denied**. Если на сервере уже есть «левый» старый **`uploads/`** с чужим владельцем — один раз от root: **`chown -R "$SSH_USER:$SSH_USER" …/uploads`** (и при необходимости то же для **`backend/uploads`**) или перенесите данные в том compose (**`/var/www/app-*-uploads`**).
+
 | Триггер | GitHub Environment | Checkout ref по умолчанию |
 |---------|--------------------|---------------------------|
 | `push` в **`develop`** | **`test`** | SHA текущего коммита |

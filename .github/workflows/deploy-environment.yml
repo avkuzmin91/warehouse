@@ -105,7 +105,9 @@ jobs:
       - name: Rsync repository to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -avzr --delete --exclude=".git" --exclude="node_modules"
+          # --delete: не трогать runtime-загрузки на VPS (часто root из Docker → Permission denied).
+          # protect — не удалять на приёмнике; exclude — не слать из раннера (gitignore может быть пусто).
+          switches: "-avzr --delete --filter='protect uploads/' --filter='protect backend/uploads/' --exclude=.git --exclude=node_modules --exclude=uploads/ --exclude=backend/uploads/"
           path: ./
           remote_path: ${{ inputs.remote_path }}
           remote_host: ${{ secrets.SSH_HOST }}
