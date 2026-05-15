@@ -7,13 +7,15 @@ import {
   useState,
 } from 'react'
 import {
+  type DictionaryItem,
+  type ProductVariantWriteItem,
+} from '../api'
+import {
   deleteProductVariant,
   fetchActiveDictionaryItems,
   getProductVariants,
   patchProductVariants,
-  type DictionaryItem,
-  type ProductVariantWriteItem,
-} from '../api'
+} from '../api/adminApi'
 import {
   DictionaryFormCombobox,
   mergeDictionaryItemsWithCurrent,

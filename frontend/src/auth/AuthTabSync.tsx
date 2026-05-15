@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { clearToken } from '../api'
+import { clearToken } from '../api/sessionAuth'
 import { authEntryHref } from '../utils/routerBase'
 import { scheduleHardRedirectToAuth } from './redirectToAuth'
 import { WMS_AUTH_BROADCAST } from './tabSync'

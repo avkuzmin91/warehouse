@@ -10,12 +10,10 @@ import {
   type ProductVariantsEditorHandle,
 } from '../components/ProductVariantsEditor'
 import {
-  fetchActiveDictionaryItems,
-  getProduct,
-  updateProduct,
   type DictionaryItem,
   type ProductItem,
 } from '../api'
+import { fetchActiveDictionaryItems, getProduct, updateProduct } from '../api/adminApi'
 import {
   DictionaryFormCombobox,
   mergeDictionaryItemsWithCurrent,

@@ -7,7 +7,7 @@ import { ActionBar } from '../components/ActionBar'
 import { ClientFormFields } from '../components/ClientFormFields'
 import { SystemInfoBlock, systemInfoFromApi, type SystemInfo } from '../components/SystemInfoBlock'
 import { CLIENT_FORM_CONFIG, mapClientFormApiError } from '../config/clientFormConfig'
-import { getDictionaryItem, updateDictionaryItem } from '../api'
+import { getDictionaryItem, updateDictionaryItem } from '../api/adminApi'
 import type { DictionaryItem } from '../api'
 
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'

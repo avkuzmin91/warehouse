@@ -9,12 +9,11 @@ import { DictionaryFormCombobox } from '../components/DictionaryFormCombobox'
 import { DictionaryMultiSelect } from '../components/DictionaryMultiSelect'
 import { ProductDimNumberInput } from '../components/ProductDimNumberInput'
 import {
-  createProduct,
-  fetchActiveDictionaryItems,
   getInventoryProductTypes,
   type DictionaryItem,
   type InventoryProductTypeLookup,
 } from '../api'
+import { createProduct, fetchActiveDictionaryItems } from '../api/adminApi'
 
 const REQUIRED_MSG = 'Заполните обязательные поля'
 

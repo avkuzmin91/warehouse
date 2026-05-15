@@ -13,11 +13,13 @@ import { useQueryState } from '../hooks/useQueryState'
 import type { ListSortState } from '../utils/queryState'
 import {
   deleteUser,
-  getInventoryClients,
   getUsers,
-  me,
   updateUserClient,
   updateUserRole,
+} from '../api/adminApi'
+import {
+  getInventoryClients,
+  me,
   type AssignableUserRole,
   type DictionaryItem,
   type User,

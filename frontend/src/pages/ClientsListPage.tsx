@@ -9,11 +9,10 @@ import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
   buildActualityFilterSelectOptions,
-  fetchRecordActualityFilterItems,
-  getClients,
   type DictionaryItem,
   type RecordActualityFilterItem,
 } from '../api'
+import { fetchRecordActualityFilterItems, getClients } from '../api/adminApi'
 
 const CLIENT_FILTER_KEYS = ['search', 'actuality_id', 'date_from', 'date_to'] as const
 

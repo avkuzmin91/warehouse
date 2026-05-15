@@ -45,6 +45,8 @@ services:
       - "5173:5173"
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      # Опционально: vite.config и так берёт http://backend:8000 при /.dockerenv
+      VITE_DEV_PROXY_TARGET: http://backend:8000
     depends_on:
       - backend
 

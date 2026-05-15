@@ -28,6 +28,14 @@ from pydantic import BaseModel, EmailStr, Field
 
 import movements_excel_import as _mei
 from fastapi.responses import JSONResponse, Response
+from rate_limit.client_ip import client_ip_from_request
+from rate_limit.login_rate_limit import check_login_rate_limits, close_login_redis
+from security import (
+    ensure_admin_account,
+    ensure_client_portal_account,
+    ensure_manager_staff,
+    user_client_id_opt,
+)
 
 
 JWT_SECRET = "replace-this-secret-in-production"
@@ -39,8 +47,6 @@ AUTH_REFRESH_COOKIE_PATH = "/api"
 AUTH_REFRESH_TTL_DAYS = 30
 _AUTH_REFRESH_COOKIE_SAMESITE = "lax"
 
-AUTH_RL_LOGIN_MAX = int(os.environ.get("AUTH_RATE_LIMIT_LOGIN_MAX", "20"))
-AUTH_RL_LOGIN_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_LOGIN_WINDOW_SEC", "60"))
 AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
 AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
 AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))
@@ -1615,6 +1621,11 @@ def on_startup():
     seed_admin()
 
 
+@app.on_event("shutdown")
+async def on_shutdown_close_login_redis():
+    await close_login_redis()
+
+
 def create_token(user_id: str, email: str, role: str) -> str:
     payload = {
         "userId": user_id,
@@ -1672,19 +1683,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 
 _rl_lock = threading.Lock()
-_rl_login_hits: dict[str, list[float]] = {}
 _rl_refresh_hits: dict[str, list[float]] = {}
-
-
-def _client_ip(request: Request) -> str:
-    h = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-    if h:
-        part = h.split(",")[0].strip()
-        if part:
-            return part
-    if request.client and request.client.host:
-        return str(request.client.host)
-    return "unknown"
 
 
 def _rate_limit_consume(
@@ -1713,22 +1712,17 @@ async def _auth_login_refresh_rate_limit_middleware(request: Request, call_next)
     if request.method == "POST":
         p = request.url.path
         if p == "/auth/login":
-            if not _rate_limit_consume(
-                _rl_login_hits,
-                _client_ip(request),
-                max_requests=AUTH_RL_LOGIN_MAX,
-                window_sec=AUTH_RL_LOGIN_WINDOW_SEC,
-            ):
-                _auth_log.warning("auth rate limit login ip=%s", _client_ip(request))
-                return JSONResponse({"detail": "Too many requests"}, status_code=429)
+            rl_resp = await check_login_rate_limits(request)
+            if rl_resp is not None:
+                return rl_resp
         elif p == "/auth/refresh":
             if not _rate_limit_consume(
                 _rl_refresh_hits,
-                _client_ip(request),
+                client_ip_from_request(request),
                 max_requests=AUTH_RL_REFRESH_MAX,
                 window_sec=AUTH_RL_REFRESH_WINDOW_SEC,
             ):
-                _auth_log.warning("auth rate limit refresh ip=%s", _client_ip(request))
+                _auth_log.warning("auth rate limit refresh ip=%s", client_ip_from_request(request))
                 return JSONResponse({"detail": "Too many requests"}, status_code=429)
     return await call_next(request)
 
@@ -1793,18 +1787,6 @@ def get_user_by_email(email: str):
         ).fetchone()
 
 
-def _user_client_id_opt(user) -> str | None:
-    """Значение users.client_id из результата SELECT (доступ по ключу, без .get)."""
-    try:
-        raw = user["client_id"]
-    except (KeyError, IndexError):
-        return None
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    return s or None
-
-
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
@@ -1857,36 +1839,18 @@ def get_current_user(
 
 
 def get_current_admin(user=Depends(get_current_user)):
-    if user["role"] != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав",
-        )
+    ensure_admin_account(user)
     return user
 
 
 def get_current_manager(user=Depends(get_current_user)):
-    if user["role"] not in ("manager", "admin", "warehouse_manager"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав",
-        )
+    ensure_manager_staff(user)
     return user
 
 
 def get_current_client_portal(user=Depends(get_current_user)):
     """Роль client и назначенный client_id; иначе 403 (в т.ч. сообщение об активации)."""
-    if user["role"] != "client":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав",
-        )
-    cid = _user_client_id_opt(user) or ""
-    if not cid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Обратитесь к администратору для активации доступа",
-        )
+    ensure_client_portal_account(user)
     return user
 
 
@@ -3414,7 +3378,7 @@ def me(user=Depends(get_current_user)):
         id=user["id"],
         email=user["email"],
         role=user["role"],
-        client_id=_user_client_id_opt(user),
+        client_id=user_client_id_opt(user),
     )
 
 
@@ -7526,7 +7490,7 @@ class ClientPortalDashboardMetrics(BaseModel):
 
 
 def _portal_bound_client_id(user) -> str:
-    return _user_client_id_opt(user) or ""
+    return user_client_id_opt(user) or ""
 
 
 def _client_portal_total_positive_stock(connection: Any, client_id: str) -> int:

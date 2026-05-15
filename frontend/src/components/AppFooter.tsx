@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchSystemVersion } from '../api'
+import { fetchSystemVersion } from '../api/sessionAuth'
 
 /**
  * Футер: версия и окружение с бэкенда (ТЗ «Версия системы»). Публичный GET /version.

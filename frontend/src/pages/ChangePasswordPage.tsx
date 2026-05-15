@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { PageContainer } from '../components/PageContainer'
-import { changePassword, saveToken } from '../api'
+import { changePassword, saveToken } from '../api/sessionAuth'
 
 const PASSWORD_MIN_LENGTH = 8
 const FORM_ID = 'change-password-form'
@@ -42,7 +42,7 @@ export function ChangePasswordPage() {
     try {
       setIsLoading(true)
       const response = await changePassword(currentPassword, newPassword)
-      saveToken(response.access_token)
+        saveToken(response.access_token)
       setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')

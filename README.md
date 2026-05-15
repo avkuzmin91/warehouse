@@ -14,7 +14,7 @@
 |-----------|--------------------|---------------------|------------|
 | **prod** | **10000** | **10080** | Статика после `npm run build` в Docker |
 | **test** | **11000** | **11080** | Как prod, другие env/том |
-| **dev** | **8000** | **5173** | Backend в Docker + bind mount **`./backend:/app`**; UI — **Vite на хосте** (`npm run dev`). Сервиса `frontend` в `docker-compose.dev.yml` нет (не добавлять без ADR — путаница портов, HMR, `/api`). |
+| **dev** | **8000** | **5173** | Backend в Docker + bind mount **`./backend:/app`**; UI по умолчанию — **Vite на хосте** (`cd frontend && npm run dev`). Опционально можно поднять **`frontend`** из `docker-compose.dev.yml` (тот же прокси `/api` → `backend:8000`). **Через nginx `dev.pack-men.ru`** в репозитории задан отдельный `server` в **`nginx/nginx.conf`** (`/api` → **8000**, `/` → **5173**); без него HTTPS мог попасть в prod/test и дать **502** на логин. |
 
 **Postgres (loopback, миграции / отладка с хоста):**
 
@@ -111,7 +111,7 @@ cd frontend && npm install && npm run dev
 - **Alembic** (корень репо, `alembic.ini`): **`DATABASE_URL`** на dev-Postgres с хоста — комментарий в **`.env.dev.example`** (порт **5435**), затем **`alembic upgrade head`**.
 - Hot reload: backend **`--reload`** в compose; фронт — HMR Vite.
 
-Через nginx на **`dev.pack-men.ru`** нужен **`server.allowedHosts`** в Vite — иначе возможен **403**.
+Через nginx на **`dev.pack-men.ru`** нужен **`server.allowedHosts`** в Vite — иначе возможен **403**. После правок **`nginx/nginx.conf`** перезагрузите nginx (**`nginx -t`** и **`reload`**), иначе останется старый `server` без `dev.pack-men.ru` и возможен **502** на `/api`.
 
 ---
 

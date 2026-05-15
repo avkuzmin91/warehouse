@@ -3,7 +3,6 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   createReceipt,
-  deleteReceipt,
   findProductVariantForReceipt,
   getReceipt,
   patchReceipt,
@@ -16,6 +15,7 @@ import {
   type ProductVariantFindResponse,
   type User,
 } from '../api'
+import { deleteReceipt } from '../api/adminApi'
 import { ConfirmDialog } from './ModalDialog'
 import { DictionaryFormCombobox, mergeDictionaryItemsWithCurrent } from './DictionaryFormCombobox'
 import { FormDateField } from './FormDateField'
