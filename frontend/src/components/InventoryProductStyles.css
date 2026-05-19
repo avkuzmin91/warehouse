@@ -1,0 +1,924 @@
+/* Inventory: подсветка остатков (форма операции, таблица остатков). */
+.qty-positive {
+  color: #4ade80;
+  font-weight: 600;
+}
+.qty-zero {
+  color: #ff7a96;
+  font-weight: 600;
+}
+.inv-balance-hint {
+  margin: -8px 0 16px;
+  font-size: 14px;
+}
+
+/* Товар: создание (цвета, габариты) и редактор вариантов */
+.field-input--readonly {
+  opacity: 0.85;
+  cursor: not-allowed;
+}
+.field-input--narrow {
+  max-width: 88px;
+}
+.product-colors-fieldset {
+  margin: 0 0 var(--entity-form-gap, 10px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  min-width: 0;
+}
+
+.product-colors-fieldset legend.field-label {
+  padding: 0;
+  margin: 0 0 5px;
+}
+
+.product-colors-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.product-color-chip {
+  margin: 0;
+}
+.product-dim-blocks {
+  margin: 10px 0 12px;
+}
+/* Габариты: группа как у «Цветов» + красная рамка при ошибке валидации */
+.product-dim-fieldset {
+  margin: 10px 0 12px;
+  padding: 10px 12px 11px;
+  border-radius: 12px;
+  border: 1px solid var(--field-border);
+  min-width: 0;
+}
+
+.product-dim-fieldset legend.field-label {
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.product-dim-fieldset--error {
+  border-color: rgba(255, 120, 120, 0.55);
+}
+
+.product-dim-block--error {
+  border-color: rgba(255, 120, 120, 0.55);
+}
+
+.product-dim-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.product-dim-block__hint {
+  margin: 0;
+  min-width: 0;
+}
+
+.product-dim-block-remove.users-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.product-dim-block-remove .users-icon-btn__svg {
+  width: 16px;
+  height: 16px;
+}
+
+.product-dim-add-block {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 0 12px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--field-border);
+  background: rgba(35, 24, 73, 0.35);
+  color: rgba(220, 210, 250, 0.82);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.product-dim-add-block:hover {
+  border-color: rgba(177, 143, 255, 0.45);
+  background: rgba(127, 56, 255, 0.16);
+  color: rgba(240, 234, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(123, 63, 255, 0.12);
+}
+
+.product-dim-add-block:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.35);
+}
+
+.product-dim-add-block__icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.product-dim-add-block:hover .product-dim-add-block__icon {
+  opacity: 1;
+}
+
+.product-photo-picker {
+  margin: 4px 0 var(--entity-form-gap, 12px);
+}
+
+.product-photo-picker__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--field-border);
+  background: rgba(35, 24, 73, 0.4);
+  color: rgba(228, 220, 255, 0.9);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.product-photo-picker__btn:hover {
+  border-color: rgba(177, 143, 255, 0.48);
+  background: rgba(127, 56, 255, 0.14);
+  color: #f1edff;
+  box-shadow: 0 0 0 1px rgba(123, 63, 255, 0.14);
+}
+
+.product-photo-picker__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.32);
+}
+
+.product-photo-picker__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  opacity: 0.88;
+}
+
+.product-photo-picker__btn:hover .product-photo-picker__icon {
+  opacity: 1;
+}
+
+.card-nested {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--field-border);
+  background: rgba(25, 16, 56, 0.25);
+}
+.product-dim-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 7px;
+}
+.product-dim-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+/* Длина/ширина/высота: без светлых нативных спиннеров, шаг ±1 */
+.product-dim-num-field {
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+  box-sizing: border-box;
+  max-width: 108px;
+  min-height: 32px;
+  border: 1px solid var(--field-border);
+  border-radius: 10px;
+  background: var(--field-bg);
+  overflow: hidden;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.product-dim-num-field:focus-within {
+  border-color: rgba(177, 143, 255, 0.8);
+  box-shadow: 0 0 0 3px rgba(123, 63, 255, 0.2);
+}
+
+.product-dim-num-field--error {
+  border-color: rgba(255, 98, 120, 0.65);
+  box-shadow: 0 0 0 1px rgba(255, 98, 120, 0.25);
+}
+
+.product-dim-num-field--error:focus-within {
+  border-color: rgba(255, 98, 120, 0.75);
+  box-shadow:
+    0 0 0 1px rgba(255, 98, 120, 0.35),
+    0 0 0 3px rgba(123, 63, 255, 0.12);
+}
+
+.product-dim-num-field__input.field-input.field-input--narrow {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+  max-width: none;
+  margin: 0;
+  margin-bottom: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  -moz-appearance: textfield;
+}
+
+.product-dim-num-field__input.field-input.field-input--narrow:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.product-dim-num-field__input::-webkit-outer-spin-button,
+.product-dim-num-field__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.product-dim-num-field__stepper {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 20px;
+  width: 20px;
+  border-left: 1px solid rgba(123, 63, 255, 0.32);
+  background: rgba(14, 8, 34, 0.55);
+}
+
+.product-dim-num-field__step-btn {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: rgba(188, 168, 238, 0.82);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.product-dim-num-field__step-btn:hover:not(:disabled) {
+  color: rgba(236, 228, 255, 0.96);
+  background: rgba(127, 56, 255, 0.22);
+}
+
+.product-dim-num-field__step-btn:active:not(:disabled) {
+  background: rgba(127, 56, 255, 0.32);
+}
+
+.product-dim-num-field__step-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.product-dim-num-field__step-btn--up {
+  border-bottom: 1px solid rgba(123, 63, 255, 0.22);
+}
+
+.product-dim-num-field__step-btn:focus-visible {
+  outline: none;
+  background: rgba(127, 56, 255, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(123, 63, 255, 0.45);
+}
+
+.product-dim-num-field__step-icon {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+}
+
+.product-create-form .product-dim-fieldset .product-dim-num-field {
+  margin-bottom: 7px;
+  border-radius: var(--entity-form-radius);
+  min-height: 34px;
+  max-width: 108px;
+}
+
+.product-create-form .product-dim-fieldset .product-dim-num-field:focus-within {
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.22);
+}
+
+.product-create-form .product-dim-fieldset .product-dim-num-field__input.field-input.field-input--narrow {
+  height: 34px;
+  min-height: 34px;
+  min-width: 52px;
+  padding: 0 5px;
+  font-size: var(--entity-form-fs);
+  line-height: 1.2;
+}
+
+.product-variants-editor.product-create-form .product-variants-dim .product-dim-num-field {
+  margin-bottom: 0;
+  border-radius: var(--entity-form-radius);
+  min-height: 34px;
+  max-width: 108px;
+}
+
+.product-variants-editor.product-create-form .product-variants-dim .product-dim-num-field:focus-within {
+  box-shadow: 0 0 0 2px rgba(123, 63, 255, 0.22);
+}
+
+.product-variants-editor.product-create-form
+  .product-variants-dim
+  .product-dim-num-field__input.field-input.field-input--narrow {
+  height: 34px;
+  min-height: 34px;
+  min-width: 52px;
+  padding: 0 5px;
+  font-size: var(--entity-form-fs);
+  line-height: 1.2;
+}
+
+.product-variants-editor.product-create-form .product-variants-dim .product-dim-num-field__stepper {
+  flex-basis: 20px;
+  width: 20px;
+}
+
+.product-multi-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 12px;
+}
+
+.product-multi-preview__card {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 200px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  cursor: grab;
+  touch-action: none;
+  transition: box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.product-multi-preview__card:active {
+  cursor: grabbing;
+}
+
+.product-multi-preview__card--over {
+  box-shadow: 0 0 0 2px rgba(127, 56, 255, 0.9);
+}
+
+.product-multi-preview__card--dragging {
+  opacity: 0.5;
+}
+
+.product-multi-preview__frame {
+  overflow: hidden;
+  border-radius: inherit;
+  background: rgba(25, 16, 56, 0.45);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-multi-preview__broken {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(255, 245, 250, 0.88);
+  text-align: center;
+}
+
+.product-multi-preview__card--broken .product-multi-preview__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.product-multi-preview__card .product-create-preview__img {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  vertical-align: top;
+  pointer-events: none;
+  user-select: none;
+}
+
+.product-multi-preview__actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.product-multi-preview__card:hover .product-multi-preview__actions,
+.product-multi-preview__card:focus-within .product-multi-preview__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.product-multi-preview__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  color: rgba(255, 250, 255, 0.96);
+  background: rgba(10, 4, 24, 0.45);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+  pointer-events: auto;
+}
+
+.product-multi-preview__action:hover,
+.product-multi-preview__action:focus-visible {
+  outline: none;
+}
+
+.product-multi-preview__action--expand:hover,
+.product-multi-preview__action--expand:focus-visible {
+  background: rgba(127, 56, 255, 0.55);
+}
+
+.product-multi-preview__action--delete:hover,
+.product-multi-preview__action--delete:focus-visible {
+  background: rgba(200, 48, 72, 0.92);
+}
+
+.product-multi-preview__action-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.image-fullscreen-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 20050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 20px 24px;
+  box-sizing: border-box;
+  background: rgba(4, 2, 12, 0.94);
+  cursor: zoom-out;
+}
+
+.image-fullscreen-lightbox__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  color: rgba(255, 250, 255, 0.95);
+  background: rgba(30, 20, 55, 0.65);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.image-fullscreen-lightbox__close:hover,
+.image-fullscreen-lightbox__close:focus-visible {
+  background: rgba(127, 56, 255, 0.45);
+  outline: none;
+}
+
+.image-fullscreen-lightbox__frame {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: default;
+}
+
+.image-fullscreen-lightbox__img {
+  display: block;
+  max-width: min(100vw - 40px, 1600px);
+  max-height: calc(100vh - 100px);
+  width: auto;
+  height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+}
+
+.product-variants-editor {
+  margin: 24px 0 8px;
+}
+.product-variants-editor__title {
+  font-size: 18px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.product-variants-dim {
+  white-space: nowrap;
+}
+.product-variants-dim .field-input--narrow {
+  display: inline-block;
+  vertical-align: middle;
+}
+.product-variants-dim span[aria-hidden] {
+  margin: 0 4px;
+  font-size: var(--entity-form-fs);
+  opacity: 0.6;
+}
+
+.product-variants-editor.product-create-form .dictionary-form-combobox {
+  margin-bottom: 0;
+}
+
+.product-variants-editor.product-create-form .dictionary-form-combobox__input.field-input {
+  margin-bottom: 0;
+}
+
+.product-variants-actions {
+  white-space: nowrap;
+  width: 1%;
+  vertical-align: middle;
+}
+.product-variants-actions__inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.product-variants-toolbar {
+  margin-top: 10px;
+}
+.product-variants-toolbar .product-dim-add-block {
+  margin-top: 0;
+}
+.product-variants-skeleton,
+.product-variants-empty {
+  padding: 16px;
+  color: var(--text-soft);
+}
+.btn--small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* Приёмка товаров (/inventory/receipt) */
+.receipt-form .form-date-field {
+  display: block;
+  width: 100%;
+}
+.receipt-form__success {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(46, 160, 67, 0.18);
+  border: 1px solid rgba(63, 185, 80, 0.45);
+  color: rgba(220, 255, 228, 0.98);
+}
+
+.receipt-form__status-banner-wrap {
+  margin: 0 0 18px;
+}
+
+.receipt-form__status-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.receipt-form__status-badge--pending {
+  background: linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.35) 0%,
+    rgba(180, 83, 9, 0.2) 48%,
+    rgba(25, 18, 40, 0.85) 100%
+  );
+  border-color: rgba(251, 191, 36, 0.45);
+  box-shadow:
+    0 0 0 1px rgba(251, 191, 36, 0.12) inset,
+    0 0 28px rgba(245, 158, 11, 0.22),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+.receipt-form__status-badge--accepted {
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.38) 0%,
+    rgba(21, 128, 61, 0.22) 45%,
+    rgba(18, 26, 28, 0.92) 100%
+  );
+  border-color: rgba(52, 211, 153, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(52, 211, 153, 0.15) inset,
+    0 0 32px rgba(34, 197, 94, 0.18),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+/* Просрочка: «Ожидает», дата операции в прошлом — красная подсветка бейджа */
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.42) 0%,
+    rgba(153, 27, 27, 0.28) 48%,
+    rgba(40, 18, 28, 0.9) 100%
+  );
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.2) inset,
+    0 0 28px rgba(239, 68, 68, 0.3),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+.receipt-form__status-badge__mark {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.receipt-form__status-badge--pending .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #fde68a, #f59e0b 55%, #b45309);
+  color: rgba(251, 191, 36, 0.9);
+  animation: receipt-status-pulse 2s ease-in-out infinite;
+}
+
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #fecaca, #ef4444 55%, #991b1b);
+  color: rgba(252, 165, 165, 0.95);
+  animation: receipt-status-overdue-pulse 2s ease-in-out infinite;
+}
+
+.receipt-form__status-badge--accepted .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #bbf7d0, #22c55e 55%, #15803d);
+  color: rgba(74, 222, 128, 0.85);
+}
+
+@keyframes receipt-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.55);
+  }
+  50% {
+    opacity: 0.92;
+    transform: scale(1.08);
+    box-shadow: 0 0 18px rgba(251, 191, 36, 0.85);
+  }
+}
+
+@keyframes receipt-status-overdue-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(248, 113, 113, 0.55);
+  }
+  50% {
+    opacity: 0.92;
+    transform: scale(1.08);
+    box-shadow: 0 0 18px rgba(239, 68, 68, 0.85);
+  }
+}
+
+.receipt-form__status-badge__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  color: rgba(255, 252, 245, 0.98);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.receipt-form__status-badge__hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 250, 250, 0.82);
+}
+
+.receipt-form__status-badge--pending .receipt-form__status-badge__hint {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(120, 53, 15, 0.35);
+  color: rgba(254, 243, 199, 0.95);
+}
+
+.receipt-form__status-badge--pending.receipt-form__status-badge--overdue .receipt-form__status-badge__hint {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.42);
+  color: rgba(254, 226, 226, 0.96);
+}
+
+.receipt-form__status-badge--accepted .receipt-form__status-badge__hint {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(6, 78, 59, 0.38);
+  color: rgba(209, 250, 229, 0.95);
+}
+
+@media (max-width: 520px) {
+  .receipt-form__status-badge {
+    flex-wrap: wrap;
+  }
+
+  .receipt-form__status-badge__hint {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+.receipt-form__lookup {
+  margin: 16px 0;
+  min-height: 24px;
+}
+.receipt-form__lookup-msg {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-soft, rgba(255, 250, 255, 0.68));
+}
+.receipt-form__card {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(147, 110, 255, 0.28);
+  background: rgba(25, 18, 52, 0.45);
+}
+
+.receipt-form__card-body {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.receipt-form__card-body--no-photo {
+  display: block;
+}
+
+.receipt-form__card-media {
+  flex: 0 0 auto;
+  width: min(148px, 38vw);
+  max-width: 148px;
+}
+
+.receipt-form__card-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.receipt-form__card-details .receipt-form__dims:last-child {
+  margin-bottom: 0;
+}
+
+.receipt-form__card-details .receipt-form__product-name--details {
+  margin: 0 0 10px;
+  color: var(--text-main, rgba(255, 252, 245, 0.98));
+}
+
+.receipt-form__product-name {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 16px;
+}
+.receipt-form__dims {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-soft, rgba(255, 250, 255, 0.72));
+}
+.receipt-form__photo-wrap {
+  max-width: 148px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(147, 110, 255, 0.25);
+}
+.receipt-form__photo {
+  display: block;
+  width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+
+@media (max-width: 520px) {
+  .receipt-form__card-body:not(.receipt-form__card-body--no-photo) {
+    flex-direction: column;
+  }
+
+  .receipt-form__card-media {
+    width: 100%;
+    max-width: 220px;
+  }
+
+  .receipt-form__photo-wrap {
+    max-width: 220px;
+  }
+}
+
+/* Список поступлений: подсветка по статусу */
+.inv-receipt-row--pending td {
+  background: rgba(234, 179, 8, 0.16);
+}
+.inv-receipt-row--accepted td {
+  background: rgba(34, 197, 94, 0.12);
+}
+.users-table--interactive .inv-receipt-row--pending:hover td,
+.users-table--interactive .inv-receipt-row--accepted:hover td {
+  filter: brightness(1.06);
+}
+
+/* Список отгрузок: подсветка по статусу */
+.inv-shipment-row--pending td {
+  background: rgba(234, 179, 8, 0.16);
+}
+.inv-shipment-row--shipped td {
+  background: rgba(34, 197, 94, 0.12);
+}
+.users-table--interactive .inv-shipment-row--pending:hover td,
+.users-table--interactive .inv-shipment-row--shipped:hover td {
+  filter: brightness(1.06);
+}
+
+/* Просроченные ожидающие операции (поступления / отгрузки) */
+.inv-receipt-row--pending.inv-op-row--overdue td,
+.inv-shipment-row--pending.inv-op-row--overdue td {
+  background: rgba(220, 38, 38, 0.14);
+  color: var(--text-main);
+}
+.users-table--interactive .inv-receipt-row--pending.inv-op-row--overdue:hover td,
+.users-table--interactive .inv-shipment-row--pending.inv-op-row--overdue:hover td {
+  background: rgba(220, 38, 38, 0.19);
+  filter: none;
+}
+.inv-op-row--overdue td:first-child {
+  position: relative;
+  padding-left: 1.65rem;
+}
+.inv-op-row--overdue td:first-child::before {
+  content: '⚠';
+  position: absolute;
+  left: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.88;
+  pointer-events: none;
+}

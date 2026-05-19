@@ -16,15 +16,17 @@ import {
   getUsers,
   updateUserClient,
   updateUserRole,
-} from '../api/adminApi'
+} from '../api/usersApi'
 import {
   getInventoryClients,
-  me,
+} from '../api/inventoryApi'
+import {
   type AssignableUserRole,
   type DictionaryItem,
-  type User,
   type UserListItem,
-} from '../api'
+} from '../api/domainTypes'
+import { me } from '../api/sessionAuth'
+import type { User } from '../api/typesUser'
 
 const USERS_FILTER_KEYS = ['search', 'users_role', 'date_from', 'date_to'] as const
 

@@ -206,6 +206,12 @@ export type HorizontalBarChartProps = {
   labelWidth?: number
   width?: number
   rowHeight?: number
+  /** Размер шрифта подписи слева (px) */
+  labelFontSize?: number
+  /** Размер шрифта числа справа (px) */
+  valueFontSize?: number
+  /** Макс. длина подписи до «…» (символов) */
+  labelMaxChars?: number
 }
 
 /** Горизонтальные столбцы: подпись слева, значение справа; tooltip через &lt;title&gt;. */
@@ -215,6 +221,9 @@ export function HorizontalBarChart({
   labelWidth = 168,
   width = 720,
   rowHeight = 36,
+  labelFontSize = 13,
+  valueFontSize = 14,
+  labelMaxChars = 22,
 }: HorizontalBarChartProps) {
   const n = Math.max(1, items.length)
   const padR = 56
@@ -224,6 +233,8 @@ export function HorizontalBarChart({
   const height = padT + padB + n * rowHeight + (n - 1) * gap
   const barAreaW = Math.max(80, width - labelWidth - padR - 16)
   const maxVal = Math.max(1, ...items.map((i) => i.value))
+  const truncate = (s: string) =>
+    s.length > labelMaxChars ? `${s.slice(0, Math.max(1, labelMaxChars - 1))}…` : s
 
   return (
     <div className="mini-chart mini-chart--horizontal" role="img" aria-label="Горизонтальная диаграмма">
@@ -231,15 +242,14 @@ export function HorizontalBarChart({
         {items.map((it, idx) => {
           const y = padT + idx * (rowHeight + gap)
           const bw = (it.value / maxVal) * barAreaW
-          const ty = y + rowHeight / 2 + 5
-          const truncate = (s: string) => (s.length > 22 ? `${s.slice(0, 21)}…` : s)
+          const ty = y + rowHeight / 2 + Math.max(4, labelFontSize * 0.35)
           return (
             <g key={`${it.label}-${idx}`}>
               <text
                 x={4}
                 y={ty}
                 className="mini-chart__axis mini-chart__axis--bar-label"
-                style={{ fontSize: 12 }}
+                style={{ fontSize: labelFontSize }}
               >
                 {truncate(it.label)}
                 <title>{it.label}</title>
@@ -258,7 +268,7 @@ export function HorizontalBarChart({
                 x={labelWidth + barAreaW + 8}
                 y={ty}
                 className="mini-chart__axis"
-                style={{ fontSize: 13 }}
+                style={{ fontSize: valueFontSize }}
               >
                 {it.value}
               </text>

@@ -12,7 +12,7 @@ import {
 import {
   type DictionaryItem,
   type ProductItem,
-} from '../api'
+} from '../api/domainTypes'
 import { fetchActiveDictionaryItems, getProduct, updateProduct } from '../api/adminApi'
 import {
   DictionaryFormCombobox,

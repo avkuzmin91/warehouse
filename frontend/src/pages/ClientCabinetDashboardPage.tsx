@@ -3,6 +3,8 @@ import { ApplyFiltersIcon, ResetFiltersIcon } from '../components/CollectionActi
 import { DateRangeFilter } from '../components/DateRangeFilter'
 import { DictionaryFilterCombobox } from '../components/DictionaryFilterCombobox'
 import { BarChart, LineChart } from '../components/MiniCharts'
+import '../components/InventoryProductStyles.css'
+import './AnalyticsPage.css'
 import {
   type AnalyticsGroup,
   type ClientPortalDashboardMetrics,
@@ -13,7 +15,7 @@ import {
   getClientPortalDashboardMetrics,
   getClientPortalDashboardMovement,
   getClientPortalDashboardTopProducts,
-} from '../api'
+} from '../api/clientPortalApi'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)

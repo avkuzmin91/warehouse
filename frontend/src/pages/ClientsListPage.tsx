@@ -8,10 +8,10 @@ import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
-  buildActualityFilterSelectOptions,
   type DictionaryItem,
   type RecordActualityFilterItem,
-} from '../api'
+} from '../api/domainTypes'
+import { buildActualityFilterSelectOptions } from '../api/filterHelpers'
 import { fetchRecordActualityFilterItems, getClients } from '../api/adminApi'
 
 const CLIENT_FILTER_KEYS = ['search', 'actuality_id', 'date_from', 'date_to'] as const

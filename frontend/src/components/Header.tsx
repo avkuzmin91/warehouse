@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { authLogout, me } from '../api'
-import type { User } from '../api'
+import { authLogout, me } from '../api/sessionAuth'
+import type { User } from '../api/typesUser'
 import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
 const LOGO_PATH = '/logo/' + encodeURIComponent('logo main.png')

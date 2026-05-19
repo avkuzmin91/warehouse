@@ -10,15 +10,16 @@ import {
   LineChart,
   StackedHorizontalBarChart,
 } from '../components/MiniCharts'
+import './AnalyticsPage.css'
 import {
   type AdminDashboardReport,
   type AnalyticsCommonParams,
   type AnalyticsGroup,
   type DictionaryItem,
   type MovementReport,
-  getInventoryClients,
-} from '../api'
-import { getAnalyticsAdminDashboard, getAnalyticsMovement } from '../api/adminApi'
+} from '../api/domainTypes'
+import { getInventoryClients } from '../api/inventoryApi'
+import { getAnalyticsAdminDashboard, getAnalyticsMovement } from '../api/analyticsApi'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -451,7 +452,11 @@ export function AnalyticsPage() {
                 <HorizontalBarChart
                   items={topByShipment}
                   barColor="#ea580c"
-                  rowHeight={32}
+                  rowHeight={44}
+                  labelWidth={228}
+                  labelFontSize={15}
+                  valueFontSize={14}
+                  labelMaxChars={34}
                 />
               ) : (
                 <p className="analytics-dash-panel__empty">—</p>
@@ -462,7 +467,15 @@ export function AnalyticsPage() {
                 Топ по остаткам
               </h2>
               {topByStock.length > 0 ? (
-                <HorizontalBarChart items={topByStock} barColor="#475569" rowHeight={32} />
+                <HorizontalBarChart
+                  items={topByStock}
+                  barColor="#475569"
+                  rowHeight={44}
+                  labelWidth={228}
+                  labelFontSize={15}
+                  valueFontSize={14}
+                  labelMaxChars={34}
+                />
               ) : (
                 <p className="analytics-dash-panel__empty">—</p>
               )}

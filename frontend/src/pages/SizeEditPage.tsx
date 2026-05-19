@@ -8,7 +8,7 @@ import { SizeFormFields } from '../components/SizeFormFields'
 import { SystemInfoBlock, systemInfoFromApi, type SystemInfo } from '../components/SystemInfoBlock'
 import { SIZE_FORM_CONFIG } from '../config/sizeFormConfig'
 import { getSize, updateSize } from '../api/adminApi'
-import type { SizeItem } from '../api'
+import type { SizeItem } from '../api/domainTypes'
 
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'
 

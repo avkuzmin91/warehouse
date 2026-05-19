@@ -15,7 +15,7 @@ import {
   getInventoryProducts,
   getInventorySingleBalance,
   getInventorySizes,
-} from '../api'
+} from '../api/inventoryApi'
 
 type Props = {
   opType: InventoryOpType

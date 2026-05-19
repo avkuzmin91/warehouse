@@ -6,11 +6,11 @@ import {
   getClientPortalProduct,
   getClientPortalProductVariants,
   getClientPortalSizes,
-  resolvePublicUploadSrc,
   type DictionaryItem,
   type ProductItem,
   type ProductVariantItem,
-} from '../api'
+} from '../api/clientPortalApi'
+import { resolvePublicUploadSrc } from '../api/constants'
 import { Table, type TableColumn } from '../components/Table'
 
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'

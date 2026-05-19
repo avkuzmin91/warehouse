@@ -14,8 +14,8 @@ import {
   getInventoryClients,
   getInventoryColors,
   getInventorySizes,
-  resolvePublicUploadSrc,
-} from '../api'
+} from '../api/inventoryApi'
+import { resolvePublicUploadSrc } from '../api/constants'
 
 const FILTER_KEYS = ['client_id', 'sku', 'name', 'color_id', 'size_id'] as const
 

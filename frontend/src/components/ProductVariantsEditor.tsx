@@ -9,7 +9,7 @@ import {
 import {
   type DictionaryItem,
   type ProductVariantWriteItem,
-} from '../api'
+} from '../api/domainTypes'
 import {
   deleteProductVariant,
   fetchActiveDictionaryItems,

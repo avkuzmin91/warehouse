@@ -1,5 +1,5 @@
 import { Navigate } from 'react-router-dom'
-import type { InventoryOpType } from '../api'
+import type { InventoryOpType } from '../api/domainTypes'
 
 export type ExcelImportPreviewPageProps = {
   opType: InventoryOpType

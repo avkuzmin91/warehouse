@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CSSProperties, RefObject } from 'react'
-import type { AssignableUserRole, UserListItem } from '../api'
+import type { AssignableUserRole, UserListItem } from '../api/domainTypes'
 
 const ROLE_OPTIONS: { value: AssignableUserRole; label: string }[] = [
   { value: 'user', label: 'Пользователь' },

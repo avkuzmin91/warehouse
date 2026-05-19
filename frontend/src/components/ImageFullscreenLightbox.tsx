@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import './InventoryProductStyles.css'
 
 /** Иконка «на весь экран» для превью фото */
 export function PhotoExpandIcon({ className }: { className?: string }) {

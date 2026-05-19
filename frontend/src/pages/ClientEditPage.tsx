@@ -8,7 +8,7 @@ import { ClientFormFields } from '../components/ClientFormFields'
 import { SystemInfoBlock, systemInfoFromApi, type SystemInfo } from '../components/SystemInfoBlock'
 import { CLIENT_FORM_CONFIG, mapClientFormApiError } from '../config/clientFormConfig'
 import { getDictionaryItem, updateDictionaryItem } from '../api/adminApi'
-import type { DictionaryItem } from '../api'
+import type { DictionaryItem } from '../api/domainTypes'
 
 type LoadState = 'loading' | 'ok' | 'not_found' | 'error'
 

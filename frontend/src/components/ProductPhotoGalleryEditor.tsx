@@ -8,7 +8,7 @@ import {
   type SetStateAction,
 } from 'react'
 import { ImageFullscreenLightbox, PhotoExpandIcon } from './ImageFullscreenLightbox'
-import { resolvePublicUploadSrc } from '../api'
+import { resolvePublicUploadSrc } from '../api/constants'
 import { uploadProductDictionaryImage } from '../api/adminApi'
 
 export type ProductGallerySlot =

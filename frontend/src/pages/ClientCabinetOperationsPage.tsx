@@ -7,6 +7,7 @@ import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import { getInventoryOpListRowPresentation } from '../utils/inventoryOperationRowVisual'
+import '../components/InventoryProductStyles.css'
 import {
   type DictionaryItem,
   type InventoryOperationItem,
@@ -14,8 +15,8 @@ import {
   getClientPortalColors,
   getClientPortalOperations,
   getClientPortalSizes,
-  resolvePublicUploadSrc,
-} from '../api'
+} from '../api/clientPortalApi'
+import { resolvePublicUploadSrc } from '../api/constants'
 
 const FILTER_KEYS_RECEIPTS = [
   'sku',

@@ -31,7 +31,7 @@ import type {
   StockSnapshotReport,
   TopProductsReport,
   UserListItem,
-} from '../api'
+} from './domainTypes'
 
 export function getUsers() {
   return request<UserListItem[]>('/users')

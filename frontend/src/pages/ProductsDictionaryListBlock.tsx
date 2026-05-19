@@ -9,15 +9,15 @@ import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
-  buildActualityFilterSelectOptions,
   getClientPortalProductCatalog,
   getClientPortalProductTypes,
   getClientPortalRecordActualityFilterItems,
-  resolvePublicUploadSrc,
   type DictionaryItem,
   type ProductItem,
   type RecordActualityFilterItem,
-} from '../api'
+} from '../api/clientPortalApi'
+import { resolvePublicUploadSrc } from '../api/constants'
+import { buildActualityFilterSelectOptions } from '../api/filterHelpers'
 import {
   fetchAllDictionaryItemsForFilter,
   fetchRecordActualityFilterItems,

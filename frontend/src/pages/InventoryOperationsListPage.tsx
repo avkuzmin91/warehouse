@@ -9,6 +9,7 @@ import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import { getInventoryOpListRowPresentation } from '../utils/inventoryOperationRowVisual'
+import '../components/InventoryProductStyles.css'
 import {
   type DictionaryItem,
   type InventoryOperationItem,
@@ -17,8 +18,8 @@ import {
   getInventoryColors,
   getInventoryOperations,
   getInventorySizes,
-  resolvePublicUploadSrc,
-} from '../api'
+} from '../api/inventoryApi'
+import { resolvePublicUploadSrc } from '../api/constants'
 
 const FILTER_KEYS_RECEIPTS = [
   'client_id',

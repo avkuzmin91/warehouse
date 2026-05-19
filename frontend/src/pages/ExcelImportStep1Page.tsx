@@ -4,6 +4,7 @@ import { ActionBar } from '../components/ActionBar'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { MovementsExcelImportPreviewSection } from '../components/MovementsExcelImportPreviewSection'
 import { PageContainer } from '../components/PageContainer'
+import './ExcelImportStep1Page.css'
 import {
   deleteImportStaging,
   downloadMovementsImportTemplate,
@@ -12,7 +13,7 @@ import {
   postMovementsImportPreviewStaged,
   type InventoryOpType,
   type MovementImportPreviewResponse,
-} from '../api'
+} from '../api/importApi'
 
 const MAX_BYTES = 20 * 1024 * 1024
 

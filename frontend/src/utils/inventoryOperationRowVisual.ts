@@ -1,4 +1,4 @@
-import type { InventoryOperationItem, InventoryOpType } from '../api'
+import type { InventoryOperationItem, InventoryOpType } from '../api/domainTypes'
 
 /** Календарная дата YYYY-MM-DD в локальном часовом поясе браузера. */
 export function localCalendarYmdFromDate(d: Date): string {

@@ -6,7 +6,7 @@ import type {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { FixedSizeList, type ListChildComponentProps } from 'react-window'
-import type { DictionaryItem } from '../api'
+import type { DictionaryItem } from '../api/domainTypes'
 import { useFixedDictionaryListPosition } from '../hooks/useFixedDictionaryListPosition'
 import { foldCiSearch } from '../utils/foldCiSearch'
 import { FieldDropdownChevron } from './FieldDropdownChevron'

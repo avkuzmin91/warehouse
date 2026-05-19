@@ -9,13 +9,13 @@ import {
   getInventorySingleBalance,
   getInventorySizesForProductSkuAndColor,
   getShipment,
-  me,
   patchShipment,
-  resolvePublicUploadSrc,
   type DictionaryItem,
   type ProductVariantFindResponse,
-  type User,
-} from '../api'
+} from '../api/inventoryApi'
+import { resolvePublicUploadSrc } from '../api/constants'
+import { me } from '../api/sessionAuth'
+import type { User } from '../api/typesUser'
 import { deleteShipment } from '../api/adminApi'
 import { ConfirmDialog } from './ModalDialog'
 import { DictionaryFormCombobox, mergeDictionaryItemsWithCurrent } from './DictionaryFormCombobox'

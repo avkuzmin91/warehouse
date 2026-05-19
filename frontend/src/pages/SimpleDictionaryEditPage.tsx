@@ -13,7 +13,7 @@ import {
 import {
   type DictionaryItem,
   type ProductTypeDictionaryItem,
-} from '../api'
+} from '../api/domainTypes'
 import {
   getProductTypeById,
   getSimpleDictionaryById,

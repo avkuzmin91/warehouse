@@ -12,7 +12,7 @@ import {
   getInventoryProductTypes,
   type DictionaryItem,
   type InventoryProductTypeLookup,
-} from '../api'
+} from '../api/inventoryApi'
 import { createProduct, fetchActiveDictionaryItems } from '../api/adminApi'
 
 const REQUIRED_MSG = 'Заполните обязательные поля'

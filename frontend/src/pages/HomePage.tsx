@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { Breadcrumbs } from '../components/Breadcrumbs'
 import { PageContainer } from '../components/PageContainer'
-import { me } from '../api'
-import type { User } from '../api'
+import { me } from '../api/sessionAuth'
+import type { User } from '../api/typesUser'
 import { postAuthLandingPath } from '../utils/postLoginRedirect'
 
 type NavItem = {

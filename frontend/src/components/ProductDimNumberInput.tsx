@@ -1,4 +1,5 @@
 import type { ChangeEvent } from 'react'
+import './InventoryProductStyles.css'
 
 function parseDim(s: string): number {
   const n = parseFloat(s.replace(',', '.'))

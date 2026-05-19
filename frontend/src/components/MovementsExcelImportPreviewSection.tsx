@@ -1,4 +1,4 @@
-import type { MovementImportPreviewResponse, MovementImportPreviewRowResult } from '../api'
+import type { MovementImportPreviewResponse, MovementImportPreviewRowResult } from '../api/domainTypes'
 
 export type MovementsExcelImportPreviewSectionProps = {
   preview: MovementImportPreviewResponse

@@ -8,10 +8,10 @@ import { ListPagination } from '../components/ListPagination'
 import { Table, type TableColumn } from '../components/Table'
 import { useQueryState } from '../hooks/useQueryState'
 import {
-  buildActualityFilterSelectOptions,
   type RecordActualityFilterItem,
   type SizeItem,
-} from '../api'
+} from '../api/domainTypes'
+import { buildActualityFilterSelectOptions } from '../api/filterHelpers'
 import { fetchRecordActualityFilterItems, getSizes } from '../api/adminApi'
 
 const SIZE_FILTER_KEYS = ['name', 'actuality_id'] as const

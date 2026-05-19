@@ -12,8 +12,8 @@ import {
   getClientPortalBalances,
   getClientPortalColors,
   getClientPortalSizes,
-  resolvePublicUploadSrc,
-} from '../api'
+} from '../api/clientPortalApi'
+import { resolvePublicUploadSrc } from '../api/constants'
 
 const FILTER_KEYS = ['sku', 'name', 'color_id', 'size_id'] as const
 

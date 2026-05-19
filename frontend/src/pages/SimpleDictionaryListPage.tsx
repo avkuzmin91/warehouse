@@ -12,12 +12,12 @@ import {
   type SimpleDictionaryEntityKey,
 } from '../config/simpleDictionaryConfig'
 import {
-  buildActualityFilterSelectOptions,
   type DictionaryItem,
   type ProductTypeDictionaryItem,
   type RecordActualityFilterItem,
   type SimpleDictionaryListParams,
-} from '../api'
+} from '../api/domainTypes'
+import { buildActualityFilterSelectOptions } from '../api/filterHelpers'
 import {
   fetchProductTypesPage,
   fetchRecordActualityFilterItems,
