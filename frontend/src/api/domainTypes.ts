@@ -200,8 +200,9 @@ export type InventoryOperationItem = {
   variant_sku?: string | null
   product_sku?: string | null
   preview_image_url?: string | null
-  receipt_status?: 'pending' | 'accepted' | null
+  receipt_status?: 'pending' | 'accepted' | 'awaiting_inspection' | 'partially_inspected' | 'inspected' | null
   shipment_status?: 'pending' | 'shipped' | null
+  shipment_type?: 'standard' | 'defect' | null
   quantity: number
   note: string | null
   created_at: string
@@ -231,6 +232,9 @@ export type InventoryBalanceItem = {
   size_id: string | null
   size_name: string | null
   quantity: number
+  good_qty: number
+  defect_qty: number
+  uninspected_qty: number
 }
 
 export type InventoryBalanceListResponse = {

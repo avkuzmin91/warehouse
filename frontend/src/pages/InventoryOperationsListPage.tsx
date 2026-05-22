@@ -101,7 +101,10 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           options: [
             { value: '', label: 'Статус' },
             { value: 'pending', label: 'Ожидает поступления' },
-            { value: 'accepted', label: 'Принят' },
+            { value: 'awaiting_inspection', label: 'Ожидает проверки' },
+            { value: 'partially_inspected', label: 'Частично проверено' },
+            { value: 'inspected', label: 'Проверено' },
+            { value: 'accepted', label: 'Принят (устар.)' },
           ],
         },
         { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
@@ -144,6 +147,9 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
             const s = row.receipt_status
             if (s === 'pending') return 'Ожидает поступления'
             if (s === 'accepted') return 'Принят'
+            if (s === 'awaiting_inspection') return 'Ожидает проверки'
+            if (s === 'partially_inspected') return 'Частично проверено'
+            if (s === 'inspected') return 'Проверено'
             return '—'
           },
         },
@@ -211,6 +217,18 @@ export function InventoryOperationsListPage({ opType }: { opType: InventoryOpTyp
           if (s === 'pending') return 'Ожидает отгрузки'
           if (s === 'shipped') return 'Отгружен'
           return '—'
+        },
+      },
+      {
+        key: 'shipment_type',
+        title: 'Тип',
+        sortable: false,
+        render: (_v, row) => {
+          const t = row.shipment_type
+          if (t === 'defect') {
+            return <span className="shipment-type-badge shipment-type-badge--defect">🔴 Брак</span>
+          }
+          return <span className="shipment-type-badge shipment-type-badge--standard">🟢 Годный</span>
         },
       },
       { key: 'client_name', title: 'Клиент', sortable: true, render: (v) => (v as string) || '—' },

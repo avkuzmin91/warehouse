@@ -66,18 +66,64 @@ DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
 
 _auth_log = logging.getLogger("warehouse.auth")
 
-# Поступления (op_type = 'in'): в остатках учитываются только со статусом «accepted».
+# Поступления (op_type = 'in').
 RECEIPT_STATUS_PENDING = "pending"
-RECEIPT_STATUS_ACCEPTED = "accepted"
+RECEIPT_STATUS_ACCEPTED = "accepted"  # legacy — используется в старых записях
+RECEIPT_STATUS_AWAITING_INSPECTION = "awaiting_inspection"  # принят, ещё не проверен
+RECEIPT_STATUS_PARTIALLY_INSPECTED = "partially_inspected"  # проверена часть
+RECEIPT_STATUS_INSPECTED = "inspected"  # проверено полностью
+
+# Статусы, при которых товар учитывается в остатках.
+RECEIPT_STATUSES_IN_STOCK: frozenset[str] = frozenset({
+    RECEIPT_STATUS_ACCEPTED,
+    RECEIPT_STATUS_AWAITING_INSPECTION,
+    RECEIPT_STATUS_PARTIALLY_INSPECTED,
+    RECEIPT_STATUS_INSPECTED,
+})
+
+# Все допустимые значения receipt_status.
+RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
+    RECEIPT_STATUS_PENDING,
+    *RECEIPT_STATUSES_IN_STOCK,
+})
 
 # Отгрузка (op_type = 'out'): в остатках учитываются только «отгружено».
 SHIPMENT_STATUS_PENDING = "pending"
 SHIPMENT_STATUS_SHIPPED = "shipped"
 
+# Тип отгрузки: годный товар или брак.
+SHIPMENT_TYPE_STANDARD = "standard"  # годный товар
+SHIPMENT_TYPE_DEFECT = "defect"      # брак
+
+# Статусы «на складе» в виде SQL-литерала для IN (без параметров — используется в строках-шаблонах).
+_SQL_IN_STOCK_STATUSES = "('accepted','awaiting_inspection','partially_inspected','inspected')"
+
+# SQL-фрагменты для типизированного остатка (alias `o`).
+_SQL_GOOD_IN = (
+    f"CASE WHEN o.op_type='in' AND COALESCE(o.receipt_status,'accepted') IN {_SQL_IN_STOCK_STATUSES} "
+    "THEN COALESCE(o.inspected_qty,0) - COALESCE(o.defect_qty,0) ELSE 0 END"
+)
+_SQL_DEFECT_IN = (
+    f"CASE WHEN o.op_type='in' AND COALESCE(o.receipt_status,'accepted') IN {_SQL_IN_STOCK_STATUSES} "
+    "THEN COALESCE(o.defect_qty,0) ELSE 0 END"
+)
+_SQL_UNINSPECTED_IN = (
+    f"CASE WHEN o.op_type='in' AND COALESCE(o.receipt_status,'accepted') IN {_SQL_IN_STOCK_STATUSES} "
+    "THEN o.quantity - COALESCE(o.inspected_qty,0) ELSE 0 END"
+)
+_SQL_GOOD_OUT = (
+    "CASE WHEN o.op_type='out' AND COALESCE(o.shipment_status,'shipped')='shipped' "
+    "AND COALESCE(o.shipment_type,'standard')='standard' THEN o.quantity ELSE 0 END"
+)
+_SQL_DEFECT_OUT = (
+    "CASE WHEN o.op_type='out' AND COALESCE(o.shipment_status,'shipped')='shipped' "
+    "AND COALESCE(o.shipment_type,'standard')='defect' THEN o.quantity ELSE 0 END"
+)
+
 # Агрегаты с алиасом `o` (inventory_operations o).
 SQL_O_NET_QTY = (
     "CASE WHEN o.op_type = 'out' AND COALESCE(o.shipment_status, 'shipped') = 'shipped' THEN -o.quantity "
-    "WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') = 'accepted' "
+    f"WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') IN {_SQL_IN_STOCK_STATUSES} "
     "THEN o.quantity ELSE 0 END"
 )
 # Сумма отгруженного количества (для отчётов; не путать с SQL_O_NET_QTY).
@@ -86,7 +132,7 @@ SQL_O_SHIPPED_OUT_QTY = (
     "THEN o.quantity ELSE 0 END"
 )
 SQL_O_INFLOW_QTY = (
-    "CASE WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') = 'accepted' "
+    f"CASE WHEN o.op_type = 'in' AND COALESCE(o.receipt_status, 'accepted') IN {_SQL_IN_STOCK_STATUSES} "
     "THEN o.quantity ELSE 0 END"
 )
 # Мягкое удаление складских операций (как у справочников).
@@ -659,6 +705,16 @@ class ProductVariantFindResponse(BaseModel):
     needs_size: bool = False
 
 
+class ReceiptInspectionCreate(BaseModel):
+    inspected_qty: int = Field(ge=0, description="Количество проверенных в этой партии")
+    defect_qty: int = Field(ge=0, description="Количество брака из проверенных в этой партии")
+
+
+class ReceiptDefectAdjust(BaseModel):
+    defect_qty: int = Field(ge=0, description="Новое абсолютное значение брака")
+    comment: str | None = Field(default=None, description="Причина корректировки (добавляется в историю)")
+
+
 class ReceiptCreate(BaseModel):
     variant_id: str = Field(min_length=1)
     quantity: int = Field(gt=0)
@@ -666,11 +722,11 @@ class ReceiptCreate(BaseModel):
     receipt_date: str | None = Field(
         default=None,
         description=f"Дата поступления YYYY-MM-DD. Для «{RECEIPT_STATUS_PENDING}» — любая; "
-        f"для «{RECEIPT_STATUS_ACCEPTED}» — не позже сегодня. Пусто — текущий момент",
+        f"для остальных — не позже сегодня. Пусто — текущий момент",
     )
     receipt_status: str = Field(
-        default=RECEIPT_STATUS_ACCEPTED,
-        description=f"'{RECEIPT_STATUS_PENDING}' — запланировано, '{RECEIPT_STATUS_ACCEPTED}' — принято на склад",
+        default=RECEIPT_STATUS_AWAITING_INSPECTION,
+        description=f"'{RECEIPT_STATUS_PENDING}' — запланировано, '{RECEIPT_STATUS_AWAITING_INSPECTION}' — принято на склад",
     )
 
 
@@ -689,7 +745,7 @@ class ReceiptPatch(BaseModel):
     )
     receipt_status: str | None = Field(
         default=None,
-        description=f"'{RECEIPT_STATUS_PENDING}' | '{RECEIPT_STATUS_ACCEPTED}'",
+        description="pending | accepted | awaiting_inspection | partially_inspected | inspected",
     )
 
 
@@ -713,6 +769,8 @@ class ReceiptDetailResponse(BaseModel):
     first_image_url: str | None
     created_at: str
     created_by: str | None
+    inspected_qty: int = 0
+    defect_qty: int = 0
 
 
 class ShipmentCreate(BaseModel):
@@ -726,6 +784,10 @@ class ShipmentCreate(BaseModel):
     shipment_status: str = Field(
         default=SHIPMENT_STATUS_PENDING,
         description=f"'{SHIPMENT_STATUS_PENDING}' — план, '{SHIPMENT_STATUS_SHIPPED}' — факт (остаток)",
+    )
+    shipment_type: str = Field(
+        default=SHIPMENT_TYPE_STANDARD,
+        description=f"'{SHIPMENT_TYPE_STANDARD}' — годный товар, '{SHIPMENT_TYPE_DEFECT}' — брак",
     )
 
 
@@ -741,6 +803,10 @@ class ShipmentPatch(BaseModel):
         default=None,
         description=f"'{SHIPMENT_STATUS_PENDING}' | '{SHIPMENT_STATUS_SHIPPED}'",
     )
+    shipment_type: str | None = Field(
+        default=None,
+        description=f"'{SHIPMENT_TYPE_STANDARD}' | '{SHIPMENT_TYPE_DEFECT}'",
+    )
 
 
 class ShipmentDetailResponse(BaseModel):
@@ -752,6 +818,7 @@ class ShipmentDetailResponse(BaseModel):
     quantity: int
     comment: str | None
     shipment_status: str
+    shipment_type: str = SHIPMENT_TYPE_STANDARD
     product_id: str
     product_name: str
     product_type_name: str | None
@@ -1063,6 +1130,9 @@ def init_db():
                 "deleted_at": "TEXT",
                 "deleted_by_id": "TEXT",
                 "shipment_status": "TEXT",
+                "inspected_qty": "INTEGER NOT NULL DEFAULT 0",
+                "defect_qty": "INTEGER NOT NULL DEFAULT 0",
+                "shipment_type": "TEXT NOT NULL DEFAULT 'standard'",
             },
         )
         connection.execute(
@@ -4968,6 +5038,10 @@ class InventoryOperationItem(BaseModel):
         default=None,
         description="Для op_type=out: pending | shipped; для прихода — null",
     )
+    shipment_type: str | None = Field(
+        default=None,
+        description="Для op_type=out: 'standard' | 'defect'; для прихода — null",
+    )
     quantity: int
     note: str | None
     created_at: str
@@ -4997,6 +5071,9 @@ class InventoryBalanceItem(BaseModel):
     size_id: str | None
     size_name: str | None
     quantity: int
+    good_qty: int = Field(0, description="Годный товар (проверено − брак)")
+    defect_qty: int = Field(0, description="Брак на складе")
+    uninspected_qty: int = Field(0, description="Не проверено")
 
 
 class InventoryBalanceListResponse(BaseModel):
@@ -5025,11 +5102,21 @@ def _inventory_balance_item_from_row(r: Mapping[str, Any]) -> InventoryBalanceIt
         size_id=r["size_id"],
         size_name=r["size_name"],
         quantity=int(r["quantity"]),
+        good_qty=max(0, int(r.get("good_qty") or 0)),
+        defect_qty=max(0, int(r.get("defect_qty") or 0)),
+        uninspected_qty=max(0, int(r.get("uninspected_qty") or 0)),
     )
 
 
 class InventorySingleBalanceResponse(BaseModel):
     quantity: int
+
+
+class InventoryTypedBalanceResponse(BaseModel):
+    quantity: int
+    good_qty: int
+    defect_qty: int
+    uninspected_qty: int
 
 
 def _active_lookup_dictionary(table_name: str) -> list[DictionaryBaseItem]:
@@ -5069,7 +5156,7 @@ def _balance_qty(
         SELECT
             COALESCE(SUM(
                 CASE WHEN op_type = 'in'
-                     AND COALESCE(receipt_status, 'accepted') = 'accepted'
+                     AND COALESCE(receipt_status, 'accepted') IN ('accepted','awaiting_inspection','partially_inspected','inspected')
                 THEN quantity ELSE 0 END
             ), 0) AS qty_in,
             COALESCE(SUM(CASE WHEN op_type = 'out'
@@ -5084,6 +5171,39 @@ def _balance_qty(
         (SHIPMENT_STATUS_SHIPPED, product_id, color_id, size_id),
     ).fetchone()
     return int(row["qty_in"]) - int(row["qty_out"])
+
+
+def _typed_balance_qty(
+    connection: Any,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+) -> tuple[int, int, int]:
+    """Возвращает (good, defect, uninspected) остаток по позиции."""
+    row = connection.execute(
+        f"""
+        SELECT
+            COALESCE(
+                SUM({_SQL_GOOD_IN}) - SUM({_SQL_GOOD_OUT}),
+                0
+            ) AS good_qty,
+            COALESCE(
+                SUM({_SQL_DEFECT_IN}) - SUM({_SQL_DEFECT_OUT}),
+                0
+            ) AS defect_qty_net,
+            COALESCE(SUM({_SQL_UNINSPECTED_IN}), 0) AS uninspected_qty
+        FROM inventory_operations o
+        WHERE o.product_id = ?
+          AND COALESCE(o.color_id, '') = COALESCE(?, '')
+          AND COALESCE(o.size_id, '') = COALESCE(?, '')
+          AND COALESCE(o.is_deleted, 0) = 0
+        """,
+        (product_id, color_id, size_id),
+    ).fetchone()
+    good = max(0, int(row["good_qty"]))
+    defect = max(0, int(row["defect_qty_net"]))
+    uninsp = max(0, int(row["uninspected_qty"]))
+    return good, defect, uninsp
 
 
 @app.get("/inventory/lookups/clients", response_model=list[DictionaryBaseItem])
@@ -5347,6 +5467,32 @@ def inventory_balance_single(
     return InventorySingleBalanceResponse(quantity=qty)
 
 
+@app.get("/inventory/balance/typed", response_model=InventoryTypedBalanceResponse)
+def inventory_balance_typed(
+    product_id: str = Query(...),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    """Типизированный остаток (годный / брак / не проверено) по точному ключу (product, color, size).
+    Используется в форме отгрузки для отображения разбивки и валидации по типу."""
+    _ = user
+    pid = str(product_id).strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="product_id обязателен")
+    cid = (color_id or "").strip() or None
+    sid = (size_id or "").strip() or None
+    with get_connection() as connection:
+        qty = _balance_qty(connection, pid, cid, sid)
+        good, defect, uninspected = _typed_balance_qty(connection, pid, cid, sid)
+    return InventoryTypedBalanceResponse(
+        quantity=qty,
+        good_qty=good,
+        defect_qty=defect,
+        uninspected_qty=uninspected,
+    )
+
+
 @app.get("/inventory/operations", response_model=InventoryOperationListResponse)
 def list_inventory_operations(
     page: int = Query(1, ge=1),
@@ -5413,10 +5559,10 @@ def list_inventory_operations(
         params.append(dt)
     if receipt_status is not None and str(receipt_status).strip():
         rsq = str(receipt_status).strip().lower()
-        if rsq not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+        if rsq not in RECEIPT_STATUSES_ALL:
             raise HTTPException(
                 status_code=400,
-                detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+                detail=f"receipt_status: допустимо {' | '.join(sorted(RECEIPT_STATUSES_ALL))}",
             )
         if op_type is None or str(op_type).strip() != "out":
             conds.append("COALESCE(o.receipt_status, 'accepted') = ?")
@@ -5461,7 +5607,7 @@ def list_inventory_operations(
             SELECT
                 o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity,
                 o.note, o.created_at, o.variant_id, o.variant_sku, o.receipt_status,
-                o.shipment_status,
+                o.shipment_status, o.shipment_type,
                 p.name AS product_name, p.client_id, p.type_id AS product_type_id,
                 p.sku AS product_sku, p.gallery_json, p.image_url,
                 pt.name AS product_type_name,
@@ -5486,10 +5632,12 @@ def list_inventory_operations(
         op_t = str(r["op_type"])
         rec_st: str | None = None
         ship_st: str | None = None
+        ship_tp: str | None = None
         if op_t == "in":
             rec_st = str(r["receipt_status"] or RECEIPT_STATUS_ACCEPTED)
         elif op_t == "out":
             ship_st = str(r["shipment_status"] or SHIPMENT_STATUS_SHIPPED)
+            ship_tp = str(r["shipment_type"] or SHIPMENT_TYPE_STANDARD)
         items.append(
             InventoryOperationItem(
                 id=r["id"],
@@ -5511,6 +5659,7 @@ def list_inventory_operations(
                 preview_image_url=preview,
                 receipt_status=rec_st,
                 shipment_status=ship_st,
+                shipment_type=ship_tp,
                 quantity=int(r["quantity"]),
                 note=r["note"],
                 created_at=r["created_at"],
@@ -5681,11 +5830,12 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
         raise HTTPException(status_code=400, detail="Укажите вариант")
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="Количество должно быть больше нуля")
-    rs = str(payload.receipt_status or "").strip().lower() or RECEIPT_STATUS_ACCEPTED
-    if rs not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+    rs = str(payload.receipt_status or "").strip().lower() or RECEIPT_STATUS_AWAITING_INSPECTION
+    _valid_create_statuses = (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED, RECEIPT_STATUS_AWAITING_INSPECTION)
+    if rs not in _valid_create_statuses:
         raise HTTPException(
             status_code=400,
-            detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+            detail=f"receipt_status при создании: допустимо {' | '.join(_valid_create_statuses)}",
         )
     note = (payload.comment or "").strip() or None
 
@@ -5721,8 +5871,9 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
             """
             INSERT INTO inventory_operations
                 (id, op_type, product_id, color_id, size_id, quantity, note,
-                 created_at, created_by_id, variant_id, variant_sku, receipt_status)
-            VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, created_by_id, variant_id, variant_sku, receipt_status,
+                 inspected_qty, defect_qty)
+            VALUES (?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
             """,
             (
                 str(uuid4()),
@@ -5741,6 +5892,8 @@ def _create_receipt_from_variant(payload: ReceiptCreate, user: dict) -> MessageR
         connection.commit()
     if rs == RECEIPT_STATUS_PENDING:
         return MessageResponse(message="Поступление запланировано")
+    if rs == RECEIPT_STATUS_AWAITING_INSPECTION:
+        return MessageResponse(message="Товар принят на склад и ожидает проверки качества")
     return MessageResponse(message="Товар принят на склад")
 
 
@@ -5752,6 +5905,8 @@ def _receipt_detail_from_connection(
         SELECT o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity, o.note,
                o.created_at, o.variant_id, o.variant_sku,
                COALESCE(o.receipt_status, ?) AS receipt_status,
+               COALESCE(o.inspected_qty, 0) AS inspected_qty,
+               COALESCE(o.defect_qty, 0) AS defect_qty,
                p.name AS product_name, p.sku AS product_sku, p.client_id, p.gallery_json, p.image_url,
                cl.name AS client_name, pt.name AS product_type_name,
                u.email AS created_by
@@ -5814,6 +5969,8 @@ def _receipt_detail_from_connection(
         first_image_url=first_img,
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
+        inspected_qty=int(row["inspected_qty"]),
+        defect_qty=int(row["defect_qty"]),
     )
 
 
@@ -5825,6 +5982,7 @@ def _shipment_detail_from_connection(
         SELECT o.id, o.op_type, o.product_id, o.color_id, o.size_id, o.quantity, o.note,
                o.created_at, o.variant_id, o.variant_sku,
                COALESCE(o.shipment_status, ?) AS shipment_status,
+               COALESCE(o.shipment_type, 'standard') AS shipment_type,
                p.name AS product_name, p.sku AS product_sku, p.client_id, p.gallery_json, p.image_url,
                cl.name AS client_name, pt.name AS product_type_name,
                u.email AS created_by
@@ -5876,6 +6034,7 @@ def _shipment_detail_from_connection(
         quantity=int(row["quantity"]),
         comment=row["note"],
         shipment_status=str(row["shipment_status"] or SHIPMENT_STATUS_SHIPPED),
+        shipment_type=str(row["shipment_type"] or SHIPMENT_TYPE_STANDARD),
         product_id=str(row["product_id"]),
         product_name=str(row["product_name"] or ""),
         product_type_name=str(row["product_type_name"] or "") or None,
@@ -5904,6 +6063,12 @@ def _create_shipment_from_variant(payload: ShipmentCreate, user: dict) -> Messag
                 f"shipment_status: допустимо {SHIPMENT_STATUS_PENDING} | "
                 f"{SHIPMENT_STATUS_SHIPPED}"
             ),
+        )
+    st = str(payload.shipment_type or "").strip().lower() or SHIPMENT_TYPE_STANDARD
+    if st not in (SHIPMENT_TYPE_STANDARD, SHIPMENT_TYPE_DEFECT):
+        raise HTTPException(
+            status_code=400,
+            detail=f"shipment_type: допустимо {SHIPMENT_TYPE_STANDARD} | {SHIPMENT_TYPE_DEFECT}",
         )
     note = (payload.comment or "").strip() or None
 
@@ -5936,22 +6101,33 @@ def _create_shipment_from_variant(payload: ShipmentCreate, user: dict) -> Messag
         )
 
         if ss == SHIPMENT_STATUS_SHIPPED:
-            current = _balance_qty(connection, pid, cid, sid)
-            if current < int(payload.quantity):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Недостаточно остатка: доступно {current}, "
-                        f"требуется {payload.quantity}"
-                    ),
-                )
+            good_bal, defect_bal, _ = _typed_balance_qty(connection, pid, cid, sid)
+            if st == SHIPMENT_TYPE_DEFECT:
+                if defect_bal < int(payload.quantity):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Недостаточно брака на складе: доступно {defect_bal}, "
+                            f"требуется {payload.quantity}"
+                        ),
+                    )
+            else:
+                if good_bal < int(payload.quantity):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Недостаточно доступного товара: доступно {good_bal}, "
+                            f"требуется {payload.quantity}"
+                        ),
+                    )
 
         connection.execute(
             """
             INSERT INTO inventory_operations
                 (id, op_type, product_id, color_id, size_id, quantity, note,
-                 created_at, created_by_id, variant_id, variant_sku, receipt_status, shipment_status)
-            VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                 created_at, created_by_id, variant_id, variant_sku,
+                 receipt_status, shipment_status, shipment_type)
+            VALUES (?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
             """,
             (
                 str(uuid4()),
@@ -5965,11 +6141,14 @@ def _create_shipment_from_variant(payload: ShipmentCreate, user: dict) -> Messag
                 vid,
                 vsku,
                 ss,
+                st,
             ),
         )
         connection.commit()
     if ss == SHIPMENT_STATUS_PENDING:
         return MessageResponse(message="Отгрузка запланирована")
+    if st == SHIPMENT_TYPE_DEFECT:
+        return MessageResponse(message="Отгрузка брака отражена на складе")
     return MessageResponse(message="Отгрузка отражена на складе")
 
 
@@ -6053,6 +6232,33 @@ def patch_shipment(
                 int(q_line) if shipped else 0
             )
 
+        # Определяем текущий тип отгрузки из БД.
+        cur_st_row = connection.execute(
+            "SELECT COALESCE(shipment_type, ?) AS shipment_type FROM inventory_operations WHERE id = ?",
+            (SHIPMENT_TYPE_STANDARD, sid),
+        ).fetchone()
+        cur_st = str(cur_st_row["shipment_type"]) if cur_st_row else SHIPMENT_TYPE_STANDARD
+
+        # Если передан shipment_type — валидируем.
+        new_st: str | None = None
+        if "shipment_type" in patch and patch["shipment_type"] is not None:
+            new_st = str(patch["shipment_type"]).strip().lower()
+            if new_st not in (SHIPMENT_TYPE_STANDARD, SHIPMENT_TYPE_DEFECT):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"shipment_type: допустимо {SHIPMENT_TYPE_STANDARD} | {SHIPMENT_TYPE_DEFECT}",
+                )
+        eff_st = new_st if new_st is not None else cur_st
+
+        def _typed_stock_headroom(
+            pid_: str, cid_: str | None, sid_: str | None,
+            was_shipped: bool, q_line: int, st_: str,
+        ) -> int:
+            good_b, defect_b, _ = _typed_balance_qty(connection, pid_, cid_, sid_)
+            if st_ == SHIPMENT_TYPE_DEFECT:
+                return defect_b + (q_line if was_shipped and cur_st == SHIPMENT_TYPE_DEFECT else 0)
+            return good_b + (q_line if was_shipped and cur_st == SHIPMENT_TYPE_STANDARD else 0)
+
         if change_variant:
             new_vid = str(patch["variant_id"]).strip()
             vrow = connection.execute(
@@ -6084,15 +6290,14 @@ def patch_shipment(
                 else cur_ss
             )
             if target_shipped == SHIPMENT_STATUS_SHIPPED:
-                head = _stock_headroom(npid, ncid, nsid, False, 0)
+                head = _typed_stock_headroom(npid, ncid, nsid, False, 0, eff_st)
                 if head < eff_qty:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Недостаточно остатка по новой позиции: доступно {head}, "
-                            f"требуется {eff_qty}"
-                        ),
+                    err_detail = (
+                        f"Недостаточно брака по новой позиции: доступно {head}, требуется {eff_qty}"
+                        if eff_st == SHIPMENT_TYPE_DEFECT
+                        else f"Недостаточно остатка по новой позиции: доступно {head}, требуется {eff_qty}"
                     )
+                    raise HTTPException(status_code=400, detail=err_detail)
 
             set_parts = [
                 "product_id = ?",
@@ -6122,6 +6327,9 @@ def patch_shipment(
             if "shipment_status" in patch and patch["shipment_status"] is not None:
                 set_parts.append("shipment_status = ?")
                 exec_vals.append(str(patch["shipment_status"]).strip().lower())
+            if new_st is not None:
+                set_parts.append("shipment_type = ?")
+                exec_vals.append(new_st)
             exec_vals.append(sid)
             connection.execute(
                 f"UPDATE inventory_operations SET {', '.join(set_parts)} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -6144,15 +6352,14 @@ def patch_shipment(
                 sid_sz = str(cur_row["size_id"]) if cur_row["size_id"] else None
                 was_shipped = cur_ss == SHIPMENT_STATUS_SHIPPED
                 old_q = int(cur_row["quantity"])
-                room = _stock_headroom(pid, cid, sid_sz, was_shipped, old_q)
+                room = _typed_stock_headroom(pid, cid, sid_sz, was_shipped, old_q, eff_st)
                 if room < new_qty:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Недостаточно остатка для отгрузки: доступно "
-                            f"{room}, требуется {new_qty}"
-                        ),
+                    err_msg = (
+                        f"Недостаточно брака на складе: доступно {room}, требуется {new_qty}"
+                        if eff_st == SHIPMENT_TYPE_DEFECT
+                        else f"Недостаточно остатка для отгрузки: доступно {room}, требуется {new_qty}"
                     )
+                    raise HTTPException(status_code=400, detail=err_msg)
 
             sets: list[str] = []
             vals: list[object] = []
@@ -6172,6 +6379,9 @@ def patch_shipment(
             if "shipment_status" in patch and patch["shipment_status"] is not None:
                 sets.append("shipment_status = ?")
                 vals.append(str(patch["shipment_status"]).strip().lower())
+            if new_st is not None:
+                sets.append("shipment_type = ?")
+                vals.append(new_st)
             if not sets:
                 raise HTTPException(status_code=400, detail="Нет данных для обновления")
             vals.append(sid)
@@ -6191,6 +6401,138 @@ def get_receipt(
     _ = user
     with get_connection() as connection:
         return _receipt_detail_from_connection(connection, receipt_id.strip())
+
+
+@app.post("/receipts/{receipt_id}/inspection", response_model=MessageResponse)
+def conduct_receipt_inspection(
+    receipt_id: str,
+    payload: ReceiptInspectionCreate,
+    user=Depends(get_current_manager),
+):
+    """Провести/продолжить проверку качества поступления."""
+    _ = user
+    rid = receipt_id.strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="Укажите поступление")
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, op_type, quantity,
+                   COALESCE(receipt_status, ?) AS receipt_status,
+                   COALESCE(inspected_qty, 0) AS inspected_qty,
+                   COALESCE(defect_qty, 0) AS defect_qty
+            FROM inventory_operations
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (RECEIPT_STATUS_ACCEPTED, rid),
+        ).fetchone()
+        if not row or str(row["op_type"]) != "in":
+            raise HTTPException(status_code=404, detail="Поступление не найдено")
+
+        rs = str(row["receipt_status"])
+        if rs not in (RECEIPT_STATUS_AWAITING_INSPECTION, RECEIPT_STATUS_PARTIALLY_INSPECTED):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Проверка недоступна для статуса «{rs}». "
+                       f"Требуется: {RECEIPT_STATUS_AWAITING_INSPECTION} или {RECEIPT_STATUS_PARTIALLY_INSPECTED}",
+            )
+
+        total = int(row["quantity"])
+        prev_inspected = int(row["inspected_qty"])
+        prev_defect = int(row["defect_qty"])
+
+        if payload.defect_qty > payload.inspected_qty:
+            raise HTTPException(
+                status_code=400,
+                detail="Брак не может превышать проверенное в этой партии",
+            )
+
+        new_inspected = prev_inspected + payload.inspected_qty
+        new_defect = prev_defect + payload.defect_qty
+
+        if new_inspected > total:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Нельзя проверить больше, чем поступило ({total} шт). "
+                       f"Уже проверено: {prev_inspected}, добавляется: {payload.inspected_qty}",
+            )
+
+        remaining = total - new_inspected
+        new_status = RECEIPT_STATUS_INSPECTED if remaining == 0 else RECEIPT_STATUS_PARTIALLY_INSPECTED
+
+        connection.execute(
+            """
+            UPDATE inventory_operations
+            SET inspected_qty = ?, defect_qty = ?, receipt_status = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (new_inspected, new_defect, new_status, rid),
+        )
+        connection.commit()
+
+    if new_status == RECEIPT_STATUS_INSPECTED:
+        return MessageResponse(message="Проверка завершена. Весь товар проверен.")
+    return MessageResponse(message=f"Результат проверки сохранён. Осталось проверить: {remaining} шт.")
+
+
+@app.post("/receipts/{receipt_id}/adjust-defect", response_model=MessageResponse)
+def adjust_receipt_defect(
+    receipt_id: str,
+    payload: ReceiptDefectAdjust,
+    user=Depends(get_current_manager),
+):
+    """Скорректировать количество брака в поступлении (доступно при любом статусе после приёмки)."""
+    _ = user
+    rid = receipt_id.strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="Укажите поступление")
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, op_type,
+                   COALESCE(receipt_status, ?) AS receipt_status,
+                   COALESCE(inspected_qty, 0) AS inspected_qty,
+                   COALESCE(defect_qty, 0) AS defect_qty,
+                   COALESCE(note, '') AS note
+            FROM inventory_operations
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (RECEIPT_STATUS_ACCEPTED, rid),
+        ).fetchone()
+        if not row or str(row["op_type"]) != "in":
+            raise HTTPException(status_code=404, detail="Поступление не найдено")
+
+        inspected = int(row["inspected_qty"])
+        if payload.defect_qty > inspected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Количество брака ({payload.defect_qty}) не может превышать проверенное количество ({inspected})",
+            )
+
+        old_defect = int(row["defect_qty"])
+        new_defect = payload.defect_qty
+
+        # Append audit note to the note field
+        existing_note = str(row["note"]).strip()
+        now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        adjustment_note = f"[{now_str}] Корректировка брака: {old_defect} → {new_defect}"
+        if payload.comment and payload.comment.strip():
+            adjustment_note += f". {payload.comment.strip()}"
+        new_note = f"{existing_note}\n{adjustment_note}".strip() if existing_note else adjustment_note
+
+        connection.execute(
+            """
+            UPDATE inventory_operations
+            SET defect_qty = ?, note = ?
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (new_defect, new_note, rid),
+        )
+        connection.commit()
+
+    return MessageResponse(message=f"Брак скорректирован: {old_defect} → {new_defect}")
 
 
 @app.patch("/receipts/{receipt_id}", response_model=MessageResponse)
@@ -6230,13 +6572,13 @@ def patch_receipt(
 
         if "receipt_status" in patch and patch["receipt_status"] is not None:
             new_rs = str(patch["receipt_status"]).strip().lower()
-            if new_rs not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+            if new_rs not in RECEIPT_STATUSES_ALL:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+                    detail=f"receipt_status: допустимо {' | '.join(sorted(RECEIPT_STATUSES_ALL))}",
                 )
             old_rs = str(cur_row["receipt_status"])
-            if old_rs == RECEIPT_STATUS_ACCEPTED and new_rs == RECEIPT_STATUS_PENDING:
+            if old_rs in RECEIPT_STATUSES_IN_STOCK and new_rs == RECEIPT_STATUS_PENDING:
                 pid = str(cur_row["product_id"])
                 cid = str(cur_row["color_id"]) if cur_row["color_id"] else None
                 sid = str(cur_row["size_id"]) if cur_row["size_id"] else None
@@ -6251,7 +6593,7 @@ def patch_receipt(
         if (
             "receipt_status" in patch
             and patch["receipt_status"] is not None
-            and str(patch["receipt_status"]).strip().lower() == RECEIPT_STATUS_ACCEPTED
+            and str(patch["receipt_status"]).strip().lower() in RECEIPT_STATUSES_IN_STOCK
             and "receipt_date" not in patch
         ):
             _assert_receipt_posting_day_not_after_today(cur_row["created_at"])
@@ -6361,7 +6703,7 @@ def delete_receipt(receipt_id: str, admin=Depends(get_current_admin)):
         if not cur or str(cur["op_type"]) != "in":
             raise HTTPException(status_code=404, detail="Поступление не найдено")
         rs = str(cur["receipt_status"])
-        if rs == RECEIPT_STATUS_ACCEPTED:
+        if rs in RECEIPT_STATUSES_IN_STOCK:
             pid = str(cur["product_id"])
             cid = str(cur["color_id"]) if cur["color_id"] else None
             sid = str(cur["size_id"]) if cur["size_id"] else None
@@ -6428,6 +6770,10 @@ def list_inventory_balances(
     sku: str | None = Query(None, description="Подстрока по базовому штрих-коду (products.sku)"),
     name: str | None = Query(None, description="Подстрока по названию товара"),
     only_positive: bool = Query(True, description="Скрывать нулевые/отрицательные остатки"),
+    has_defect: bool = Query(False, description="Есть брак (defect_qty > 0)"),
+    has_uninspected: bool = Query(False, description="Есть непроверенное (uninspected_qty > 0)"),
+    no_good: bool = Query(False, description="Нет годного товара (good_qty = 0)"),
+    only_defect: bool = Query(False, description="Только брак: good_qty = 0 и defect_qty > 0"),
     sort: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
@@ -6460,7 +6806,21 @@ def list_inventory_balances(
         conds.append("fold_ci(COALESCE(p.name, '')) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))
     where_sql = " AND ".join(conds)
-    having_sql = f"HAVING SUM({SQL_O_NET_QTY}) > 0" if only_positive else ""
+    # Собираем HAVING с учётом фильтров по типизированным остаткам.
+    having_parts: list[str] = []
+    if only_positive:
+        having_parts.append(f"SUM({SQL_O_NET_QTY}) > 0")
+    if has_defect or only_defect:
+        having_parts.append(
+            f"(COALESCE(SUM({_SQL_DEFECT_IN}), 0) - COALESCE(SUM({_SQL_DEFECT_OUT}), 0)) > 0"
+        )
+    if has_uninspected:
+        having_parts.append(f"COALESCE(SUM({_SQL_UNINSPECTED_IN}), 0) > 0")
+    if no_good or only_defect:
+        having_parts.append(
+            f"(COALESCE(SUM({_SQL_GOOD_IN}), 0) - COALESCE(SUM({_SQL_GOOD_OUT}), 0)) <= 0"
+        )
+    having_sql = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
     base_sql = f"""
         FROM inventory_operations o
         LEFT JOIN products p ON p.id = o.product_id
@@ -6502,7 +6862,10 @@ def list_inventory_balances(
                 MAX(col.name) AS color_name,
                 MAX(o.size_id) AS size_id,
                 MAX(sz.name) AS size_name,
-                SUM({SQL_O_NET_QTY}) AS quantity
+                SUM({SQL_O_NET_QTY}) AS quantity,
+                COALESCE(SUM({_SQL_GOOD_IN}), 0) - COALESCE(SUM({_SQL_GOOD_OUT}), 0) AS good_qty,
+                COALESCE(SUM({_SQL_DEFECT_IN}), 0) - COALESCE(SUM({_SQL_DEFECT_OUT}), 0) AS defect_qty,
+                COALESCE(SUM({_SQL_UNINSPECTED_IN}), 0) AS uninspected_qty
             {base_sql}
             ORDER BY {balances_order_sql}
             LIMIT ? OFFSET ?
@@ -7681,10 +8044,10 @@ def client_portal_list_operations(
         params.append(dt)
     if receipt_status is not None and str(receipt_status).strip():
         rsq = str(receipt_status).strip().lower()
-        if rsq not in (RECEIPT_STATUS_PENDING, RECEIPT_STATUS_ACCEPTED):
+        if rsq not in RECEIPT_STATUSES_ALL:
             raise HTTPException(
                 status_code=400,
-                detail=f"receipt_status: допустимо {RECEIPT_STATUS_PENDING} | {RECEIPT_STATUS_ACCEPTED}",
+                detail=f"receipt_status: допустимо {' | '.join(sorted(RECEIPT_STATUSES_ALL))}",
             )
         if op_type is None or str(op_type).strip() != "out":
             conds.append("COALESCE(o.receipt_status, 'accepted') = ?")

@@ -139,6 +139,13 @@ export function createReceipt(payload: {
   })
 }
 
+export type ReceiptStatus =
+  | 'pending'
+  | 'accepted'
+  | 'awaiting_inspection'
+  | 'partially_inspected'
+  | 'inspected'
+
 export type ReceiptDetail = {
   id: string
   variant_id: string | null
@@ -158,7 +165,9 @@ export type ReceiptDetail = {
   first_image_url: string | null
   created_at: string
   created_by: string | null
-  receipt_status: 'pending' | 'accepted'
+  receipt_status: ReceiptStatus
+  inspected_qty: number
+  defect_qty: number
 }
 
 export function getReceipt(receiptId: string) {
@@ -172,7 +181,7 @@ export function patchReceipt(
     comment?: string | null
     variant_id?: string
     receipt_date?: string | null
-    receipt_status?: 'pending' | 'accepted'
+    receipt_status?: ReceiptStatus
   },
 ) {
   return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
@@ -180,6 +189,34 @@ export function patchReceipt(
     body: JSON.stringify(payload),
   })
 }
+
+export function conductInspection(
+  receiptId: string,
+  payload: { inspected_qty: number; defect_qty: number },
+) {
+  return request<{ message: string }>(
+    `/receipts/${encodeURIComponent(receiptId.trim())}/inspection`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function adjustReceiptDefect(
+  receiptId: string,
+  payload: { defect_qty: number; comment?: string | null },
+) {
+  return request<{ message: string }>(
+    `/receipts/${encodeURIComponent(receiptId.trim())}/adjust-defect`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export type ShipmentType = 'standard' | 'defect'
 
 export type ShipmentDetail = {
   id: string
@@ -190,6 +227,7 @@ export type ShipmentDetail = {
   quantity: number
   comment: string | null
   shipment_status: 'pending' | 'shipped'
+  shipment_type: ShipmentType
   product_id: string
   product_name: string
   product_type_name: string | null
@@ -203,12 +241,20 @@ export type ShipmentDetail = {
   created_by: string | null
 }
 
+export type TypedBalanceResponse = {
+  quantity: number
+  good_qty: number
+  defect_qty: number
+  uninspected_qty: number
+}
+
 export function createShipment(payload: {
   variant_id: string
   quantity: number
   comment?: string | null
   shipment_date?: string | null
   shipment_status: 'pending' | 'shipped'
+  shipment_type?: ShipmentType
 }) {
   return request<{ message: string }>('/shipments', {
     method: 'POST',
@@ -218,6 +264,7 @@ export function createShipment(payload: {
       comment: (payload.comment ?? '').trim() || null,
       shipment_date: (payload.shipment_date ?? '').trim() || null,
       shipment_status: payload.shipment_status,
+      shipment_type: payload.shipment_type ?? 'standard',
     }),
   })
 }
@@ -234,12 +281,25 @@ export function patchShipment(
     variant_id?: string
     shipment_date?: string | null
     shipment_status?: 'pending' | 'shipped'
+    shipment_type?: ShipmentType
   },
 ) {
   return request<{ message: string }>(`/shipments/${encodeURIComponent(shipmentId.trim())}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })
+}
+
+export function getTypedBalance(params: {
+  product_id: string
+  color_id?: string | null
+  size_id?: string | null
+}) {
+  const sp = new URLSearchParams()
+  sp.set('product_id', params.product_id)
+  if (params.color_id) sp.set('color_id', params.color_id)
+  if (params.size_id) sp.set('size_id', params.size_id)
+  return request<TypedBalanceResponse>(`/inventory/balance/typed?${sp.toString()}`)
 }
 
 export type InventoryOperationsListParams = {
@@ -255,7 +315,7 @@ export type InventoryOperationsListParams = {
   name?: string
   date_from?: string
   date_to?: string
-  receipt_status?: 'pending' | 'accepted' | ''
+  receipt_status?: ReceiptStatus | ''
   shipment_status?: 'pending' | 'shipped' | ''
   sort?: string
 }
@@ -278,7 +338,7 @@ export function getInventoryOperations(params?: InventoryOperationsListParams) {
   if (params?.date_to && /^\d{4}-\d{2}-\d{2}$/.test(params.date_to)) {
     sp.set('date_to', params.date_to)
   }
-  if (params?.receipt_status === 'pending' || params?.receipt_status === 'accepted') {
+  if (params?.receipt_status) {
     sp.set('receipt_status', params.receipt_status)
   }
   if (params?.shipment_status === 'pending' || params?.shipment_status === 'shipped') {
@@ -303,6 +363,10 @@ export type InventoryBalancesListParams = {
   sku?: string
   name?: string
   only_positive?: boolean
+  has_defect?: boolean
+  has_uninspected?: boolean
+  no_good?: boolean
+  only_defect?: boolean
   sort?: string
 }
 
@@ -319,6 +383,10 @@ export function getInventoryBalances(params?: InventoryBalancesListParams) {
   if (params?.sku?.trim()) sp.set('sku', params.sku.trim())
   if (params?.name?.trim()) sp.set('name', params.name.trim())
   if (params?.only_positive === false) sp.set('only_positive', 'false')
+  if (params?.has_defect) sp.set('has_defect', 'true')
+  if (params?.has_uninspected) sp.set('has_uninspected', 'true')
+  if (params?.no_good) sp.set('no_good', 'true')
+  if (params?.only_defect) sp.set('only_defect', 'true')
   if (params?.sort) sp.set('sort', params.sort)
   const q = sp.toString()
   return request<InventoryBalanceListResponse>(

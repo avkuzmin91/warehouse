@@ -17,7 +17,17 @@ import {
 } from '../api/inventoryApi'
 import { resolvePublicUploadSrc } from '../api/constants'
 
-const FILTER_KEYS = ['client_id', 'sku', 'name', 'color_id', 'size_id'] as const
+const FILTER_KEYS = [
+  'client_id',
+  'sku',
+  'name',
+  'color_id',
+  'size_id',
+  'has_defect',
+  'has_uninspected',
+  'no_good',
+  'only_defect',
+] as const
 
 function dictOptions(items: { id: string; name: string }[], placeholder: string) {
   return [{ value: '', label: placeholder }, ...items.map((i) => ({ value: i.id, label: i.name }))]
@@ -60,6 +70,38 @@ export function InventoryBalancesPage() {
       { name: 'name', type: 'text', placeholder: 'Название' },
       { name: 'color_id', type: 'dictionary_autocomplete', options: dictOptions(colors, 'Цвет') },
       { name: 'size_id', type: 'dictionary_autocomplete', options: dictOptions(sizes, 'Размер') },
+      {
+        name: 'only_defect',
+        type: 'dictionary_autocomplete',
+        options: [
+          { value: '', label: 'Все типы' },
+          { value: 'true', label: 'Только брак' },
+        ],
+      },
+      {
+        name: 'has_defect',
+        type: 'dictionary_autocomplete',
+        options: [
+          { value: '', label: 'Наличие брака' },
+          { value: 'true', label: 'Есть брак' },
+        ],
+      },
+      {
+        name: 'has_uninspected',
+        type: 'dictionary_autocomplete',
+        options: [
+          { value: '', label: 'Непроверенное' },
+          { value: 'true', label: 'Есть непроверенное' },
+        ],
+      },
+      {
+        name: 'no_good',
+        type: 'dictionary_autocomplete',
+        options: [
+          { value: '', label: 'Годный товар' },
+          { value: 'true', label: 'Нет годного товара' },
+        ],
+      },
     ],
     [clients, colors, sizes],
   )
@@ -118,12 +160,39 @@ export function InventoryBalancesPage() {
       },
       {
         key: 'quantity',
-        title: 'Остаток',
+        title: 'Всего',
         sortable: true,
         render: (v) => {
           const n = Math.max(0, Number(v) || 0)
           const cls = n <= 0 ? 'qty-zero' : 'qty-positive'
           return <span className={cls}>{n}</span>
+        },
+      },
+      {
+        key: 'good_qty',
+        title: 'Годный',
+        sortable: false,
+        render: (_v, row) => {
+          const n = Math.max(0, Number(row.good_qty) || 0)
+          return <span className={n > 0 ? 'qty-positive' : 'qty-zero'}>{n}</span>
+        },
+      },
+      {
+        key: 'defect_qty',
+        title: 'Брак',
+        sortable: false,
+        render: (_v, row) => {
+          const n = Math.max(0, Number(row.defect_qty) || 0)
+          return <span className={n > 0 ? 'balance-defect-qty' : 'qty-zero'}>{n}</span>
+        },
+      },
+      {
+        key: 'uninspected_qty',
+        title: 'Не проверено',
+        sortable: false,
+        render: (_v, row) => {
+          const n = Math.max(0, Number(row.uninspected_qty) || 0)
+          return <span className={n > 0 ? 'balance-uninspected-qty' : 'qty-zero'}>{n}</span>
         },
       },
     ],
@@ -143,6 +212,10 @@ export function InventoryBalancesPage() {
       sku: apiParams.sku,
       name: apiParams.name,
       only_positive: true,
+      has_defect: apiParams.has_defect === 'true' ? true : undefined,
+      has_uninspected: apiParams.has_uninspected === 'true' ? true : undefined,
+      no_good: apiParams.no_good === 'true' ? true : undefined,
+      only_defect: apiParams.only_defect === 'true' ? true : undefined,
       sort: apiParams.sort,
     })
       .then((res) => {
@@ -185,10 +258,22 @@ export function InventoryBalancesPage() {
               name: query.filters.name,
               color_id: query.filters.color_id,
               size_id: query.filters.size_id,
+              only_defect: query.filters.only_defect,
+              has_defect: query.filters.has_defect,
+              has_uninspected: query.filters.has_uninspected,
+              no_good: query.filters.no_good,
             }}
             onTextFilterDebounced={onTextFilterDebounced}
             onSelectChange={(name, value) => {
-              if (name === 'client_id' || name === 'color_id' || name === 'size_id') {
+              if (
+                name === 'client_id' ||
+                name === 'color_id' ||
+                name === 'size_id' ||
+                name === 'only_defect' ||
+                name === 'has_defect' ||
+                name === 'has_uninspected' ||
+                name === 'no_good'
+              ) {
                 setFilters({ [name]: value ?? undefined })
               }
             }}

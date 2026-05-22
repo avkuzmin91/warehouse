@@ -32,6 +32,14 @@ export type ListFilters = {
   date_to?: string
   /** Фильтр списка пользователей по роли (URL: users_role). */
   users_role?: string
+  /** Остатки: есть брак ('true'). */
+  has_defect?: string
+  /** Остатки: есть непроверенное ('true'). */
+  has_uninspected?: string
+  /** Остатки: нет годного ('true'). */
+  no_good?: string
+  /** Остатки: только брак ('true'). */
+  only_defect?: string
 }
 
 export type ParsedListQuery = {
@@ -140,10 +148,23 @@ export function parseListQueryFromSearchParams(
       filters.users_role = parseUsersRoleParam(sp.get('users_role'))
     } else if (key === 'receipt_status') {
       const v = sp.get('receipt_status')
-      filters.receipt_status = v === 'pending' || v === 'accepted' ? v : undefined
+      const validReceipt = ['pending', 'accepted', 'awaiting_inspection', 'partially_inspected', 'inspected']
+      filters.receipt_status = v != null && validReceipt.includes(v) ? v : undefined
     } else if (key === 'shipment_status') {
       const v = sp.get('shipment_status')
       filters.shipment_status = v === 'pending' || v === 'shipped' ? v : undefined
+    } else if (key === 'has_defect') {
+      const v = sp.get('has_defect')
+      filters.has_defect = v === 'true' ? 'true' : undefined
+    } else if (key === 'has_uninspected') {
+      const v = sp.get('has_uninspected')
+      filters.has_uninspected = v === 'true' ? 'true' : undefined
+    } else if (key === 'no_good') {
+      const v = sp.get('no_good')
+      filters.no_good = v === 'true' ? 'true' : undefined
+    } else if (key === 'only_defect') {
+      const v = sp.get('only_defect')
+      filters.only_defect = v === 'true' ? 'true' : undefined
     }
   }
 
@@ -232,12 +253,25 @@ export function applyListQueryToSearchParams(
       else next.delete('users_role')
     } else if (key === 'receipt_status') {
       const v = q.filters.receipt_status
-      if (v === 'pending' || v === 'accepted') next.set('receipt_status', v)
+      const validReceipt = ['pending', 'accepted', 'awaiting_inspection', 'partially_inspected', 'inspected']
+      if (v != null && validReceipt.includes(v)) next.set('receipt_status', v)
       else next.delete('receipt_status')
     } else if (key === 'shipment_status') {
       const v = q.filters.shipment_status
       if (v === 'pending' || v === 'shipped') next.set('shipment_status', v)
       else next.delete('shipment_status')
+    } else if (key === 'has_defect') {
+      if (q.filters.has_defect === 'true') next.set('has_defect', 'true')
+      else next.delete('has_defect')
+    } else if (key === 'has_uninspected') {
+      if (q.filters.has_uninspected === 'true') next.set('has_uninspected', 'true')
+      else next.delete('has_uninspected')
+    } else if (key === 'no_good') {
+      if (q.filters.no_good === 'true') next.set('no_good', 'true')
+      else next.delete('no_good')
+    } else if (key === 'only_defect') {
+      if (q.filters.only_defect === 'true') next.set('only_defect', 'true')
+      else next.delete('only_defect')
     }
   }
 
@@ -259,12 +293,16 @@ export type ListApiQueryParams = {
   color_id?: string
   size_id?: string
   op_type?: 'in' | 'out'
-  receipt_status?: 'pending' | 'accepted'
+  receipt_status?: string
   shipment_status?: 'pending' | 'shipped'
   actuality_id?: string
   sort?: string
   date_from?: string
   date_to?: string
+  has_defect?: string
+  has_uninspected?: string
+  no_good?: string
+  only_defect?: string
 }
 
 export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
@@ -294,7 +332,7 @@ export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   const opT = q.filters.op_type
   if (opT === 'in' || opT === 'out') out.op_type = opT
   const rs = q.filters.receipt_status
-  if (rs === 'pending' || rs === 'accepted') out.receipt_status = rs
+  if (rs != null && String(rs).trim() !== '') out.receipt_status = String(rs).trim()
   const ss = q.filters.shipment_status
   if (ss === 'pending' || ss === 'shipped') out.shipment_status = ss
   const aid = q.filters.actuality_id
@@ -305,6 +343,14 @@ export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   const dt = q.filters.date_to
   const dtParsed = dt != null ? parseYyyyMmDdParam(dt) : undefined
   if (dtParsed) out.date_to = dtParsed
+  const hd = q.filters.has_defect
+  if (hd === 'true') out.has_defect = 'true'
+  const hu = q.filters.has_uninspected
+  if (hu === 'true') out.has_uninspected = 'true'
+  const ng = q.filters.no_good
+  if (ng === 'true') out.no_good = 'true'
+  const od = q.filters.only_defect
+  if (od === 'true') out.only_defect = 'true'
   const sortStr = serializeSortParam(q.sort)
   if (sortStr) out.sort = sortStr
   return out

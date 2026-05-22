@@ -2753,12 +2753,12 @@ body {
 /* Комментарий: несколько строк, скролл в стиле приложения */
 .product-create-form textarea.field-input.inventory-operation-comment {
   height: auto;
-  min-height: calc(3 * 1.35em + 20px);
+  min-height: calc(1 * 1.35em + 20px);
   padding-top: 10px;
   padding-bottom: 10px;
   line-height: 1.35;
   resize: vertical;
-  overflow-y: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: rgba(147, 110, 255, 0.55) rgba(18, 12, 40, 0.65);
 }

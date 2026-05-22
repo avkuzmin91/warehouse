@@ -2,15 +2,18 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  adjustReceiptDefect,
   createReceipt,
   findProductVariantForReceipt,
   getReceipt,
   patchReceipt,
+  conductInspection,
   getInventoryColorsForProductSku,
   getInventorySizesForProductSkuAndColor,
   getInventoryProductSkus,
   type DictionaryItem,
   type ProductVariantFindResponse,
+  type ReceiptStatus,
 } from '../api/inventoryApi'
 import { resolvePublicUploadSrc } from '../api/constants'
 import { me } from '../api/sessionAuth'
@@ -41,18 +44,43 @@ function localTodayYmd(): string {
   return `${y}-${m}-${day}`
 }
 
-function ReceiptStatusBadge({
-  status,
-  overdue,
-}: {
-  status: 'pending' | 'accepted'
-  overdue?: boolean
-}) {
-  const pending = status === 'pending'
-  const overdueActive = Boolean(pending && overdue)
+const RECEIPT_STATUS_META: Record<
+  ReceiptStatus,
+  { modClass: string; label: string; hint: string }
+> = {
+  pending: {
+    modClass: 'receipt-form__status-badge--pending',
+    label: 'Ожидает поступления',
+    hint: 'ещё не на остатках',
+  },
+  accepted: {
+    modClass: 'receipt-form__status-badge--accepted',
+    label: 'Принят на склад',
+    hint: 'учтён на складе',
+  },
+  awaiting_inspection: {
+    modClass: 'receipt-form__status-badge--awaiting-inspection',
+    label: 'Ожидает проверки',
+    hint: 'на складе',
+  },
+  partially_inspected: {
+    modClass: 'receipt-form__status-badge--partially-inspected',
+    label: 'Частично проверено',
+    hint: 'проверка идёт',
+  },
+  inspected: {
+    modClass: 'receipt-form__status-badge--inspected',
+    label: 'Проверено',
+    hint: 'проверка завершена',
+  },
+}
+
+function ReceiptStatusBadge({ status, overdue }: { status: ReceiptStatus; overdue?: boolean }) {
+  const meta = RECEIPT_STATUS_META[status] ?? RECEIPT_STATUS_META.accepted
+  const overdueActive = Boolean(status === 'pending' && overdue)
   const className = [
     'receipt-form__status-badge',
-    pending ? 'receipt-form__status-badge--pending' : 'receipt-form__status-badge--accepted',
+    meta.modClass,
     overdueActive ? 'receipt-form__status-badge--overdue' : '',
   ]
     .filter(Boolean)
@@ -65,11 +93,58 @@ function ReceiptStatusBadge({
     >
       <span className="receipt-form__status-badge__mark" aria-hidden />
       <span className="receipt-form__status-badge__label">
-        {pending ? 'Ожидает приемки' : 'Принят на склад'}
+        {overdueActive ? 'Просрочено' : meta.label}
       </span>
       <span className="receipt-form__status-badge__hint">
-        {pending ? (overdueActive ? 'просрочено' : 'ещё не на остатках') : 'учтён на складе'}
+        {overdueActive ? 'просрочено' : meta.hint}
       </span>
+    </div>
+  )
+}
+
+function QuantityInfoCard({
+  quantity,
+  inspectedQty,
+  defectQty,
+}: {
+  quantity: number
+  inspectedQty: number
+  defectQty: number
+}) {
+  const unchecked = Math.max(0, quantity - inspectedQty)
+  const percent = quantity > 0 ? Math.round((inspectedQty / quantity) * 100) : 0
+  return (
+    <div className="receipt-qty-card">
+      <div className="receipt-qty-card__title">Количество товара</div>
+      <div className="receipt-qty-card__total">{quantity} шт</div>
+      <div className="receipt-qty-card__rows">
+        <div className="receipt-qty-card__row">
+          <span>Всего поступило</span>
+          <span className="receipt-qty-card__row-val">{quantity}</span>
+        </div>
+        <div className="receipt-qty-card__row">
+          <span>Проверено</span>
+          <span className="receipt-qty-card__row-val receipt-qty-card__row-val--green">
+            {inspectedQty}
+          </span>
+        </div>
+        <div className="receipt-qty-card__row">
+          <span>Брак</span>
+          <span className="receipt-qty-card__row-val receipt-qty-card__row-val--red">
+            {defectQty}
+          </span>
+        </div>
+        <div className="receipt-qty-card__row">
+          <span>Не проверено</span>
+          <span className="receipt-qty-card__row-val receipt-qty-card__row-val--muted">
+            {unchecked}
+          </span>
+        </div>
+      </div>
+      <div className="receipt-qty-card__progress-wrap">
+        <div className="receipt-qty-card__progress-bar" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="receipt-qty-card__progress-label">Проверено {percent}%</div>
     </div>
   )
 }
@@ -116,15 +191,31 @@ export function ReceiptForm({ receiptId }: Props) {
   const [quantityStr, setQuantityStr] = useState('')
   const [receiptDate, setReceiptDate] = useState(() => localTodayYmd())
   const [comment, setComment] = useState('')
-  const [receiptStatus, setReceiptStatus] = useState<'pending' | 'accepted'>('accepted')
+  const [receiptStatus, setReceiptStatus] = useState<ReceiptStatus>('awaiting_inspection')
+  const [inspectedQty, setInspectedQty] = useState(0)
+  const [defectQty, setDefectQty] = useState(0)
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const findSeq = useRef(0)
+
+  const [showInspectionPanel, setShowInspectionPanel] = useState(false)
+  const [sessionInspected, setSessionInspected] = useState('')
+  const [sessionDefect, setSessionDefect] = useState('')
+  const [inspectionError, setInspectionError] = useState('')
+  const [inspectionSubmitting, setInspectionSubmitting] = useState(false)
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const isAdmin = currentUser?.role === 'admin'
+
+  // Корректировка брака
+  const [adjustDefectStr, setAdjustDefectStr] = useState('')
+  const [adjustComment, setAdjustComment] = useState('')
+  const [adjustError, setAdjustError] = useState('')
+  const [adjustSubmitting, setAdjustSubmitting] = useState(false)
+
+  const commentRef = useRef<HTMLTextAreaElement>(null)
 
   const showSize = Boolean(findRes?.needs_size || findRes?.variant?.requires_size)
 
@@ -220,6 +311,8 @@ export function ReceiptForm({ receiptId }: Props) {
         setReceiptDate(d.created_at.slice(0, 10))
         setComment(d.comment || '')
         setReceiptStatus(d.receipt_status)
+        setInspectedQty(d.inspected_qty ?? 0)
+        setDefectQty(d.defect_qty ?? 0)
         setReady(true)
       })
       .catch((e) => {
@@ -295,15 +388,16 @@ export function ReceiptForm({ receiptId }: Props) {
       ready,
   )
 
+  const dateRequiresNotFuture = receiptStatus !== 'pending'
   const canSubmitEdit = Boolean(
-    canSubmitBase && (receiptStatus === 'accepted' ? receiptDateOkAccepted : true),
+    canSubmitBase && (dateRequiresNotFuture ? receiptDateOkAccepted : true),
   )
 
   const canSubmit = isEdit ? canSubmitEdit : canSubmitBase
 
   const canSubmitAcceptCreate = Boolean(canSubmitBase && receiptDateOkAccepted)
 
-  async function submitCreate(intent: 'pending' | 'accepted') {
+  async function submitCreate(intent: 'pending' | 'awaiting_inspection') {
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
       setSubmitError('Сначала выберите штрих-код и цвет')
@@ -317,7 +411,7 @@ export function ReceiptForm({ receiptId }: Props) {
       setSubmitError('Укажите дату поступления')
       return
     }
-    if (intent === 'accepted' && !receiptDateOkAccepted) {
+    if (intent === 'awaiting_inspection' && !receiptDateOkAccepted) {
       setSubmitError('Для принятого поступления дата не может быть позже сегодняшнего дня')
       return
     }
@@ -366,7 +460,7 @@ export function ReceiptForm({ receiptId }: Props) {
         quantity: qty,
         comment: note,
         receipt_date: receiptDate,
-        receipt_status: 'accepted' as const,
+        receipt_status: 'awaiting_inspection' as const,
       }
       if (nextVid !== loadedVariantId) {
         await patchReceipt(receiptId, { ...base, variant_id: nextVid })
@@ -396,6 +490,40 @@ export function ReceiptForm({ receiptId }: Props) {
     }
   }
 
+  async function submitInspection() {
+    if (!receiptId?.trim()) return
+    const inspQty = parseInt(sessionInspected, 10)
+    const defQty = parseInt(sessionDefect || '0', 10)
+    if (!Number.isFinite(inspQty) || inspQty < 0) {
+      setInspectionError('Укажите количество проверенных (≥ 0)')
+      return
+    }
+    if (!Number.isFinite(defQty) || defQty < 0) {
+      setInspectionError('Укажите количество брака (≥ 0)')
+      return
+    }
+    if (defQty > inspQty) {
+      setInspectionError('Брак не может превышать проверенное количество')
+      return
+    }
+    setInspectionError('')
+    setInspectionSubmitting(true)
+    try {
+      await conductInspection(receiptId, { inspected_qty: inspQty, defect_qty: defQty })
+      const updated = await getReceipt(receiptId)
+      setReceiptStatus(updated.receipt_status)
+      setInspectedQty(updated.inspected_qty ?? 0)
+      setDefectQty(updated.defect_qty ?? 0)
+      setShowInspectionPanel(false)
+      setSessionInspected('')
+      setSessionDefect('')
+    } catch (e) {
+      setInspectionError(e instanceof Error ? e.message : 'Ошибка сохранения')
+    } finally {
+      setInspectionSubmitting(false)
+    }
+  }
+
   async function handleDeleteReceipt() {
     if (!receiptId?.trim()) return
     setSubmitError('')
@@ -412,12 +540,51 @@ export function ReceiptForm({ receiptId }: Props) {
     }
   }
 
+  // Auto-resize comment textarea
+  useEffect(() => {
+    const el = commentRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [comment])
+
+  async function submitDefectAdjust() {
+    if (!receiptId?.trim()) return
+    const newDefect = parseInt(adjustDefectStr, 10)
+    if (!Number.isFinite(newDefect) || newDefect < 0) {
+      setAdjustError('Укажите количество брака (≥ 0)')
+      return
+    }
+    if (newDefect > inspectedQty) {
+      setAdjustError(`Брак не может превышать проверенное количество (${inspectedQty})`)
+      return
+    }
+    setAdjustError('')
+    setAdjustSubmitting(true)
+    try {
+      await adjustReceiptDefect(receiptId, {
+        defect_qty: newDefect,
+        comment: adjustComment.trim() || null,
+      })
+      const updated = await getReceipt(receiptId)
+      setDefectQty(updated.defect_qty ?? 0)
+      setComment(updated.comment || '')
+      setAdjustDefectStr('')
+      setAdjustComment('')
+    } catch (e) {
+      setAdjustError(e instanceof Error ? e.message : 'Ошибка сохранения')
+    } finally {
+      setAdjustSubmitting(false)
+    }
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!isEdit) {
-      void submitCreate('accepted')
+      void submitCreate('awaiting_inspection')
       return
     }
+    if (receiptStatus === 'inspected') return
     setSubmitError('')
     if (!findRes?.found || !findRes.variant) {
       setSubmitError('Сначала выберите штрих-код и цвет')
@@ -468,6 +635,11 @@ export function ReceiptForm({ receiptId }: Props) {
   const v = findRes?.variant
   const imgSrc = v?.first_image_url ? resolvePublicUploadSrc(v.first_image_url) : ''
   const showStatusAtTop = isEdit && ready
+  const isInspected = receiptStatus === 'inspected'
+  const showInspectionAction =
+    receiptStatus === 'awaiting_inspection' || receiptStatus === 'partially_inspected'
+  const displayQty = quantityNum || 0
+  const showQtyCard = isEdit || (quantityStr.trim() !== '' && displayQty > 0)
 
   if (isEdit && !ready && !loadError) {
     return <p className="receipt-form__lookup-msg">Загрузка…</p>
@@ -494,8 +666,9 @@ export function ReceiptForm({ receiptId }: Props) {
           id={`${formId}-receipt-date`}
           value={receiptDate}
           onChange={setReceiptDate}
-          max={isEdit && receiptStatus === 'accepted' ? localTodayYmd() : undefined}
+          max={isEdit && receiptStatus !== 'pending' ? localTodayYmd() : undefined}
           ariaLabel="Дата поступления"
+          disabled={isInspected}
         />
 
         <label className="field-label" htmlFor={`${formId}-sku`}>
@@ -516,6 +689,7 @@ export function ReceiptForm({ receiptId }: Props) {
           required
           allowClear
           listPortal
+          disabled={isInspected}
         />
 
         <label className="field-label" htmlFor={`${formId}-color`}>
@@ -534,7 +708,7 @@ export function ReceiptForm({ receiptId }: Props) {
           }}
           required
           allowClear
-          disabled={!sku.trim()}
+          disabled={!sku.trim() || isInspected}
           listPortal
         />
 
@@ -553,7 +727,7 @@ export function ReceiptForm({ receiptId }: Props) {
               onChange={setSizeId}
               required
               allowClear
-              disabled={!sku.trim() || !colorId.trim()}
+              disabled={!sku.trim() || !colorId.trim() || isInspected}
               listPortal
             />
           </>
@@ -582,17 +756,89 @@ export function ReceiptForm({ receiptId }: Props) {
             setQuantityStr(String(n))
           }}
           inputClassName="field-input field-input--narrow"
+          disabled={isInspected}
         />
+
+        {showQtyCard ? (
+          <QuantityInfoCard
+            quantity={displayQty}
+            inspectedQty={isEdit ? inspectedQty : 0}
+            defectQty={isEdit ? defectQty : 0}
+          />
+        ) : null}
+
+        {showInspectionPanel ? (
+          <div className="receipt-inspection-panel">
+            <p className="receipt-inspection-panel__title">
+              {receiptStatus === 'awaiting_inspection' ? 'Провести проверку' : 'Продолжить проверку'}
+            </p>
+            <div className="receipt-inspection-panel__row">
+              <div className="receipt-inspection-panel__field">
+                <label className="receipt-inspection-panel__label" htmlFor={`${formId}-insp-qty`}>
+                  Проверено в этой партии
+                </label>
+                <ProductDimNumberInput
+                  id={`${formId}-insp-qty`}
+                  value={sessionInspected}
+                  onChange={setSessionInspected}
+                  inputClassName="field-input field-input--narrow"
+                />
+              </div>
+              <div className="receipt-inspection-panel__field">
+                <label className="receipt-inspection-panel__label" htmlFor={`${formId}-def-qty`}>
+                  Из них брак
+                </label>
+                <ProductDimNumberInput
+                  id={`${formId}-def-qty`}
+                  value={sessionDefect}
+                  onChange={setSessionDefect}
+                  inputClassName="field-input field-input--narrow"
+                />
+              </div>
+            </div>
+            {inspectionError ? (
+              <p className="error-text" style={{ margin: '0' }}>
+                {inspectionError}
+              </p>
+            ) : null}
+            <div className="receipt-inspection-panel__actions">
+              <button
+                type="button"
+                className="btn btn--primary btn--form-action"
+                disabled={inspectionSubmitting}
+                onClick={() => void submitInspection()}
+              >
+                Сохранить результат
+              </button>
+              <button
+                type="button"
+                className="btn btn--secondary btn--form-action"
+                disabled={inspectionSubmitting}
+                onClick={() => {
+                  setShowInspectionPanel(false)
+                  setInspectionError('')
+                  setSessionInspected('')
+                  setSessionDefect('')
+                }}
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <label className="field-label" htmlFor={`${formId}-comment`}>
           Комментарий
         </label>
         <textarea
+          ref={commentRef}
           id={`${formId}-comment`}
           className="field-input inventory-operation-comment"
-          rows={3}
+          rows={1}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
+          disabled={isInspected}
+          style={{ overflow: 'hidden' }}
         />
 
         <div className="receipt-form__lookup" aria-live="polite">
@@ -615,7 +861,9 @@ export function ReceiptForm({ receiptId }: Props) {
                   </div>
                 ) : null}
                 <div className="receipt-form__card-details">
-                  <p className="receipt-form__product-name receipt-form__product-name--details">{v.product_name}</p>
+                  <p className="receipt-form__product-name receipt-form__product-name--details">
+                    {v.product_name}
+                  </p>
                   <p className="receipt-form__dims">
                     Клиент: {v.client_name?.trim() ? v.client_name : '—'}
                   </p>
@@ -637,50 +885,125 @@ export function ReceiptForm({ receiptId }: Props) {
         {submitError ? <p className="error-text product-create-error">{submitError}</p> : null}
       </form>
 
+      {isEdit && isInspected ? (
+        <div className="receipt-form__defect-adjust">
+          <p className="receipt-form__defect-adjust__title">Корректировка брака</p>
+          <div className="receipt-form__defect-adjust__row">
+            <span className="receipt-form__defect-adjust__label">Текущий брак:</span>
+            <span className="receipt-form__defect-adjust__val">{defectQty}</span>
+          </div>
+          <label className="field-label" htmlFor={`${formId}-adjust-defect`}>
+            Новое количество брака
+          </label>
+          <ProductDimNumberInput
+            id={`${formId}-adjust-defect`}
+            value={adjustDefectStr}
+            onChange={setAdjustDefectStr}
+            inputClassName="field-input field-input--narrow"
+          />
+          <label className="field-label" htmlFor={`${formId}-adjust-comment`}>
+            Комментарий изменения
+          </label>
+          <input
+            id={`${formId}-adjust-comment`}
+            type="text"
+            className="field-input"
+            value={adjustComment}
+            onChange={(e) => setAdjustComment(e.target.value)}
+            placeholder="Причина корректировки"
+          />
+          {adjustError ? (
+            <p className="error-text" style={{ margin: '4px 0 0' }}>
+              {adjustError}
+            </p>
+          ) : null}
+          <div className="receipt-form__defect-adjust__actions">
+            <button
+              type="button"
+              className="btn btn--primary btn--form-action"
+              disabled={adjustSubmitting || adjustDefectStr.trim() === ''}
+              onClick={() => void submitDefectAdjust()}
+            >
+              Сохранить корректировку
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {isEdit ? (
-        <ActionBar
-          leading={
-            receiptStatus === 'pending' ? (
-              <div className="users-actions">
-                <button
-                  type="button"
-                  className="btn btn--primary btn--form-action"
-                  disabled={submitting}
-                  onClick={() => void finalizeReceipt()}
-                >
-                  Принять на склад
-                </button>
-              </div>
-            ) : receiptStatus === 'accepted' ? (
-              <div className="users-actions">
-                <button
-                  type="button"
-                  className="btn btn--primary btn--form-action"
-                  disabled={submitting}
-                  onClick={() => void revertReceiptToPending()}
-                >
-                  Вернуть в ожидание
-                </button>
-              </div>
-            ) : undefined
-          }
-          trailingEnd={
-            isAdmin ? (
+        isInspected ? (
+          <div className="product-form-actions action-bar">
+            <div className="action-bar__trailing">
               <button
                 type="button"
-                className="btn btn--secondary btn--form-action action-bar__btn--danger"
-                disabled={submitting || deleteSubmitting}
-                onClick={() => setDeleteOpen(true)}
+                className="btn btn--secondary btn--form-action"
+                onClick={() => navigate('/inventory/receipts')}
               >
-                Удалить
+                Назад к списку
               </button>
-            ) : undefined
-          }
-          primaryLabel="Сохранить"
-          submitFormId={formId}
-          primaryDisabled={!canSubmit}
-          onSecondary={() => navigate('/inventory/receipts')}
-        />
+            </div>
+          </div>
+        ) : (
+          <ActionBar
+            leading={
+              receiptStatus === 'pending' ? (
+                <div className="users-actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--form-action"
+                    disabled={submitting}
+                    onClick={() => void finalizeReceipt()}
+                  >
+                    Принять на склад
+                  </button>
+                </div>
+              ) : receiptStatus === 'accepted' ? (
+                <div className="users-actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--form-action"
+                    disabled={submitting}
+                    onClick={() => void revertReceiptToPending()}
+                  >
+                    Вернуть в ожидание
+                  </button>
+                </div>
+              ) : showInspectionAction ? (
+                <div className="users-actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--form-action"
+                    disabled={submitting || inspectionSubmitting}
+                    onClick={() => {
+                      setShowInspectionPanel((p) => !p)
+                      setInspectionError('')
+                    }}
+                  >
+                    {receiptStatus === 'awaiting_inspection'
+                      ? 'Провести проверку'
+                      : 'Продолжить проверку'}
+                  </button>
+                </div>
+              ) : undefined
+            }
+            trailingEnd={
+              isAdmin && receiptStatus === 'pending' ? (
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--form-action action-bar__btn--danger"
+                  disabled={submitting || deleteSubmitting}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  Удалить
+                </button>
+              ) : undefined
+            }
+            primaryLabel="Сохранить"
+            submitFormId={formId}
+            primaryDisabled={!canSubmit}
+            onSecondary={() => navigate('/inventory/receipts')}
+          />
+        )
       ) : (
         <div className="product-form-actions action-bar">
           <div className="action-bar__trailing">
@@ -696,7 +1019,7 @@ export function ReceiptForm({ receiptId }: Props) {
               type="button"
               className="btn btn--primary btn--form-action"
               disabled={!canSubmitAcceptCreate}
-              onClick={() => void submitCreate('accepted')}
+              onClick={() => void submitCreate('awaiting_inspection')}
             >
               Принять на склад
             </button>

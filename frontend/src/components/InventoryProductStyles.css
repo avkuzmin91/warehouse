@@ -776,6 +776,89 @@
   color: rgba(209, 250, 229, 0.95);
 }
 
+/* --- awaiting_inspection --- */
+.receipt-form__status-badge--awaiting-inspection {
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.38) 0%,
+    rgba(67, 56, 202, 0.22) 45%,
+    rgba(18, 16, 40, 0.92) 100%
+  );
+  border-color: rgba(129, 140, 248, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.15) inset,
+    0 0 28px rgba(99, 102, 241, 0.18),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+.receipt-form__status-badge--awaiting-inspection .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #c7d2fe, #6366f1 55%, #4338ca);
+  color: rgba(129, 140, 248, 0.85);
+  animation: receipt-status-pulse-indigo 2s ease-in-out infinite;
+}
+.receipt-form__status-badge--awaiting-inspection .receipt-form__status-badge__hint {
+  border-color: rgba(129, 140, 248, 0.35);
+  background: rgba(49, 46, 129, 0.38);
+  color: rgba(224, 231, 255, 0.95);
+}
+
+/* --- partially_inspected --- */
+.receipt-form__status-badge--partially-inspected {
+  background: linear-gradient(
+    135deg,
+    rgba(249, 115, 22, 0.36) 0%,
+    rgba(194, 65, 12, 0.2) 48%,
+    rgba(30, 18, 14, 0.9) 100%
+  );
+  border-color: rgba(251, 146, 60, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(251, 146, 60, 0.15) inset,
+    0 0 28px rgba(249, 115, 22, 0.18),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+.receipt-form__status-badge--partially-inspected .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #fed7aa, #f97316 55%, #c2410c);
+  color: rgba(251, 146, 60, 0.85);
+  animation: receipt-status-pulse-orange 2s ease-in-out infinite;
+}
+.receipt-form__status-badge--partially-inspected .receipt-form__status-badge__hint {
+  border-color: rgba(251, 146, 60, 0.35);
+  background: rgba(124, 45, 18, 0.38);
+  color: rgba(255, 237, 213, 0.95);
+}
+
+/* --- inspected (same green palette as accepted) --- */
+.receipt-form__status-badge--inspected {
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.38) 0%,
+    rgba(21, 128, 61, 0.22) 45%,
+    rgba(18, 26, 28, 0.92) 100%
+  );
+  border-color: rgba(52, 211, 153, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(52, 211, 153, 0.15) inset,
+    0 0 32px rgba(34, 197, 94, 0.18),
+    0 12px 36px rgba(0, 0, 0, 0.4);
+}
+.receipt-form__status-badge--inspected .receipt-form__status-badge__mark {
+  background: radial-gradient(circle at 30% 30%, #bbf7d0, #22c55e 55%, #15803d);
+  color: rgba(74, 222, 128, 0.85);
+}
+.receipt-form__status-badge--inspected .receipt-form__status-badge__hint {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(6, 78, 59, 0.38);
+  color: rgba(209, 250, 229, 0.95);
+}
+
+@keyframes receipt-status-pulse-indigo {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 10px rgba(129, 140, 248, 0.55); }
+  50% { opacity: 0.92; transform: scale(1.08); box-shadow: 0 0 18px rgba(99, 102, 241, 0.85); }
+}
+@keyframes receipt-status-pulse-orange {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 10px rgba(251, 146, 60, 0.55); }
+  50% { opacity: 0.92; transform: scale(1.08); box-shadow: 0 0 18px rgba(249, 115, 22, 0.85); }
+}
+
 @media (max-width: 520px) {
   .receipt-form__status-badge {
     flex-wrap: wrap;
@@ -785,6 +868,173 @@
     width: 100%;
     text-align: center;
   }
+}
+
+/* ===== QuantityInfoCard ===== */
+.receipt-qty-card {
+  border-radius: 14px;
+  border: 1px solid var(--card-border);
+  background: linear-gradient(160deg, rgba(23, 16, 57, 0.56), var(--card-bg));
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(126, 92, 255, 0.08);
+  padding: 16px 18px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+.receipt-qty-card__title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.receipt-qty-card__total {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 14px;
+  line-height: 1.1;
+}
+.receipt-qty-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+  border-top: 1px solid rgba(126, 92, 255, 0.12);
+  border-bottom: 1px solid rgba(126, 92, 255, 0.12);
+  padding: 10px 0;
+}
+.receipt-qty-card__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.receipt-qty-card__row-val {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.receipt-qty-card__row-val--green { color: #4ade80; }
+.receipt-qty-card__row-val--red   { color: #f87171; }
+.receipt-qty-card__row-val--muted { color: var(--text-muted); }
+.receipt-qty-card__progress-wrap {
+  height: 6px;
+  background: rgba(126, 92, 255, 0.15);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.receipt-qty-card__progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-2), var(--primary));
+  border-radius: 3px;
+  transition: width 0.35s ease;
+  min-width: 0;
+}
+.receipt-qty-card__progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* ===== InspectionPanel ===== */
+.receipt-inspection-panel {
+  border-radius: 12px;
+  border: 1px solid rgba(127, 56, 255, 0.3);
+  background: rgba(35, 24, 73, 0.5);
+  padding: 16px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.receipt-inspection-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0;
+}
+.receipt-inspection-panel__row {
+  display: flex;
+  gap: 12px;
+}
+.receipt-inspection-panel__field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.receipt-inspection-panel__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.receipt-inspection-panel__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ===== DefectAdjust block ===== */
+.receipt-form__defect-adjust {
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  background: rgba(60, 16, 16, 0.35);
+  padding: 16px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.receipt-form__defect-adjust__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0 0 6px;
+}
+.receipt-form__defect-adjust__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.receipt-form__defect-adjust__label {
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.receipt-form__defect-adjust__val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f87171;
+}
+.receipt-form__defect-adjust__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* Compact field overrides inside the adjust block */
+.receipt-form__defect-adjust .field-label {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 0;
+}
+/* Space before second group (comment label follows the number input) */
+.receipt-form__defect-adjust .product-dim-num-field + .field-label {
+  margin-top: 10px;
+}
+.receipt-form__defect-adjust .field-input {
+  height: 40px;
+  min-height: 40px;
+  font-size: 14px;
+  border-radius: 10px;
+  padding: 0 12px;
+  margin-bottom: 0;
+}
+.receipt-form__defect-adjust .product-dim-num-field {
+  margin-bottom: 0;
 }
 
 .receipt-form__lookup {
@@ -816,8 +1066,8 @@
 
 .receipt-form__card-media {
   flex: 0 0 auto;
-  width: min(148px, 38vw);
-  max-width: 148px;
+  width: min(100px, 28vw);
+  max-width: 100px;
 }
 
 .receipt-form__card-details {
@@ -845,7 +1095,7 @@
   color: var(--text-soft, rgba(255, 250, 255, 0.72));
 }
 .receipt-form__photo-wrap {
-  max-width: 148px;
+  max-width: 100px;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgba(147, 110, 255, 0.25);
@@ -864,11 +1114,11 @@
 
   .receipt-form__card-media {
     width: 100%;
-    max-width: 220px;
+    max-width: 140px;
   }
 
   .receipt-form__photo-wrap {
-    max-width: 220px;
+    max-width: 140px;
   }
 }
 
@@ -921,4 +1171,109 @@
   line-height: 1;
   opacity: 0.88;
   pointer-events: none;
+}
+
+/* ===== Сегмент-контрол типа отгрузки ===== */
+.shipment-type-segment {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1.5px solid var(--card-border, #2e3347);
+  margin-bottom: var(--entity-form-gap, 10px);
+  width: fit-content;
+}
+.shipment-type-segment__btn {
+  flex: 1;
+  padding: 7px 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #8898aa);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  outline: none;
+  min-width: 88px;
+}
+.shipment-type-segment__btn:not(:last-child) {
+  border-right: 1.5px solid var(--card-border, #2e3347);
+}
+.shipment-type-segment__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.shipment-type-segment__btn--active {
+  background: var(--accent, #4f8ef7);
+  color: #fff;
+  font-weight: 700;
+}
+.shipment-type-segment__btn--active.shipment-type-segment__btn--defect {
+  background: #e53e3e;
+}
+
+/* ===== Типизированный блок остатков (форма отгрузки) ===== */
+.typed-balance {
+  display: flex;
+  gap: 10px;
+  margin-bottom: var(--entity-form-gap, 10px);
+}
+.typed-balance__item {
+  flex: 1;
+  min-width: 72px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: center;
+  border: 1.5px solid var(--card-border, #2e3347);
+  background: var(--card-bg, #1a1f2e);
+}
+.typed-balance__qty {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.typed-balance__label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary, #8898aa);
+  margin-top: 2px;
+}
+.typed-balance__item--good .typed-balance__qty { color: #4ade80; }
+.typed-balance__item--defect .typed-balance__qty { color: #f87171; }
+.typed-balance__item--uninspected .typed-balance__qty { color: #a78bfa; }
+.typed-balance__loading {
+  font-size: 13px;
+  color: var(--text-secondary, #8898aa);
+  margin: 0 0 10px;
+}
+
+/* ===== Бейдж типа отгрузки в списке ===== */
+.shipment-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.shipment-type-badge--standard {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+.shipment-type-badge--defect {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+}
+
+/* ===== Цвета типизированных остатков в таблице остатков ===== */
+.balance-defect-qty {
+  color: #f87171;
+  font-weight: 600;
+}
+.balance-uninspected-qty {
+  color: #a78bfa;
+  font-weight: 600;
 }

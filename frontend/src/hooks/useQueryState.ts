@@ -29,6 +29,10 @@ export type UseQueryStateFilterKey =
   | 'date_from'
   | 'date_to'
   | 'users_role'
+  | 'has_defect'
+  | 'has_uninspected'
+  | 'no_good'
+  | 'only_defect'
 
 export function useQueryState(options: { filterKeys: readonly UseQueryStateFilterKey[] }) {
   const { filterKeys } = options

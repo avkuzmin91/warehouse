@@ -6,12 +6,14 @@ import {
   findProductVariantForReceipt,
   getInventoryColorsForProductSku,
   getInventoryProductSkus,
-  getInventorySingleBalance,
   getInventorySizesForProductSkuAndColor,
   getShipment,
+  getTypedBalance,
   patchShipment,
   type DictionaryItem,
   type ProductVariantFindResponse,
+  type ShipmentType,
+  type TypedBalanceResponse,
 } from '../api/inventoryApi'
 import { resolvePublicUploadSrc } from '../api/constants'
 import { me } from '../api/sessionAuth'
@@ -79,6 +81,70 @@ function ShipmentStatusBadge({
   )
 }
 
+/** Сегмент-контрол для выбора типа отгрузки */
+function ShipmentTypeSegment({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ShipmentType
+  onChange: (v: ShipmentType) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="shipment-type-segment" role="group" aria-label="Тип отгрузки">
+      <button
+        type="button"
+        className={`shipment-type-segment__btn${value === 'standard' ? ' shipment-type-segment__btn--active' : ''}`}
+        onClick={() => onChange('standard')}
+        disabled={disabled}
+        aria-pressed={value === 'standard'}
+      >
+        Годный
+      </button>
+      <button
+        type="button"
+        className={`shipment-type-segment__btn${value === 'defect' ? ' shipment-type-segment__btn--active shipment-type-segment__btn--defect' : ''}`}
+        onClick={() => onChange('defect')}
+        disabled={disabled}
+        aria-pressed={value === 'defect'}
+      >
+        Брак
+      </button>
+    </div>
+  )
+}
+
+/** Компактный блок остатков: Годный / Брак / Не проверено */
+function TypedBalanceBlock({
+  loading,
+  balance,
+}: {
+  loading: boolean
+  balance: TypedBalanceResponse | null
+}) {
+  if (loading) {
+    return <p className="typed-balance__loading">Остатки: загрузка…</p>
+  }
+  if (!balance) return null
+  return (
+    <div className="typed-balance">
+      <div className="typed-balance__item typed-balance__item--good">
+        <span className="typed-balance__qty">{Math.max(0, balance.good_qty)}</span>
+        <span className="typed-balance__label">Годный</span>
+      </div>
+      <div className="typed-balance__item typed-balance__item--defect">
+        <span className="typed-balance__qty">{Math.max(0, balance.defect_qty)}</span>
+        <span className="typed-balance__label">Брак</span>
+      </div>
+      <div className="typed-balance__item typed-balance__item--uninspected">
+        <span className="typed-balance__qty">{Math.max(0, balance.uninspected_qty)}</span>
+        <span className="typed-balance__label">Не проверено</span>
+      </div>
+    </div>
+  )
+}
+
 export function ShipmentForm({ shipmentId }: Props) {
   const navigate = useNavigate()
   const isEdit = Boolean(shipmentId?.trim())
@@ -122,17 +188,20 @@ export function ShipmentForm({ shipmentId }: Props) {
   const [shipmentDate, setShipmentDate] = useState(() => localTodayYmd())
   const [comment, setComment] = useState('')
   const [shipmentStatus, setShipmentStatus] = useState<'pending' | 'shipped'>('shipped')
+  const [shipmentType, setShipmentType] = useState<ShipmentType>('standard')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const findSeq = useRef(0)
 
-  const [balance, setBalance] = useState<number | null>(null)
+  const [typedBalance, setTypedBalance] = useState<TypedBalanceResponse | null>(null)
   const [balanceLoading, setBalanceLoading] = useState(false)
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const isAdmin = currentUser?.role === 'admin'
+
+  const commentRef = useRef<HTMLTextAreaElement>(null)
 
   const showSize = Boolean(findRes?.needs_size || findRes?.variant?.requires_size)
 
@@ -228,6 +297,7 @@ export function ShipmentForm({ shipmentId }: Props) {
         setShipmentDate(d.created_at.slice(0, 10))
         setComment(d.comment || '')
         setShipmentStatus(d.shipment_status)
+        setShipmentType(d.shipment_type ?? 'standard')
         setReady(true)
       })
       .catch((e) => {
@@ -279,21 +349,21 @@ export function ShipmentForm({ shipmentId }: Props) {
   useEffect(() => {
     const v = findRes?.variant
     if (!findRes?.found || !v) {
-      setBalance(null)
+      setTypedBalance(null)
       return
     }
     let cancelled = false
     setBalanceLoading(true)
-    getInventorySingleBalance({
+    getTypedBalance({
       product_id: v.product_id,
       color_id: v.color_id,
       size_id: v.size_id,
     })
       .then((r) => {
-        if (!cancelled) setBalance(r.quantity)
+        if (!cancelled) setTypedBalance(r)
       })
       .catch(() => {
-        if (!cancelled) setBalance(null)
+        if (!cancelled) setTypedBalance(null)
       })
       .finally(() => {
         if (!cancelled) setBalanceLoading(false)
@@ -310,6 +380,14 @@ export function ShipmentForm({ shipmentId }: Props) {
     Math.floor(quantityNum) === quantityNum &&
     quantityNum >= 1
 
+  // Доступный остаток по выбранному типу
+  const availableBalance =
+    typedBalance == null
+      ? null
+      : shipmentType === 'defect'
+        ? Math.max(0, typedBalance.defect_qty)
+        : Math.max(0, typedBalance.good_qty)
+
   const shipmentDateFormatOk = /^\d{4}-\d{2}-\d{2}$/.test(shipmentDate)
   const shipmentDateOkShipped = shipmentDateFormatOk && shipmentDate <= localTodayYmd()
   /** Просрочка: «Ожидает», дата операции раньше сегодня (ТЗ отгрузки). */
@@ -317,6 +395,9 @@ export function ShipmentForm({ shipmentId }: Props) {
     shipmentStatus === 'pending' &&
     shipmentDateFormatOk &&
     shipmentDate < localTodayYmd()
+
+  const stockEnoughForShipped =
+    availableBalance == null || !quantityValid || availableBalance >= Math.floor(quantityNum)
 
   const canSubmitBase = Boolean(
     findRes?.found &&
@@ -332,9 +413,6 @@ export function ShipmentForm({ shipmentId }: Props) {
   )
 
   const canSubmit = isEdit ? canSubmitEdit : canSubmitBase
-
-  const stockEnoughForShipped =
-    balance == null || !quantityValid || balance >= Math.floor(quantityNum)
 
   const canSubmitShippedCreate = Boolean(
     canSubmitBase && shipmentDateOkShipped && stockEnoughForShipped,
@@ -360,8 +438,11 @@ export function ShipmentForm({ shipmentId }: Props) {
         return
       }
       if (!stockEnoughForShipped) {
+        const avail = availableBalance ?? 0
         setSubmitError(
-          `Недостаточно остатка: доступно ${balance ?? 0}, требуется ${Math.floor(quantityNum)}`,
+          shipmentType === 'defect'
+            ? `Недостаточно брака на складе: доступно ${avail}, требуется ${Math.floor(quantityNum)}`
+            : `Недостаточно доступного товара: доступно ${avail}, требуется ${Math.floor(quantityNum)}`,
         )
         return
       }
@@ -374,6 +455,7 @@ export function ShipmentForm({ shipmentId }: Props) {
         comment: comment.trim() || null,
         shipment_date: shipmentDate,
         shipment_status: intent,
+        shipment_type: shipmentType,
       })
       navigate('/inventory/shipments')
     } catch (e) {
@@ -403,8 +485,11 @@ export function ShipmentForm({ shipmentId }: Props) {
       return
     }
     if (!stockEnoughForShipped) {
+      const avail = availableBalance ?? 0
       setSubmitError(
-        `Недостаточно остатка: доступно ${balance ?? 0}, требуется ${Math.floor(quantityNum)}`,
+        shipmentType === 'defect'
+          ? `Недостаточно брака на складе: доступно ${avail}, требуется ${Math.floor(quantityNum)}`
+          : `Недостаточно доступного товара: доступно ${avail}, требуется ${Math.floor(quantityNum)}`,
       )
       return
     }
@@ -418,6 +503,7 @@ export function ShipmentForm({ shipmentId }: Props) {
         comment: note,
         shipment_date: shipmentDate,
         shipment_status: 'shipped' as const,
+        shipment_type: shipmentType,
       }
       if (nextVid !== loadedVariantId) {
         await patchShipment(shipmentId, { ...base, variant_id: nextVid })
@@ -463,6 +549,14 @@ export function ShipmentForm({ shipmentId }: Props) {
     }
   }
 
+  // Auto-resize comment textarea
+  useEffect(() => {
+    const el = commentRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [comment])
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!isEdit) {
@@ -498,12 +592,14 @@ export function ShipmentForm({ shipmentId }: Props) {
             quantity: qty,
             comment: note,
             shipment_date: shipmentDate,
+            shipment_type: shipmentType,
           })
         } else {
           await patchShipment(shipmentId, {
             quantity: qty,
             comment: note,
             shipment_date: shipmentDate,
+            shipment_type: shipmentType,
           })
         }
         setLoadedVariantId(nextVid)
@@ -610,6 +706,19 @@ export function ShipmentForm({ shipmentId }: Props) {
           </>
         ) : null}
 
+        <label className="field-label">
+          Тип отгрузки
+        </label>
+        <ShipmentTypeSegment
+          value={shipmentType}
+          onChange={setShipmentType}
+          disabled={submitting}
+        />
+
+        {findRes?.found && v ? (
+          <TypedBalanceBlock loading={balanceLoading} balance={typedBalance} />
+        ) : null}
+
         <label className="field-label" htmlFor={`${formId}-qty`}>
           Количество
           <span className="field-label__required" aria-label="обязательное поле">
@@ -635,9 +744,13 @@ export function ShipmentForm({ shipmentId }: Props) {
           inputClassName="field-input field-input--narrow"
         />
 
-        {findRes?.found && v ? (
-          <small className={`field-hint inv-balance-hint ${balance == null ? '' : balance > 0 ? 'qty-positive' : 'qty-zero'}`}>
-            {balanceLoading ? 'Остаток: загрузка…' : `Текущий остаток: ${balance ?? 0}`}
+        {findRes?.found && v && !balanceLoading && availableBalance != null ? (
+          <small
+            className={`field-hint inv-balance-hint ${availableBalance > 0 ? 'qty-positive' : 'qty-zero'}`}
+          >
+            {shipmentType === 'defect'
+              ? `Доступно брака: ${availableBalance}`
+              : `Доступно годного: ${availableBalance}`}
           </small>
         ) : null}
 
@@ -645,11 +758,13 @@ export function ShipmentForm({ shipmentId }: Props) {
           Комментарий
         </label>
         <textarea
+          ref={commentRef}
           id={`${formId}-comment`}
           className="field-input inventory-operation-comment"
-          rows={3}
+          rows={1}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
+          style={{ overflow: 'hidden' }}
         />
 
         <div className="receipt-form__lookup" aria-live="polite">
@@ -722,7 +837,7 @@ export function ShipmentForm({ shipmentId }: Props) {
             ) : undefined
           }
           trailingEnd={
-            isAdmin ? (
+            isAdmin && shipmentStatus === 'pending' ? (
               <button
                 type="button"
                 className="btn btn--secondary btn--form-action action-bar__btn--danger"
