@@ -9,6 +9,7 @@ import type {
   InventoryOpType,
   InventoryOperationListResponse,
   InventoryProductTypeLookup,
+  ReceiptStatus,
   MovementReport,
   ProductItem,
   ProductListQueryParams,
@@ -104,7 +105,7 @@ export type ClientPortalOperationsParams = {
   search?: string
   date_from?: string
   date_to?: string
-  receipt_status?: 'pending' | 'accepted'
+  receipt_status?: ReceiptStatus | ''
   shipment_status?: 'pending' | 'shipped'
   sort?: string
 }

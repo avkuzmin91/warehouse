@@ -6,6 +6,7 @@ import type {
   InventoryOperationListResponse,
   InventoryProductLookup,
   InventoryProductTypeLookup,
+  ReceiptStatus,
 } from './domainTypes'
 
 export type {
@@ -17,6 +18,7 @@ export type {
   InventoryOperationListResponse,
   InventoryProductLookup,
   InventoryProductTypeLookup,
+  ReceiptStatus,
 } from './domainTypes'
 
 export function getInventoryClients() {
@@ -125,7 +127,7 @@ export function createReceipt(payload: {
   quantity: number
   comment?: string | null
   receipt_date?: string | null
-  receipt_status?: 'pending' | 'accepted'
+  receipt_status?: ReceiptStatus
 }) {
   return request<{ message: string }>('/receipts', {
     method: 'POST',
@@ -138,13 +140,6 @@ export function createReceipt(payload: {
     }),
   })
 }
-
-export type ReceiptStatus =
-  | 'pending'
-  | 'accepted'
-  | 'awaiting_inspection'
-  | 'partially_inspected'
-  | 'inspected'
 
 export type ReceiptDetail = {
   id: string

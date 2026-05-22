@@ -17,6 +17,10 @@ export type DictionaryFilterKey =
   | 'size_id'
   | 'receipt_status'
   | 'shipment_status'
+  | 'only_defect'
+  | 'has_defect'
+  | 'has_uninspected'
+  | 'no_good'
   /** Статический список (напр. шаг графика на странице аналитики). */
   | 'analytics_group'
 

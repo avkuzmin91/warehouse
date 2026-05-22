@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import type { ReceiptStatus } from '../api/domainTypes'
 import {
   applyListQueryToSearchParams,
   cycleSort,
@@ -95,12 +96,16 @@ export function useQueryState(options: { filterKeys: readonly UseQueryStateFilte
             else if (k === 'color_id') nextFilters.color_id = v as string
             else if (k === 'size_id') nextFilters.size_id = v as string
             else if (k === 'op_type') nextFilters.op_type = v as string
-            else if (k === 'receipt_status') nextFilters.receipt_status = v as string
+            else if (k === 'receipt_status') nextFilters.receipt_status = v as ReceiptStatus | ''
             else if (k === 'shipment_status') nextFilters.shipment_status = v as string
             else if (k === 'actuality_id') nextFilters.actuality_id = v as string
             else if (k === 'date_from') nextFilters.date_from = v as string | undefined
             else if (k === 'date_to') nextFilters.date_to = v as string | undefined
             else if (k === 'users_role') nextFilters.users_role = v as string
+            else if (k === 'has_defect') nextFilters.has_defect = v as string
+            else if (k === 'has_uninspected') nextFilters.has_uninspected = v as string
+            else if (k === 'no_good') nextFilters.no_good = v as string
+            else if (k === 'only_defect') nextFilters.only_defect = v as string
           }
         }
         return { ...prev, filters: nextFilters, page: 1 }

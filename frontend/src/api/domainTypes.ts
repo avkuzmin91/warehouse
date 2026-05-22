@@ -182,6 +182,13 @@ export type InventoryProductLookup = {
   requires_size: boolean
 }
 
+export type ReceiptStatus =
+  | 'pending'
+  | 'accepted'
+  | 'awaiting_inspection'
+  | 'partially_inspected'
+  | 'inspected'
+
 export type InventoryOperationItem = {
   id: string
   op_type: InventoryOpType
@@ -200,7 +207,7 @@ export type InventoryOperationItem = {
   variant_sku?: string | null
   product_sku?: string | null
   preview_image_url?: string | null
-  receipt_status?: 'pending' | 'accepted' | 'awaiting_inspection' | 'partially_inspected' | 'inspected' | null
+  receipt_status?: ReceiptStatus | null
   shipment_status?: 'pending' | 'shipped' | null
   shipment_type?: 'standard' | 'defect' | null
   quantity: number

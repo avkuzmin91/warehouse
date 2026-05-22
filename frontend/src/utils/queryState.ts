@@ -1,4 +1,20 @@
+import type { ReceiptStatus } from '../api/domainTypes'
+
 export type ListSortState = { field: string; direction: 'asc' | 'desc' } | null
+
+const RECEIPT_STATUSES: readonly ReceiptStatus[] = [
+  'pending',
+  'accepted',
+  'awaiting_inspection',
+  'partially_inspected',
+  'inspected',
+] as const
+
+function parseReceiptStatus(value: string | undefined): ReceiptStatus | '' | undefined {
+  const s = value != null ? String(value).trim() : ''
+  if (!s) return undefined
+  return (RECEIPT_STATUSES as readonly string[]).includes(s) ? (s as ReceiptStatus) : undefined
+}
 
 export type ListQueryLimits = 20 | 50 | 100
 
@@ -21,7 +37,7 @@ export type ListFilters = {
   /** Inventory: тип операции 'in' / 'out'. */
   op_type?: string
   /** Поступления: pending | accepted (URL: receipt_status). */
-  receipt_status?: string
+  receipt_status?: ReceiptStatus | ''
   /** Отгрузки: pending | shipped (URL: shipment_status). */
   shipment_status?: string
   /** ID записи системного справочника актуальности (GET /system/record-actuality). */
@@ -149,7 +165,8 @@ export function parseListQueryFromSearchParams(
     } else if (key === 'receipt_status') {
       const v = sp.get('receipt_status')
       const validReceipt = ['pending', 'accepted', 'awaiting_inspection', 'partially_inspected', 'inspected']
-      filters.receipt_status = v != null && validReceipt.includes(v) ? v : undefined
+      filters.receipt_status =
+        v != null && validReceipt.includes(v) ? (v as ReceiptStatus) : undefined
     } else if (key === 'shipment_status') {
       const v = sp.get('shipment_status')
       filters.shipment_status = v === 'pending' || v === 'shipped' ? v : undefined
@@ -293,7 +310,7 @@ export type ListApiQueryParams = {
   color_id?: string
   size_id?: string
   op_type?: 'in' | 'out'
-  receipt_status?: string
+  receipt_status?: ReceiptStatus | ''
   shipment_status?: 'pending' | 'shipped'
   actuality_id?: string
   sort?: string
@@ -331,8 +348,8 @@ export function listQueryToApiParams(q: ParsedListQuery): ListApiQueryParams {
   if (szId != null && String(szId).trim() !== '') out.size_id = String(szId).trim()
   const opT = q.filters.op_type
   if (opT === 'in' || opT === 'out') out.op_type = opT
-  const rs = q.filters.receipt_status
-  if (rs != null && String(rs).trim() !== '') out.receipt_status = String(rs).trim()
+  const rs = parseReceiptStatus(q.filters.receipt_status)
+  if (rs) out.receipt_status = rs
   const ss = q.filters.shipment_status
   if (ss === 'pending' || ss === 'shipped') out.shipment_status = ss
   const aid = q.filters.actuality_id

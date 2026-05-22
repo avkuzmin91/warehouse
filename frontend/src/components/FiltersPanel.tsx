@@ -28,6 +28,10 @@ export type DictionaryAutocompleteFilterKey =
   | 'size_id'
   | 'receipt_status'
   | 'shipment_status'
+  | 'only_defect'
+  | 'has_defect'
+  | 'has_uninspected'
+  | 'no_good'
 
 /** Ключ селекта / комбобокса в панели фильтров (native select или dictionary autocomplete). */
 export type FilterPanelSelectKey = SelectFilterFieldKey | DictionaryAutocompleteFilterKey
@@ -65,6 +69,10 @@ type FilterValues = {
   date_to?: string
   receipt_status?: string
   shipment_status?: string
+  only_defect?: string
+  has_defect?: string
+  has_uninspected?: string
+  no_good?: string
 }
 
 type Props = {
