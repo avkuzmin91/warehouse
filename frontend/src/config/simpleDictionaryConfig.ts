@@ -53,8 +53,8 @@ export const SIMPLE_DICTIONARIES: Record<SimpleDictionaryEntityKey, SimpleDictio
     apiPath: '/suppliers',
     listNameQueryKey: 'name',
     title: 'Поставщики',
-    formNameLabel: 'Наименование',
-    formNamePlaceholder: 'Введите наименование поставщика',
+    formNameLabel: 'Название поставщика',
+    formNamePlaceholder: 'Введите название поставщика',
     messages: {
       requiredFields: 'Заполните обязательные поля',
       notFound: 'Поставщик не найден',
