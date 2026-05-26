@@ -6,8 +6,8 @@ import {
   getInventoryColors,
   getInventorySizes,
   getInventoryProductTypes,
-} from '../../api/inventoryApi'
-import type { InventoryProductTypeLookup } from '../../api/inventoryApi'
+} from '../../api/inventoryLookupsApi'
+import type { DictionaryItem, InventoryProductTypeLookup } from '../../api/domainTypes'
 import { FormPage } from '../layouts/FormPage'
 import { Field, Input } from '../primitives/Input'
 import { Toggle } from '../primitives/Checkbox'
@@ -91,11 +91,11 @@ export function ProductCreatePage() {
       getInventoryClients(),
       getInventoryColors(),
       getInventorySizes(),
-    ]).then(([types, cls, cols, szs]) => {
+    ]).then(([types, cls, cols, szs]: [InventoryProductTypeLookup[], DictionaryItem[], DictionaryItem[], DictionaryItem[]]) => {
       setProductTypes(types)
-      setClients(cls.map((c) => ({ value: c.id, label: c.name })))
-      setColorOptions(cols.map((c) => ({ value: c.id, label: c.name })))
-      setSizeOptions(szs.map((s) => ({ value: s.id, label: s.name })))
+      setClients(cls.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
+      setColorOptions(cols.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
+      setSizeOptions(szs.map((s: DictionaryItem) => ({ value: s.id, label: s.name })))
     }).catch(() => null)
   }, [])
 

@@ -31,9 +31,6 @@ const SizeCreatePage = lazy(() =>
 const SizeEditPage = lazy(() =>
   import('../pages/SizeEditPage').then((m) => ({ default: m.SizeEditPage })),
 )
-const SimpleDictionaryListPage = lazy(() =>
-  import('../pages/SimpleDictionaryListPage').then((m) => ({ default: m.SimpleDictionaryListPage })),
-)
 const SimpleDictionaryCreatePage = lazy(() =>
   import('../pages/SimpleDictionaryCreatePage').then((m) => ({ default: m.SimpleDictionaryCreatePage })),
 )

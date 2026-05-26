@@ -68,6 +68,7 @@ export type IconName = keyof typeof paths
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'children'> {
   name: IconName
   size?: number
+  title?: string
 }
 
 export function Icon({ name, size = 16, className = '', style, ...rest }: IconProps) {

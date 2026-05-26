@@ -4,7 +4,6 @@ import {
   createReceipt,
   advanceReceiptStatus,
   arriveReceipt,
-  RECEIPT_STATUS_LABELS,
 } from '../../../api/receiptsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
@@ -65,7 +64,6 @@ export function ReceiptCreateFeature() {
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
 
-  const isReady = readyChecks.every((c) => c.ok)
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
   async function handleSave(mode: 'plan' | 'arrive') {

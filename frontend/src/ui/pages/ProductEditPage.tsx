@@ -10,8 +10,8 @@ import {
 } from '../../api/adminApi'
 import type { ProductItem, ProductVariantItem, ProductVariantWriteItem } from '../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../api/constants'
-import { getInventoryClients, getInventoryColors, getInventorySizes } from '../../api/inventoryApi'
-import type { DictionaryItem } from '../../api/inventoryApi'
+import { getInventoryClients, getInventoryColors, getInventorySizes } from '../../api/inventoryLookupsApi'
+import type { DictionaryItem } from '../../api/domainTypes'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
 import { Modal } from '../feedback/Modal'
@@ -120,7 +120,7 @@ export function ProductEditPage() {
         setImages((p.image_urls ?? []).map((url) => ({ kind: 'url', previewUrl: url, serverUrl: url })))
       })
       .finally(() => setLoading(false))
-    getInventoryClients().then((items) => setClients(items.map((item) => ({ value: item.id, label: item.name })))).catch(() => {})
+    getInventoryClients().then((items: DictionaryItem[]) => setClients(items.map((item) => ({ value: item.id, label: item.name })))).catch(() => {})
     getInventoryColors().then(setColors).catch(() => {})
     getInventorySizes().then(setSizes).catch(() => {})
   }, [id])

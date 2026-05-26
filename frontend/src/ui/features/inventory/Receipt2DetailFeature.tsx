@@ -13,12 +13,11 @@ import {
   updateReceipt,
   updateReceiptLine,
   deleteReceiptLine,
-  deleteReceipt,
   RECEIPT_STATUS_LABELS,
   RECEIPT_OP_LABELS,
   receiptStatusTone,
 } from '../../../api/receiptsApi'
-import type { ReceiptDetail, ReceiptLine, ReceiptOp, ReceiptStatus } from '../../../api/receiptsApi'
+import type { ReceiptDetail, ReceiptLine, ReceiptOp } from '../../../api/receiptsApi'
 import {
   getInventoryClients,
   getInventoryProducts,
@@ -42,13 +41,6 @@ import { ReceiptStepper } from './ReceiptStepper'
 
 interface Props {
   docId: string
-}
-
-const NEXT_STATUS_LABELS: Record<ReceiptStatus, string> = {
-  draft: 'Запланировать поступление',
-  planned: 'Зафиксировать прибытие',
-  on_review: 'Завершить проверку',
-  done: '',
 }
 
 const OP_TONES: Record<string, string> = {
@@ -104,14 +96,12 @@ function DraftView({
   detail,
   onReload,
   onAdvance,
-  onArrive,
   advancing,
 }: {
   docId: string
   detail: ReceiptDetail
   onReload: () => Promise<void>
   onAdvance: () => void
-  onArrive: () => void
   advancing: boolean
 }) {
   const navigate = useNavigate()
@@ -190,18 +180,6 @@ function DraftView({
     await onReload()
   }
 
-  async function handleDeleteDraft() {
-    const ok = await confirm({
-      title: 'Удалить документ?',
-      body: `Документ ${doc.doc_number} и все его строки будут удалены без возможности восстановления.`,
-      danger: true,
-      confirmLabel: 'Удалить',
-    })
-    if (!ok) return
-    await deleteReceipt(docId)
-    navigate('/inventory/receipts')
-  }
-
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
 
@@ -211,7 +189,6 @@ function DraftView({
     { ok: lines.length > 0, label: `Строк добавлено: ${lines.length}`, error: 'Не добавлено ни одной строки' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
-  const isReady = readyChecks.every((c) => c.ok)
 
   const blockReasons = [
     ...(metaDirty ? ['Есть несохранённые изменения реквизитов'] : []),
@@ -542,7 +519,7 @@ function PlannedView({
   detail,
   onReload,
   onUpdateLineQty,
-  onAdvance,
+  onArrive,
   onCancel,
   advancing,
 }: {
@@ -550,7 +527,7 @@ function PlannedView({
   detail: ReceiptDetail
   onReload: () => Promise<void>
   onUpdateLineQty: (lineId: string, qty: number) => void
-  onAdvance: () => void
+  onArrive: () => void
   onCancel: () => void
   advancing: boolean
 }) {
@@ -667,7 +644,7 @@ function PlannedView({
             )}
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { onAdvance() } }}
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { onArrive() } }}
               disabled={advancing}
             >
               <Icon name="arrowRight" size={14} />Зафиксировать прибытие
@@ -1644,7 +1621,6 @@ export function ReceiptDetailFeature({ docId }: Props) {
         detail={detail}
         onReload={load}
         onAdvance={handleAdvance}
-        onArrive={handleArrive}
         advancing={advancing}
       />
     )
@@ -1658,7 +1634,7 @@ export function ReceiptDetailFeature({ docId }: Props) {
         detail={detail}
         onReload={load}
         onUpdateLineQty={handleUpdateLineQty}
-        onAdvance={handleAdvance}
+        onArrive={handleArrive}
         onCancel={handleCancel}
         advancing={advancing}
       />

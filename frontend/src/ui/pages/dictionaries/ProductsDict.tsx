@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getProducts, getProductVariants } from '../../../api/adminApi'
 import { getInventoryProductTypes, getInventoryClients } from '../../../api/inventoryLookupsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
-import type { ProductItem, ProductVariantItem } from '../../../api/domainTypes'
-import type { DictionaryItem } from '../../../api/domainTypes'
+import type { ProductItem, ProductVariantItem, DictionaryItem, InventoryProductTypeLookup } from '../../../api/domainTypes'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
 import { Checkbox } from '../../primitives/Checkbox'
@@ -37,7 +36,7 @@ export function ProductsDict({ onTotalLoaded }: ProductsDictProps) {
   const [clientId, setClientId] = useState('')
   const [actuality, setActuality] = useState('')
 
-  const [productTypes, setProductTypes] = useState<DictionaryItem[]>([])
+  const [productTypes, setProductTypes] = useState<InventoryProductTypeLookup[]>([])
   const [clients, setClients] = useState<DictionaryItem[]>([])
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
