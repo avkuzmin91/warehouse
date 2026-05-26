@@ -280,6 +280,7 @@ export function getProducts(params?: ProductListQueryParams) {
   const sp = new URLSearchParams()
   if (params?.page != null) sp.set('page', String(params.page))
   if (params?.limit != null) sp.set('limit', String(params.limit))
+  if (params?.search != null && params.search.trim() !== '') sp.set('search', params.search.trim())
   if (params?.name != null && params.name.trim() !== '') sp.set('name', params.name.trim())
   if (params?.sku != null && params.sku.trim() !== '') sp.set('sku', params.sku.trim())
   if (params?.type_id != null && params.type_id.trim() !== '') {

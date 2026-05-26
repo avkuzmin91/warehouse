@@ -1,10 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import './auth-critical.css'
-import App from './App'
 import { RootErrorBoundary } from './RootErrorBoundary'
 import { routerBasename } from './utils/routerBase'
+import { App } from './ui/App'
+import './ui/theme.css'
 
 /** Заголовок вкладки: `VITE_APP_TITLE` при сборке (prod/test) или pack-men - dev в `npm run dev`. */
 function applyDocumentTitle(): void {

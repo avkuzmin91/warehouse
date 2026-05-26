@@ -56,11 +56,15 @@ export type ProductVariantDimension = {
 export type ProductVariantItem = {
   id: string
   color_id: string
+  color_name: string | null
   dimension: ProductVariantDimension
   size_id: string | null
+  size_name: string | null
   sku: string
   images: string[]
   is_active: boolean
+  stock: number
+  defect_qty: number
 }
 
 export type ProductVariantWriteItem = {
@@ -83,6 +87,7 @@ export type ProductItem = {
   requires_size: boolean
   client_id: string | null
   client_name: string | null
+  client_locked?: boolean
   variant_count: number
   is_active: boolean
   is_deleted?: boolean
@@ -155,6 +160,7 @@ export type SimpleDictionaryListParams = {
 export type ProductListQueryParams = {
   page?: number
   limit?: number
+  search?: string
   name?: string
   sku?: string
   type_id?: string
