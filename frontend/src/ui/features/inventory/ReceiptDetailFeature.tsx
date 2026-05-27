@@ -307,7 +307,7 @@ function DraftView({
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия (плановая) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
                 </div>
@@ -625,8 +625,10 @@ function PlannedView({
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
 
+  const today = new Date().toISOString().slice(0, 10)
   const readyChecks = [
     { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
+    { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
     { ok: !!logisticsCost && parseFloat(logisticsCost) >= 0, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
@@ -715,7 +717,7 @@ function PlannedView({
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия (плановая) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
                 </div>
@@ -960,6 +962,7 @@ function ReviewView({
   const [lineError, setLineError] = useState<Record<string, string>>({})
   const [filterLine, setFilterLine] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string | null>(null)
+  const [showBlockHint, setShowBlockHint] = useState(false)
 
   function getDraft(line: ReceiptLine): LineQcDraft {
     return drafts[line.id] ?? { accepted: line.accepted, defect: line.defect }
@@ -1088,14 +1091,20 @@ function ReviewView({
             </button>
           )}
           {!isReadonly && (
-            <button
-              className="btn primary"
-              onClick={onAdvance}
-              disabled={advancing || !allDone}
-              title={!allDone ? 'Завершите проверку всех строк' : undefined}
-            >
-              <Icon name="check" size={14} />Завершить проверку
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+              <button
+                className="btn primary"
+                onClick={() => { if (!allDone) { setShowBlockHint(true) } else { onAdvance() } }}
+                disabled={advancing}
+              >
+                <Icon name="check" size={14} />Завершить проверку
+              </button>
+              {showBlockHint && !allDone && (
+                <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+                  · Осталось проверить строк: {lines.length - doneLinesCount}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -1427,7 +1436,7 @@ function ReviewView({
                 <div className="mono">{doc.ttn || '—'}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Дата прибытия (план)</div>
+                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Дата прибытия</div>
                 <div>{fmtDate(doc.arrival_date)}</div>
               </div>
               <div>
@@ -1819,6 +1828,7 @@ function AddLineDrawer2({
 
   async function handleAdd() {
     if (!selectedProduct) { setError('Выберите товар'); return }
+    if (needsSize && !sizeId) { setError('Выберите размер — он обязателен для этого типа товара'); return }
     if (qty < 0) { setError('Количество не может быть отрицательным'); return }
     setError('')
     setSaving(true)
@@ -1843,7 +1853,8 @@ function AddLineDrawer2({
   }
 
   const needsColor = selectedProduct?.requires_color ?? false
-  const canPickSize = !!colorId && sizes.length > 0
+  const needsSize = selectedProduct?.requires_size ?? false
+  const canPickSize = sizes.length > 0
 
   return (
     <Drawer
@@ -1890,7 +1901,10 @@ function AddLineDrawer2({
           />
         </div>
         <div>
-          <label className="field-label">Размер</label>
+          <label className="field-label">
+            <span>Размер{needsSize && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
+            {!needsSize && selectedProduct && <span className="text-xs faint">не обязательно</span>}
+          </label>
           <Select
             value={sizeId}
             placeholder={canPickSize ? 'Выберите размер' : '—'}

@@ -98,7 +98,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="sidebar-brand-text">pack-men</div>
             <div className="sidebar-brand-sub">
-              {isClient ? 'Кабинет клиента' : 'WMS · MSK-01'}
+              {isClient ? 'Кабинет клиента' : 'Ваш товар - наша забота'}
             </div>
           </div>
         )}

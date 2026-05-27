@@ -19,26 +19,24 @@ const ShipmentCreate = ({ onNavigate }) => {
 
   return (
     <div className="page">
-      <div className="page-header" style={{alignItems: 'flex-start'}}>
-        <div>
-          <div className="row gap-8" style={{marginBottom: 6}}>
-            <button className="btn ghost sm icon" onClick={() => onNavigate('shipments')}>
-              <Icon name="arrowLeft" size={14}/>
-            </button>
-            <Badge dot>Черновик</Badge>
-            <span className="text-xs subtle">SHP-1209 · 24 мая</span>
+      <div className="page-header">
+        <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+          <button className="btn ghost icon" style={{marginTop: 2}} onClick={() => onNavigate('shipments')}>
+            <Icon name="arrowLeft" size={16}/>
+          </button>
+          <div>
+            <div className="page-title">Новая отгрузка</div>
           </div>
-          <div className="page-title">Новая отгрузка</div>
-          <div className="page-subtitle">Сборка заказа из остатков на складе</div>
         </div>
         <div className="row gap-8">
-          <button className="btn ghost" onClick={() => onNavigate('shipments')}>Отмена</button>
-          <button className="btn"><Icon name="file" size={14}/>Сохранить черновик</button>
+          <button className="btn" onClick={() => onNavigate('shipments')}>Отмена</button>
           <button className="btn primary" disabled={overSome}>
-            <Icon name="check" size={14}/>Отправить в сборку
+            <Icon name="check" size={14}/>Запланировать отгрузку
           </button>
         </div>
       </div>
+
+      <ShipmentStepper status="draft" style={{marginTop: -10}} />
 
       {overSome && (
         <div style={{

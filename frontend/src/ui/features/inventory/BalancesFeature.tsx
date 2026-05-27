@@ -51,8 +51,8 @@ export function BalancesFeature() {
     const totalQty = items.reduce((s, i) => s + i.total, 0)
     const goodQty = items.reduce((s, i) => s + i.good, 0)
     const defectQty = items.reduce((s, i) => s + i.defect, 0)
-    const docsCount = items.reduce((s, i) => s + i.docs_count, 0)
-    return { totalQty, goodQty, defectQty, docsCount }
+    const onReviewQty = items.reduce((s, i) => s + i.on_review, 0)
+    return { totalQty, goodQty, defectQty, onReviewQty }
   }, [items])
 
   return (
@@ -100,9 +100,9 @@ export function BalancesFeature() {
     >
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <KPI label="Всего единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label="Кондиция" value={kpi.goodQty.toLocaleString('ru-RU')} unit="шт" />
+        <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} unit="шт" />
         <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label="Документов" value={kpi.docsCount.toLocaleString('ru-RU')} />
+        <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} unit="шт" />
       </div>
 
       <Table>
@@ -110,10 +110,10 @@ export function BalancesFeature() {
           <tr>
             <th>Товар</th>
             <th>Клиент</th>
-            <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
-            <th style={{ textAlign: 'right', width: 90 }}>Кондиция</th>
+            <th style={{ textAlign: 'right', width: 90 }}>Годный</th>
             <th style={{ textAlign: 'right', width: 80 }}>Брак</th>
-            <th style={{ textAlign: 'right', width: 80 }}>Документов</th>
+            <th style={{ textAlign: 'right', width: 100 }}>На проверке</th>
+            <th style={{ textAlign: 'right', width: 90, borderLeft: '2px solid var(--c-border)' }}>Всего</th>
           </tr>
         </thead>
         <tbody>
@@ -133,11 +133,8 @@ export function BalancesFeature() {
                 <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>
                   {item.client_name ?? '—'}
                 </Td>
-                <Td className="num" style={{ fontWeight: 600 }}>
-                  {item.total.toLocaleString('ru-RU')}
-                </Td>
                 <Td className="num" style={{ color: item.good > 0 ? 'var(--c-success)' : undefined, fontWeight: item.good > 0 ? 500 : undefined }}>
-                  {item.good.toLocaleString('ru-RU')}
+                  {item.good > 0 ? item.good.toLocaleString('ru-RU') : <span style={{ color: 'var(--c-text-faint)' }}>0</span>}
                 </Td>
                 <Td className="num">
                   {item.defect > 0
@@ -145,8 +142,14 @@ export function BalancesFeature() {
                     : <span style={{ color: 'var(--c-text-faint)' }}>0</span>
                   }
                 </Td>
-                <Td className="num" style={{ color: 'var(--c-text-muted)' }}>
-                  {item.docs_count}
+                <Td className="num">
+                  {item.on_review > 0
+                    ? <span style={{ color: 'var(--c-accent)', fontWeight: 500 }}>{item.on_review.toLocaleString('ru-RU')}</span>
+                    : <span style={{ color: 'var(--c-text-faint)' }}>0</span>
+                  }
+                </Td>
+                <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', fontWeight: 600, background: 'var(--c-bg-sunken)', color: 'var(--c-text)' }}>
+                  {item.total.toLocaleString('ru-RU')}
                 </Td>
               </tr>
             ))

@@ -34,12 +34,13 @@ function mapServerError(msg: string): string {
 
 function checkDuplicateCombos(blocks: DimBlock[], colorIds: string[]): string | null {
   const seen = new Set<string>()
+  const effectiveColors = colorIds.length > 0 ? colorIds : ['']
   for (const b of blocks) {
-    const L = parseNum(b.length), W = parseNum(b.width), H = parseNum(b.height)
     for (const sz of b.sizes) {
-      for (const cid of colorIds) {
-        const key = `${cid.toLowerCase()}\0${L}\0${W}\0${H}\0${sz.toLowerCase()}`
-        if (seen.has(key)) return 'Дублируется комбинация цвета, габаритов и размера.'
+      for (const cid of effectiveColors) {
+        // для одежды уникальность — цвет × размер (без габаритов)
+        const key = `${cid.toLowerCase()}\0${sz.toLowerCase()}`
+        if (seen.has(key)) return 'Дублируется комбинация цвета и размера.'
         seen.add(key)
       }
     }
@@ -83,6 +84,7 @@ export function ProductCreatePage() {
   const [submitError, setSubmitError] = useState('')
   const [saving, setSaving] = useState(false)
 
+  const requiresColor = productTypes.find((t) => t.id === typeId)?.requires_color ?? false
   const requiresSize = productTypes.find((t) => t.id === typeId)?.requires_size ?? false
 
   useEffect(() => {
@@ -110,10 +112,10 @@ export function ProductCreatePage() {
       type_id:    !typeId,
       sku_base:   !skuBase.trim(),
       client_id:  !clientId,
-      colors:     colorIds.length === 0,
+      colors:     requiresColor && colorIds.length === 0,
       dimensions: !dimsOk,
     }
-  }, [name, typeId, skuBase, clientId, colorIds, dims, requiresSize])
+  }, [name, typeId, skuBase, clientId, colorIds, dims, requiresColor, requiresSize])
 
   const touch = (key: FieldKey) => setTouched((t) => ({ ...t, [key]: true }))
   const err = (key: FieldKey) => touched[key] && invalid[key]
@@ -182,8 +184,19 @@ export function ProductCreatePage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <FormPage title="Новый товар" backTo="/dictionaries/products">
-      <form onSubmit={handleSubmit} noValidate>
+    <FormPage
+      title="Новый товар"
+      backTo="/dictionaries/products"
+      actions={
+        <>
+          <button type="button" className="btn ghost" onClick={() => navigate('/dictionaries/products')}>Отмена</button>
+          <button type="submit" form="product-create-form" className="btn primary" disabled={saving}>
+            {saving ? 'Создание…' : <><Icon name="check" size={14} />Создать товар</>}
+          </button>
+        </>
+      }
+    >
+      <form id="product-create-form" onSubmit={handleSubmit} noValidate>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
 
           {/* ── Левая колонка ── */}
@@ -303,7 +316,12 @@ export function ProductCreatePage() {
 
             {/* Цвета */}
             <div className="card" style={err('colors') ? { borderColor: 'var(--c-danger)' } : undefined}>
-              <div className="card-head"><div className="card-head-title">Цвета <span style={{ color: 'var(--c-danger)' }}>*</span></div></div>
+              <div className="card-head">
+                <div className="card-head-title">
+                  Цвета{requiresColor && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}
+                  {!requiresColor && typeId && <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--c-text-muted)', marginLeft: 6 }}>не обязательно</span>}
+                </div>
+              </div>
               <div className="card-body">
                 <MultiSelect
                   value={colorIds}
@@ -342,7 +360,7 @@ export function ProductCreatePage() {
                         <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--c-text-muted)' }}>
                           {dims.length > 1 ? `Блок ${i + 1}` : 'Блок'}
                         </span>
-                        {dims.length > 1 && (
+                        {dims.length > 1 && requiresSize && (
                           <button type="button" className="btn ghost icon sm" onClick={() => setDims((p) => p.filter((_, j) => j !== i))}>
                             <Icon name="trash" size={12} />
                           </button>
@@ -380,29 +398,23 @@ export function ProductCreatePage() {
                   )
                 })}
 
-                <button type="button" className="btn ghost sm" style={{ marginTop: 4 }}
-                  onClick={() => setDims((p) => [...p, { length: '', width: '', height: '', sizes: [] }])}>
-                  <Icon name="plus" size={13} />Добавить блок
-                </button>
+                {requiresSize && (
+                  <button type="button" className="btn ghost sm" style={{ marginTop: 4 }}
+                    onClick={() => setDims((p) => [...p, { length: '', width: '', height: '', sizes: [] }])}>
+                    <Icon name="plus" size={13} />Добавить блок
+                  </button>
+                )}
                 <ErrMsg msg={err('dimensions') && dims.every((b) => !b.length.trim() && !b.width.trim() && !b.height.trim()) ? 'Заполните габариты' : undefined} />
               </div>
             </div>
           </div>
         </div>
 
-        {/* Итог + кнопки */}
         {submitError && (
           <div style={{ marginTop: 16, padding: '10px 14px', background: 'color-mix(in oklab, var(--c-danger) 10%, transparent)', border: '1px solid color-mix(in oklab, var(--c-danger) 30%, transparent)', borderRadius: 'var(--r-md)', color: 'var(--c-danger)', fontSize: 13 }}>
             {submitError}
           </div>
         )}
-
-        <div className="row gap-8 mt-16">
-          <button type="button" className="btn ghost" onClick={() => navigate('/dictionaries/products')}>Отмена</button>
-          <button type="submit" className="btn primary" disabled={saving}>
-            {saving ? 'Создание…' : <><Icon name="check" size={14} />Создать товар</>}
-          </button>
-        </div>
       </form>
     </FormPage>
   )

@@ -1,25 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchActiveDictionaryItems } from '../../api/adminApi'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
 import { getBalances } from '../../api/balancesApi'
 import type { BalanceItem } from '../../api/balancesApi'
-import { getInventoryClients } from '../../api/inventoryLookupsApi'
+import {
+  getInventoryCarriers,
+  getInventoryClients,
+  getInventoryWarehouses,
+} from '../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../api/domainTypes'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
 import { Icon } from '../primitives/Icon'
 import { Field } from '../primitives/Input'
 import { DatePicker } from '../primitives/DatePicker'
-import { Badge } from '../primitives/Badge'
 import { EmptyState } from '../primitives/EmptyState'
+import { ShipmentStepper } from '../features/inventory/ShipmentStepper'
 
 type DraftLine = ShipmentLineIn & { _key: string; available: number }
 
-function todayYmd(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+function formatYmdAsDmy(value: string | null): string {
+  if (!value) return '—'
+  const [year, month, day] = value.split('-')
+  if (!year || !month || !day) return value
+  return `${day}-${month}-${year}`
 }
 
 function balanceKey(b: BalanceItem) {
@@ -34,28 +39,40 @@ export function InventoryShipmentCreatePage() {
   const [clientName, setClientName] = useState<string | null>(null)
   const [destinationId, setDestinationId] = useState<string | null>(null)
   const [destinationName, setDestinationName] = useState<string | null>(null)
+  const [carrierId, setCarrierId] = useState<string | null>(null)
   const [carrier, setCarrier] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
-  const [shipDate, setShipDate] = useState(todayYmd())
+  const [shipDate, setShipDate] = useState('')
   const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [destinations, setDestinations] = useState<DictionaryItem[]>([])
+  const [carriers, setCarriers] = useState<DictionaryItem[]>([])
 
   useEffect(() => {
     getInventoryClients().then(setClients).catch(() => {})
-    fetchActiveDictionaryItems('/warehouses').then(setDestinations).catch(() => {})
+    getInventoryWarehouses().then(setDestinations).catch(() => {})
+    getInventoryCarriers().then(setCarriers).catch(() => {})
   }, [])
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const destinationOptions: ComboboxOption[] = destinations.map((d) => ({ value: d.id, label: d.name }))
+  const carrierOptions: ComboboxOption[] = carriers.map((c) => ({ value: c.id, label: c.name }))
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const hasOverflow = lines.some((l) => l.qty > l.available)
+  const readyChecks = [
+    { ok: !!clientId, error: 'Выберите клиента' },
+    { ok: !!shipDate, error: 'Укажите дату отгрузки' },
+    { ok: lines.length > 0, error: 'Добавьте хотя бы одну позицию в отгрузку' },
+    { ok: !hasOverflow, error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
+  ]
+  const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
   function handleClientChange(val: string | number | null, opt?: ComboboxOption) {
     setClientId(val ? String(val) : null)
@@ -67,6 +84,11 @@ export function InventoryShipmentCreatePage() {
   function handleDestinationChange(val: string | number | null, opt?: ComboboxOption) {
     setDestinationId(val ? String(val) : null)
     setDestinationName(opt?.label ?? null)
+  }
+
+  function handleCarrierChange(val: string | number | null, opt?: ComboboxOption) {
+    setCarrierId(val ? String(val) : null)
+    setCarrier(opt?.label ?? '')
   }
 
   function updateQty(key: string, qty: number) {
@@ -119,29 +141,44 @@ export function InventoryShipmentCreatePage() {
     }
   }
 
+  function handleSendToPacking() {
+    if (blockReasons.length > 0) {
+      setShowBlockReasons(true)
+      return
+    }
+    setShowBlockReasons(false)
+    void handleSave(true)
+  }
+
   return (
     <div className="page">
-      <div className="page-header" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <button className="btn ghost sm icon" onClick={() => navigate('/inventory/shipments')}>
-              <Icon name="arrowLeft" size={14} />
-            </button>
-            <Badge dot>Черновик</Badge>
+      <div className="page-header">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <button className="btn ghost icon" style={{ marginTop: 2 }} onClick={() => navigate('/inventory/shipments')}>
+            <Icon name="arrowLeft" size={16} />
+          </button>
+          <div>
+            <div className="page-title">Новая отгрузка</div>
           </div>
-          <div className="page-title">Новая отгрузка</div>
-          <div className="page-subtitle">Сборка заказа из остатков склада</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn ghost" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
-          <button className="btn" disabled={saving} onClick={() => handleSave(false)}>
-            <Icon name="file" size={14} />Сохранить черновик
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
+          <button className="btn primary" disabled={saving} onClick={handleSendToPacking}>
+            <Icon name="check" size={14} />Запланировать отгрузку
           </button>
-          <button className="btn primary" disabled={saving || hasOverflow || lines.length === 0} onClick={() => handleSave(true)}>
-            <Icon name="check" size={14} />Отправить в сборку
-          </button>
+          </div>
+          {showBlockReasons && blockReasons.length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+              {blockReasons.map((reason, index) => (
+                <div key={index}>- {reason}</div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
+
+      <ShipmentStepper status="draft" style={{ marginTop: -10 }} />
 
       {hasOverflow && (
         <div style={{
@@ -169,7 +206,7 @@ export function InventoryShipmentCreatePage() {
             <div className="card-body">
               <CargoTypeToggle value={cargoType} onChange={(v) => { setCargoType(v); setLines([]) }} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
-                <Field label="Клиент">
+                <Field label="Клиент" required>
                   <Combobox
                     value={clientId}
                     onChange={handleClientChange}
@@ -187,11 +224,17 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки">
+                <Field label="Дата отгрузки" required>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
                 <Field label="Перевозчик">
-                  <input className="input" value={carrier} onChange={(e) => setCarrier(e.target.value)} />
+                  <Combobox
+                    value={carrierId}
+                    onChange={handleCarrierChange}
+                    options={carrierOptions}
+                    placeholder="Выберите перевозчика…"
+                    clearable
+                  />
                 </Field>
                 <Field label="Стоимость логистики">
                   <input
@@ -304,7 +347,7 @@ export function InventoryShipmentCreatePage() {
               <span style={{ color: 'var(--c-text-muted)' }}>Кол-во</span>
               <span className="mono" style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Дата</span>
-              <span className="mono" style={{ textAlign: 'right' }}>{shipDate || '—'}</span>
+              <span className="mono" style={{ textAlign: 'right' }}>{formatYmdAsDmy(shipDate)}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Перевозчик</span>
               <span style={{ textAlign: 'right', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{carrier || '—'}</span>
               {logisticsCost && (

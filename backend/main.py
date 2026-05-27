@@ -644,7 +644,7 @@ class ProductCreateInner(BaseModel):
 
 class ProductCreateMeta(BaseModel):
     product: ProductCreateInner
-    colors: list[str] = Field(min_length=1)
+    colors: list[str] = Field(default_factory=list)
     dimensions: list[ProductCreateDimensionBlock] = Field(min_length=1)
 
 
@@ -656,12 +656,17 @@ class ProductVariantDimension(BaseModel):
 
 class ProductVariantItem(BaseModel):
     id: str
-    color_id: str
+    color_id: str | None
+    color_name: str | None = None
     dimension: ProductVariantDimension
     size_id: str | None = None
+    size_name: str | None = None
     sku: str
     images: list[str] = Field(default_factory=list)
     is_active: bool
+    stock: int = 0
+    defect_qty: int = 0
+    has_receipts: bool = False
 
 
 class ProductVariantDeletePatchRequest(BaseModel):
@@ -672,7 +677,7 @@ class ProductVariantDeletePatchRequest(BaseModel):
 class ProductVariantWriteItem(BaseModel):
     id: str | None = None
     sku: str | None = None
-    color_id: str = Field(min_length=1)
+    color_id: str | None = None
     dimension: ProductVariantDimension
     size_id: str | None = None
     images: list[str] = Field(default_factory=list)
@@ -691,7 +696,7 @@ class ProductVariantFindItem(BaseModel):
     client_name: str | None = Field(default=None, description="Клиент карточки товара")
     requires_size: bool
     sku: str
-    color_id: str
+    color_id: str | None
     size_id: str | None
     length: float
     width: float
@@ -1172,6 +1177,7 @@ def init_db():
         _soft_delete_extra_dicts(connection)
         _migrate_auth_sessions_v1(connection)
         _migrate_auth_refresh_superseded_v1(connection)
+        _migrate_product_variants_color_nullable(connection)
         _ensure_columns(
             connection,
             "inventory_operations",
@@ -1705,6 +1711,21 @@ def _migrate_auth_refresh_superseded_v1(connection: Any) -> None:
     )
 
 
+def _migrate_product_variants_color_nullable(connection: Any) -> None:
+    """color_id в product_variants стал необязательным для техники без цвета."""
+    if connection.execute(
+        "SELECT 1 FROM app_migrations WHERE id = 'product_variants_color_nullable_v1'"
+    ).fetchone():
+        return
+    connection.execute(
+        "ALTER TABLE product_variants ALTER COLUMN color_id DROP NOT NULL"
+    )
+    connection.execute(
+        "INSERT INTO app_migrations (id) VALUES ('product_variants_color_nullable_v1')"
+    )
+
+
+
 def _ensure_record_actuality(connection: Any) -> None:
     """Системный справочник значений фильтра «актуальность»; не редактируется через UI."""
     connection.execute(
@@ -1931,9 +1952,46 @@ def get_user_by_email(email: str):
         ).fetchone()
 
 
+def _get_user_by_refresh_cookie(raw_refresh: str | None):
+    raw = str(raw_refresh or "").strip()
+    if not raw:
+        return None
+    h = _hash_refresh_token(raw)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT u.id, u.email, u.role, u.created_at, u.client_id, s.expires_at
+            FROM auth_sessions s
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE s.refresh_hash = ?
+              AND s.revoked_at IS NULL
+              AND COALESCE(u.is_deleted, 0) = 0
+            """,
+            (h,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        exp_at = _parse_session_expires_at(str(row["expires_at"]))
+    except ValueError:
+        return None
+    if exp_at < datetime.now(UTC):
+        return None
+    return row
+
+
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    wms_rt: str | None = Cookie(None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer),
 ):
+    if not credentials or not credentials.credentials:
+        user = _get_user_by_refresh_cookie(wms_rt)
+        if user:
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
     try:
         payload = jwt.decode(
             credentials.credentials,
@@ -1941,6 +1999,9 @@ def get_current_user(
             algorithms=[JWT_ALGORITHM],
         )
     except jwt.PyJWTError as exc:
+        user = _get_user_by_refresh_cookie(wms_rt)
+        if user:
+            return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный токен",
@@ -1951,6 +2012,9 @@ def get_current_user(
     role = payload.get("role")
     jti = payload.get("jti")
     if not user_id or not email or not role:
+        user = _get_user_by_refresh_cookie(wms_rt)
+        if user:
+            return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный токен",
@@ -2497,12 +2561,16 @@ def _build_variant_rows_for_create(
     else:
         for block in dimensions:
             dim_tok = _sku_dim_token(block.length, block.width, block.height)
-            for color_id in color_ids:
-                _require_active_color_id(connection, color_id)
-                ct = _sku_token_from_label(color_labels.get(color_id, "C"))
-                candidate = (
-                    f"{base_norm}-{ct}-{dim_tok}" if multi_dim else f"{base_norm}-{ct}"
-                )
+            effective_colors: list[str | None] = color_ids if color_ids else [None]
+            for color_id in effective_colors:
+                if color_id is not None:
+                    _require_active_color_id(connection, color_id)
+                    ct = _sku_token_from_label(color_labels.get(color_id, "C"))
+                    candidate = (
+                        f"{base_norm}-{ct}-{dim_tok}" if multi_dim else f"{base_norm}-{ct}"
+                    )
+                else:
+                    candidate = f"{base_norm}-{dim_tok}" if multi_dim else base_norm
                 sku = candidate
                 salt = 0
                 while sku in used_skus:
@@ -2510,7 +2578,7 @@ def _build_variant_rows_for_create(
                     sku = f"{candidate}-{salt}"
                 used_skus.add(sku)
                 key = _variant_dimension_key(
-                    block.length, block.width, block.height, color_id, None
+                    block.length, block.width, block.height, color_id or "", None
                 )
                 if key in seen_keys:
                     raise HTTPException(
@@ -2650,13 +2718,14 @@ def _sync_product_variants_from_request(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Для этого типа товара укажите размер варианта",
             )
-        _require_active_color_id(connection, item.color_id)
+        if item.color_id:
+            _require_active_color_id(connection, item.color_id)
         if eff_size:
             _require_active_size_id(connection, eff_size)
         identity_keys.append(
             _variant_identity_key(
                 sku_base,
-                item.color_id,
+                item.color_id or "",
                 eff_size,
                 requires_size=requires_size,
             )
@@ -2674,7 +2743,10 @@ def _sync_product_variants_from_request(
         if item.id:
             rid = str(item.id)
             own = connection.execute(
-                "SELECT id FROM product_variants WHERE id = ? AND product_id = ?",
+                """
+                SELECT id, color_id, size_id, length, width, height
+                FROM product_variants WHERE id = ? AND product_id = ?
+                """,
                 (rid, product_id),
             ).fetchone()
             if not own:
@@ -2682,6 +2754,26 @@ def _sync_product_variants_from_request(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Неизвестный вариант",
                 )
+            has_receipts = connection.execute(
+                """
+                SELECT 1 FROM receipt2_lines rl
+                JOIN receipt2_docs rd ON rd.id = rl.doc_id
+                WHERE rl.product_id = ?
+                  AND rl.color_id IS NOT DISTINCT FROM ?
+                  AND rl.size_id IS NOT DISTINCT FROM ?
+                  AND rl.is_deleted = 0 AND rd.is_deleted = 0
+                LIMIT 1
+                """,
+                (product_id, own["color_id"], own["size_id"]),
+            ).fetchone()
+            if has_receipts:
+                color_changed = item.color_id != own["color_id"]
+                size_changed = eff_size != own["size_id"]
+                if color_changed or size_changed:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Нельзя изменить цвет или размер варианта: по нему зафиксированы поступления",
+                    )
             new_sku = (
                 _normalize_sku(item.sku)
                 if item.sku and str(item.sku).strip()
@@ -4783,27 +4875,86 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             raise HTTPException(status_code=404, detail="Товар не найден")
         rows = connection.execute(
             """
-            SELECT id, color_id, size_id, length, width, height, sku, images_json, is_active
-            FROM product_variants
-            WHERE product_id = ?
-              AND COALESCE(is_deleted, 0) = 0
-            ORDER BY LOWER(sku) ASC
+            SELECT v.id, v.color_id, col.name AS color_name,
+                   v.size_id, sz.name AS size_name,
+                   v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
+                   GREATEST(0, COALESCE(b.good_in, 0) - COALESCE(sg.shipped_good, 0)) AS stock,
+                   GREATEST(0, COALESCE(b.defect_in, 0) - COALESCE(sd.shipped_defect, 0)) AS defect_qty,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM receipt2_lines rl
+                       JOIN receipt2_docs rd ON rd.id = rl.doc_id
+                       WHERE rl.product_id = v.product_id
+                         AND rl.color_id IS NOT DISTINCT FROM v.color_id
+                         AND rl.size_id IS NOT DISTINCT FROM v.size_id
+                         AND rl.is_deleted = 0 AND rd.is_deleted = 0
+                   ) THEN 1 ELSE 0 END AS has_receipts
+            FROM product_variants v
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
+            LEFT JOIN (
+                SELECT l.product_id, l.color_id, l.size_id,
+                       SUM(COALESCE((
+                           SELECT SUM(o.qty) FROM receipt2_ops o
+                           WHERE o.line_id = l.id
+                             AND o.op_type IN ('receiving', 'receiving_correction')
+                       ), 0)) AS good_in,
+                       SUM(COALESCE((
+                           SELECT SUM(o.qty) FROM receipt2_ops o
+                           WHERE o.line_id = l.id
+                             AND o.op_type IN ('defect_fix', 'defect_correction')
+                       ), 0)) AS defect_in
+                FROM receipt2_lines l
+                JOIN receipt2_docs d ON d.id = l.doc_id
+                WHERE l.product_id = ? AND l.is_deleted = 0
+                  AND d.is_deleted = 0 AND d.status IN ('done', 'on_review')
+                GROUP BY l.product_id, l.color_id, l.size_id
+            ) b ON b.product_id = v.product_id
+               AND b.color_id IS NOT DISTINCT FROM v.color_id
+               AND b.size_id IS NOT DISTINCT FROM v.size_id
+            LEFT JOIN (
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_good
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.product_id = ? AND sl.is_deleted = 0
+                  AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'good'
+                GROUP BY sl.product_id, sl.color_id, sl.size_id
+            ) sg ON sg.product_id = v.product_id
+                AND sg.color_id IS NOT DISTINCT FROM v.color_id
+                AND sg.size_id IS NOT DISTINCT FROM v.size_id
+            LEFT JOIN (
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_defect
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.product_id = ? AND sl.is_deleted = 0
+                  AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
+                GROUP BY sl.product_id, sl.color_id, sl.size_id
+            ) sd ON sd.product_id = v.product_id
+               AND sd.color_id IS NOT DISTINCT FROM v.color_id
+               AND sd.size_id IS NOT DISTINCT FROM v.size_id
+            WHERE v.product_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+            ORDER BY LOWER(v.sku) ASC
             """,
-            (item_id,),
+            (item_id, item_id, item_id, item_id),
         ).fetchall()
     return [
         ProductVariantItem(
             id=str(r["id"]),
-            color_id=str(r["color_id"]),
+            color_id=r["color_id"],
+            color_name=r["color_name"],
             dimension=ProductVariantDimension(
                 length=float(r["length"]),
                 width=float(r["width"]),
                 height=float(r["height"]),
             ),
             size_id=str(r["size_id"]) if r["size_id"] else None,
+            size_name=r["size_name"],
             sku=str(r["sku"]),
             images=_decode_images_json(r["images_json"]),
             is_active=bool(r["is_active"]),
+            stock=max(0, int(r["stock"])),
+            defect_qty=max(0, int(r["defect_qty"])),
+            has_receipts=bool(r["has_receipts"]),
         )
         for r in rows
     ]
@@ -4837,12 +4988,12 @@ def _require_product_not_deleted_for_variants(
     connection: Any, product_id: str
 ) -> None:
     r = connection.execute(
-        "SELECT COALESCE(is_deleted, 0) FROM products WHERE id = ?",
+        "SELECT COALESCE(is_deleted, 0) AS is_deleted FROM products WHERE id = ?",
         (product_id,),
     ).fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Товар не найден")
-    if bool(r[0]):
+    if bool(r["is_deleted"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Товар удалён. Восстановите товар перед изменением вариантов.",
@@ -4861,7 +5012,7 @@ def _apply_product_variant_deleted_flag(
         _require_product_not_deleted_for_variants(connection, item_id)
         row = connection.execute(
             """
-            SELECT id, COALESCE(is_deleted, 0) AS del
+            SELECT id, COALESCE(is_deleted, 0) AS del, color_id, size_id
             FROM product_variants
             WHERE id = ? AND product_id = ?
             """,
@@ -4872,6 +5023,29 @@ def _apply_product_variant_deleted_flag(
         if is_deleted:
             if row["del"]:
                 return MessageResponse(message="Вариант отключён")
+            has_receipts = connection.execute(
+                """
+                SELECT 1 FROM inventory_operations
+                WHERE op_type = 'in'
+                  AND COALESCE(is_deleted, 0) = 0
+                  AND (
+                    variant_id = ?
+                    OR (
+                      variant_id IS NULL
+                      AND product_id = ?
+                      AND (color_id = ? OR (color_id IS NULL AND ? IS NULL))
+                      AND (size_id = ? OR (size_id IS NULL AND ? IS NULL))
+                    )
+                  )
+                LIMIT 1
+                """,
+                (variant_id, item_id, row["color_id"], row["color_id"], row["size_id"], row["size_id"]),
+            ).fetchone()
+            if has_receipts:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Нельзя удалить вариант: по нему зафиксированы поступления в системе",
+                )
             connection.execute(
                 """
                 UPDATE product_variants
@@ -4984,12 +5158,11 @@ async def create_product(
         image_urls.append(f"/uploads/{filename}")
 
     inner = parsed.product
-    if not parsed.colors:
-        raise HTTPException(status_code=400, detail="Выберите хотя бы один цвет")
-
     with get_connection() as connection:
         tid = _require_active_product_type(connection, inner.type_id)
-        _, requires_size = _product_type_flags(connection, tid)
+        requires_color, requires_size = _product_type_flags(connection, tid)
+        if requires_color and not parsed.colors:
+            raise HTTPException(status_code=400, detail="Для этого типа товара выберите хотя бы один цвет")
         cid = _require_active_client(connection, inner.client_id)
         variant_rows = _build_variant_rows_for_create(
             connection,
@@ -5641,6 +5814,18 @@ def inventory_lookup_suppliers(user=Depends(get_current_manager)):
 def inventory_lookup_unloading_zones(user=Depends(get_current_manager)):
     _ = user
     return _active_lookup_dictionary("unloading_zones")
+
+
+@app.get("/inventory/lookups/warehouses", response_model=list[DictionaryBaseItem])
+def inventory_lookup_warehouses(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("warehouses")
+
+
+@app.get("/inventory/lookups/carriers", response_model=list[DictionaryBaseItem])
+def inventory_lookup_carriers(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("carriers")
 
 
 @app.get("/inventory/lookups/products", response_model=list[InventoryProductLookup])
@@ -7274,27 +7459,77 @@ def client_portal_list_product_variants(item_id: str, user=Depends(get_current_c
             raise HTTPException(status_code=404, detail="Товар не найден")
         rows = connection.execute(
             """
-            SELECT id, color_id, size_id, length, width, height, sku, images_json, is_active
-            FROM product_variants
-            WHERE product_id = ?
-              AND COALESCE(is_deleted, 0) = 0
-            ORDER BY LOWER(sku) ASC
+            SELECT v.id, v.color_id, col.name AS color_name,
+                   v.size_id, sz.name AS size_name,
+                   v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
+                   GREATEST(0, COALESCE(b.good_in, 0) - COALESCE(sg.shipped_good, 0)) AS stock,
+                   GREATEST(0, COALESCE(b.defect_in, 0) - COALESCE(sd.shipped_defect, 0)) AS defect_qty
+            FROM product_variants v
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
+            LEFT JOIN (
+                SELECT l.product_id, l.color_id, l.size_id,
+                       SUM(COALESCE((
+                           SELECT SUM(o.qty) FROM receipt2_ops o
+                           WHERE o.line_id = l.id
+                             AND o.op_type IN ('receiving', 'receiving_correction')
+                       ), 0)) AS good_in,
+                       SUM(COALESCE((
+                           SELECT SUM(o.qty) FROM receipt2_ops o
+                           WHERE o.line_id = l.id
+                             AND o.op_type IN ('defect_fix', 'defect_correction')
+                       ), 0)) AS defect_in
+                FROM receipt2_lines l
+                JOIN receipt2_docs d ON d.id = l.doc_id
+                WHERE l.product_id = ? AND l.is_deleted = 0
+                  AND d.is_deleted = 0 AND d.status IN ('done', 'on_review')
+                GROUP BY l.product_id, l.color_id, l.size_id
+            ) b ON b.product_id = v.product_id
+               AND b.color_id IS NOT DISTINCT FROM v.color_id
+               AND b.size_id IS NOT DISTINCT FROM v.size_id
+            LEFT JOIN (
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_good
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.product_id = ? AND sl.is_deleted = 0
+                  AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'good'
+                GROUP BY sl.product_id, sl.color_id, sl.size_id
+            ) sg ON sg.product_id = v.product_id
+                AND sg.color_id IS NOT DISTINCT FROM v.color_id
+                AND sg.size_id IS NOT DISTINCT FROM v.size_id
+            LEFT JOIN (
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_defect
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.product_id = ? AND sl.is_deleted = 0
+                  AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
+                GROUP BY sl.product_id, sl.color_id, sl.size_id
+            ) sd ON sd.product_id = v.product_id
+               AND sd.color_id IS NOT DISTINCT FROM v.color_id
+               AND sd.size_id IS NOT DISTINCT FROM v.size_id
+            WHERE v.product_id = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+            ORDER BY LOWER(v.sku) ASC
             """,
-            (item_id,),
+            (item_id, item_id, item_id, item_id),
         ).fetchall()
     return [
         ProductVariantItem(
             id=str(r["id"]),
-            color_id=str(r["color_id"]),
+            color_id=r["color_id"],
+            color_name=r["color_name"],
             dimension=ProductVariantDimension(
                 length=float(r["length"]),
                 width=float(r["width"]),
                 height=float(r["height"]),
             ),
             size_id=str(r["size_id"]) if r["size_id"] else None,
+            size_name=r["size_name"],
             sku=str(r["sku"]),
             images=_decode_images_json(r["images_json"]),
             is_active=bool(r["is_active"]),
+            stock=max(0, int(r["stock"])),
+            defect_qty=max(0, int(r["defect_qty"])),
         )
         for r in rows
     ]
@@ -9832,6 +10067,7 @@ class BalanceItem(BaseModel):
     size_name: str | None
     good: int
     defect: int
+    on_review: int
     total: int
     docs_count: int
 
@@ -9855,6 +10091,7 @@ def list_balances(
 ):
     with get_connection() as connection:
         _receipt_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
 
         doc_conds = ["d.is_deleted = 0"]
         doc_params: list = []
@@ -9868,21 +10105,7 @@ def list_balances(
         line_conds = [
             "l.is_deleted = 0",
             f"({doc_where})",
-            (
-                "("
-                "d.status = 'done' "
-                "OR (d.status = 'on_review' AND EXISTS ("
-                "    SELECT 1 FROM receipt2_ops oq "
-                "    WHERE oq.line_id = l.id AND oq.op_type = 'line_qc_complete' "
-                "      AND NOT EXISTS ("
-                "          SELECT 1 FROM receipt2_ops orp "
-                "          WHERE orp.line_id = l.id "
-                "            AND orp.op_type = 'line_qc_reopen' "
-                "            AND orp.created_at > oq.created_at"
-                "      )"
-                "))"
-                ")"
-            ),
+            "d.status IN ('done', 'on_review')",
         ]
         line_params = list(doc_params)
 
@@ -9895,38 +10118,90 @@ def list_balances(
 
         agg_query = f"""
             SELECT
-                l.product_id,
-                l.product_sku,
-                d.client_id,
-                l.color_id,
-                l.size_id,
-                MAX(l.product_name) AS product_name,
-                MAX(cl.name) AS client_name,
-                MAX(l.color_name) AS color_name,
-                MAX(l.size_name) AS size_name,
-                SUM(COALESCE((
-                    SELECT SUM(o.qty)
-                    FROM receipt2_ops o
-                    WHERE o.line_id = l.id
-                      AND o.op_type IN ('receiving', 'receiving_correction')
-                ), 0)) AS good,
-                SUM(COALESCE((
-                    SELECT SUM(o.qty)
-                    FROM receipt2_ops o
-                    WHERE o.line_id = l.id
-                      AND o.op_type IN ('defect_fix', 'defect_correction')
-                ), 0)) AS defect,
-                COUNT(DISTINCT l.doc_id) AS docs_count
-            FROM receipt2_lines l
-            JOIN receipt2_docs d ON d.id = l.doc_id
-            LEFT JOIN clients cl ON cl.id = d.client_id
-            WHERE {line_where}
-            GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
+                r.product_id,
+                r.product_sku,
+                r.client_id,
+                r.color_id,
+                r.size_id,
+                r.product_name,
+                r.client_name,
+                r.color_name,
+                r.size_name,
+                GREATEST(0, r.good_in - COALESCE(sg.shipped_good, 0)) AS good,
+                GREATEST(0, r.defect_in - COALESCE(sd_out.shipped_defect, 0)) AS defect,
+                r.on_review,
+                r.docs_count
+            FROM (
+                SELECT
+                    l.product_id,
+                    l.product_sku,
+                    d.client_id,
+                    l.color_id,
+                    l.size_id,
+                    MAX(l.product_name) AS product_name,
+                    MAX(cl.name) AS client_name,
+                    MAX(l.color_name) AS color_name,
+                    MAX(l.size_name) AS size_name,
+                    SUM(COALESCE((
+                        SELECT SUM(o.qty)
+                        FROM receipt2_ops o
+                        WHERE o.line_id = l.id
+                          AND o.op_type IN ('receiving', 'receiving_correction')
+                    ), 0)) AS good_in,
+                    SUM(COALESCE((
+                        SELECT SUM(o.qty)
+                        FROM receipt2_ops o
+                        WHERE o.line_id = l.id
+                          AND o.op_type IN ('defect_fix', 'defect_correction')
+                    ), 0)) AS defect_in,
+                    SUM(CASE WHEN d.status = 'on_review' AND NOT EXISTS (
+                        SELECT 1 FROM receipt2_ops oq
+                        WHERE oq.line_id = l.id AND oq.op_type = 'line_qc_complete'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM receipt2_ops orp
+                              WHERE orp.line_id = l.id
+                                AND orp.op_type = 'line_qc_reopen'
+                                AND orp.created_at > oq.created_at
+                          )
+                    ) THEN COALESCE(l.planned_qty, 0) ELSE 0 END) AS on_review,
+                    COUNT(DISTINCT l.doc_id) AS docs_count
+                FROM receipt2_lines l
+                JOIN receipt2_docs d ON d.id = l.doc_id
+                LEFT JOIN clients cl ON cl.id = d.client_id
+                WHERE {line_where}
+                GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
+            ) r
+            LEFT JOIN (
+                SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
+                       SUM(sl.qty) AS shipped_good
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
+                  AND sd.status = 'shipped' AND sd.cargo_type = 'good'
+                GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
+            ) sg
+                ON sg.product_id = r.product_id
+               AND sg.client_id IS NOT DISTINCT FROM r.client_id
+               AND sg.color_id IS NOT DISTINCT FROM r.color_id
+               AND sg.size_id IS NOT DISTINCT FROM r.size_id
+            LEFT JOIN (
+                SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
+                       SUM(sl.qty) AS shipped_defect
+                FROM shipment2_lines sl
+                JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
+                  AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
+                GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
+            ) sd_out
+                ON sd_out.product_id = r.product_id
+               AND sd_out.client_id IS NOT DISTINCT FROM r.client_id
+               AND sd_out.color_id IS NOT DISTINCT FROM r.color_id
+               AND sd_out.size_id IS NOT DISTINCT FROM r.size_id
         """
 
         where_parts = []
         if only_positive:
-            where_parts.append("(good + defect) > 0")
+            where_parts.append("(good + defect + on_review) > 0")
         if has_defect:
             where_parts.append("defect > 0")
         where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
@@ -9949,6 +10224,7 @@ def list_balances(
         for row in rows:
             good = int(row["good"] or 0)
             defect = int(row["defect"] or 0)
+            on_review = int(row["on_review"] or 0)
             items.append(BalanceItem(
                 product_id=str(row["product_id"]),
                 product_name=str(row["product_name"]),
@@ -9961,7 +10237,8 @@ def list_balances(
                 size_name=row["size_name"],
                 good=good,
                 defect=defect,
-                total=good + defect,
+                on_review=on_review,
+                total=good + defect + on_review,
                 docs_count=int(row["docs_count"] or 0),
             ))
 
@@ -9987,10 +10264,10 @@ SHIPMENT_STATUSES_ALL = [
 
 SHIPMENT_STATUS_LABELS = {
     SHIPMENT_STATUS_DRAFT:     "Черновик",
-    SHIPMENT_STATUS_PACKING:   "Сборка",
-    SHIPMENT_STATUS_READY:     "Готово",
+    SHIPMENT_STATUS_PACKING:   "В плане",
+    SHIPMENT_STATUS_READY:     "На сборке",
     SHIPMENT_STATUS_SHIPPED:   "Отправлено",
-    SHIPMENT_STATUS_CANCELLED: "Отменено",
+    SHIPMENT_STATUS_CANCELLED: "Аннулирован",
 }
 
 SHIPMENT_TRANSITIONS = {
@@ -10003,12 +10280,19 @@ SHIPMENT_REVERT_TRANSITIONS = {
     SHIPMENT_STATUS_READY: SHIPMENT_STATUS_PACKING,
 }
 
+SHIPMENT_EDITABLE_LINE_STATUSES = {
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_READY,
+}
+
 
 def _shipment_ensure_tables(connection) -> None:
     connection.execute("""
         CREATE TABLE IF NOT EXISTS shipment2_docs (
             id          TEXT PRIMARY KEY,
             doc_number  TEXT NOT NULL,
+            cargo_type  TEXT NOT NULL DEFAULT 'good',
             client_id   TEXT,
             client_name TEXT,
             destination TEXT,
@@ -10022,6 +10306,35 @@ def _shipment_ensure_tables(connection) -> None:
             is_deleted  INTEGER NOT NULL DEFAULT 0
         )
     """)
+    _ensure_columns(
+        connection,
+        "shipment2_docs",
+        {
+            "cargo_type": "TEXT NOT NULL DEFAULT 'good'",
+            "client_id": "TEXT",
+            "client_name": "TEXT",
+            "destination": "TEXT",
+            "carrier": "TEXT",
+            "ship_date": "TEXT",
+            "comment": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'draft'",
+            "created_by": "TEXT",
+            "updated_at": "TEXT",
+            "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
+    # Online migration for existing databases where cargo_type did not exist yet.
+    s2_cols = _shipment_doc_columns(connection)
+    if "cargo_type" not in s2_cols:
+        try:
+            connection.execute("ALTER TABLE shipment2_docs ADD COLUMN cargo_type TEXT")
+        except Exception:
+            # Keep backward compatibility for environments where ALTER may fail here.
+            pass
+        else:
+            connection.execute(
+                "UPDATE shipment2_docs SET cargo_type = 'good' WHERE cargo_type IS NULL OR TRIM(COALESCE(cargo_type, '')) = ''"
+            )
     connection.execute("""
         CREATE TABLE IF NOT EXISTS shipment2_lines (
             id           TEXT PRIMARY KEY,
@@ -10038,6 +10351,18 @@ def _shipment_ensure_tables(connection) -> None:
             is_deleted   INTEGER NOT NULL DEFAULT 0
         )
     """)
+    _ensure_columns(
+        connection,
+        "shipment2_lines",
+        {
+            "color_id": "TEXT",
+            "color_name": "TEXT",
+            "size_id": "TEXT",
+            "size_name": "TEXT",
+            "qty": "INTEGER NOT NULL DEFAULT 1",
+            "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
     connection.execute("CREATE INDEX IF NOT EXISTS idx_s2lines_doc ON shipment2_lines(doc_id)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_s2docs_client ON shipment2_docs(client_id)")
     connection.execute("""
@@ -10050,6 +10375,14 @@ def _shipment_ensure_tables(connection) -> None:
             created_by TEXT
         )
     """)
+    _ensure_columns(
+        connection,
+        "shipment2_ops",
+        {
+            "comment": "TEXT",
+            "created_by": "TEXT",
+        },
+    )
     connection.execute("CREATE INDEX IF NOT EXISTS idx_s2ops_doc ON shipment2_ops(doc_id)")
     connection.commit()
 
@@ -10058,6 +10391,23 @@ def _shipment_next_doc_number(connection) -> str:
     row = connection.execute("SELECT COUNT(*) AS cnt FROM shipment2_docs").fetchone()
     n = (row["cnt"] if row else 0) + 1
     return f"SHP2-{n:04d}"
+
+
+def _shipment_doc_columns(connection) -> set[str]:
+    return _table_column_names(connection, "shipment2_docs")
+
+
+def _shipment_has_cargo_type_column(connection) -> bool:
+    return "cargo_type" in _shipment_doc_columns(connection)
+
+
+def _shipment_row_cargo_type(row) -> str:
+    try:
+        v = row["cargo_type"]
+    except Exception:
+        return "good"
+    s = str(v or "good").strip().lower()
+    return s if s in ("good", "defect") else "good"
 
 
 # --- Pydantic models ---
@@ -10074,6 +10424,7 @@ class ShipmentLineIn(BaseModel):
 
 
 class ShipmentDocCreate(BaseModel):
+    cargo_type:  str = "good"
     client_id:   str | None = None
     client_name: str | None = None
     destination: str | None = None
@@ -10084,6 +10435,7 @@ class ShipmentDocCreate(BaseModel):
 
 
 class ShipmentDocUpdate(BaseModel):
+    cargo_type:  str | None = None
     client_id:   str | None = None
     client_name: str | None = None
     destination: str | None = None
@@ -10107,6 +10459,7 @@ class ShipmentLineItem(BaseModel):
 class ShipmentListItem(BaseModel):
     id:           str
     doc_number:   str
+    cargo_type:   str
     client_id:    str | None
     client_name:  str | None
     destination:  str | None
@@ -10138,6 +10491,7 @@ class ShipmentOpItem(BaseModel):
 class ShipmentDetailResponse(BaseModel):
     id:           str
     doc_number:   str
+    cargo_type:   str
     client_id:    str | None
     client_name:  str | None
     destination:  str | None
@@ -10162,30 +10516,48 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_manager)):
     uid = str(user["id"])
     now = _now()
     doc_id = str(uuid4())
-    with get_connection() as connection:
-        _shipment_ensure_tables(connection)
-        doc_number = _shipment_next_doc_number(connection)
-        connection.execute(
-            """INSERT INTO shipment2_docs
-               (id,doc_number,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (doc_id, doc_number, body.client_id, body.client_name,
-             body.destination, body.carrier, body.ship_date, body.comment,
-             SHIPMENT_STATUS_DRAFT, now, uid),
-        )
-        for line in body.lines:
+    cargo_type = str(body.cargo_type or "good").strip().lower()
+    if cargo_type not in ("good", "defect"):
+        raise HTTPException(status_code=422, detail="cargo_type: допустимо good | defect")
+    try:
+        with get_connection() as connection:
+            _shipment_ensure_tables(connection)
+            doc_number = _shipment_next_doc_number(connection)
+            if _shipment_has_cargo_type_column(connection):
+                connection.execute(
+                    """INSERT INTO shipment2_docs
+                       (id,doc_number,cargo_type,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (doc_id, doc_number, cargo_type, body.client_id, body.client_name,
+                     body.destination, body.carrier, body.ship_date, body.comment,
+                     SHIPMENT_STATUS_DRAFT, now, uid),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO shipment2_docs
+                       (id,doc_number,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (doc_id, doc_number, body.client_id, body.client_name,
+                     body.destination, body.carrier, body.ship_date, body.comment,
+                     SHIPMENT_STATUS_DRAFT, now, uid),
+                )
+            for line in body.lines:
+                connection.execute(
+                    """INSERT INTO shipment2_lines
+                       (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
+                     line.color_id, line.color_name, line.size_id, line.size_name, line.qty, now),
+                )
             connection.execute(
-                """INSERT INTO shipment2_lines
-                   (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
-                 line.color_id, line.color_name, line.size_id, line.size_name, line.qty, now),
+                "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+                (str(uuid4()), doc_id, "doc_create", now, uid),
             )
-        connection.execute(
-            "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
-            (str(uuid4()), doc_id, "doc_create", now, uid),
-        )
-        connection.commit()
+            connection.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"create_shipment failed: {type(exc).__name__}: {exc}") from exc
     return MessageResponse(message=doc_id)
 
 
@@ -10216,14 +10588,21 @@ def shipments_summary(
             params.append(date_to)
         where = " AND ".join(conds)
         rows = connection.execute(
-            f"SELECT d.status FROM shipment2_docs d WHERE {where}", params
+            f"SELECT d.status, d.ship_date FROM shipment2_docs d WHERE {where}", params
         ).fetchall()
+    today = date.today().isoformat()
     all_    = len(rows)
-    active  = sum(1 for r in rows if r["status"] in ("draft", "packing", "ready"))
-    done    = sum(1 for r in rows if r["status"] == "shipped")
+    active  = sum(1 for r in rows if r["status"] == "ready")
+    done    = sum(1 for r in rows if r["status"] in ("shipped", "cancelled"))
     packing = sum(1 for r in rows if r["status"] == "packing")
     ready   = sum(1 for r in rows if r["status"] == "ready")
-    return {"all": all_, "active": active, "done": done, "packing": packing, "ready": ready}
+    overdue = sum(
+        1 for r in rows
+        if r["status"] in ("ready", "packing")
+        and r["ship_date"]
+        and str(r["ship_date"]) < today
+    )
+    return {"all": all_, "active": active, "done": done, "packing": packing, "ready": ready, "overdue": overdue}
 
 
 @app.get("/shipments", response_model=ShipmentListResponse)
@@ -10235,6 +10614,7 @@ def list_shipments(
     search:    str | None = Query(None),
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
+    overdue:   bool = Query(False),
     user=Depends(get_current_manager),
 ):
     with get_connection() as connection:
@@ -10244,6 +10624,12 @@ def list_shipments(
         if status and status in SHIPMENT_STATUSES_ALL:
             conds.append("d.status = ?")
             params.append(status)
+        if overdue:
+            today = date.today().isoformat()
+            conds.append("d.status IN ('ready', 'packing')")
+            conds.append("d.ship_date IS NOT NULL")
+            conds.append("d.ship_date < ?")
+            params.append(today)
         if client_id:
             conds.append("d.client_id = ?")
             params.append(client_id.strip())
@@ -10278,6 +10664,7 @@ def list_shipments(
             ShipmentListItem(
                 id=str(r["id"]),
                 doc_number=str(r["doc_number"]),
+                cargo_type=_shipment_row_cargo_type(r),
                 client_id=r["client_id"],
                 client_name=r["client_name"],
                 destination=r["destination"],
@@ -10344,6 +10731,7 @@ def get_shipment(doc_id: str, user=Depends(get_current_manager)):
     return ShipmentDetailResponse(
         id=str(row["id"]),
         doc_number=str(row["doc_number"]),
+        cargo_type=_shipment_row_cargo_type(row),
         client_id=row["client_id"],
         client_name=row["client_name"],
         destination=row["destination"],
@@ -10372,9 +10760,16 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(get_curre
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
+        if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        if "cargo_type" in fields:
+            ct = str(fields["cargo_type"]).strip().lower()
+            if ct not in ("good", "defect"):
+                raise HTTPException(status_code=422, detail="cargo_type: допустимо good | defect")
+            fields["cargo_type"] = ct
+            if not _shipment_has_cargo_type_column(connection):
+                fields.pop("cargo_type", None)
         if not fields:
             return MessageResponse(message="ok")
         sets = ", ".join(f"{k} = ?" for k in fields)
@@ -10396,8 +10791,8 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(get_curren
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
-            raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
+        if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
+            raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         line_id = str(uuid4())
         connection.execute(
             """INSERT INTO shipment2_lines
@@ -10420,7 +10815,7 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
-            raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
+            raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         connection.execute(
             """UPDATE shipment2_lines SET
                product_id=?,product_name=?,product_sku=?,color_id=?,color_name=?,
@@ -10438,6 +10833,13 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
 def delete_shipment_line(doc_id: str, line_id: str, user=Depends(get_current_manager)):
     with get_connection() as connection:
         _shipment_ensure_tables(connection)
+        row = connection.execute(
+            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Р”РѕРєСѓРјРµРЅС‚ РЅРµ РЅР°Р№РґРµРЅ")
+        if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
+            raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         connection.execute(
             "UPDATE shipment2_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),

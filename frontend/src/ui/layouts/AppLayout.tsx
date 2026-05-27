@@ -14,16 +14,16 @@ export function AppLayout() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const ok = await ensureSessionBootstrapped()
-      if (cancelled) return
-      if (!ok) { setBoot('guest'); return }
-      setBoot('checking')
       try {
+        const ok = await ensureSessionBootstrapped()
+        if (cancelled) return
+        if (!ok) { setBoot('guest'); return }
+        setBoot('checking')
         await me()
         if (!cancelled) setBoot('ready')
       } catch (e) {
         if (isSessionExpiredError(e)) return
-        if (!cancelled) setBoot('ready')
+        if (!cancelled) setBoot(getToken() ? 'ready' : 'guest')
       }
     })()
     return () => { cancelled = true }

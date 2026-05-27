@@ -4,6 +4,7 @@ import {
   listShipments,
   getShipmentsSummary,
   advanceShipment,
+  isShipmentOverdue,
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
@@ -23,31 +24,25 @@ import { EmptyState } from '../primitives/EmptyState'
 
 const PAGE_SIZE = 25
 
-type TabId = 'all' | 'active' | 'packing' | 'ready' | 'done'
+type TabId = 'all' | 'active' | 'overdue' | 'done' | 'planned'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'all',     label: 'Все' },
   { id: 'active',  label: 'В работе' },
-  { id: 'packing', label: 'Сборка' },
-  { id: 'ready',   label: 'Готово' },
-  { id: 'done',    label: 'Отправлено' },
+  { id: 'overdue', label: 'Просрочка' },
+  { id: 'done',    label: 'Завершённые' },
+  { id: 'planned', label: 'В плане' },
 ]
 
 const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
-  packing: 'packing',
-  ready:   'ready',
-  done:    'shipped',
-}
-
-const TAB_MULTI_STATUS: Partial<Record<TabId, ShipmentStatus[]>> = {
-  active: ['draft', 'packing', 'ready'],
+  active:  'ready',
+  planned: 'packing',
 }
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: string }[] = [
-  { status: 'draft',   label: 'Черновик',   tone: '' },
-  { status: 'packing', label: 'Сборка',     tone: 'info' },
-  { status: 'ready',   label: 'Готово',     tone: 'accent' },
-  { status: 'shipped', label: 'Отправлено', tone: 'success' },
+  { status: 'packing', label: 'В плане',   tone: 'info' },
+  { status: 'ready',   label: 'На сборке', tone: 'accent' },
+  { status: 'shipped', label: 'Завершён',  tone: 'success' },
 ]
 
 function fmtDate(s: string | null) {
@@ -56,9 +51,9 @@ function fmtDate(s: string | null) {
 }
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
-  draft:   'В сборку',
-  packing: 'Готово',
-  ready:   'Отправить',
+  draft:   'В план',
+  packing: 'Начать сборку',
+  ready:   'Завершить',
 }
 
 export function InventoryShipmentsListPage() {
@@ -77,7 +72,7 @@ export function InventoryShipmentsListPage() {
   const [dateTo, setDateTo] = useState('')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [summary, setSummary] = useState<ShipmentsSummary>({ all: 0, active: 0, done: 0, packing: 0, ready: 0 })
+  const [summary, setSummary] = useState<ShipmentsSummary>({ all: 0, active: 0, done: 0, packing: 0, ready: 0, overdue: 0 })
   const [kanbanItems, setKanbanItems] = useState<ShipmentListItem[]>([])
   const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
@@ -96,12 +91,25 @@ export function InventoryShipmentsListPage() {
   useEffect(() => {
     if (view !== 'table') return
     setLoading(true)
+    const isOverdueTab = tab === 'overdue' && !statusFilter
+    const isDoneTab = tab === 'done' && !statusFilter
     const singleStatus = statusFilter || TAB_STATUS[tab]
-    const multiStatuses = !statusFilter ? TAB_MULTI_STATUS[tab] : undefined
+
     const fetchPage = async () => {
-      if (multiStatuses) {
+      if (isOverdueTab) {
+        const res = await listShipments({
+          page, limit: PAGE_SIZE,
+          search: search.trim() || undefined,
+          client_id: clientId || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          overdue: true,
+        })
+        setItems(res.items)
+        setTotal(res.total)
+      } else if (isDoneTab) {
         const results = await Promise.all(
-          multiStatuses.map((s) =>
+          (['shipped', 'cancelled'] as ShipmentStatus[]).map((s) =>
             listShipments({
               page: 1, limit: 200,
               search: search.trim() || undefined,
@@ -162,6 +170,15 @@ export function InventoryShipmentsListPage() {
     } finally {
       setAdvancingId(null)
     }
+  }
+
+  function tabCount(id: TabId): number {
+    if (id === 'all')     return summary.all
+    if (id === 'active')  return summary.active
+    if (id === 'overdue') return summary.overdue
+    if (id === 'done')    return summary.done
+    if (id === 'planned') return summary.packing
+    return 0
   }
 
   if (initialLoading) {
@@ -249,7 +266,7 @@ export function InventoryShipmentsListPage() {
                 onClick={() => handleTabChange(t.id)}
               >
                 {t.label}
-                <span className="tab-count">{summary[t.id]}</span>
+                <span className="tab-count">{tabCount(t.id)}</span>
               </button>
             ))}
           </div>
@@ -257,6 +274,7 @@ export function InventoryShipmentsListPage() {
           <Table>
             <thead>
               <tr>
+                <th style={{ width: 22 }} />
                 <th style={{ width: 120 }}>Номер</th>
                 <th>Клиент</th>
                 <th>Назначение</th>
@@ -270,38 +288,70 @@ export function InventoryShipmentsListPage() {
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={9} />
+                <SkeletonRows rows={8} cols={10} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={9}><EmptyState title="Отгрузок нет" sub="Создайте первую отгрузку" /></td></tr>
+                <tr><td colSpan={10}>
+                  <EmptyState
+                    title={tab === 'overdue' ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
+                    sub={tab === 'all' ? 'Создайте первую отгрузку' : undefined}
+                  />
+                </td></tr>
               ) : (
-                items.map((item) => (
-                  <tr key={item.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/inventory/shipments/${item.id}`)}>
-                    <Td className="mono" style={{ fontWeight: 500 }}>{item.doc_number}</Td>
-                    <Td>{item.client_name ?? '—'}</Td>
-                    <Td className="t-sub">{item.destination ?? '—'}</Td>
-                    <Td className="mono">{fmtDate(item.ship_date)}</Td>
-                    <Td className="num">{item.sku_count}</Td>
-                    <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
-                    <Td>{item.carrier ?? '—'}</Td>
-                    <Td>
-                      <Badge tone={SHIPMENT_STATUS_TONES[item.status] as any} dot>
-                        {item.status_label}
-                      </Badge>
-                    </Td>
-                    <Td>
-                      {ADVANCE_LABELS[item.status] && (
-                        <button
-                          className="btn ghost sm"
-                          disabled={advancingId === item.id}
-                          onClick={(e) => handleAdvance(e, item)}
-                          title={ADVANCE_LABELS[item.status]}
-                        >
-                          <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
-                        </button>
-                      )}
-                    </Td>
-                  </tr>
-                ))
+                items.map((item) => {
+                  const overdue = isShipmentOverdue(item)
+                  return (
+                    <tr
+                      key={item.id}
+                      style={{
+                        cursor: 'pointer',
+                        ...(overdue ? {
+                          background: 'color-mix(in oklab, var(--c-danger) 5%, transparent)',
+                          borderLeft: '2px solid var(--c-danger)',
+                        } : {}),
+                      }}
+                      onClick={() => navigate(`/inventory/shipments/${item.id}`)}
+                    >
+                      <Td style={{ paddingLeft: overdue ? 6 : 8 }}>
+                        {overdue && (
+                          <Icon name="alert" size={14} style={{ color: 'var(--c-danger)' }} title="Просрочена" />
+                        )}
+                      </Td>
+                      <Td className="mono" style={{ fontWeight: 500 }}>
+                        {item.doc_number}
+                        {overdue && (
+                          <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>
+                            просрочена
+                          </div>
+                        )}
+                      </Td>
+                      <Td>{item.client_name ?? '—'}</Td>
+                      <Td className="t-sub">{item.destination ?? '—'}</Td>
+                      <Td className="mono" style={overdue ? { color: 'var(--c-danger)', fontWeight: 500 } : {}}>
+                        {fmtDate(item.ship_date)}
+                      </Td>
+                      <Td className="num">{item.sku_count}</Td>
+                      <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
+                      <Td>{item.carrier ?? '—'}</Td>
+                      <Td>
+                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as any} dot>
+                          {item.status_label}
+                        </Badge>
+                      </Td>
+                      <Td>
+                        {ADVANCE_LABELS[item.status] && (
+                          <button
+                            className="btn ghost sm"
+                            disabled={advancingId === item.id}
+                            onClick={(e) => handleAdvance(e, item)}
+                            title={ADVANCE_LABELS[item.status]}
+                          >
+                            <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
+                          </button>
+                        )}
+                      </Td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </Table>
@@ -320,7 +370,7 @@ function KanbanBoard({ items, loading, onNavigate }: {
   onNavigate: (id: string) => void
 }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, alignItems: 'start' }}>
       {KANBAN_COLS.map((col) => {
         const colItems = items.filter((i) => i.status === col.status)
         return (
@@ -330,26 +380,35 @@ function KanbanBoard({ items, loading, onNavigate }: {
               <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{loading ? '…' : colItems.length}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {colItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="card"
-                  style={{ padding: 10, cursor: 'pointer' }}
-                  onClick={() => onNavigate(item.id)}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-text-faint)' }}>{fmtDate(item.ship_date)}</span>
+              {colItems.map((item) => {
+                const overdue = isShipmentOverdue(item)
+                return (
+                  <div
+                    key={item.id}
+                    className="card"
+                    style={{
+                      padding: 10, cursor: 'pointer',
+                      ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
+                    }}
+                    onClick={() => onNavigate(item.id)}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+                      {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
+                      <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
+                        {fmtDate(item.ship_date)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
+                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+                      <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
+                    </div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
-                    <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                    <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )

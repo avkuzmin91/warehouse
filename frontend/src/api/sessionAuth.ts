@@ -33,12 +33,15 @@ export function clearToken(): void {
 }
 
 async function fetchAccessTokenViaRefreshOnce(): Promise<string | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
   const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
     method: 'POST',
     credentials: AUTH_FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
-  })
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer))
   if (res.status === 401) {
     return null
   }

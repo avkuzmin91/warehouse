@@ -48,6 +48,14 @@ export function getInventoryShipmentDestinations() {
   return request<DictionaryItem[]>('/inventory/lookups/shipment-destinations')
 }
 
+export function getInventoryWarehouses() {
+  return request<DictionaryItem[]>('/inventory/lookups/warehouses')
+}
+
+export function getInventoryCarriers() {
+  return request<DictionaryItem[]>('/inventory/lookups/carriers')
+}
+
 export function getInventoryUnloadingZones() {
   return request<DictionaryItem[]>('/inventory/lookups/unloading-zones')
 }

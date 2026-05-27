@@ -4,18 +4,18 @@ export type ShipmentStatus = 'draft' | 'packing' | 'ready' | 'shipped' | 'cancel
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создание',
-  packing:   'Сборка',
-  ready:     'Отправление',
+  packing:   'В плане',
+  ready:     'На сборке',
   shipped:   'Завершение',
-  cancelled: 'Отменено',
+  cancelled: 'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создан',
-  packing:   'Собран',
-  ready:     'Отправлен',
+  packing:   'Сборка начата',
+  ready:     'На сборке',
   shipped:   'Завершён',
-  cancelled: 'Отменён',
+  cancelled: 'Аннулирован',
 }
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
@@ -101,6 +101,7 @@ export type ShipmentListParams = {
   search?:    string
   date_from?: string
   date_to?:   string
+  overdue?:   boolean
 }
 
 export type ShipmentsSummary = {
@@ -109,6 +110,13 @@ export type ShipmentsSummary = {
   done:    number
   packing: number
   ready:   number
+  overdue: number
+}
+
+export function isShipmentOverdue(item: ShipmentListItem): boolean {
+  if (!item.ship_date) return false
+  if (item.status !== 'ready' && item.status !== 'packing') return false
+  return item.ship_date < new Date().toISOString().slice(0, 10)
 }
 
 export type ShipmentLineIn = {
@@ -155,6 +163,7 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   if (params.search)    sp.set('search', params.search)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
+  if (params.overdue)   sp.set('overdue', 'true')
   const q = sp.toString()
   return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
 }

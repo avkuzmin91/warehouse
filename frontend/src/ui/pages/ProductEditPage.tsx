@@ -22,6 +22,7 @@ import { Badge } from '../primitives/Badge'
 import { Skeleton } from '../primitives/Skeleton'
 import { Icon } from '../primitives/Icon'
 import { Select } from '../primitives/Select'
+import { Tooltip } from '../primitives/Tooltip'
 import { Table, Td } from '../data/Table'
 import { useConfirm } from '../feedback/ConfirmDialog'
 
@@ -104,6 +105,7 @@ export function ProductEditPage() {
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [clients, setClients] = useState<ComboboxOption[]>([])
   const [rows, setRows] = useState<ProductVariantWriteItem[]>([])
+  const [variantHasReceipts, setVariantHasReceipts] = useState<Map<string, boolean>>(new Map())
   const [varLoading, setVarLoading] = useState(false)
   const [varError, setVarError] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -151,6 +153,7 @@ export function ProductEditPage() {
           is_active: v.is_active,
         })),
       )
+      setVariantHasReceipts(new Map(items.map((v) => [v.id, v.has_receipts ?? false])))
     } catch (e: unknown) {
       setVarError(e instanceof Error ? e.message : 'Ошибка загрузки вариантов')
     } finally {
@@ -237,11 +240,21 @@ export function ProductEditPage() {
   async function saveVariantsPart() {
     if (!id) throw new Error('Товар не найден')
     const requiresSz = product?.requires_size ?? false
-    const missingColor = rows.some((r) => !r.color_id)
+    const requiresClr = product?.requires_color ?? false
+    const missingColor = requiresClr && rows.some((r) => !r.color_id)
     const missingSize = requiresSz && rows.some((r) => !r.size_id)
     if (missingColor) throw new Error('Укажите цвет для всех вариантов')
     if (missingSize) throw new Error('Укажите размер для всех вариантов')
     if (hasDuplicates(rows, requiresSz)) throw new Error('Есть дублирующиеся сочетания цвет + размер')
+    if (!requiresSz && rows.length > 1) {
+      const first = rows[0]!.dimension
+      const dimMismatch = rows.slice(1).some((r) =>
+        r.dimension.length !== first.length ||
+        r.dimension.width !== first.width ||
+        r.dimension.height !== first.height
+      )
+      if (dimMismatch) throw new Error('У техники все варианты должны иметь одинаковые габариты')
+    }
 
     await patchProductVariants(id, rows)
   }
@@ -510,26 +523,46 @@ export function ProductEditPage() {
                         Нет вариантов — нажмите «Добавить»
                       </td>
                     </tr>
-                  ) : rows.map((row, i) => (
+                  ) : rows.map((row, i) => {
+                    const locked = row.id ? (variantHasReceipts.get(row.id) ?? false) : false
+                    return (
                     <tr key={row.id ?? `new-${i}`}>
                       <Td>
-                        <Select
-                          value={row.color_id}
-                          onChange={(v) => setRow(i, { color_id: v })}
-                          options={colors.map((c) => ({ value: c.id, label: c.name }))}
-                          placeholder="Цвет…"
-                          disabled={busy}
-                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Select
+                            value={row.color_id ?? ''}
+                            onChange={(v) => setRow(i, { color_id: v })}
+                            options={colors.map((c) => ({ value: c.id, label: c.name }))}
+                            placeholder="Цвет…"
+                            disabled={busy || locked}
+                          />
+                          {locked && (
+                            <Tooltip content="Цвет нельзя изменить: по этому варианту есть поступления">
+                              <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
+                                <Icon name="lock" size={13} />
+                              </span>
+                            </Tooltip>
+                          )}
+                        </div>
                       </Td>
                       {requiresSize && (
                         <Td>
-                          <Select
-                            value={row.size_id ?? ''}
-                            onChange={(v) => setRow(i, { size_id: v || null })}
-                            options={sizes.map((s) => ({ value: s.id, label: s.name }))}
-                            placeholder="Размер…"
-                            disabled={busy}
-                          />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Select
+                              value={row.size_id ?? ''}
+                              onChange={(v) => setRow(i, { size_id: v || null })}
+                              options={sizes.map((s) => ({ value: s.id, label: s.name }))}
+                              placeholder="Размер…"
+                              disabled={busy || locked}
+                            />
+                            {locked && (
+                              <Tooltip content="Размер нельзя изменить: по этому варианту есть поступления">
+                                <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
+                                  <Icon name="lock" size={13} />
+                                </span>
+                              </Tooltip>
+                            )}
+                          </div>
                         </Td>
                       )}
                       <Td>
@@ -552,7 +585,8 @@ export function ProductEditPage() {
                         </button>
                       </Td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </Table>
 

@@ -12,6 +12,7 @@ export type BalanceItem = {
   client_name: string | null
   good: number
   defect: number
+  on_review: number
   total: number
   docs_count: number
 }

@@ -194,7 +194,7 @@ export function ReceiptCreateFeature() {
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия (плановая) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={setArrivalDate} />
                 </div>
@@ -512,6 +512,7 @@ function AddLineDrawer({
 
   function handleAdd() {
     if (!selectedProduct || qty < 1) return
+    if (needsSize && !sizeId) return
     const selectedColor = colors.find((c) => c.id === colorId)
     const selectedSize = sizes.find((s) => s.id === sizeId)
     onAdd({
@@ -527,7 +528,8 @@ function AddLineDrawer({
   }
 
   const needsColor = selectedProduct?.requires_color ?? false
-  const canPickSize = !!colorId && sizes.length > 0
+  const needsSize = selectedProduct?.requires_size ?? false
+  const canPickSize = sizes.length > 0
 
   return (
     <Drawer
@@ -541,7 +543,7 @@ function AddLineDrawer({
           <button className="btn" onClick={onClose}>Отмена</button>
           <button
             className="btn primary"
-            disabled={!productId || qty < 1}
+            disabled={!productId || qty < 1 || (needsSize && !sizeId)}
             onClick={handleAdd}
           >
             <Icon name="plus" size={13} />Добавить
@@ -579,7 +581,8 @@ function AddLineDrawer({
         </div>
         <div>
           <label className="field-label">
-            <span>Размер</span>
+            <span>Размер{needsSize && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
+            {!needsSize && selectedProduct && <span className="text-xs faint">не обязательно</span>}
           </label>
           <Select
             value={sizeId}

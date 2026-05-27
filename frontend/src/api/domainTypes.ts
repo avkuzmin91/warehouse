@@ -55,7 +55,7 @@ export type ProductVariantDimension = {
 
 export type ProductVariantItem = {
   id: string
-  color_id: string
+  color_id: string | null
   color_name: string | null
   dimension: ProductVariantDimension
   size_id: string | null
@@ -65,12 +65,13 @@ export type ProductVariantItem = {
   is_active: boolean
   stock: number
   defect_qty: number
+  has_receipts?: boolean
 }
 
 export type ProductVariantWriteItem = {
   id: string | null
   sku?: string | null
-  color_id: string
+  color_id: string | null
   dimension: ProductVariantDimension
   size_id: string | null
   images: string[]
