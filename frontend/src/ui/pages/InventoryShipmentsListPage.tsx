@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   listShipments,
+  getShipmentsSummary,
   advanceShipment,
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
 } from '../../api/shipmentsApi'
-import type { ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
+import type { ShipmentListItem, ShipmentStatus, ShipmentsSummary } from '../../api/shipmentsApi'
 import { getInventoryClients } from '../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../api/domainTypes'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
-import { FiltersBar, FilterChip, FilterSelect } from '../data/FiltersBar'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
 import { DateRange } from '../data/DateRange'
 import { Badge } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
@@ -22,10 +23,30 @@ import { EmptyState } from '../primitives/EmptyState'
 
 const PAGE_SIZE = 25
 
+type TabId = 'all' | 'active' | 'packing' | 'ready' | 'done'
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'all',     label: 'Все' },
+  { id: 'active',  label: 'В работе' },
+  { id: 'packing', label: 'Сборка' },
+  { id: 'ready',   label: 'Готово' },
+  { id: 'done',    label: 'Отправлено' },
+]
+
+const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
+  packing: 'packing',
+  ready:   'ready',
+  done:    'shipped',
+}
+
+const TAB_MULTI_STATUS: Partial<Record<TabId, ShipmentStatus[]>> = {
+  active: ['draft', 'packing', 'ready'],
+}
+
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: string }[] = [
-  { status: 'draft',   label: 'Черновик',  tone: '' },
-  { status: 'packing', label: 'Сборка',    tone: 'info' },
-  { status: 'ready',   label: 'Готово',    tone: 'accent' },
+  { status: 'draft',   label: 'Черновик',   tone: '' },
+  { status: 'packing', label: 'Сборка',     tone: 'info' },
+  { status: 'ready',   label: 'Готово',     tone: 'accent' },
   { status: 'shipped', label: 'Отправлено', tone: 'success' },
 ]
 
@@ -42,10 +63,13 @@ const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
 
 export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
+  const { key: locationKey } = useLocation()
+  const [tab, setTab] = useState<TabId>('all')
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | ''>('')
@@ -53,40 +77,101 @@ export function InventoryShipmentsListPage() {
   const [dateTo, setDateTo] = useState('')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [view, setView] = useState<'table' | 'kanban'>('table')
+  const [summary, setSummary] = useState<ShipmentsSummary>({ all: 0, active: 0, done: 0, packing: 0, ready: 0 })
+  const [kanbanItems, setKanbanItems] = useState<ShipmentListItem[]>([])
   const [advancingId, setAdvancingId] = useState<string | null>(null)
+  const [reloadTick, setReloadTick] = useState(0)
 
   useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await listShipments({
-        page: view === 'kanban' ? 1 : page,
-        limit: view === 'kanban' ? 200 : PAGE_SIZE,
-        search: search || undefined,
-        client_id: clientId || undefined,
-        status: statusFilter || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-      })
-      setItems(res.items)
-      setTotal(res.total)
-    } finally {
-      setLoading(false)
-    }
-  }, [page, search, clientId, statusFilter, dateFrom, dateTo, view])
+  useEffect(() => {
+    getShipmentsSummary({
+      client_id: clientId || undefined,
+      search: search.trim() || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }).then(setSummary).catch(() => {})
+  }, [clientId, search, dateFrom, dateTo, locationKey, reloadTick])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (view !== 'table') return
+    setLoading(true)
+    const singleStatus = statusFilter || TAB_STATUS[tab]
+    const multiStatuses = !statusFilter ? TAB_MULTI_STATUS[tab] : undefined
+    const fetchPage = async () => {
+      if (multiStatuses) {
+        const results = await Promise.all(
+          multiStatuses.map((s) =>
+            listShipments({
+              page: 1, limit: 200,
+              search: search.trim() || undefined,
+              client_id: clientId || undefined,
+              status: s,
+              date_from: dateFrom || undefined,
+              date_to: dateTo || undefined,
+            })
+          )
+        )
+        const merged = results.flatMap((r) => r.items)
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        const offset = (page - 1) * PAGE_SIZE
+        setItems(merged.slice(offset, offset + PAGE_SIZE))
+        setTotal(merged.length)
+      } else {
+        const res = await listShipments({
+          page, limit: PAGE_SIZE,
+          search: search.trim() || undefined,
+          client_id: clientId || undefined,
+          status: singleStatus || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+        })
+        setItems(res.items)
+        setTotal(res.total)
+      }
+    }
+    fetchPage().catch((e) => console.error(e)).finally(() => {
+      setLoading(false)
+      setInitialLoading(false)
+    })
+  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, reloadTick])
+
+  useEffect(() => {
+    if (view !== 'kanban') return
+    listShipments({
+      page: 1, limit: 200,
+      search: search.trim() || undefined,
+      client_id: clientId || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }).then((res) => setKanbanItems(res.items)).catch(() => {})
+  }, [view, search, clientId, dateFrom, dateTo])
+
+  function handleTabChange(t: TabId) {
+    setTab(t)
+    setStatusFilter('')
+    setPage(1)
+  }
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
     setAdvancingId(item.id)
     try {
       await advanceShipment(item.id)
-      load()
+      setReloadTick((t) => t + 1)
     } finally {
       setAdvancingId(null)
     }
+  }
+
+  if (initialLoading) {
+    return (
+      <ListPage title="Отгрузки">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
+          <div style={{ width: 28, height: 28, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+        </div>
+      </ListPage>
+    )
   }
 
   return (
@@ -124,11 +209,12 @@ export function InventoryShipmentsListPage() {
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             />
           </div>
-          <FilterSelect
+          <FilterCombobox
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={(v) => { setClientId(v); setPage(1) }}
+            placeholder="Поиск клиента…"
           />
           <DateRange
             from={dateFrom} to={dateTo}
@@ -136,15 +222,15 @@ export function InventoryShipmentsListPage() {
             onToChange={(v) => { setDateTo(v); setPage(1) }}
             onClear={() => { setDateFrom(''); setDateTo(''); setPage(1) }}
           />
-          {SHIPMENT_STATUS_ORDER.map((s) => (
-            <FilterChip
-              key={s}
-              label={SHIPMENT_STATUS_LABELS[s]}
-              active={statusFilter === s}
-              onClick={() => { setStatusFilter(statusFilter === s ? '' : s); setPage(1) }}
-              onClear={() => { setStatusFilter(''); setPage(1) }}
-            />
-          ))}
+          <FilterSelect
+            label="Статус"
+            value={statusFilter}
+            options={[
+              { value: '', label: 'Все статусы' },
+              ...SHIPMENT_STATUS_ORDER.map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
+            ]}
+            onChange={(v) => { setStatusFilter(v as ShipmentStatus | ''); setPage(1) }}
+          />
           {(clientId || dateFrom || dateTo || statusFilter) && (
             <button className="btn ghost sm" onClick={() => { setClientId(''); setDateFrom(''); setDateTo(''); setStatusFilter(''); setPage(1) }}>
               <Icon name="x" size={12} />Сбросить
@@ -155,6 +241,19 @@ export function InventoryShipmentsListPage() {
     >
       {view === 'table' ? (
         <>
+          <div className="tabs" style={{ marginBottom: 14 }}>
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                className={`tab${tab === t.id ? ' active' : ''}`}
+                onClick={() => handleTabChange(t.id)}
+              >
+                {t.label}
+                <span className="tab-count">{summary[t.id]}</span>
+              </button>
+            ))}
+          </div>
+
           <Table>
             <thead>
               <tr>
@@ -209,17 +308,15 @@ export function InventoryShipmentsListPage() {
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
       ) : (
-        <KanbanBoard items={items} loading={loading} onAdvance={handleAdvance} advancingId={advancingId} onNavigate={(id) => navigate(`/inventory/shipments/${id}`)} />
+        <KanbanBoard items={kanbanItems} loading={loading} onNavigate={(id) => navigate(`/inventory/shipments/${id}`)} />
       )}
     </ListPage>
   )
 }
 
-function KanbanBoard({ items, loading, onAdvance, advancingId, onNavigate }: {
+function KanbanBoard({ items, loading, onNavigate }: {
   items: ShipmentListItem[]
   loading: boolean
-  onAdvance: (e: React.MouseEvent, item: ShipmentListItem) => void
-  advancingId: string | null
   onNavigate: (id: string) => void
 }) {
   return (
@@ -250,16 +347,6 @@ function KanbanBoard({ items, loading, onAdvance, advancingId, onNavigate }: {
                     <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
                     <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
                     <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                    {ADVANCE_LABELS[item.status] && (
-                      <button
-                        className="btn ghost sm"
-                        style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: 11.5 }}
-                        disabled={advancingId === item.id}
-                        onClick={(e) => onAdvance(e, item)}
-                      >
-                        {ADVANCE_LABELS[item.status]}
-                      </button>
-                    )}
                   </div>
                 </div>
               ))}

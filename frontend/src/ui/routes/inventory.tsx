@@ -5,25 +5,25 @@ const InventoryHomePage = lazy(() =>
   import('../pages/InventoryHomePage').then((m) => ({ default: m.InventoryHomePage })),
 )
 const InventoryReceiptsListPage = lazy(() =>
-  import('../pages/InventoryReceipts2ListPage').then((m) => ({ default: m.InventoryReceiptsListPage })),
+  import('../pages/InventoryReceiptsListPage').then((m) => ({ default: m.InventoryReceiptsListPage })),
 )
 const InventoryReceiptPage = lazy(() =>
-  import('../pages/InventoryReceipt2Page').then((m) => ({ default: m.InventoryReceiptPage })),
+  import('../pages/InventoryReceiptPage').then((m) => ({ default: m.InventoryReceiptPage })),
 )
 const InventoryReceiptDetailPage = lazy(() =>
-  import('../pages/InventoryReceipt2DetailPage').then((m) => ({ default: m.InventoryReceiptDetailPage })),
+  import('../pages/InventoryReceiptDetailPage').then((m) => ({ default: m.InventoryReceiptDetailPage })),
 )
 const InventoryBalancesPage = lazy(() =>
-  import('../pages/InventoryBalances2Page').then((m) => ({ default: m.InventoryBalancesPage })),
+  import('../pages/InventoryBalancesPage').then((m) => ({ default: m.InventoryBalancesPage })),
 )
 const InventoryShipmentsListPage = lazy(() =>
-  import('../pages/InventoryShipments2ListPage').then((m) => ({ default: m.InventoryShipmentsListPage })),
+  import('../pages/InventoryShipmentsListPage').then((m) => ({ default: m.InventoryShipmentsListPage })),
 )
 const InventoryShipmentCreatePage = lazy(() =>
-  import('../pages/InventoryShipment2CreatePage').then((m) => ({ default: m.InventoryShipmentCreatePage })),
+  import('../pages/InventoryShipmentCreatePage').then((m) => ({ default: m.InventoryShipmentCreatePage })),
 )
 const InventoryShipmentDetailPage = lazy(() =>
-  import('../pages/InventoryShipment2DetailPage').then((m) => ({ default: m.InventoryShipmentDetailPage })),
+  import('../pages/InventoryShipmentDetailPage').then((m) => ({ default: m.InventoryShipmentDetailPage })),
 )
 const ExcelImportStep1Page = lazy(() =>
   import('../pages/ExcelImportStep1Page').then((m) => ({ default: m.ExcelImportStep1Page })),

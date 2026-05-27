@@ -3,8 +3,8 @@ import type { SVGProps } from 'react'
 const paths: Record<string, React.ReactNode> = {
   home: <><path d="M3 10l9-7 9 7v10a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2V10z"/></>,
   book: <><path d="M4 4a2 2 0 0 1 2-2h12v18H6a2 2 0 0 0-2 2V4z"/><path d="M4 20a2 2 0 0 0 2 2h12"/></>,
-  truckIn: <><path d="M3 17V6h12v11"/><path d="M15 9h4l3 4v4h-7"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><path d="M9 4l3 3-3 3" stroke="currentColor"/></>,
-  truckOut: <><path d="M3 17V6h12v11"/><path d="M15 9h4l3 4v4h-7"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><path d="M9 4l-3 3 3 3"/></>,
+  truckIn: <><path d="M3 17V6h12v11"/><path d="M15 9h4l3 4v4h-7"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/></>,
+  truckOut: <><path d="M3 17V6h12v11"/><path d="M15 9h4l3 4v4h-7"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><polyline points="5.5 11.5 8 14 12.5 9" strokeWidth={2}/></>,
   box: <><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></>,
   boxes: <><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></>,
   alert: <><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></>,

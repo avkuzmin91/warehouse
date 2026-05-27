@@ -18,6 +18,7 @@ type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 const SIMPLE_API_PATHS: Record<string, string> = {
   colors: '/colors',
   suppliers: '/suppliers',
+  'unloading-zones': '/unloading-zones',
   warehouses: '/warehouses',
   carriers: '/carriers',
   reasons: '/defect-reasons',
@@ -32,7 +33,7 @@ interface SimpleDictSheetProps {
   onSaved: () => void
   isNew: boolean
   kind: string
-  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'warehouses' | 'carriers' | 'reasons'
+  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'
   initial?: AnyDictItem | null
 }
 

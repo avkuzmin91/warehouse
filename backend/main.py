@@ -62,7 +62,7 @@ def _resolve_uploads_dir() -> Path:
 
 
 UPLOADS_DIR = _resolve_uploads_dir()
-DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers"}
+DICTIONARY_TABLES = {"clients", "colors", "sizes", "product_types", "suppliers", "unloading_zones", "warehouses", "carriers", "defect_reasons"}
 
 _auth_log = logging.getLogger("warehouse.auth")
 
@@ -1008,6 +1008,58 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS unloading_zones (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                creator_id TEXT,
+                updated_at TEXT,
+                updated_by_id TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS warehouses (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                creator_id TEXT,
+                updated_at TEXT,
+                updated_by_id TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS carriers (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                creator_id TEXT,
+                updated_at TEXT,
+                updated_by_id TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS defect_reasons (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                creator_id TEXT,
+                updated_at TEXT,
+                updated_by_id TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS products (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -1117,6 +1169,7 @@ def init_db():
         _migrate_product_variants_v1(connection)
         _migrate_soft_delete_policy_v1(connection)
         _migrate_product_gallery_json_v1(connection)
+        _soft_delete_extra_dicts(connection)
         _migrate_auth_sessions_v1(connection)
         _migrate_auth_refresh_superseded_v1(connection)
         _ensure_columns(
@@ -1536,6 +1589,17 @@ def _migrate_soft_delete_policy_v1(connection: Any) -> None:
     connection.execute(
         "INSERT INTO app_migrations (id) VALUES ('soft_delete_policy_v1')"
     )
+
+
+def _soft_delete_extra_dicts(connection: Any) -> None:
+    """Добавляет soft-delete колонки в справочники, созданные после v1-миграции."""
+    soft_cols = {
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_at": "TEXT",
+        "deleted_by_id": "TEXT",
+    }
+    for tbl in ("unloading_zones", "warehouses", "carriers", "defect_reasons"):
+        _ensure_columns(connection, tbl, soft_cols)
 
 
 def _migrate_product_gallery_json_v1(connection: Any) -> None:
@@ -4232,6 +4296,194 @@ def delete_supplier(item_id: str, admin=Depends(get_current_admin)):
     return _delete_dictionary_item("suppliers", item_id, admin["id"])
 
 
+@app.get("/unloading-zones", response_model=DictionaryListResponse)
+def list_unloading_zones(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    return _list_dictionary_items_page(
+        "unloading_zones",
+        page,
+        limit,
+        search=name,
+        actuality_id=actuality_id,
+        date_from=df,
+        date_to=dt,
+        sort=sort,
+        sort_columns=CLIENT_LIST_SORT_COLUMNS,
+        default_order="d.created_at DESC",
+        include_deleted=include_deleted,
+    )
+
+
+@app.post("/unloading-zones", response_model=MessageResponse)
+def create_unloading_zone(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return _create_dictionary_item("unloading_zones", payload, admin["id"])
+
+
+@app.get("/unloading-zones/{item_id}", response_model=DictionaryBaseItem)
+def get_unloading_zone(
+    item_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    return _get_dictionary_item("unloading_zones", item_id, include_deleted=include_deleted)
+
+
+@app.patch("/unloading-zones/{item_id}", response_model=MessageResponse)
+def update_unloading_zone(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return _update_dictionary_item("unloading_zones", item_id, payload, admin["id"])
+
+
+@app.delete("/unloading-zones/{item_id}", response_model=MessageResponse)
+def delete_unloading_zone(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return _delete_dictionary_item("unloading_zones", item_id, admin["id"])
+
+
+@app.get("/warehouses", response_model=DictionaryListResponse)
+def list_warehouses(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    return _list_dictionary_items_page(
+        "warehouses", page, limit, search=name, actuality_id=actuality_id,
+        date_from=df, date_to=dt, sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS,
+        default_order="d.created_at DESC", include_deleted=include_deleted,
+    )
+
+
+@app.post("/warehouses", response_model=MessageResponse)
+def create_warehouse(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return _create_dictionary_item("warehouses", payload, admin["id"])
+
+
+@app.get("/warehouses/{item_id}", response_model=DictionaryBaseItem)
+def get_warehouse(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return _get_dictionary_item("warehouses", item_id, include_deleted=include_deleted)
+
+
+@app.patch("/warehouses/{item_id}", response_model=MessageResponse)
+def update_warehouse(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return _update_dictionary_item("warehouses", item_id, payload, admin["id"])
+
+
+@app.delete("/warehouses/{item_id}", response_model=MessageResponse)
+def delete_warehouse(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return _delete_dictionary_item("warehouses", item_id, admin["id"])
+
+
+@app.get("/carriers", response_model=DictionaryListResponse)
+def list_carriers(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    return _list_dictionary_items_page(
+        "carriers", page, limit, search=name, actuality_id=actuality_id,
+        date_from=df, date_to=dt, sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS,
+        default_order="d.created_at DESC", include_deleted=include_deleted,
+    )
+
+
+@app.post("/carriers", response_model=MessageResponse)
+def create_carrier(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return _create_dictionary_item("carriers", payload, admin["id"])
+
+
+@app.get("/carriers/{item_id}", response_model=DictionaryBaseItem)
+def get_carrier(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return _get_dictionary_item("carriers", item_id, include_deleted=include_deleted)
+
+
+@app.patch("/carriers/{item_id}", response_model=MessageResponse)
+def update_carrier(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return _update_dictionary_item("carriers", item_id, payload, admin["id"])
+
+
+@app.delete("/carriers/{item_id}", response_model=MessageResponse)
+def delete_carrier(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return _delete_dictionary_item("carriers", item_id, admin["id"])
+
+
+@app.get("/defect-reasons", response_model=DictionaryListResponse)
+def list_defect_reasons(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    df = _normalize_date_yyyy_mm_dd(date_from, "date_from")
+    dt = _normalize_date_yyyy_mm_dd(date_to, "date_to")
+    return _list_dictionary_items_page(
+        "defect_reasons", page, limit, search=name, actuality_id=actuality_id,
+        date_from=df, date_to=dt, sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS,
+        default_order="d.created_at DESC", include_deleted=include_deleted,
+    )
+
+
+@app.post("/defect-reasons", response_model=MessageResponse)
+def create_defect_reason(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return _create_dictionary_item("defect_reasons", payload, admin["id"])
+
+
+@app.get("/defect-reasons/{item_id}", response_model=DictionaryBaseItem)
+def get_defect_reason(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return _get_dictionary_item("defect_reasons", item_id, include_deleted=include_deleted)
+
+
+@app.patch("/defect-reasons/{item_id}", response_model=MessageResponse)
+def update_defect_reason(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return _update_dictionary_item("defect_reasons", item_id, payload, admin["id"])
+
+
+@app.delete("/defect-reasons/{item_id}", response_model=MessageResponse)
+def delete_defect_reason(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return _delete_dictionary_item("defect_reasons", item_id, admin["id"])
+
+
 @app.get("/sizes", response_model=SizeListResponse)
 def list_sizes(
     admin=Depends(get_current_admin),
@@ -5383,6 +5635,12 @@ def inventory_lookup_product_types(user=Depends(get_current_manager)):
 def inventory_lookup_suppliers(user=Depends(get_current_manager)):
     _ = user
     return _active_lookup_dictionary("suppliers")
+
+
+@app.get("/inventory/lookups/unloading-zones", response_model=list[DictionaryBaseItem])
+def inventory_lookup_unloading_zones(user=Depends(get_current_manager)):
+    _ = user
+    return _active_lookup_dictionary("unloading_zones")
 
 
 @app.get("/inventory/lookups/products", response_model=list[InventoryProductLookup])
@@ -8288,63 +8546,63 @@ async def import_movements_commit_staged(
 # ============================================================
 
 # --- Статусы документа ---
-RECEIPT2_STATUS_DRAFT     = "draft"
-RECEIPT2_STATUS_PLANNED   = "planned"
-RECEIPT2_STATUS_ON_REVIEW = "on_review"
-RECEIPT2_STATUS_IN_REVIEW_LEGACY = "in_review"
-RECEIPT2_STATUS_DONE      = "done"
-RECEIPT2_STATUS_CANCELLED = "cancelled"
+RECEIPT_STATUS_DRAFT     = "draft"
+RECEIPT_STATUS_PLANNED   = "planned"
+RECEIPT_STATUS_ON_REVIEW = "on_review"
+RECEIPT_STATUS_IN_REVIEW_LEGACY = "in_review"
+RECEIPT_STATUS_DONE      = "done"
+RECEIPT_STATUS_CANCELLED = "cancelled"
 
-RECEIPT2_STATUSES_ALL = frozenset({
-    RECEIPT2_STATUS_DRAFT,
-    RECEIPT2_STATUS_PLANNED,
-    RECEIPT2_STATUS_ON_REVIEW,
-    RECEIPT2_STATUS_DONE,
-    RECEIPT2_STATUS_CANCELLED,
+RECEIPT_STATUSES_ALL = frozenset({
+    RECEIPT_STATUS_DRAFT,
+    RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_CANCELLED,
 })
 
 # Порядок переходов статусов
-RECEIPT2_STATUS_TRANSITIONS: dict[str, str] = {
-    RECEIPT2_STATUS_DRAFT: RECEIPT2_STATUS_PLANNED,
-    RECEIPT2_STATUS_PLANNED: RECEIPT2_STATUS_ON_REVIEW,
-    RECEIPT2_STATUS_ON_REVIEW: RECEIPT2_STATUS_DONE,
+RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
+    RECEIPT_STATUS_DRAFT: RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_PLANNED: RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_ON_REVIEW: RECEIPT_STATUS_DONE,
 }
 
-RECEIPT2_STATUS_RU = {
-    RECEIPT2_STATUS_DRAFT:     "Планирование",
-    RECEIPT2_STATUS_PLANNED:   "В пути",
-    RECEIPT2_STATUS_ON_REVIEW: "На проверке",
-    RECEIPT2_STATUS_DONE:      "Завершён",
-    RECEIPT2_STATUS_CANCELLED: "Аннулирован",
+RECEIPT_STATUS_RU = {
+    RECEIPT_STATUS_DRAFT:     "Создание",
+    RECEIPT_STATUS_PLANNED:   "В плане",
+    RECEIPT_STATUS_ON_REVIEW: "На проверке",
+    RECEIPT_STATUS_DONE:      "Завершён",
+    RECEIPT_STATUS_CANCELLED: "Аннулирован",
 }
 
 # --- Типы операций v2 ---
-RECEIPT2_OP_DOC_CREATE = "doc_create"
-RECEIPT2_OP_DOC_UPDATE = "doc_update"
-RECEIPT2_OP_LINE_ADD = "line_add"
-RECEIPT2_OP_LINE_UPDATE = "line_update"
-RECEIPT2_OP_RECEIVING = "receiving"
-RECEIPT2_OP_DEFECT_FIX = "defect_fix"
-RECEIPT2_OP_QC_COMPLETE = "qc_complete"
-RECEIPT2_OP_PLAN_FIX    = "plan_fix"
-RECEIPT2_OP_ARRIVAL_FIX = "arrival_fix"
-RECEIPT2_OP_CANCEL      = "cancel"
-RECEIPT2_OP_LINE_DELETE = "line_delete"
-RECEIPT2_OP_LINE_QC_COMPLETE = "line_qc_complete"
-RECEIPT2_OP_LINE_QC_REOPEN = "line_qc_reopen"
-RECEIPT2_OP_RECEIVING_CORRECTION = "receiving_correction"
-RECEIPT2_OP_DEFECT_CORRECTION    = "defect_correction"
+RECEIPT_OP_DOC_CREATE = "doc_create"
+RECEIPT_OP_DOC_UPDATE = "doc_update"
+RECEIPT_OP_LINE_ADD = "line_add"
+RECEIPT_OP_LINE_UPDATE = "line_update"
+RECEIPT_OP_RECEIVING = "receiving"
+RECEIPT_OP_DEFECT_FIX = "defect_fix"
+RECEIPT_OP_QC_COMPLETE = "qc_complete"
+RECEIPT_OP_PLAN_FIX    = "plan_fix"
+RECEIPT_OP_ARRIVAL_FIX = "arrival_fix"
+RECEIPT_OP_CANCEL      = "cancel"
+RECEIPT_OP_LINE_DELETE = "line_delete"
+RECEIPT_OP_LINE_QC_COMPLETE = "line_qc_complete"
+RECEIPT_OP_LINE_QC_REOPEN = "line_qc_reopen"
+RECEIPT_OP_RECEIVING_CORRECTION = "receiving_correction"
+RECEIPT_OP_DEFECT_CORRECTION    = "defect_correction"
 
-RECEIPT2_OP_TYPES_ALL = frozenset({
-    RECEIPT2_OP_DOC_CREATE, RECEIPT2_OP_DOC_UPDATE,
-    RECEIPT2_OP_LINE_ADD, RECEIPT2_OP_LINE_UPDATE,
-    RECEIPT2_OP_ARRIVAL_FIX, RECEIPT2_OP_RECEIVING,
-    RECEIPT2_OP_DEFECT_FIX, RECEIPT2_OP_QC_COMPLETE,
-    RECEIPT2_OP_LINE_QC_COMPLETE, RECEIPT2_OP_LINE_QC_REOPEN,
+RECEIPT_OP_TYPES_ALL = frozenset({
+    RECEIPT_OP_DOC_CREATE, RECEIPT_OP_DOC_UPDATE,
+    RECEIPT_OP_LINE_ADD, RECEIPT_OP_LINE_UPDATE,
+    RECEIPT_OP_ARRIVAL_FIX, RECEIPT_OP_RECEIVING,
+    RECEIPT_OP_DEFECT_FIX, RECEIPT_OP_QC_COMPLETE,
+    RECEIPT_OP_LINE_QC_COMPLETE, RECEIPT_OP_LINE_QC_REOPEN,
 })
 
 
-def _receipt2_ensure_tables(connection) -> None:
+def _receipt_ensure_tables(connection) -> None:
     """Создаёт таблицы v2 если их ещё нет (idempotent)."""
     connection.execute("""
         CREATE TABLE IF NOT EXISTS receipt2_docs (
@@ -8445,11 +8703,11 @@ def _receipt2_ensure_tables(connection) -> None:
     # Normalize legacy status spelling to keep flows and balances consistent.
     connection.execute(
         "UPDATE receipt2_docs SET status = ? WHERE status = ?",
-        (RECEIPT2_STATUS_ON_REVIEW, RECEIPT2_STATUS_IN_REVIEW_LEGACY),
+        (RECEIPT_STATUS_ON_REVIEW, RECEIPT_STATUS_IN_REVIEW_LEGACY),
     )
 
 
-def _receipt2_next_doc_number(connection) -> str:
+def _receipt_next_doc_number(connection) -> str:
     row = connection.execute(
         "SELECT COUNT(*) AS cnt FROM receipt2_docs"
     ).fetchone()
@@ -8457,7 +8715,7 @@ def _receipt2_next_doc_number(connection) -> str:
     return f"WH2-{n:05d}"
 
 
-def _receipt2_compute_state(connection, doc_id: str) -> dict:
+def _receipt_compute_state(connection, doc_id: str) -> dict:
     """Вычисляет текущее состояние документа из журнала операций."""
     ops = connection.execute(
         "SELECT * FROM receipt2_ops WHERE doc_id = ? ORDER BY created_at",
@@ -8493,27 +8751,27 @@ def _receipt2_compute_state(connection, doc_id: str) -> dict:
         if lid and str(lid) in lines:
             line = lines[str(lid)]
             line["ops_count"] += 1
-            if ot == RECEIPT2_OP_RECEIVING:
+            if ot == RECEIPT_OP_RECEIVING:
                 line["accepted"] += qty
                 if line["qc_status"] != "done":
                     line["qc_status"] = "in_progress"
-            elif ot == RECEIPT2_OP_DEFECT_FIX:
+            elif ot == RECEIPT_OP_DEFECT_FIX:
                 line["defect"] += qty
                 if line["qc_status"] != "done":
                     line["qc_status"] = "in_progress"
-            elif ot == RECEIPT2_OP_RECEIVING_CORRECTION:
+            elif ot == RECEIPT_OP_RECEIVING_CORRECTION:
                 # QC correction stores absolute accepted qty for the line.
                 line["accepted"] = int(qty)
                 if line["qc_status"] != "done":
                     line["qc_status"] = "in_progress"
-            elif ot == RECEIPT2_OP_DEFECT_CORRECTION:
+            elif ot == RECEIPT_OP_DEFECT_CORRECTION:
                 # QC correction stores absolute defect qty for the line.
                 line["defect"] = int(qty)
                 if line["qc_status"] != "done":
                     line["qc_status"] = "in_progress"
-            elif ot == RECEIPT2_OP_LINE_QC_COMPLETE:
+            elif ot == RECEIPT_OP_LINE_QC_COMPLETE:
                 line["qc_status"] = "done"
-            elif ot == RECEIPT2_OP_LINE_QC_REOPEN:
+            elif ot == RECEIPT_OP_LINE_QC_REOPEN:
                 line["qc_status"] = "in_progress" if (line["accepted"] + line["defect"]) > 0 else "pending"
 
     total_planned = sum(l["planned_qty"] for l in lines.values())
@@ -8531,7 +8789,7 @@ def _receipt2_compute_state(connection, doc_id: str) -> dict:
     }
 
 
-def _receipt2_line_label(
+def _receipt_line_label(
     product_sku: str | None,
     color_name: str | None,
     size_name: str | None,
@@ -8547,7 +8805,7 @@ def _receipt2_line_label(
 
 # --- Pydantic models v2 ---
 
-class Receipt2DocCreate(BaseModel):
+class ReceiptDocCreate(BaseModel):
     client_id: str
     supplier_name: str | None = None
     arrival_date: str | None = None
@@ -8555,10 +8813,10 @@ class Receipt2DocCreate(BaseModel):
     zone_name: str | None = None
     ttn: str | None = None
     logistics_cost: float | None = None
-    lines: list["Receipt2LineCreate"] = []
+    lines: list["ReceiptLineCreate"] = []
 
 
-class Receipt2LineCreate(BaseModel):
+class ReceiptLineCreate(BaseModel):
     product_id: str
     product_name: str
     product_sku: str
@@ -8569,7 +8827,7 @@ class Receipt2LineCreate(BaseModel):
     planned_qty: int = Field(ge=1)
 
 
-class Receipt2DocUpdate(BaseModel):
+class ReceiptDocUpdate(BaseModel):
     client_id: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
@@ -8579,7 +8837,7 @@ class Receipt2DocUpdate(BaseModel):
     logistics_cost: float | None = None
 
 
-class Receipt2LineAdd(BaseModel):
+class ReceiptLineAdd(BaseModel):
     product_id: str
     product_name: str
     product_sku: str
@@ -8590,11 +8848,11 @@ class Receipt2LineAdd(BaseModel):
     planned_qty: int = Field(ge=1)
 
 
-class Receipt2LineUpdate(BaseModel):
+class ReceiptLineUpdate(BaseModel):
     planned_qty: int = Field(ge=1)
 
 
-class Receipt2OpRecord(BaseModel):
+class ReceiptOpRecord(BaseModel):
     line_id: str
     op_type: str  # receiving | defect_fix
     qty: int = Field(ge=1)
@@ -8602,12 +8860,12 @@ class Receipt2OpRecord(BaseModel):
     comment: str | None = None
 
 
-class Receipt2LineQcComplete(BaseModel):
+class ReceiptLineQcComplete(BaseModel):
     accepted: int | None = None
     defect: int | None = None
 
 
-class Receipt2DocResponse(BaseModel):
+class ReceiptDocResponse(BaseModel):
     id: str
     doc_number: str
     client_id: str
@@ -8624,7 +8882,7 @@ class Receipt2DocResponse(BaseModel):
     updated_at: str | None = None
 
 
-class Receipt2LineResponse(BaseModel):
+class ReceiptLineResponse(BaseModel):
     id: str
     doc_id: str
     product_id: str
@@ -8642,7 +8900,7 @@ class Receipt2LineResponse(BaseModel):
     created_at: str
 
 
-class Receipt2OpResponse(BaseModel):
+class ReceiptOpResponse(BaseModel):
     id: str
     doc_id: str
     line_id: str | None = None
@@ -8655,14 +8913,14 @@ class Receipt2OpResponse(BaseModel):
     created_by_email: str | None = None
 
 
-class Receipt2DetailResponse(BaseModel):
-    doc: Receipt2DocResponse
-    lines: list[Receipt2LineResponse]
-    ops: list[Receipt2OpResponse]
+class ReceiptDetailResponse(BaseModel):
+    doc: ReceiptDocResponse
+    lines: list[ReceiptLineResponse]
+    ops: list[ReceiptOpResponse]
     state: dict
 
 
-class Receipt2ListItem(BaseModel):
+class ReceiptListItem(BaseModel):
     id: str
     doc_number: str
     client_id: str
@@ -8682,8 +8940,8 @@ class Receipt2ListItem(BaseModel):
     total_defect: int = 0
 
 
-class Receipt2ListResponse(BaseModel):
-    items: list[Receipt2ListItem]
+class ReceiptListResponse(BaseModel):
+    items: list[ReceiptListItem]
     total: int
     page: int
     limit: int
@@ -8692,8 +8950,8 @@ class Receipt2ListResponse(BaseModel):
 # --- Endpoints ---
 
 @app.post("/receipts", response_model=MessageResponse)
-def create_receipt2(
-    payload: Receipt2DocCreate,
+def create_receipt(
+    payload: ReceiptDocCreate,
     user=Depends(get_current_manager),
 ):
     """Создание нового документа поступления v2 (draft + строки)."""
@@ -8703,7 +8961,7 @@ def create_receipt2(
         raise HTTPException(status_code=400, detail="Укажите клиента")
 
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         client_row = connection.execute(
             "SELECT id, name FROM clients WHERE id = ? AND COALESCE(is_deleted,0)=0",
@@ -8713,7 +8971,7 @@ def create_receipt2(
             raise HTTPException(status_code=400, detail="Клиент не найден")
 
         doc_id = str(uuid4())
-        doc_number = _receipt2_next_doc_number(connection)
+        doc_number = _receipt_next_doc_number(connection)
         now = _now()
 
         connection.execute(
@@ -8727,7 +8985,7 @@ def create_receipt2(
                 doc_id, doc_number, cid,
                 (payload.supplier_name or "").strip() or None,
                 (payload.arrival_date or "").strip() or None,
-                RECEIPT2_STATUS_DRAFT,
+                RECEIPT_STATUS_DRAFT,
                 (payload.zone_id or "").strip() or None,
                 (payload.zone_name or "").strip() or None,
                 (payload.ttn or "").strip() or None,
@@ -8739,7 +8997,7 @@ def create_receipt2(
         # Операция doc_create
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT2_OP_DOC_CREATE, now, uid),
+            (str(uuid4()), doc_id, RECEIPT_OP_DOC_CREATE, now, uid),
         )
 
         # Строки + операции line_add
@@ -8764,26 +9022,81 @@ def create_receipt2(
             )
             connection.execute(
                 "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_ADD, line.planned_qty,
-                 _receipt2_line_label(line.product_sku, line.color_name, line.size_name, line.planned_qty), now, uid),
+                (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_ADD, line.planned_qty,
+                 _receipt_line_label(line.product_sku, line.color_name, line.size_name, line.planned_qty), now, uid),
             )
 
         connection.commit()
     return MessageResponse(message=doc_id)
 
 
-@app.get("/receipts", response_model=Receipt2ListResponse)
-def list_receipts2(
+@app.get("/receipts/summary")
+def receipts_summary(
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    """Счётчики по вкладкам для списка поступлений."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    with get_connection() as connection:
+        _receipt_ensure_tables(connection)
+        conds = ["d.is_deleted = 0"]
+        params: list = []
+        if client_id:
+            conds.append("d.client_id = ?")
+            params.append(client_id.strip())
+        if search:
+            s = f"%{search.strip()}%"
+            conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
+            params += [s, s]
+        if date_from:
+            conds.append("d.arrival_date >= ?")
+            params.append(date_from)
+        if date_to:
+            conds.append("d.arrival_date <= ?")
+            params.append(date_to)
+        where = " AND ".join(conds)
+        rows = connection.execute(
+            f"""
+            SELECT d.status, d.arrival_date
+            FROM receipt2_docs d
+            LEFT JOIN clients cl ON cl.id = d.client_id
+            WHERE {where}
+            """,
+            params,
+        ).fetchall()
+        total = len(rows)
+        active = sum(1 for r in rows if r["status"] == "on_review")
+        done = sum(1 for r in rows if r["status"] in ("done", "cancelled"))
+        drafts = sum(1 for r in rows if r["status"] == "planned")
+        overdue = sum(
+            1 for r in rows
+            if r["status"] in ("planned", "on_review")
+            and r["arrival_date"] and str(r["arrival_date"]) < today
+        )
+    return {"all": total, "active": active, "done": done, "drafts": drafts, "overdue": overdue}
+
+
+@app.get("/receipts", response_model=ReceiptListResponse)
+def list_receipts(
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
     client_id: str | None = Query(None),
     status: str | None = Query(None),
+    overdue: bool = Query(False),
     search: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
     """Список документов поступлений v2 с вычисленными агрегатами."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         conds = ["d.is_deleted = 0"]
         params: list = []
@@ -8791,13 +9104,23 @@ def list_receipts2(
         if client_id:
             conds.append("d.client_id = ?")
             params.append(client_id.strip())
-        if status and status in RECEIPT2_STATUSES_ALL:
+        if overdue:
+            conds.append("d.status IN ('planned', 'on_review')")
+            conds.append("d.arrival_date < ?")
+            params.append(today)
+        elif status and status in RECEIPT_STATUSES_ALL:
             conds.append("d.status = ?")
             params.append(status)
         if search:
             s = f"%{search.strip()}%"
             conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
             params += [s, s]
+        if date_from:
+            conds.append("d.arrival_date >= ?")
+            params.append(date_from)
+        if date_to:
+            conds.append("d.arrival_date <= ?")
+            params.append(date_to)
 
         where = " AND ".join(conds)
         total_row = connection.execute(
@@ -8826,8 +9149,8 @@ def list_receipts2(
         items = []
         for row in rows:
             doc_id = str(row["id"])
-            state = _receipt2_compute_state(connection, doc_id)
-            items.append(Receipt2ListItem(
+            state = _receipt_compute_state(connection, doc_id)
+            items.append(ReceiptListItem(
                 id=doc_id,
                 doc_number=str(row["doc_number"]),
                 client_id=str(row["client_id"]),
@@ -8847,17 +9170,17 @@ def list_receipts2(
                 total_defect=state["total_defect"],
             ))
 
-    return Receipt2ListResponse(items=items, total=total, page=page, limit=limit)
+    return ReceiptListResponse(items=items, total=total, page=page, limit=limit)
 
 
-@app.get("/receipts/{doc_id}", response_model=Receipt2DetailResponse)
-def get_receipt2(
+@app.get("/receipts/{doc_id}", response_model=ReceiptDetailResponse)
+def get_receipt(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Детальный вид документа v2: doc + lines + ops + вычисленное состояние."""
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             """
@@ -8871,7 +9194,7 @@ def get_receipt2(
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
 
-        state = _receipt2_compute_state(connection, doc_id)
+        state = _receipt_compute_state(connection, doc_id)
 
         lines_rows = connection.execute(
             "SELECT * FROM receipt2_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
@@ -8895,7 +9218,7 @@ def get_receipt2(
         for lr in lines_rows:
             lid = str(lr["id"])
             ls = state_by_line.get(lid, {})
-            lines_out.append(Receipt2LineResponse(
+            lines_out.append(ReceiptLineResponse(
                 id=lid,
                 doc_id=doc_id,
                 product_id=str(lr["product_id"]),
@@ -8915,7 +9238,7 @@ def get_receipt2(
 
         ops_out = []
         for op in ops_rows:
-            ops_out.append(Receipt2OpResponse(
+            ops_out.append(ReceiptOpResponse(
                 id=str(op["id"]),
                 doc_id=doc_id,
                 line_id=op["line_id"],
@@ -8928,7 +9251,7 @@ def get_receipt2(
                 created_by_email=op["user_email"],
             ))
 
-        doc_out = Receipt2DocResponse(
+        doc_out = ReceiptDocResponse(
             id=doc_id,
             doc_number=str(doc_row["doc_number"]),
             client_id=str(doc_row["client_id"]),
@@ -8945,7 +9268,7 @@ def get_receipt2(
             updated_at=doc_row["updated_at"],
         )
 
-    return Receipt2DetailResponse(
+    return ReceiptDetailResponse(
         doc=doc_out,
         lines=lines_out,
         ops=ops_out,
@@ -8954,15 +9277,15 @@ def get_receipt2(
 
 
 @app.patch("/receipts/{doc_id}", response_model=MessageResponse)
-def update_receipt2(
+def update_receipt(
     doc_id: str,
-    payload: Receipt2DocUpdate,
+    payload: ReceiptDocUpdate,
     user=Depends(get_current_manager),
 ):
     """Изменение реквизитов документа v2 (фиксируется операция doc_update)."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT * FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -8971,7 +9294,7 @@ def update_receipt2(
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
 
-        if str(doc_row["status"]) == RECEIPT2_STATUS_DONE:
+        if str(doc_row["status"]) == RECEIPT_STATUS_DONE:
             raise HTTPException(status_code=400, detail="Завершённый документ нельзя изменять")
 
         updates: list[str] = []
@@ -9051,7 +9374,7 @@ def update_receipt2(
                 lines_ru = "; ".join(f"{k}: {v}" for k, v in changed.items())
                 connection.execute(
                     "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                    (str(uuid4()), doc_id, RECEIPT2_OP_DOC_UPDATE, lines_ru, now, uid),
+                    (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE, lines_ru, now, uid),
                 )
             connection.commit()
 
@@ -9059,9 +9382,9 @@ def update_receipt2(
 
 
 @app.post("/receipts/{doc_id}/lines", response_model=MessageResponse)
-def add_receipt2_line(
+def add_receipt_line(
     doc_id: str,
-    payload: Receipt2LineAdd,
+    payload: ReceiptLineAdd,
     user=Depends(get_current_manager),
 ):
     """Добавление строки в документ v2 (операция line_add)."""
@@ -9070,7 +9393,7 @@ def add_receipt2_line(
         raise HTTPException(status_code=400, detail="Количество ≥ 1")
 
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9078,7 +9401,7 @@ def add_receipt2_line(
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) == RECEIPT2_STATUS_DONE:
+        if str(doc_row["status"]) == RECEIPT_STATUS_DONE:
             raise HTTPException(status_code=400, detail="Нельзя добавить строку в завершённый документ")
 
         now = _now()
@@ -9100,32 +9423,32 @@ def add_receipt2_line(
         )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_ADD, payload.planned_qty,
-             _receipt2_line_label(payload.product_sku, payload.color_name, payload.size_name, payload.planned_qty), now, uid),
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_ADD, payload.planned_qty,
+             _receipt_line_label(payload.product_sku, payload.color_name, payload.size_name, payload.planned_qty), now, uid),
         )
         connection.commit()
     return MessageResponse(message=line_id)
 
 
 @app.patch("/receipts/{doc_id}/lines/{line_id}", response_model=MessageResponse)
-def update_receipt2_line(
+def update_receipt_line(
     doc_id: str,
     line_id: str,
-    payload: Receipt2LineUpdate,
+    payload: ReceiptLineUpdate,
     user=Depends(get_current_manager),
 ):
     """Изменение планового количества строки черновика (операция line_update)."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) not in (RECEIPT2_STATUS_DRAFT, RECEIPT2_STATUS_PLANNED):
-            raise HTTPException(status_code=400, detail="Изменить количество строки можно только в статусе 'Планирование' или 'В пути'")
+        if str(doc_row["status"]) not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
+            raise HTTPException(status_code=400, detail="Изменить количество строки можно только в статусе 'Создание' или 'В плане'")
         line_row = connection.execute(
             "SELECT id, planned_qty FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
@@ -9140,7 +9463,7 @@ def update_receipt2_line(
         )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_UPDATE, payload.planned_qty,
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_UPDATE, payload.planned_qty,
              f"План: {old_qty} → {payload.planned_qty} шт.", now, uid),
         )
         connection.commit()
@@ -9148,7 +9471,7 @@ def update_receipt2_line(
 
 
 @app.delete("/receipts/{doc_id}/lines/{line_id}", response_model=MessageResponse)
-def delete_receipt2_line(
+def delete_receipt_line(
     doc_id: str,
     line_id: str,
     user=Depends(get_current_manager),
@@ -9156,15 +9479,15 @@ def delete_receipt2_line(
     """Мягкое удаление строки черновика."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) not in (RECEIPT2_STATUS_DRAFT, RECEIPT2_STATUS_PLANNED):
-            raise HTTPException(status_code=400, detail="Удалить строку можно только в статусе 'Планирование' или 'В пути'")
+        if str(doc_row["status"]) not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
+            raise HTTPException(status_code=400, detail="Удалить строку можно только в статусе 'Создание' или 'В плане'")
         line_row = connection.execute(
             "SELECT id, product_sku, color_name, size_name, planned_qty FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
@@ -9185,7 +9508,7 @@ def delete_receipt2_line(
         )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_DELETE,
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_DELETE,
              delete_comment, now, uid),
         )
         connection.commit()
@@ -9193,20 +9516,20 @@ def delete_receipt2_line(
 
 
 @app.delete("/receipts/{doc_id}", response_model=MessageResponse)
-def delete_receipt2(
+def delete_receipt(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Мягкое удаление черновика документа v2."""
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT2_STATUS_DRAFT:
+        if str(doc_row["status"]) != RECEIPT_STATUS_DRAFT:
             raise HTTPException(status_code=400, detail="Удалить можно только черновик")
         connection.execute(
             "UPDATE receipt2_docs SET is_deleted = 1 WHERE id = ?",
@@ -9217,21 +9540,21 @@ def delete_receipt2(
 
 
 @app.post("/receipts/{doc_id}/ops", response_model=MessageResponse)
-def record_receipt2_op(
+def record_receipt_op(
     doc_id: str,
-    payload: Receipt2OpRecord,
+    payload: ReceiptOpRecord,
     user=Depends(get_current_manager),
 ):
     """Фиксация операции приёмки (receiving) или брака (defect_fix)."""
     uid = str(user["id"])
-    allowed_ops = {RECEIPT2_OP_RECEIVING, RECEIPT2_OP_DEFECT_FIX}
+    allowed_ops = {RECEIPT_OP_RECEIVING, RECEIPT_OP_DEFECT_FIX}
     if payload.op_type not in allowed_ops:
         raise HTTPException(status_code=400, detail=f"Тип операции: {' | '.join(allowed_ops)}")
     if payload.qty < 1:
         raise HTTPException(status_code=400, detail="Количество ≥ 1")
 
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9241,7 +9564,7 @@ def record_receipt2_op(
             raise HTTPException(status_code=404, detail="Документ не найден")
 
         doc_status = str(doc_row["status"])
-        if doc_status != RECEIPT2_STATUS_ON_REVIEW:
+        if doc_status != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(
                 status_code=400,
                 detail="Операцию приёмки/брака можно записывать только для документов в статусе 'on_review'",
@@ -9265,24 +9588,24 @@ def record_receipt2_op(
 
 
 @app.post("/receipts/{doc_id}/lines/{line_id}/qc-complete", response_model=MessageResponse)
-def complete_receipt2_line(
+def complete_receipt_line(
     doc_id: str,
     line_id: str,
-    body: Receipt2LineQcComplete | None = None,
+    body: ReceiptLineQcComplete | None = None,
     user=Depends(get_current_manager),
 ):
     """Отмечает строку как проверенную QC. Опционально записывает корректирующие qty."""
     uid = str(user["id"])
     now = _now()
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT2_STATUS_ON_REVIEW:
+        if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(status_code=400, detail="QC можно выполнить только для документа в статусе 'on_review'")
         line_row = connection.execute(
             "SELECT id FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
@@ -9293,23 +9616,23 @@ def complete_receipt2_line(
         if body and body.accepted is not None and body.accepted >= 0:
             connection.execute(
                 "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, line_id, RECEIPT2_OP_RECEIVING_CORRECTION, body.accepted, "QC корректировка", now, uid),
+                (str(uuid4()), doc_id, line_id, RECEIPT_OP_RECEIVING_CORRECTION, body.accepted, "QC корректировка", now, uid),
             )
         if body and body.defect is not None and body.defect >= 0:
             connection.execute(
                 "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, line_id, RECEIPT2_OP_DEFECT_CORRECTION, body.defect, "QC корректировка брака", now, uid),
+                (str(uuid4()), doc_id, line_id, RECEIPT_OP_DEFECT_CORRECTION, body.defect, "QC корректировка брака", now, uid),
             )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_QC_COMPLETE, "Строка проверена", now, uid),
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_COMPLETE, "Строка проверена", now, uid),
         )
         connection.commit()
     return MessageResponse(message="ok")
 
 
 @app.post("/receipts/{doc_id}/lines/{line_id}/qc-reopen", response_model=MessageResponse)
-def reopen_receipt2_line(
+def reopen_receipt_line(
     doc_id: str,
     line_id: str,
     user=Depends(get_current_manager),
@@ -9318,14 +9641,14 @@ def reopen_receipt2_line(
     uid = str(user["id"])
     now = _now()
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT2_STATUS_ON_REVIEW:
+        if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(status_code=400, detail="Переоткрыть строку можно только в статусе 'on_review'")
         line_row = connection.execute(
             "SELECT id FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
@@ -9335,21 +9658,21 @@ def reopen_receipt2_line(
             raise HTTPException(status_code=404, detail="Строка не найдена")
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT2_OP_LINE_QC_REOPEN, "Строка возвращена на проверку", now, uid),
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_REOPEN, "Строка возвращена на проверку", now, uid),
         )
         connection.commit()
     return MessageResponse(message="ok")
 
 
 @app.post("/receipts/{doc_id}/advance", response_model=MessageResponse)
-def advance_receipt2_status(
+def advance_receipt_status(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Переводит документ на следующий статус по цепочке."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9359,15 +9682,15 @@ def advance_receipt2_status(
             raise HTTPException(status_code=404, detail="Документ не найден")
 
         current = str(doc_row["status"])
-        next_status = RECEIPT2_STATUS_TRANSITIONS.get(current)
+        next_status = RECEIPT_STATUS_TRANSITIONS.get(current)
         if next_status is None:
             raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
         now = _now()
-        op_type = RECEIPT2_OP_PLAN_FIX if next_status == RECEIPT2_STATUS_PLANNED else \
-                  RECEIPT2_OP_ARRIVAL_FIX if next_status == RECEIPT2_STATUS_ON_REVIEW else \
-                  RECEIPT2_OP_QC_COMPLETE if next_status == RECEIPT2_STATUS_DONE else \
-                  RECEIPT2_OP_DOC_UPDATE
+        op_type = RECEIPT_OP_PLAN_FIX if next_status == RECEIPT_STATUS_PLANNED else \
+                  RECEIPT_OP_ARRIVAL_FIX if next_status == RECEIPT_STATUS_ON_REVIEW else \
+                  RECEIPT_OP_QC_COMPLETE if next_status == RECEIPT_STATUS_DONE else \
+                  RECEIPT_OP_DOC_UPDATE
 
         connection.execute(
             "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
@@ -9376,7 +9699,7 @@ def advance_receipt2_status(
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, op_type,
-             f"{RECEIPT2_STATUS_RU.get(current, current)} → {RECEIPT2_STATUS_RU.get(next_status, next_status)}",
+             f"{RECEIPT_STATUS_RU.get(current, current)} → {RECEIPT_STATUS_RU.get(next_status, next_status)}",
              now, uid),
         )
         connection.commit()
@@ -9384,14 +9707,14 @@ def advance_receipt2_status(
 
 
 @app.post("/receipts/{doc_id}/arrive", response_model=MessageResponse)
-def arrive_receipt2(
+def arrive_receipt(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Фиксация прибытия: из draft сразу в on_review (plan_fix + arrival_fix)."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9401,40 +9724,41 @@ def arrive_receipt2(
             raise HTTPException(status_code=404, detail="Документ не найден")
 
         current = str(doc_row["status"])
-        if current != RECEIPT2_STATUS_DRAFT:
+        if current not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(
                 status_code=400,
-                detail="Зафиксировать прибытие можно только из статуса 'Планирование'",
+                detail="Зафиксировать прибытие можно только из статуса 'Создание' или 'В плане'",
             )
 
         now = _now()
         connection.execute(
             "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT2_STATUS_ON_REVIEW, now, doc_id),
+            (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
+        if current == RECEIPT_STATUS_DRAFT:
+            connection.execute(
+                "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, RECEIPT_OP_PLAN_FIX,
+                 "Создание → В плане (авто при фиксации прибытия)", now, uid),
+            )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT2_OP_PLAN_FIX,
-             "Планирование → В пути (авто при фиксации прибытия)", now, uid),
-        )
-        connection.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT2_OP_ARRIVAL_FIX,
-             "В пути → На проверке (фиксация прибытия)", now, uid),
+            (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
+             "В плане → На проверке (фиксация прибытия)", now, uid),
         )
         connection.commit()
-    return MessageResponse(message=RECEIPT2_STATUS_ON_REVIEW)
+    return MessageResponse(message=RECEIPT_STATUS_ON_REVIEW)
 
 
 @app.post("/receipts/{doc_id}/cancel", response_model=MessageResponse)
-def cancel_receipt2(
+def cancel_receipt(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Аннулирование документа из статуса 'planned'."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9444,31 +9768,31 @@ def cancel_receipt2(
             raise HTTPException(status_code=404, detail="Документ не найден")
 
         current = str(doc_row["status"])
-        if current != RECEIPT2_STATUS_PLANNED:
-            raise HTTPException(status_code=400, detail="Аннулировать можно только документ в статусе 'В пути'")
+        if current != RECEIPT_STATUS_PLANNED:
+            raise HTTPException(status_code=400, detail="Аннулировать можно только документ в статусе 'В плане'")
 
         now = _now()
         connection.execute(
             "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT2_STATUS_CANCELLED, now, doc_id),
+            (RECEIPT_STATUS_CANCELLED, now, doc_id),
         )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT2_OP_CANCEL, "В пути → Аннулирован", now, uid),
+            (str(uuid4()), doc_id, RECEIPT_OP_CANCEL, "В пути → Аннулирован", now, uid),
         )
         connection.commit()
-    return MessageResponse(message=RECEIPT2_STATUS_CANCELLED)
+    return MessageResponse(message=RECEIPT_STATUS_CANCELLED)
 
 
 @app.post("/receipts/{doc_id}/reopen", response_model=MessageResponse)
-def reopen_receipt2(
+def reopen_receipt(
     doc_id: str,
     user=Depends(get_current_manager),
 ):
     """Возвращает документ из статуса 'done' в 'on_review'."""
     uid = str(user["id"])
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_row = connection.execute(
             "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
@@ -9478,25 +9802,25 @@ def reopen_receipt2(
             raise HTTPException(status_code=404, detail="Документ не найден")
 
         current = str(doc_row["status"])
-        if current != RECEIPT2_STATUS_DONE:
+        if current != RECEIPT_STATUS_DONE:
             raise HTTPException(status_code=400, detail="Вернуть на проверку можно только завершённый документ")
 
         now = _now()
         connection.execute(
             "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT2_STATUS_ON_REVIEW, now, doc_id),
+            (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
         connection.execute(
             "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT2_OP_DOC_UPDATE, "Завершён → На проверке (возврат на проверку)", now, uid),
+            (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE, "Завершён → На проверке (возврат на проверку)", now, uid),
         )
         connection.commit()
-    return MessageResponse(message=RECEIPT2_STATUS_ON_REVIEW)
+    return MessageResponse(message=RECEIPT_STATUS_ON_REVIEW)
 
 
 # --- Balances v2 ---
 
-class Balance2Item(BaseModel):
+class BalanceItem(BaseModel):
     product_id: str
     product_name: str
     product_sku: str
@@ -9512,15 +9836,15 @@ class Balance2Item(BaseModel):
     docs_count: int
 
 
-class Balance2ListResponse(BaseModel):
-    items: list[Balance2Item]
+class BalanceListResponse(BaseModel):
+    items: list[BalanceItem]
     total: int
     page: int
     limit: int
 
 
-@app.get("/balances", response_model=Balance2ListResponse)
-def list_balances2(
+@app.get("/balances", response_model=BalanceListResponse)
+def list_balances(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     client_id: str | None = Query(None),
@@ -9530,7 +9854,7 @@ def list_balances2(
     user=Depends(get_current_manager),
 ):
     with get_connection() as connection:
-        _receipt2_ensure_tables(connection)
+        _receipt_ensure_tables(connection)
 
         doc_conds = ["d.is_deleted = 0"]
         doc_params: list = []
@@ -9625,7 +9949,7 @@ def list_balances2(
         for row in rows:
             good = int(row["good"] or 0)
             defect = int(row["defect"] or 0)
-            items.append(Balance2Item(
+            items.append(BalanceItem(
                 product_id=str(row["product_id"]),
                 product_name=str(row["product_name"]),
                 product_sku=str(row["product_sku"]),
@@ -9641,42 +9965,46 @@ def list_balances2(
                 docs_count=int(row["docs_count"] or 0),
             ))
 
-    return Balance2ListResponse(items=items, total=total, page=page, limit=limit)
+    return BalanceListResponse(items=items, total=total, page=page, limit=limit)
 
 
 # Shipments v2
 # ============================================================
 
-SHIPMENT2_STATUS_DRAFT     = "draft"
-SHIPMENT2_STATUS_PACKING   = "packing"
-SHIPMENT2_STATUS_READY     = "ready"
-SHIPMENT2_STATUS_SHIPPED   = "shipped"
-SHIPMENT2_STATUS_CANCELLED = "cancelled"
+SHIPMENT_STATUS_DRAFT     = "draft"
+SHIPMENT_STATUS_PACKING   = "packing"
+SHIPMENT_STATUS_READY     = "ready"
+SHIPMENT_STATUS_SHIPPED   = "shipped"
+SHIPMENT_STATUS_CANCELLED = "cancelled"
 
-SHIPMENT2_STATUSES_ALL = [
-    SHIPMENT2_STATUS_DRAFT,
-    SHIPMENT2_STATUS_PACKING,
-    SHIPMENT2_STATUS_READY,
-    SHIPMENT2_STATUS_SHIPPED,
-    SHIPMENT2_STATUS_CANCELLED,
+SHIPMENT_STATUSES_ALL = [
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_READY,
+    SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_CANCELLED,
 ]
 
-SHIPMENT2_STATUS_LABELS = {
-    SHIPMENT2_STATUS_DRAFT:     "Черновик",
-    SHIPMENT2_STATUS_PACKING:   "Сборка",
-    SHIPMENT2_STATUS_READY:     "Готово",
-    SHIPMENT2_STATUS_SHIPPED:   "Отправлено",
-    SHIPMENT2_STATUS_CANCELLED: "Отменено",
+SHIPMENT_STATUS_LABELS = {
+    SHIPMENT_STATUS_DRAFT:     "Черновик",
+    SHIPMENT_STATUS_PACKING:   "Сборка",
+    SHIPMENT_STATUS_READY:     "Готово",
+    SHIPMENT_STATUS_SHIPPED:   "Отправлено",
+    SHIPMENT_STATUS_CANCELLED: "Отменено",
 }
 
-SHIPMENT2_TRANSITIONS = {
-    SHIPMENT2_STATUS_DRAFT:   SHIPMENT2_STATUS_PACKING,
-    SHIPMENT2_STATUS_PACKING: SHIPMENT2_STATUS_READY,
-    SHIPMENT2_STATUS_READY:   SHIPMENT2_STATUS_SHIPPED,
+SHIPMENT_TRANSITIONS = {
+    SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_READY,
+    SHIPMENT_STATUS_READY:   SHIPMENT_STATUS_SHIPPED,
+}
+
+SHIPMENT_REVERT_TRANSITIONS = {
+    SHIPMENT_STATUS_READY: SHIPMENT_STATUS_PACKING,
 }
 
 
-def _shipment2_ensure_tables(connection) -> None:
+def _shipment_ensure_tables(connection) -> None:
     connection.execute("""
         CREATE TABLE IF NOT EXISTS shipment2_docs (
             id          TEXT PRIMARY KEY,
@@ -9712,10 +10040,21 @@ def _shipment2_ensure_tables(connection) -> None:
     """)
     connection.execute("CREATE INDEX IF NOT EXISTS idx_s2lines_doc ON shipment2_lines(doc_id)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_s2docs_client ON shipment2_docs(client_id)")
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS shipment2_ops (
+            id         TEXT PRIMARY KEY,
+            doc_id     TEXT NOT NULL REFERENCES shipment2_docs(id),
+            op_type    TEXT NOT NULL,
+            comment    TEXT,
+            created_at TEXT NOT NULL,
+            created_by TEXT
+        )
+    """)
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_s2ops_doc ON shipment2_ops(doc_id)")
     connection.commit()
 
 
-def _shipment2_next_doc_number(connection) -> str:
+def _shipment_next_doc_number(connection) -> str:
     row = connection.execute("SELECT COUNT(*) AS cnt FROM shipment2_docs").fetchone()
     n = (row["cnt"] if row else 0) + 1
     return f"SHP2-{n:04d}"
@@ -9723,7 +10062,7 @@ def _shipment2_next_doc_number(connection) -> str:
 
 # --- Pydantic models ---
 
-class Shipment2LineIn(BaseModel):
+class ShipmentLineIn(BaseModel):
     product_id:   str
     product_name: str
     product_sku:  str
@@ -9734,17 +10073,17 @@ class Shipment2LineIn(BaseModel):
     qty:          int = Field(ge=1)
 
 
-class Shipment2DocCreate(BaseModel):
+class ShipmentDocCreate(BaseModel):
     client_id:   str | None = None
     client_name: str | None = None
     destination: str | None = None
     carrier:     str | None = None
     ship_date:   str | None = None
     comment:     str | None = None
-    lines:       list[Shipment2LineIn] = []
+    lines:       list[ShipmentLineIn] = []
 
 
-class Shipment2DocUpdate(BaseModel):
+class ShipmentDocUpdate(BaseModel):
     client_id:   str | None = None
     client_name: str | None = None
     destination: str | None = None
@@ -9753,7 +10092,7 @@ class Shipment2DocUpdate(BaseModel):
     comment:     str | None = None
 
 
-class Shipment2LineItem(BaseModel):
+class ShipmentLineItem(BaseModel):
     id:           str
     product_id:   str
     product_name: str
@@ -9765,7 +10104,7 @@ class Shipment2LineItem(BaseModel):
     qty:          int
 
 
-class Shipment2ListItem(BaseModel):
+class ShipmentListItem(BaseModel):
     id:           str
     doc_number:   str
     client_id:    str | None
@@ -9780,14 +10119,23 @@ class Shipment2ListItem(BaseModel):
     created_at:   str
 
 
-class Shipment2ListResponse(BaseModel):
-    items: list[Shipment2ListItem]
+class ShipmentListResponse(BaseModel):
+    items: list[ShipmentListItem]
     total: int
     page:  int
     limit: int
 
 
-class Shipment2DetailResponse(BaseModel):
+class ShipmentOpItem(BaseModel):
+    id:                str
+    op_type:           str
+    comment:           str | None
+    created_at:        str
+    created_by:        str | None
+    created_by_email:  str | None
+
+
+class ShipmentDetailResponse(BaseModel):
     id:           str
     doc_number:   str
     client_id:    str | None
@@ -9801,7 +10149,8 @@ class Shipment2DetailResponse(BaseModel):
     created_at:   str
     created_by:   str | None
     updated_at:   str | None
-    lines:        list[Shipment2LineItem]
+    lines:        list[ShipmentLineItem]
+    ops:          list[ShipmentOpItem]
     sku_count:    int
     total_qty:    int
 
@@ -9809,20 +10158,20 @@ class Shipment2DetailResponse(BaseModel):
 # --- Endpoints ---
 
 @app.post("/shipments", response_model=MessageResponse)
-def create_shipment2(body: Shipment2DocCreate, user=Depends(get_current_manager)):
+def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_manager)):
     uid = str(user["id"])
     now = _now()
     doc_id = str(uuid4())
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
-        doc_number = _shipment2_next_doc_number(connection)
+        _shipment_ensure_tables(connection)
+        doc_number = _shipment_next_doc_number(connection)
         connection.execute(
             """INSERT INTO shipment2_docs
                (id,doc_number,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_number, body.client_id, body.client_name,
              body.destination, body.carrier, body.ship_date, body.comment,
-             SHIPMENT2_STATUS_DRAFT, now, uid),
+             SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
             connection.execute(
@@ -9832,24 +10181,67 @@ def create_shipment2(body: Shipment2DocCreate, user=Depends(get_current_manager)
                 (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty, now),
             )
+        connection.execute(
+            "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+            (str(uuid4()), doc_id, "doc_create", now, uid),
+        )
         connection.commit()
     return MessageResponse(message=doc_id)
 
 
-@app.get("/shipments", response_model=Shipment2ListResponse)
-def list_shipments2(
+@app.get("/shipments/summary")
+def shipments_summary(
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    with get_connection() as connection:
+        _shipment_ensure_tables(connection)
+        conds = ["d.is_deleted = 0"]
+        params: list = []
+        if client_id:
+            conds.append("d.client_id = ?")
+            params.append(client_id.strip())
+        if search:
+            s = f"%{search.strip()}%"
+            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            params += [s, s, s]
+        if date_from:
+            conds.append("d.ship_date >= ?")
+            params.append(date_from)
+        if date_to:
+            conds.append("d.ship_date <= ?")
+            params.append(date_to)
+        where = " AND ".join(conds)
+        rows = connection.execute(
+            f"SELECT d.status FROM shipment2_docs d WHERE {where}", params
+        ).fetchall()
+    all_    = len(rows)
+    active  = sum(1 for r in rows if r["status"] in ("draft", "packing", "ready"))
+    done    = sum(1 for r in rows if r["status"] == "shipped")
+    packing = sum(1 for r in rows if r["status"] == "packing")
+    ready   = sum(1 for r in rows if r["status"] == "ready")
+    return {"all": all_, "active": active, "done": done, "packing": packing, "ready": ready}
+
+
+@app.get("/shipments", response_model=ShipmentListResponse)
+def list_shipments(
     page:      int = Query(1, ge=1),
     limit:     int = Query(25, ge=1, le=200),
     status:    str | None = Query(None),
     client_id: str | None = Query(None),
     search:    str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
     user=Depends(get_current_manager),
 ):
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         conds = ["d.is_deleted = 0"]
         params: list = []
-        if status and status in SHIPMENT2_STATUSES_ALL:
+        if status and status in SHIPMENT_STATUSES_ALL:
             conds.append("d.status = ?")
             params.append(status)
         if client_id:
@@ -9857,8 +10249,14 @@ def list_shipments2(
             params.append(client_id.strip())
         if search:
             s = f"%{search.strip()}%"
-            conds.append("(d.doc_number ILIKE ? OR d.client_name ILIKE ? OR d.destination ILIKE ?)")
+            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
+        if date_from:
+            conds.append("d.ship_date >= ?")
+            params.append(date_from)
+        if date_to:
+            conds.append("d.ship_date <= ?")
+            params.append(date_to)
         where = " AND ".join(conds)
         total = connection.execute(
             f"SELECT COUNT(*) AS cnt FROM shipment2_docs d WHERE {where}", params
@@ -9877,7 +10275,7 @@ def list_shipments2(
             params + [limit, offset],
         ).fetchall()
         items = [
-            Shipment2ListItem(
+            ShipmentListItem(
                 id=str(r["id"]),
                 doc_number=str(r["doc_number"]),
                 client_id=r["client_id"],
@@ -9886,20 +10284,20 @@ def list_shipments2(
                 carrier=r["carrier"],
                 ship_date=r["ship_date"],
                 status=str(r["status"]),
-                status_label=SHIPMENT2_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+                status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
                 sku_count=int(r["sku_count"] or 0),
                 total_qty=int(r["total_qty"] or 0),
                 created_at=str(r["created_at"]),
             )
             for r in rows
         ]
-    return Shipment2ListResponse(items=items, total=total, page=page, limit=limit)
+    return ShipmentListResponse(items=items, total=total, page=page, limit=limit)
 
 
-@app.get("/shipments/{doc_id}", response_model=Shipment2DetailResponse)
-def get_shipment2(doc_id: str, user=Depends(get_current_manager)):
+@app.get("/shipments/{doc_id}", response_model=ShipmentDetailResponse)
+def get_shipment(doc_id: str, user=Depends(get_current_manager)):
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT * FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -9910,7 +10308,7 @@ def get_shipment2(doc_id: str, user=Depends(get_current_manager)):
             (doc_id,),
         ).fetchall()
         lines = [
-            Shipment2LineItem(
+            ShipmentLineItem(
                 id=str(l["id"]),
                 product_id=str(l["product_id"]),
                 product_name=str(l["product_name"]),
@@ -9924,7 +10322,26 @@ def get_shipment2(doc_id: str, user=Depends(get_current_manager)):
             for l in lines_rows
         ]
         total_qty = sum(l.qty for l in lines)
-    return Shipment2DetailResponse(
+        ops_rows = connection.execute(
+            """SELECT o.*, u.email AS user_email
+               FROM shipment2_ops o
+               LEFT JOIN users u ON u.id = o.created_by
+               WHERE o.doc_id = ?
+               ORDER BY o.created_at DESC""",
+            (doc_id,),
+        ).fetchall()
+        ops = [
+            ShipmentOpItem(
+                id=str(o["id"]),
+                op_type=str(o["op_type"]),
+                comment=o["comment"],
+                created_at=str(o["created_at"]),
+                created_by=o["created_by"],
+                created_by_email=o["user_email"],
+            )
+            for o in ops_rows
+        ]
+    return ShipmentDetailResponse(
         id=str(row["id"]),
         doc_number=str(row["doc_number"]),
         client_id=row["client_id"],
@@ -9934,27 +10351,28 @@ def get_shipment2(doc_id: str, user=Depends(get_current_manager)):
         ship_date=row["ship_date"],
         comment=row["comment"],
         status=str(row["status"]),
-        status_label=SHIPMENT2_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
+        status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
         updated_at=row["updated_at"],
         lines=lines,
+        ops=ops,
         sku_count=len(lines),
         total_qty=total_qty,
     )
 
 
 @app.patch("/shipments/{doc_id}", response_model=MessageResponse)
-def update_shipment2(doc_id: str, body: Shipment2DocUpdate, user=Depends(get_current_manager)):
+def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(get_current_manager)):
     now = _now()
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT2_STATUS_SHIPPED:
+        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         if not fields:
@@ -9969,16 +10387,16 @@ def update_shipment2(doc_id: str, body: Shipment2DocUpdate, user=Depends(get_cur
 
 
 @app.post("/shipments/{doc_id}/lines", response_model=MessageResponse)
-def add_shipment2_line(doc_id: str, body: Shipment2LineIn, user=Depends(get_current_manager)):
+def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(get_current_manager)):
     now = _now()
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT2_STATUS_SHIPPED:
+        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         line_id = str(uuid4())
         connection.execute(
@@ -9993,15 +10411,15 @@ def add_shipment2_line(doc_id: str, body: Shipment2LineIn, user=Depends(get_curr
 
 
 @app.patch("/shipments/{doc_id}/lines/{line_id}", response_model=MessageResponse)
-def update_shipment2_line(doc_id: str, line_id: str, body: Shipment2LineIn, user=Depends(get_current_manager)):
+def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=Depends(get_current_manager)):
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT2_STATUS_SHIPPED:
+        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         connection.execute(
             """UPDATE shipment2_lines SET
@@ -10017,9 +10435,9 @@ def update_shipment2_line(doc_id: str, line_id: str, body: Shipment2LineIn, user
 
 
 @app.delete("/shipments/{doc_id}/lines/{line_id}", response_model=MessageResponse)
-def delete_shipment2_line(doc_id: str, line_id: str, user=Depends(get_current_manager)):
+def delete_shipment_line(doc_id: str, line_id: str, user=Depends(get_current_manager)):
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         connection.execute(
             "UPDATE shipment2_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),
@@ -10029,52 +10447,86 @@ def delete_shipment2_line(doc_id: str, line_id: str, user=Depends(get_current_ma
 
 
 @app.post("/shipments/{doc_id}/advance", response_model=MessageResponse)
-def advance_shipment2(doc_id: str, user=Depends(get_current_manager)):
+def advance_shipment(doc_id: str, user=Depends(get_current_manager)):
     now = _now()
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         current = str(row["status"])
-        next_status = SHIPMENT2_TRANSITIONS.get(current)
+        next_status = SHIPMENT_TRANSITIONS.get(current)
         if not next_status:
             raise HTTPException(status_code=400, detail=f"Нельзя продвинуть из статуса «{current}»")
         connection.execute(
             "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
             (next_status, now, doc_id),
         )
+        connection.execute(
+            "INSERT INTO shipment2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, "advance", f"{current} → {next_status}", now, str(user["id"])),
+        )
         connection.commit()
     return MessageResponse(message=next_status)
 
 
 @app.post("/shipments/{doc_id}/cancel", response_model=MessageResponse)
-def cancel_shipment2(doc_id: str, user=Depends(get_current_manager)):
+def cancel_shipment(doc_id: str, user=Depends(get_current_manager)):
     now = _now()
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         row = connection.execute(
             "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT2_STATUS_SHIPPED:
+        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Нельзя отменить отправленный документ")
         connection.execute(
             "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
-            (SHIPMENT2_STATUS_CANCELLED, now, doc_id),
+            (SHIPMENT_STATUS_CANCELLED, now, doc_id),
+        )
+        connection.execute(
+            "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+            (str(uuid4()), doc_id, "cancel", now, str(user["id"])),
         )
         connection.commit()
-    return MessageResponse(message=SHIPMENT2_STATUS_CANCELLED)
+    return MessageResponse(message=SHIPMENT_STATUS_CANCELLED)
+
+
+@app.post("/shipments/{doc_id}/revert", response_model=MessageResponse)
+def revert_shipment(doc_id: str, user=Depends(get_current_manager)):
+    now = _now()
+    with get_connection() as connection:
+        _shipment_ensure_tables(connection)
+        row = connection.execute(
+            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        current = str(row["status"])
+        prev_status = SHIPMENT_REVERT_TRANSITIONS.get(current)
+        if not prev_status:
+            raise HTTPException(status_code=400, detail=f"Нельзя откатить из статуса «{current}»")
+        connection.execute(
+            "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
+            (prev_status, now, doc_id),
+        )
+        connection.execute(
+            "INSERT INTO shipment2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, "revert", f"{current} → {prev_status}", now, str(user["id"])),
+        )
+        connection.commit()
+    return MessageResponse(message=prev_status)
 
 
 @app.delete("/shipments/{doc_id}", response_model=MessageResponse)
-def delete_shipment2(doc_id: str, user=Depends(get_current_manager)):
+def delete_shipment_doc(doc_id: str, user=Depends(get_current_manager)):
     now = _now()
     with get_connection() as connection:
-        _shipment2_ensure_tables(connection)
+        _shipment_ensure_tables(connection)
         connection.execute(
             "UPDATE shipment2_docs SET is_deleted=1, updated_at=? WHERE id=?",
             (now, doc_id),

@@ -17,13 +17,15 @@ function formatShort(ymd: string): string {
   return `${d}.${m}`
 }
 
-const POP_W = 340
+const POP_W = 360
 
 export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateRangeProps) {
   const [open, setOpen] = useState(false)
   const [popStyle, setPopStyle] = useState({ top: 0, left: 0 })
   const triggerRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  // Unique id so outside-click handler can find this component's subtree including portals
+  const groupId = useRef(`dr-${Math.random().toString(36).slice(2)}`)
 
   const hasValue = Boolean(from || to)
 
@@ -72,12 +74,13 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
     if (!open) return
     const handleDown = (e: MouseEvent) => {
       const target = e.target as Node
-      if (
-        triggerRef.current && !triggerRef.current.contains(target) &&
-        popoverRef.current && !popoverRef.current.contains(target)
-      ) {
-        setOpen(false)
-      }
+      // Check trigger and our own popover
+      if (triggerRef.current?.contains(target)) return
+      if (popoverRef.current?.contains(target)) return
+      // Check any portaled dialogs (DatePicker calendars) that belong to our group
+      const groupDialogs = document.querySelectorAll(`[data-daterange-group="${groupId.current}"]`)
+      if (Array.from(groupDialogs).some(d => d.contains(target))) return
+      setOpen(false)
     }
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -95,6 +98,7 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
       ref={popoverRef}
       role="dialog"
       aria-label="Фильтр по дате"
+      data-daterange-group={groupId.current}
       style={{
         position: 'absolute',
         top: popStyle.top,
@@ -105,21 +109,30 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
         border: '1px solid var(--c-border)',
         borderRadius: 'var(--r-xl)',
         boxShadow: 'var(--sh-3)',
-        padding: '12px 14px',
+        padding: '14px 16px',
         display: 'flex',
-        gap: 10,
-        alignItems: 'flex-end',
+        gap: 12,
+        alignItems: 'flex-start',
         visibility: popStyle.top === 0 && popStyle.left === 0 ? 'hidden' : 'visible',
       }}
-      onMouseDown={e => e.preventDefault()}
     >
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 11, color: 'var(--c-text-faint)', marginBottom: 4 }}>От</div>
-        <DatePicker value={from} onChange={onFromChange} placeholder="дд.мм.гггг" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: 'var(--c-text-faint)', marginBottom: 6 }}>От</div>
+        <DatePicker
+          value={from}
+          onChange={onFromChange}
+          placeholder="дд.мм.гггг"
+          portalGroup={groupId.current}
+        />
       </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 11, color: 'var(--c-text-faint)', marginBottom: 4 }}>До</div>
-        <DatePicker value={to} onChange={onToChange} placeholder="дд.мм.гггг" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: 'var(--c-text-faint)', marginBottom: 6 }}>До</div>
+        <DatePicker
+          value={to}
+          onChange={onToChange}
+          placeholder="дд.мм.гггг"
+          portalGroup={groupId.current}
+        />
       </div>
     </div>,
     document.body

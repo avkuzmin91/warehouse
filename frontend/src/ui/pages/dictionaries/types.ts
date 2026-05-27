@@ -7,6 +7,7 @@ export type DictionaryTypeId =
   | 'colors'
   | 'clients'
   | 'suppliers'
+  | 'unloading-zones'
   | 'warehouses'
   | 'reasons'
   | 'carriers'
@@ -31,8 +32,9 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'sizes',         name: 'Размеры',       icon: 'ruler',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Размер' },
   { id: 'colors',        name: 'Цвета',         icon: 'palette',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Цвет' },
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
-  { id: 'suppliers',     name: 'Поставщики',    icon: 'cart',     kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Поставщик' },
-  { id: 'warehouses',    name: 'Склады',        icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад' },
+  { id: 'suppliers',        name: 'Поставщики',       icon: 'cart',     kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Поставщик' },
+  { id: 'unloading-zones', name: 'Зоны разгрузки',  icon: 'truckIn',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Зона разгрузки' },
+  { id: 'warehouses',       name: 'Склады',           icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад' },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
   { id: 'reasons',       name: 'Причины брака', icon: 'alert',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Причина брака' },
   { id: 'product-types', name: 'Типы товаров',  icon: 'tag',      kind: 'simple', group: 'system', createLabel: 'Создать запись', sheetKind: 'Тип товара' },

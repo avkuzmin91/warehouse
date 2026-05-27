@@ -11,7 +11,7 @@ import {
   SHIPMENT_CARGO_LABELS,
 } from '../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentOp } from '../../api/shipmentsApi'
-import { ShipmentStepper } from '../features/inventory/Shipment2Stepper'
+import { ShipmentStepper } from '../features/inventory/ShipmentStepper'
 import { Badge } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { Avatar, getInitials } from '../primitives/Avatar'

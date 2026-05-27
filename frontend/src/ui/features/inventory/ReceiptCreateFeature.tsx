@@ -9,6 +9,7 @@ import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
   getInventoryClients,
   getInventorySuppliers,
+  getInventoryUnloadingZones,
   getInventoryProducts,
   getInventoryColorsForProductSku,
   getInventorySizesForProductSkuAndColor,
@@ -36,12 +37,12 @@ export function ReceiptCreateFeature() {
 
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
+  const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
   const [ttn, setTtn] = useState('')
-  const [zoneId] = useState('')
-  const [zoneName, setZoneName] = useState('')
+  const [zoneId, setZoneId] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [saving, setSaving] = useState(false)
@@ -52,6 +53,7 @@ export function ReceiptCreateFeature() {
   useEffect(() => {
     getInventoryClients().then((res) => setClients(res.filter((c) => c.is_active && !c.is_deleted)))
     getInventorySuppliers().then((res) => setSuppliers(res.filter((s) => s.is_active && !s.is_deleted)))
+    getInventoryUnloadingZones().then((res) => setUnloadingZones(res.filter((z) => z.is_active && !z.is_deleted)))
   }, [])
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
@@ -71,13 +73,14 @@ export function ReceiptCreateFeature() {
     setError('')
     setSaving(true)
     try {
+      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       const res = await createReceipt({
         client_id: clientId,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
         ttn: ttn.trim() || null,
         zone_id: zoneId || null,
-        zone_name: zoneName.trim() || null,
+        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
@@ -106,7 +109,7 @@ export function ReceiptCreateFeature() {
 
   return (
     <FormPage
-      title="Новый документ поступления"
+      title="Новое поступление"
 
       backTo="/inventory/receipts"
       actions={
@@ -159,12 +162,12 @@ export function ReceiptCreateFeature() {
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
-                  <Select
+                  <Combobox
                     value={clientId}
-                    placeholder="Выберите клиента"
+                    placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
                     prefix="user"
-                    onChange={setClientId}
+                    onChange={(v) => setClientId(String(v ?? ''))}
                     disabled={lines.length > 0}
                   />
                   {lines.length > 0 && (
@@ -210,11 +213,13 @@ export function ReceiptCreateFeature() {
                   <label className="field-label">
                     <span>Зона разгрузки</span>
                   </label>
-                  <input
-                    className="input"
-                    placeholder="A-12"
-                    value={zoneName}
-                    onChange={(e) => setZoneName(e.target.value)}
+                  <Combobox
+                    value={zoneId}
+                    placeholder="Выберите зону…"
+                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
+                    prefix="map"
+                    onChange={(v) => setZoneId(String(v ?? ''))}
+                    clearable
                   />
                 </div>
                 <div>

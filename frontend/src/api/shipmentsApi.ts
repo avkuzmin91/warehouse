@@ -103,6 +103,14 @@ export type ShipmentListParams = {
   date_to?:   string
 }
 
+export type ShipmentsSummary = {
+  all:     number
+  active:  number
+  done:    number
+  packing: number
+  ready:   number
+}
+
 export type ShipmentLineIn = {
   product_id:   string
   product_name: string
@@ -128,7 +136,17 @@ export type ShipmentDocCreate = {
 
 export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'>
 
-export function listShipments(params: ShipmentListParams = {}) {
+export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search)    sp.set('search', params.search)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to)   sp.set('date_to', params.date_to)
+  const q = sp.toString()
+  return request<ShipmentsSummary>(`/shipments/summary${q ? `?${q}` : ''}`, { signal })
+}
+
+export function listShipments(params: ShipmentListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page)      sp.set('page', String(params.page))
   if (params.limit)     sp.set('limit', String(params.limit))
@@ -138,7 +156,7 @@ export function listShipments(params: ShipmentListParams = {}) {
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   const q = sp.toString()
-  return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`)
+  return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getShipment(id: string) {

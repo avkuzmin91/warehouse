@@ -1,23 +1,20 @@
-import type React from 'react'
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   getReceipts,
-  arriveReceipt,
-  advanceReceiptStatus,
+  getReceiptsSummary,
   RECEIPT_STATUS_LABELS,
   RECEIPT_STATUS_ORDER,
   receiptStatusTone,
-  receiptQcStatus,
   isReceiptOverdue,
 } from '../../api/receiptsApi'
-import type { ReceiptListItem, ReceiptListResponse, ReceiptStatus } from '../../api/receiptsApi'
+import type { ReceiptListItem, ReceiptStatus, ReceiptsSummary } from '../../api/receiptsApi'
 import { getInventoryClients } from '../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../api/domainTypes'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
-import { FiltersBar, FilterChip, FilterSelect } from '../data/FiltersBar'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
 import { DateRange } from '../data/DateRange'
 import { Badge } from '../primitives/Badge'
 import type { BadgeTone } from '../primitives/Badge'
@@ -34,21 +31,20 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'active', label: 'В работе' },
   { id: 'overdue', label: 'Просрочка' },
   { id: 'done', label: 'Завершённые' },
-  { id: 'drafts', label: 'Планирование' },
+  { id: 'drafts', label: 'В плане' },
 ]
 
+const TAB_STATUS: Partial<Record<TabId, ReceiptStatus>> = {
+  active: 'on_review',
+  done: 'done',
+  drafts: 'planned',
+}
+
 const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: string }[] = [
-  { status: 'draft',     label: 'Планирование', tone: '' },
-  { status: 'planned',   label: 'В пути',       tone: 'info' },
+  { status: 'planned',   label: 'В плане',      tone: 'info' },
   { status: 'on_review', label: 'На проверке',  tone: 'warning' },
   { status: 'done',      label: 'Завершён',      tone: 'success' },
 ]
-
-const ADVANCE_LABELS: Partial<Record<ReceiptStatus, string>> = {
-  draft:     'В путь',
-  planned:   'На проверку',
-  on_review: 'Завершить',
-}
 
 function fmtDate(s: string | null) {
   if (!s) return '—'
@@ -57,77 +53,100 @@ function fmtDate(s: string | null) {
 
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
+  const { key: locationKey } = useLocation()
   const [tab, setTab] = useState<TabId>('all')
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [retryTick, setRetryTick] = useState(0)
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [statusFilter, setStatusFilter] = useState<ReceiptStatus | ''>('')
-  const [allItems, setAllItems] = useState<ReceiptListItem[]>([])
+  const [items, setItems] = useState<ReceiptListItem[]>([])
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [advancingId, setAdvancingId] = useState<string | null>(null)
+  const [summary, setSummary] = useState<ReceiptsSummary>({ all: 0, active: 0, done: 0, drafts: 0, overdue: 0 })
+  const [kanbanItems, setKanbanItems] = useState<ReceiptListItem[]>([])
 
   useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res: ReceiptListResponse = await getReceipts({
-        page: 1,
-        limit: 200,
-        search: search.trim() || undefined,
-        client_id: clientId || undefined,
-        status: statusFilter || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-      })
-      setAllItems(res.items)
-      setTotal(res.total)
-    } finally {
-      setLoading(false)
-    }
-  }, [search, clientId, statusFilter, dateFrom, dateTo])
-
-  async function handleAdvance(e: React.MouseEvent, item: ReceiptListItem) {
-    e.stopPropagation()
-    setAdvancingId(item.id)
-    try {
-      if (item.status === 'draft') await arriveReceipt(item.id)
-      else await advanceReceiptStatus(item.id)
-      load()
-    } finally {
-      setAdvancingId(null)
-    }
-  }
+  useEffect(() => {
+    getReceiptsSummary({
+      client_id: clientId || undefined,
+      search: search.trim() || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }).then(setSummary).catch(() => {})
+  }, [clientId, search, dateFrom, dateTo, locationKey])
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (view !== 'table') return
+    setLoading(true)
+    setLoadError(null)
+    const effectiveStatus = statusFilter || TAB_STATUS[tab]
+    getReceipts({
+      page,
+      limit: PAGE_SIZE,
+      search: search.trim() || undefined,
+      client_id: clientId || undefined,
+      status: effectiveStatus,
+      overdue: tab === 'overdue' && !statusFilter ? true : undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }).then((res) => {
+      setItems(res.items)
+      setTotal(res.total)
+      setLoadError(null)
+    }).catch((e) => {
+      console.error('[receipts] load failed:', e)
+      setLoadError(e instanceof Error ? e.message : String(e))
+      if (initialLoading) {
+        setTimeout(() => setRetryTick((t) => t + 1), 400)
+      }
+    }).finally(() => {
+      setLoading(false)
+      setInitialLoading(false)
+    })
+  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, retryTick])
 
-  const filtered = allItems.filter((r) => {
-    if (tab === 'active' && r.status === 'done') return false
-    if (tab === 'active' && r.status === 'draft') return false
-    if (tab === 'done' && r.status !== 'done') return false
-    if (tab === 'drafts' && r.status !== 'draft') return false
-    if (tab === 'overdue' && !isReceiptOverdue(r)) return false
-    return true
-  })
+  useEffect(() => {
+    if (view !== 'kanban') return
+    getReceipts({
+      page: 1,
+      limit: 200,
+      search: search.trim() || undefined,
+      client_id: clientId || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }).then((res) => setKanbanItems(res.items)).catch(() => {})
+  }, [view, search, clientId, dateFrom, dateTo])
 
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-
-  const tabCounts = {
-    all: allItems.length,
-    active: allItems.filter((r) => r.status !== 'done' && r.status !== 'draft').length,
-    overdue: allItems.filter(isReceiptOverdue).length,
-    done: allItems.filter((r) => r.status === 'done').length,
-    drafts: allItems.filter((r) => r.status === 'draft').length,
+  // When tab changes reset page and clear manual status chip
+  function handleTabChange(t: TabId) {
+    setTab(t)
+    setStatusFilter('')
+    setPage(1)
   }
 
-  const STATUS_OPTIONS = RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft')
+  const STATUS_OPTIONS = [
+    { value: '', label: 'Все статусы' },
+    ...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft').map((s) => ({ value: s, label: RECEIPT_STATUS_LABELS[s] })),
+  ]
+
+  if (initialLoading) {
+    return (
+      <ListPage title="Поступления">
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 300, gap: 16 }}>
+          <div style={{ width: 32, height: 32, border: '2.5px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+          <span style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>Загрузка поступлений…</span>
+        </div>
+      </ListPage>
+    )
+  }
 
   return (
     <ListPage
@@ -164,11 +183,12 @@ export function InventoryReceiptsListPage() {
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             />
           </div>
-          <FilterSelect
+          <FilterCombobox
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={(v) => { setClientId(v); setPage(1) }}
+            placeholder="Поиск клиента…"
           />
           <DateRange
             from={dateFrom} to={dateTo}
@@ -176,15 +196,12 @@ export function InventoryReceiptsListPage() {
             onToChange={(v) => { setDateTo(v); setPage(1) }}
             onClear={() => { setDateFrom(''); setDateTo(''); setPage(1) }}
           />
-          {STATUS_OPTIONS.map((s) => (
-            <FilterChip
-              key={s}
-              label={RECEIPT_STATUS_LABELS[s]}
-              active={statusFilter === s}
-              onClick={() => { setStatusFilter(statusFilter === s ? '' : s); setPage(1) }}
-              onClear={() => { setStatusFilter(''); setPage(1) }}
-            />
-          ))}
+          <FilterSelect
+            label="Статус"
+            value={statusFilter}
+            options={STATUS_OPTIONS}
+            onChange={(v) => { setStatusFilter(v as ReceiptStatus | ''); setPage(1) }}
+          />
           {(clientId || dateFrom || dateTo || statusFilter) && (
             <button className="btn ghost sm" onClick={() => { setClientId(''); setDateFrom(''); setDateTo(''); setStatusFilter(''); setPage(1) }}>
               <Icon name="x" size={12} />Сбросить
@@ -195,16 +212,15 @@ export function InventoryReceiptsListPage() {
     >
       {view === 'table' ? (
         <>
-          {/* Вкладки */}
           <div className="tabs" style={{ marginBottom: 14 }}>
             {TABS.map((t) => (
               <button
                 key={t.id}
                 className={`tab${tab === t.id ? ' active' : ''}`}
-                onClick={() => { setTab(t.id); setPage(1) }}
+                onClick={() => handleTabChange(t.id)}
               >
                 {t.label}
-                <span className="tab-count">{tabCounts[t.id]}</span>
+                <span className="tab-count">{summary[t.id]}</span>
               </button>
             ))}
           </div>
@@ -219,17 +235,30 @@ export function InventoryReceiptsListPage() {
                 <th style={{ width: 70, textAlign: 'right' }}>SKU</th>
                 <th style={{ width: 100, textAlign: 'right' }}>План, шт</th>
                 <th style={{ width: 130 }}>Статус</th>
-                <th style={{ width: 80, textAlign: 'right' }}>Брак</th>
-                <th style={{ width: 140 }}>Проверка</th>
+                <th style={{ width: 160 }}>Проверка</th>
                 <th style={{ width: 28 }} />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={10} />
-              ) : paginated.length === 0 ? (
+                <SkeletonRows rows={8} cols={9} />
+              ) : loadError ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={9}>
+                    <EmptyState
+                      title="Не удалось загрузить документы"
+                      sub={loadError}
+                      action={
+                        <button className="btn primary" onClick={() => setRetryTick((t) => t + 1)}>
+                          <Icon name="check" size={14} />Повторить
+                        </button>
+                      }
+                    />
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={9}>
                     <EmptyState
                       title="Документов нет"
                       sub={tab === 'overdue' ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
@@ -244,9 +273,8 @@ export function InventoryReceiptsListPage() {
                   </td>
                 </tr>
               ) : (
-                paginated.map((item) => {
+                items.map((item) => {
                   const overdue = isReceiptOverdue(item)
-                  const qc = receiptQcStatus(item)
                   return (
                     <tr
                       key={item.id}
@@ -287,15 +315,36 @@ export function InventoryReceiptsListPage() {
                           {RECEIPT_STATUS_LABELS[item.status]}
                         </Badge>
                       </Td>
-                      <Td className="num">
-                        {item.total_defect > 0 ? (
-                          <span style={{ color: 'var(--c-warning)', fontWeight: 500 }}>{item.total_defect}</span>
-                        ) : (
-                          <span style={{ color: 'var(--c-text-faint)' }}>—</span>
-                        )}
-                      </Td>
                       <Td>
-                        <Badge tone={qc.tone as BadgeTone}>{qc.label}</Badge>
+                        {(() => {
+                          const processed = item.total_accepted + item.total_defect
+                          const pct = item.total_planned > 0 ? Math.min(100, Math.round(processed / item.total_planned * 100)) : 0
+                          const isActive = item.status === 'on_review' || item.status === 'done'
+                          if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                          return (
+                            <div style={{ minWidth: 120 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                                  <div style={{
+                                    height: '100%', borderRadius: 3,
+                                    width: `${pct}%`,
+                                    background: pct === 100 ? 'var(--c-success)' : 'var(--c-accent)',
+                                    transition: 'width 0.3s',
+                                  }} />
+                                </div>
+                                <span style={{ fontSize: 11.5, fontWeight: 600, color: pct === 100 ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                                  {pct}%
+                                </span>
+                              </div>
+                              {item.total_defect > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: 'var(--c-warning)', fontWeight: 500 }}>
+                                  <Icon name="alert" size={10} />
+                                  <span>{item.total_defect} брак</span>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </Td>
                       <Td>
                         <Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} />
@@ -306,30 +355,18 @@ export function InventoryReceiptsListPage() {
               )}
             </tbody>
           </Table>
-          <Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onPage={setPage} />
-          <div style={{ display: 'flex', alignItems: 'center', marginTop: 10, gap: 8 }}>
-            <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-              <Icon name="shield" size={11} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-              Сортировка: по дате прибытия ↓ · показано {filtered.length} из {allItems.length}
-            </span>
-            <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 11, color: 'var(--c-text-faint)' }}>
-              Сортировка: по дате прибытия ↓
-            </span>
-          </div>
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
       ) : (
-        <KanbanBoard items={allItems} loading={loading} onAdvance={handleAdvance} advancingId={advancingId} onNavigate={(id) => navigate(`/inventory/receipts/${id}`)} />
+        <KanbanBoard items={kanbanItems} loading={loading} onNavigate={(id) => navigate(`/inventory/receipts/${id}`)} />
       )}
     </ListPage>
   )
 }
 
-function KanbanBoard({ items, loading, onAdvance, advancingId, onNavigate }: {
+function KanbanBoard({ items, loading, onNavigate }: {
   items: ReceiptListItem[]
   loading: boolean
-  onAdvance: (e: React.MouseEvent, item: ReceiptListItem) => void
-  advancingId: string | null
   onNavigate: (id: string) => void
 }) {
   return (
@@ -375,16 +412,6 @@ function KanbanBoard({ items, loading, onAdvance, advancingId, onNavigate }: {
                           <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
                           <span style={{ fontSize: 12, color: 'var(--c-warning)', fontWeight: 500 }}>брак: {item.total_defect}</span>
                         </>
-                      )}
-                      {ADVANCE_LABELS[item.status] && (
-                        <button
-                          className="btn ghost sm"
-                          style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: 11.5 }}
-                          disabled={advancingId === item.id}
-                          onClick={(e) => onAdvance(e, item)}
-                        >
-                          {ADVANCE_LABELS[item.status]}
-                        </button>
                       )}
                     </div>
                   </div>

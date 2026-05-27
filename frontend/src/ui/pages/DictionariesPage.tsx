@@ -15,7 +15,7 @@ import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
 type SheetState =
-  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'warehouses' | 'carriers' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
+  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
   | { type: 'client'; isNew: boolean; initial: DictionaryItem | null }
   | null
 
@@ -41,6 +41,8 @@ export function DictionariesPage() {
       setSheet({ type: 'simple', apiType: 'colors', kind: 'Цвет', isNew: true, initial: null })
     } else if (active === 'suppliers') {
       setSheet({ type: 'simple', apiType: 'suppliers', kind: 'Поставщик', isNew: true, initial: null })
+    } else if (active === 'unloading-zones') {
+      setSheet({ type: 'simple', apiType: 'unloading-zones', kind: 'Зона разгрузки', isNew: true, initial: null })
     } else if (active === 'warehouses') {
       setSheet({ type: 'simple', apiType: 'warehouses', kind: 'Склад', isNew: true, initial: null })
     } else if (active === 'carriers') {
@@ -55,6 +57,7 @@ export function DictionariesPage() {
       active === 'product-types' ? 'product-types' :
       active === 'sizes' ? 'sizes' :
       active === 'suppliers' ? 'suppliers' :
+      active === 'unloading-zones' ? 'unloading-zones' :
       active === 'warehouses' ? 'warehouses' :
       active === 'carriers' ? 'carriers' :
       active === 'reasons' ? 'reasons' :
@@ -80,7 +83,7 @@ export function DictionariesPage() {
     if (active === 'clients') {
       return <ClientsDict key={`clients-${refreshKey}`} onEdit={openClientEdit} onTotalLoaded={handleTotalLoaded('clients')} />
     }
-    if (active === 'product-types' || active === 'sizes' || active === 'colors' || active === 'suppliers' || active === 'warehouses' || active === 'carriers' || active === 'reasons') {
+    if (active === 'product-types' || active === 'sizes' || active === 'colors' || active === 'suppliers' || active === 'unloading-zones' || active === 'warehouses' || active === 'carriers' || active === 'reasons') {
       return (
         <SimpleDict
           key={`${active}-${refreshKey}`}

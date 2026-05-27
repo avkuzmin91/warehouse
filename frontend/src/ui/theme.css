@@ -161,7 +161,7 @@ a { color: inherit; text-decoration: none; }
   color: var(--c-text);
   font-weight: 500;
 }
-.nav-item .nav-icon { width: 16px; height: 16px; flex: 0 0 16px; color: var(--c-text-subtle); }
+.nav-item .nav-icon { width: 20px; height: 20px; flex: 0 0 20px; color: var(--c-text-subtle); }
 .nav-item.active .nav-icon { color: var(--c-accent); }
 .nav-item .nav-count {
   margin-left: auto;

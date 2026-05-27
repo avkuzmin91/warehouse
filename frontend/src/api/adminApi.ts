@@ -378,18 +378,6 @@ export function deleteProduct(id: string) {
   })
 }
 
-export function deleteReceipt(receiptId: string) {
-  return request<{ message: string }>(`/receipts/${encodeURIComponent(receiptId.trim())}`, {
-    method: 'DELETE',
-  })
-}
-
-export function deleteShipment(shipmentId: string) {
-  return request<{ message: string }>(`/shipments/${encodeURIComponent(shipmentId.trim())}`, {
-    method: 'DELETE',
-  })
-}
-
 function appendCommon(sp: URLSearchParams, p: AnalyticsCommonParams | undefined) {
   if (!p) return
   if (p.date_from && /^\d{4}-\d{2}-\d{2}$/.test(p.date_from)) sp.set('date_from', p.date_from)

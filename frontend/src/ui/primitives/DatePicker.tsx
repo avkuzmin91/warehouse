@@ -8,6 +8,7 @@ interface DatePickerProps {
   placeholder?: string
   disabled?: boolean
   className?: string
+  portalGroup?: string // data attribute so parent DateRange can detect this portal
 }
 
 const MONTH_NAMES = [
@@ -51,7 +52,7 @@ interface PopoverStyle {
   left: number
 }
 
-export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг', disabled, className = '' }: DatePickerProps) {
+export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг', disabled, className = '', portalGroup }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [inputText, setInputText] = useState(formatDisplay(value))
   const [viewMode, setViewMode] = useState<ViewMode>('days')
@@ -229,6 +230,7 @@ export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг'
         visibility: popStyle.top === 0 && popStyle.left === 0 ? 'hidden' : 'visible',
       }}
       onMouseDown={e => e.preventDefault()}
+      {...(portalGroup ? { 'data-daterange-group': portalGroup } : {})}
     >
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '10px 10px 6px' }}>

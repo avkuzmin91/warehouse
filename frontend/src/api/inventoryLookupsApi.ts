@@ -47,3 +47,7 @@ export function getInventoryProductSkus() {
 export function getInventoryShipmentDestinations() {
   return request<DictionaryItem[]>('/inventory/lookups/shipment-destinations')
 }
+
+export function getInventoryUnloadingZones() {
+  return request<DictionaryItem[]>('/inventory/lookups/unloading-zones')
+}

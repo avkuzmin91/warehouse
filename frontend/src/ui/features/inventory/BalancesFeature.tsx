@@ -6,7 +6,7 @@ import type { DictionaryItem } from '../../../api/domainTypes'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
-import { FiltersBar, FilterChip, FilterSelect } from '../../data/FiltersBar'
+import { FiltersBar, FilterChip, FilterCombobox } from '../../data/FiltersBar'
 import { KPI } from '../../primitives/KPI'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
@@ -71,11 +71,12 @@ export function BalancesFeature() {
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             />
           </div>
-          <FilterSelect
+          <FilterCombobox
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={(v) => { setClientId(v); setPage(1) }}
+            placeholder="Поиск клиента…"
           />
           <FilterChip
             label="Только с остатком"

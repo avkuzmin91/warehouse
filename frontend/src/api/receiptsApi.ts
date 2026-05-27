@@ -143,6 +143,7 @@ export type ReceiptListParams = {
   limit?: number
   client_id?: string
   status?: ReceiptStatus
+  overdue?: boolean
   search?: string
   date_from?: string
   date_to?: string
@@ -150,17 +151,36 @@ export type ReceiptListParams = {
 
 // --- API functions ---
 
-export function getReceipts(params: ReceiptListParams = {}) {
+export type ReceiptsSummary = {
+  all: number
+  active: number
+  done: number
+  drafts: number
+  overdue: number
+}
+
+export function getReceiptsSummary(params: Pick<ReceiptListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to) sp.set('date_to', params.date_to)
+  const q = sp.toString()
+  return request<ReceiptsSummary>(`/receipts/summary${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.status) sp.set('status', params.status)
+  if (params.overdue) sp.set('overdue', 'true')
   if (params.search) sp.set('search', params.search)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   const q = sp.toString()
-  return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`)
+  return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getReceipt(docId: string) {
@@ -265,15 +285,15 @@ export function reopenReceipt(docId: string) {
 // --- Labels & helpers ---
 
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
-  draft: 'Планирование',
-  planned: 'В пути',
+  draft: 'Создание',
+  planned: 'В плане',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
 }
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
-  draft: 'Запланирован',
+  draft: 'Создан',
   planned: 'Поступил',
   on_review: 'Проверен',
   done: 'Завершен',
@@ -322,7 +342,7 @@ export function receiptQcStatus(item: ReceiptListItem): { label: string; tone: s
 }
 
 export function isReceiptOverdue(item: ReceiptListItem): boolean {
-  if (item.status === 'done') return false
+  if (item.status === 'done' || item.status === 'cancelled') return false
   if (!item.arrival_date) return false
   const today = new Date().toISOString().slice(0, 10)
   return item.arrival_date < today

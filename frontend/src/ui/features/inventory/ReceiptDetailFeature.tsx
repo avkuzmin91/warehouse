@@ -20,6 +20,8 @@ import {
 import type { ReceiptDetail, ReceiptLine, ReceiptOp } from '../../../api/receiptsApi'
 import {
   getInventoryClients,
+  getInventorySuppliers,
+  getInventoryUnloadingZones,
   getInventoryProducts,
   getInventoryColorsForProductSku,
   getInventorySizesForProductSkuAndColor,
@@ -109,11 +111,13 @@ function DraftView({
   const { doc, lines } = detail
 
   const [clients, setClients] = useState<DictionaryItem[]>([])
+  const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
+  const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState(doc.client_id)
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [ttn, setTtn] = useState(doc.ttn ?? '')
-  const [zoneName, setZoneName] = useState(doc.zone_name ?? '')
+  const [zoneId, setZoneId] = useState(doc.zone_id ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -128,6 +132,8 @@ function DraftView({
 
   useEffect(() => {
     getInventoryClients().then((res) => setClients(res.filter((c) => c.is_active && !c.is_deleted)))
+    getInventorySuppliers().then((res) => setSuppliers(res.filter((s) => s.is_active && !s.is_deleted)))
+    getInventoryUnloadingZones().then((res) => setUnloadingZones(res.filter((z) => z.is_active && !z.is_deleted)))
   }, [])
 
   function markDirty() { setMetaDirty(true) }
@@ -136,12 +142,14 @@ function DraftView({
     setMetaError('')
     setMetaSaving(true)
     try {
+      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       await updateReceipt(docId, {
         client_id: clientId || undefined,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
         ttn: ttn.trim() || null,
-        zone_name: zoneName.trim() || null,
+        zone_id: zoneId || null,
+        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
       })
       setMetaDirty(false)
@@ -210,7 +218,7 @@ function DraftView({
               {doc.created_by && ` · ${doc.created_by}`}
             </span>
           </div>
-          <div className="page-title">Планирование поступления</div>
+          <div className="page-title">Создание поступления</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -265,12 +273,12 @@ function DraftView({
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
-                  <Select
+                  <Combobox
                     value={clientId}
-                    placeholder="Выберите клиента"
+                    placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
                     prefix="user"
-                    onChange={(v) => { setClientId(v); markDirty() }}
+                    onChange={(v) => { setClientId(String(v ?? '')); markDirty() }}
                     disabled={lines.length > 0}
                   />
                   {lines.length > 0 && (
@@ -284,11 +292,17 @@ function DraftView({
                     <span>Поставщик</span>
                     <span className="text-xs faint">не обязательно</span>
                   </label>
-                  <input
-                    className="input"
-                    placeholder="Название поставщика"
-                    value={supplierName}
-                    onChange={(e) => { setSupplierName(e.target.value); markDirty() }}
+                  <Combobox
+                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
+                    placeholder="Поиск поставщика…"
+                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
+                    onChange={(v) => {
+                      const found = suppliers.find((s) => s.id === String(v ?? ''))
+                      setSupplierName(found?.name ?? '')
+                      markDirty()
+                    }}
+                    clearable
+                    prefix="user"
                   />
                 </div>
                 <div>
@@ -314,11 +328,13 @@ function DraftView({
                     <span>Зона разгрузки</span>
                     <span className="text-xs faint">не обязательно</span>
                   </label>
-                  <input
-                    className="input"
-                    placeholder="A-12"
-                    value={zoneName}
-                    onChange={(e) => { setZoneName(e.target.value); markDirty() }}
+                  <Combobox
+                    value={zoneId}
+                    placeholder="Выберите зону…"
+                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
+                    prefix="map"
+                    onChange={(v) => { setZoneId(String(v ?? '')); markDirty() }}
+                    clearable
                   />
                 </div>
                 <div>
@@ -535,10 +551,11 @@ function PlannedView({
   const confirm = useConfirm()
   const { doc, lines } = detail
 
+  const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [ttn, setTtn] = useState(doc.ttn ?? '')
-  const [zoneName, setZoneName] = useState(doc.zone_name ?? '')
+  const [zoneId, setZoneId] = useState(doc.zone_id ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -550,17 +567,23 @@ function PlannedView({
   const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
   const [showAddLine, setShowAddLine] = useState(false)
 
+  useEffect(() => {
+    getInventoryUnloadingZones().then((res) => setUnloadingZones(res.filter((z) => z.is_active && !z.is_deleted)))
+  }, [])
+
   function markDirty() { setMetaDirty(true) }
 
   async function handleSaveMeta() {
     setMetaError('')
     setMetaSaving(true)
     try {
+      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       await updateReceipt(docId, {
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
         ttn: ttn.trim() || null,
-        zone_name: zoneName.trim() || null,
+        zone_id: zoneId || null,
+        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
       })
       setMetaDirty(false)
@@ -703,8 +726,14 @@ function PlannedView({
                 </div>
                 <div>
                   <label className="field-label"><span>Зона разгрузки</span></label>
-                  <input className="input" placeholder="A-12" value={zoneName}
-                    onChange={(e) => { setZoneName(e.target.value); markDirty() }} />
+                  <Combobox
+                    value={zoneId}
+                    placeholder="Выберите зону…"
+                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
+                    prefix="map"
+                    onChange={(v) => { setZoneId(String(v ?? '')); markDirty() }}
+                    clearable
+                  />
                 </div>
                 <div>
                   <label className="field-label">

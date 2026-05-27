@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { fetchActiveDictionaryItems } from '../../api/adminApi'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
 import { getBalances } from '../../api/balancesApi'
 import type { BalanceItem } from '../../api/balancesApi'
-import { getInventoryClients, getInventoryShipmentDestinations } from '../../api/inventoryLookupsApi'
+import { getInventoryClients } from '../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../api/domainTypes'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
@@ -47,7 +48,7 @@ export function InventoryShipmentCreatePage() {
 
   useEffect(() => {
     getInventoryClients().then(setClients).catch(() => {})
-    getInventoryShipmentDestinations().then(setDestinations).catch(() => {})
+    fetchActiveDictionaryItems('/warehouses').then(setDestinations).catch(() => {})
   }, [])
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
@@ -163,7 +164,7 @@ export function InventoryShipmentCreatePage() {
           <div className="card">
             <div className="card-head">
               <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Документ</div>
+              <div className="card-head-title">Основная информация</div>
             </div>
             <div className="card-body">
               <CargoTypeToggle value={cargoType} onChange={(v) => { setCargoType(v); setLines([]) }} />

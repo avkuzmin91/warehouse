@@ -51,6 +51,10 @@ export function SimpleDict({ typeId, title, onEdit, onTotalLoaded }: SimpleDictP
         const res = await fetchSimpleDictionaryPage('/suppliers', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
         onTotalLoaded(res.total)
+      } else if (typeId === 'unloading-zones') {
+        const res = await fetchSimpleDictionaryPage('/unloading-zones', 'name', { page: 1, limit: 100, name: q || undefined })
+        setItems(res.items)
+        onTotalLoaded(res.total)
       } else if (typeId === 'warehouses') {
         const res = await fetchSimpleDictionaryPage('/warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
