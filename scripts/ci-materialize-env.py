@@ -19,6 +19,15 @@ def _write_lines(path: pathlib.Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _verify_jwt(path: pathlib.Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    jwt = next((line.split("=", 1)[1] for line in text.splitlines() if line.startswith("JWT_SECRET=")), "")
+    if len(jwt) < 32:
+        print("ERROR: JWT_SECRET missing or shorter than 32 characters.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Staged env file OK (JWT_SECRET length {len(jwt)})")
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         print("usage: ci-materialize-env.py <test|prod> <output-path>", file=sys.stderr)
@@ -57,6 +66,8 @@ def main() -> None:
     else:
         print(f"ERROR: unknown kind {kind!r}", file=sys.stderr)
         sys.exit(2)
+
+    _verify_jwt(out)
 
 
 if __name__ == "__main__":

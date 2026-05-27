@@ -124,13 +124,7 @@ jobs:
           umask 077
           python3 scripts/ci-materialize-env.py test .env.deploy.staging
           python3 scripts/ci-normalize-database-url-test.py .env.deploy.staging
-          python3 -c "
-          import pathlib
-          text = pathlib.Path('.env.deploy.staging').read_text(encoding='utf-8')
-          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
-          assert len(jwt) >= 32, 'JWT_SECRET missing or too short in staged env file'
-          print('Staged test env file OK (JWT_SECRET length', len(jwt), ')')
-          "
+          python3 scripts/ci-verify-jwt-in-env.py .env.deploy.staging
 
       - name: Materialize prod env file
         if: inputs.deploy_kind == 'prod'
@@ -142,13 +136,7 @@ jobs:
           set -euo pipefail
           umask 077
           python3 scripts/ci-materialize-env.py prod .env.deploy.staging
-          python3 -c "
-          import pathlib
-          text = pathlib.Path('.env.deploy.staging').read_text(encoding='utf-8')
-          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
-          assert len(jwt) >= 32, 'JWT_SECRET missing or too short in staged env file'
-          print('Staged prod env file OK (JWT_SECRET length', len(jwt), ')')
-          "
+          python3 scripts/ci-verify-jwt-in-env.py .env.deploy.staging
 
       - name: Rsync repository to server
         uses: burnett01/rsync-deployments@7.0.1
@@ -188,12 +176,7 @@ jobs:
             fi
             install -m 600 .env.deploy.staging "${{ inputs.env_file }}"
             rm -f .env.deploy.staging
-            python3 -c "
-          import pathlib
-          text = pathlib.Path('${{ inputs.env_file }}').read_text(encoding='utf-8')
-          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
-          assert len(jwt) >= 32, 'JWT_SECRET missing on server after install'
-          "
+            python3 scripts/ci-verify-jwt-in-env.py "${{ inputs.env_file }}"
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
@@ -229,12 +212,7 @@ jobs:
               echo "ERROR: VITE_API_BASE_URL пустой или отсутствует. Добавьте репозиторный секрет **VITE_API_BASE_URL** (Actions → Repository secrets) или в Environment **production** (часто значение **/api**)." >&2
               exit 1
             fi
-            python3 -c "
-          import pathlib
-          text = pathlib.Path('${{ inputs.env_file }}').read_text(encoding='utf-8')
-          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
-          assert len(jwt) >= 32, 'JWT_SECRET missing on server after install'
-          "
+            python3 scripts/ci-verify-jwt-in-env.py "${{ inputs.env_file }}"
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
