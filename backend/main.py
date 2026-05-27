@@ -4894,14 +4894,22 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             LEFT JOIN (
                 SELECT l.product_id, l.color_id, l.size_id,
                        SUM(COALESCE((
-                           SELECT SUM(o.qty) FROM receipt2_ops o
-                           WHERE o.line_id = l.id
-                             AND o.op_type IN ('receiving', 'receiving_correction')
+                           SELECT COALESCE(
+                               (SELECT o2.qty FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
+                                ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
+                           )
                        ), 0)) AS good_in,
                        SUM(COALESCE((
-                           SELECT SUM(o.qty) FROM receipt2_ops o
-                           WHERE o.line_id = l.id
-                             AND o.op_type IN ('defect_fix', 'defect_correction')
+                           SELECT COALESCE(
+                               (SELECT o2.qty FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
+                                ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
+                           )
                        ), 0)) AS defect_in
                 FROM receipt2_lines l
                 JOIN receipt2_docs d ON d.id = l.doc_id
@@ -7470,14 +7478,22 @@ def client_portal_list_product_variants(item_id: str, user=Depends(get_current_c
             LEFT JOIN (
                 SELECT l.product_id, l.color_id, l.size_id,
                        SUM(COALESCE((
-                           SELECT SUM(o.qty) FROM receipt2_ops o
-                           WHERE o.line_id = l.id
-                             AND o.op_type IN ('receiving', 'receiving_correction')
+                           SELECT COALESCE(
+                               (SELECT o2.qty FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
+                                ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
+                           )
                        ), 0)) AS good_in,
                        SUM(COALESCE((
-                           SELECT SUM(o.qty) FROM receipt2_ops o
-                           WHERE o.line_id = l.id
-                             AND o.op_type IN ('defect_fix', 'defect_correction')
+                           SELECT COALESCE(
+                               (SELECT o2.qty FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
+                                ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                                WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
+                           )
                        ), 0)) AS defect_in
                 FROM receipt2_lines l
                 JOIN receipt2_docs d ON d.id = l.doc_id
@@ -10143,16 +10159,22 @@ def list_balances(
                     MAX(l.color_name) AS color_name,
                     MAX(l.size_name) AS size_name,
                     SUM(COALESCE((
-                        SELECT SUM(o.qty)
-                        FROM receipt2_ops o
-                        WHERE o.line_id = l.id
-                          AND o.op_type IN ('receiving', 'receiving_correction')
+                        SELECT COALESCE(
+                            (SELECT o2.qty FROM receipt2_ops o2
+                             WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
+                             ORDER BY o2.created_at DESC LIMIT 1),
+                            (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                             WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
+                        )
                     ), 0)) AS good_in,
                     SUM(COALESCE((
-                        SELECT SUM(o.qty)
-                        FROM receipt2_ops o
-                        WHERE o.line_id = l.id
-                          AND o.op_type IN ('defect_fix', 'defect_correction')
+                        SELECT COALESCE(
+                            (SELECT o2.qty FROM receipt2_ops o2
+                             WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
+                             ORDER BY o2.created_at DESC LIMIT 1),
+                            (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                             WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
+                        )
                     ), 0)) AS defect_in,
                     SUM(CASE WHEN d.status = 'on_review' AND NOT EXISTS (
                         SELECT 1 FROM receipt2_ops oq
