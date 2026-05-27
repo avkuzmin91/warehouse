@@ -14,10 +14,9 @@ export function InventoryHomePage() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, maxWidth: 800 }}>
         {[
-          { to: '/inventory/receipts', icon: 'truckIn' as const, label: 'Поступления', sub: 'Список и приёмка товара' },
+          { to: '/inventory/receipts', icon: 'truckIn' as const, label: 'Поступления', sub: 'Список и приемка товара' },
           { to: '/inventory/shipments', icon: 'truckOut' as const, label: 'Отгрузки', sub: 'Сборка заказов клиентов' },
           { to: '/inventory/balances', icon: 'boxes' as const, label: 'Остатки', sub: 'Что и где лежит на складе' },
-          { to: '/inventory/receipts/import/excel', icon: 'upload' as const, label: 'Импорт Excel', sub: 'Массовое обновление остатков' },
         ].map((item) => (
           <Card key={item.to} style={{ cursor: 'pointer' }}>
             <CardBody>

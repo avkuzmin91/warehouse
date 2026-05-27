@@ -64,11 +64,11 @@ def test_get_clients_forbidden_non_admin(role: str):
     assert r.json()["detail"] == FORBIDDEN_DETAIL
 
 
-def test_get_analytics_movement_forbidden_client():
+def test_get_analytics_movement_removed():
     app.dependency_overrides[get_current_user] = _user_row("client", client_id="client-uuid-1")
     r = TestClient(app).get(
         "/analytics/movement",
         headers={"Authorization": "Bearer test-token"},
     )
-    assert r.status_code == 403
-    assert r.json()["detail"] == FORBIDDEN_DETAIL
+    assert r.status_code == 410
+    assert r.json()["detail"] == "Аналитика отключена"

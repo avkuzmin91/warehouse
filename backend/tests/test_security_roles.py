@@ -8,7 +8,6 @@ from fastapi import HTTPException
 from security import (
     FORBIDDEN_DETAIL,
     ensure_admin_account,
-    ensure_client_portal_account,
     ensure_manager_staff,
 )
 
@@ -53,31 +52,3 @@ def test_ensure_manager_accepts_staff(role: str):
             "client_id": None,
         }
     )
-
-
-def test_ensure_client_portal_requires_client_role():
-    with pytest.raises(HTTPException) as ctx:
-        ensure_client_portal_account(
-            {
-                "id": "1",
-                "email": "u@x",
-                "role": "admin",
-                "created_at": "",
-                "client_id": "cid",
-            }
-        )
-    assert ctx.value.status_code == 403
-
-
-def test_ensure_client_portal_requires_client_id():
-    with pytest.raises(HTTPException) as ctx:
-        ensure_client_portal_account(
-            {
-                "id": "1",
-                "email": "u@x",
-                "role": "client",
-                "created_at": "",
-                "client_id": None,
-            }
-        )
-    assert "администратору" in str(ctx.value.detail)

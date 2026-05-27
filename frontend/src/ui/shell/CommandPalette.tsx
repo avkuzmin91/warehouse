@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Icon } from '../primitives/Icon'
 import { Kbd } from '../primitives/Kbd'
+import { Icon } from '../primitives/Icon'
 
 interface CmdItem {
   section: string
@@ -13,16 +13,13 @@ interface CmdItem {
 
 const ALL_CMDS: CmdItem[] = [
   { section: 'Навигация', icon: 'home', label: 'Главная', sub: 'Сводка по складу', to: '/home' },
-  { section: 'Навигация', icon: 'truckIn', label: 'Поступления', sub: 'Список и приёмка', to: '/inventory/receipts' },
+  { section: 'Навигация', icon: 'truckIn', label: 'Поступления', sub: 'Список и приемка', to: '/inventory/receipts' },
   { section: 'Навигация', icon: 'truckOut', label: 'Отгрузки', sub: 'Сборка заказов', to: '/inventory/shipments' },
   { section: 'Навигация', icon: 'boxes', label: 'Остатки', sub: 'Что и где лежит', to: '/inventory/balances' },
-  { section: 'Навигация', icon: 'book', label: 'Справочники', sub: 'Товары · цвета · размеры · клиенты', to: '/dictionaries' },
+  { section: 'Навигация', icon: 'book', label: 'Справочники', sub: 'Товары, цвета, размеры, клиенты', to: '/dictionaries' },
   { section: 'Навигация', icon: 'users', label: 'Пользователи и роли', sub: 'Управление доступом', to: '/dictionaries/users' },
-  { section: 'Навигация', icon: 'chart', label: 'Аналитика', sub: 'Графики и отчёты', to: '/analytics' },
   { section: 'Действия', icon: 'plus', label: 'Новое поступление', sub: 'Создать черновик документа', to: '/inventory/receipts/new' },
   { section: 'Действия', icon: 'plus', label: 'Новая отгрузка', sub: 'Заявка от клиента', to: '/inventory/shipments/new' },
-  { section: 'Действия', icon: 'upload', label: 'Импорт из Excel (поступления)', sub: 'Массовое обновление', to: '/inventory/receipts/import/excel' },
-  { section: 'Действия', icon: 'upload', label: 'Импорт из Excel (отгрузки)', sub: 'Массовое обновление', to: '/inventory/shipments/import/excel' },
   { section: 'Аккаунт', icon: 'lock', label: 'Сменить пароль', sub: '', to: '/account/password' },
 ]
 
@@ -40,8 +37,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   useEffect(() => {
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 30)
-      setQ('')
-      setSel(0)
     }
   }, [open])
 
@@ -76,7 +71,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         <input
           ref={inputRef}
           className="cmdk-input"
-          placeholder="Найти команду, документ или раздел…"
+          placeholder="Найти команду, документ или раздел..."
           value={q}
           onChange={(e) => { setQ(e.target.value); setSel(0) }}
           onKeyDown={handleKey}
@@ -112,9 +107,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           )}
         </div>
         <div style={{
-          padding: '8px 14px', borderTop: '1px solid var(--c-border)',
-          display: 'flex', alignItems: 'center', gap: 10,
-          fontSize: 11, color: 'var(--c-text-subtle)', background: 'var(--c-bg-sunken)',
+          padding: '8px 14px',
+          borderTop: '1px solid var(--c-border)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          fontSize: 11,
+          color: 'var(--c-text-subtle)',
+          background: 'var(--c-bg-sunken)',
         }}>
           <Kbd>↑</Kbd><Kbd>↓</Kbd>навигация
           <span style={{ flex: 1 }} />
