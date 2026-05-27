@@ -38,12 +38,11 @@ const ROLE_FILTERS = [
 
 // --- Role dropdown ---
 interface RoleMenuProps {
-  userId: string
   currentRole: string
   onSelect: (role: AssignableRole) => void
 }
 
-function RoleMenu({ userId, currentRole, onSelect }: RoleMenuProps) {
+function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -339,7 +338,6 @@ export function UsersPage() {
                   </td>
                   <td className="td">
                     <RoleMenu
-                      userId={u.id}
                       currentRole={u.role}
                       onSelect={(role) => handleRoleChange(u.id, role)}
                     />

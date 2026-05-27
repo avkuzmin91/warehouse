@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class DictionaryBaseItem(BaseModel):
+    id: str
+    name: str
+    is_active: bool
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = None
+    created_at: str
+    created_by: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class ProductTypeDictionaryItem(DictionaryBaseItem):
+    requires_color: bool
+    requires_size: bool
+
+
+class DictionaryCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    is_active: bool = False
+
+
+class DictionaryUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+
+
+class ProductTypeCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    is_active: bool = False
+    requires_color: bool = True
+    requires_size: bool = False
+
+
+class ProductTypeUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+    requires_color: bool | None = None
+    requires_size: bool | None = None
+
+
+class SizeItem(BaseModel):
+    id: str
+    name: str
+    is_active: bool
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = None
+    created_at: str
+    created_by: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class SizeCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    is_active: bool = True
+
+
+class SizeUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+
+
+class DictionaryListResponse(BaseModel):
+    items: list[DictionaryBaseItem]
+    total: int
+    page: int
+    limit: int
+
+
+class ProductTypeListResponse(BaseModel):
+    items: list[ProductTypeDictionaryItem]
+    total: int
+    page: int
+    limit: int
+
+
+class SizeListResponse(BaseModel):
+    items: list[SizeItem]
+    total: int
+    page: int
+    limit: int
+
+
+class RecordActualityFilterItem(BaseModel):
+    id: str
+    name: str
+
+
+class MessageResponse(BaseModel):
+    message: str

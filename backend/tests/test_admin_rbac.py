@@ -14,7 +14,8 @@ if not os.environ.get("DATABASE_URL"):
 
 from fastapi.testclient import TestClient
 
-from main import app, get_current_user
+from app import app
+from modules.auth.service import get_current_user
 from security import FORBIDDEN_DETAIL
 
 
