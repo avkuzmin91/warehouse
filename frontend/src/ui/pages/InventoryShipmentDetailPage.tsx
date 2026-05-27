@@ -263,7 +263,7 @@ export function InventoryShipmentDetailPage() {
     await loadBalances()
   }
 
-  async function handleAddLine(item: BalanceItem) {
+  async function handleAddLine(item: BalanceItem, qty: number) {
     if (!docId) return
     await act(async () => {
       await addShipmentLine(docId, {
@@ -274,7 +274,7 @@ export function InventoryShipmentDetailPage() {
         color_name: item.color_name,
         size_id: item.size_id,
         size_name: item.size_name,
-        qty: 1,
+        qty,
       })
       await refreshAfterLineChange()
       setShowPicker(false)
@@ -598,7 +598,7 @@ export function InventoryShipmentDetailPage() {
                     <th style={{ width: 30 }}>#</th>
                     <th>Товар · вариант</th>
                     {isEditable && <th style={{ textAlign: 'right', width: 90 }}>Доступно</th>}
-                    <th style={{ textAlign: 'right', width: isEditable ? 160 : 90 }}>Кол-во</th>
+                    <th style={{ textAlign: 'right', width: isEditable ? 160 : 90 }}>К отгрузке</th>
                     {isEditable && <th style={{ width: 32 }} />}
                   </tr>
                 </thead>
@@ -618,14 +618,14 @@ export function InventoryShipmentDetailPage() {
                         {isEditable && (
                           <td className="num" style={{ color: 'var(--c-success)', fontWeight: 500 }}>{line.available}</td>
                         )}
-                        <td className="num" style={{ fontWeight: 500 }}>
+                        <td className="num">
                           {isEditable ? (
                             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                               <NumberStep value={draft.qty} onChange={(qty) => setDraftQty(line.id, qty)} disabled={acting || isSaving} />
                               {over && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
                             </div>
                           ) : (
-                            line.qty
+                            <span className="mono" style={{ fontWeight: 600, fontSize: 14 }}>{line.qty}</span>
                           )}
                         </td>
                         {isEditable && (
@@ -730,7 +730,7 @@ export function InventoryShipmentDetailPage() {
           clientId={doc.client_id}
           cargoType={doc.cargo_type as ShipmentCargoType}
           selectedKeys={editableLines.map((line) => line._key)}
-          onAdd={(item) => { void handleAddLine(item) }}
+          onAdd={(item, qty) => { void handleAddLine(item, qty) }}
           onClose={() => setShowPicker(false)}
         />
       )}
@@ -880,12 +880,13 @@ function BalancePicker({ clientId, cargoType, selectedKeys, onAdd, onClose }: {
   clientId: string | null
   cargoType: ShipmentCargoType
   selectedKeys: string[]
-  onAdd: (b: BalanceItem) => void
+  onAdd: (b: BalanceItem, qty: number) => void
   onClose: () => void
 }) {
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<BalanceItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -904,6 +905,10 @@ function BalancePicker({ clientId, cargoType, selectedKeys, onAdd, onClose }: {
   }, [search, clientId, cargoType])
 
   useEffect(() => { load() }, [load])
+
+  const available = pending
+    ? (cargoType === 'defect' ? pending.item.defect : pending.item.good)
+    : 0
 
   return (
     <>
@@ -932,54 +937,122 @@ function BalancePicker({ clientId, cargoType, selectedKeys, onAdd, onClose }: {
               placeholder="SKU, название, цвет, размер…"
               value={search}
               autoFocus
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPending(null) }}
             />
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {loading ? (
-            <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: 12 }}>Загрузка…</div>
-          ) : items.length === 0 ? (
-            <EmptyState title="Ничего не найдено" sub="Нет остатков по заданному запросу" />
-          ) : (
-            items.map((item) => {
-              const key = balanceKey(item)
-              const added = selectedKeys.includes(key)
-              return (
-                <div
-                  key={key}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
-                    borderRadius: 8, border: `1px solid ${added ? 'var(--c-accent)' : 'var(--c-border)'}`,
-                    cursor: added ? 'default' : 'pointer',
-                    background: added ? 'var(--c-accent-bg)' : undefined,
-                    opacity: added ? 0.75 : 1,
-                  }}
-                  onClick={() => { if (!added) onAdd(item) }}
-                >
-                  <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{item.product_name}</div>
-                    <div className="t-sub mono">{[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}</div>
-                  </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div className="mono" style={{ color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
-                      {cargoType === 'defect' ? item.defect : item.good}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
-                  </div>
-                  <Icon name={added ? 'check' : 'plus'} size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
-                </div>
-              )
-            })
-          )}
-        </div>
+        {pending ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, gap: 20 }}>
+            <div style={{
+              padding: '14px 16px', borderRadius: 8,
+              border: '1px solid var(--c-accent)', background: 'var(--c-accent-bg)',
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{pending.item.product_name}</div>
+              <div className="t-sub mono" style={{ marginTop: 2 }}>
+                {[pending.item.product_sku, pending.item.color_name, pending.item.size_name].filter(Boolean).join(' · ')}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
+                Доступно:{' '}
+                <span className="mono" style={{ fontWeight: 600, color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)' }}>
+                  {available}
+                </span> шт
+              </div>
+            </div>
 
-        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--c-border)' }}>
-          <button className="btn" style={{ width: '100%' }} onClick={onClose}>Готово</button>
+            <div>
+              <label className="field-label"><span>К отгрузке</span></label>
+              <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${pending.qty > available ? 'var(--c-warning)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 30, width: 160, background: 'var(--c-bg-elev)' }}>
+                <button
+                  className="btn ghost icon sm"
+                  style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
+                  onClick={() => setPending((p) => p && { ...p, qty: Math.max(0, p.qty - 1) })}
+                >
+                  <Icon name="minus" size={11} />
+                </button>
+                <input
+                  inputMode="numeric"
+                  value={pending.qty}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value.replace(/\D/g, '')) || 0
+                    setPending((p) => p && { ...p, qty: v })
+                  }}
+                  style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: pending.qty > available ? 'var(--c-warning)' : undefined }}
+                />
+                <button
+                  className="btn ghost icon sm"
+                  style={{ height: 28, width: 26, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
+                  onClick={() => setPending((p) => p && { ...p, qty: p.qty + 1 })}
+                >
+                  <Icon name="plus" size={11} />
+                </button>
+              </div>
+              {pending.qty > available && (
+                <div style={{ fontSize: 12, color: 'var(--c-warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Icon name="alert" size={12} />Превышает доступный остаток
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {loading ? (
+              <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: 12 }}>Загрузка…</div>
+            ) : items.length === 0 ? (
+              <EmptyState title="Ничего не найдено" sub="Нет остатков по заданному запросу" />
+            ) : (
+              items.map((item) => {
+                const key = balanceKey(item)
+                const added = selectedKeys.includes(key)
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
+                      borderRadius: 8, border: `1px solid ${added ? 'var(--c-accent)' : 'var(--c-border)'}`,
+                      cursor: added ? 'default' : 'pointer',
+                      background: added ? 'var(--c-accent-bg)' : undefined,
+                      opacity: added ? 0.75 : 1,
+                    }}
+                    onClick={() => { if (!added) setPending({ item, qty: 0 }) }}
+                  >
+                    <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{item.product_name}</div>
+                      <div className="t-sub mono">{[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div className="mono" style={{ color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
+                        {cargoType === 'defect' ? item.defect : item.good}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
+                    </div>
+                    <Icon name={added ? 'check' : 'plus'} size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
+
+        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--c-border)', display: 'flex', gap: 8 }}>
+          {pending ? (
+            <>
+              <button className="btn" style={{ flex: 1 }} onClick={() => setPending(null)}>Назад</button>
+              <button
+                className="btn primary"
+                style={{ flex: 1 }}
+                disabled={pending.qty <= 0}
+                onClick={() => onAdd(pending.item, pending.qty)}
+              >
+                <Icon name="plus" size={13} />Добавить
+              </button>
+            </>
+          ) : (
+            <button className="btn" style={{ width: '100%' }} onClick={onClose}>Готово</button>
+          )}
         </div>
       </div>
     </>

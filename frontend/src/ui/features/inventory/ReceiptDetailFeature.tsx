@@ -520,6 +520,7 @@ function DraftView({
         key={showAddLine ? 'open' : 'closed'}
         docId={docId}
         clientId={clientId}
+        existingLines={lines}
         open={showAddLine}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
@@ -573,7 +574,7 @@ function PlannedView({
 
   function markDirty() { setMetaDirty(true) }
 
-  async function handleSaveMeta() {
+  async function handleSaveMeta(): Promise<boolean> {
     setMetaError('')
     setMetaSaving(true)
     try {
@@ -588,8 +589,10 @@ function PlannedView({
       })
       setMetaDirty(false)
       await onReload()
+      return true
     } catch (e: unknown) {
       setMetaError(e instanceof Error ? e.message : 'Ошибка')
+      return false
     } finally {
       setMetaSaving(false)
     }
@@ -637,10 +640,17 @@ function PlannedView({
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
 
   const blockReasons = [
-    ...(metaDirty ? ['Есть несохранённые изменения реквизитов'] : []),
     ...(hasPendingQty ? ['Есть несохранённые изменения количества в строках товаров'] : []),
     ...readyChecks.filter((c) => !c.ok).map((c) => c.error),
   ]
+
+  async function handleArrive() {
+    if (metaDirty) {
+      const ok = await handleSaveMeta()
+      if (!ok) return
+    }
+    onArrive()
+  }
 
   return (
     <div className="page">
@@ -669,7 +679,7 @@ function PlannedView({
             )}
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { onArrive() } }}
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleArrive() } }}
               disabled={advancing}
             >
               <Icon name="arrowRight" size={14} />Зафиксировать прибытие
@@ -921,6 +931,7 @@ function PlannedView({
         key={showAddLine ? 'open' : 'closed'}
         docId={docId}
         clientId={doc.client_id}
+        existingLines={lines}
         open={showAddLine}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
@@ -1488,7 +1499,7 @@ function ReviewView({
         {/* Журнал операций */}
         <div
           className="card"
-          style={{ position: 'sticky', top: 0, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}
+          style={{ position: 'sticky', top: 0, width: '100%', maxWidth: '100%', boxSizing: 'border-box', maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}
         >
           <CardHead style={{ borderBottom: '1px solid var(--c-border)', flexShrink: 0 } as React.CSSProperties}>
             <Icon name="layers" size={15} style={{ color: 'var(--c-accent)' }} />
@@ -1780,12 +1791,14 @@ function OpEntry({ op, onFilterLine }: { op: ReceiptOp; onFilterLine: (lid: stri
 function AddLineDrawer2({
   docId,
   clientId,
+  existingLines,
   open,
   onClose,
   onAdded,
 }: {
   docId: string
   clientId: string
+  existingLines: ReceiptLine[]
   open: boolean
   onClose: () => void
   onAdded: () => void
@@ -1856,6 +1869,15 @@ function AddLineDrawer2({
   const needsSize = selectedProduct?.requires_size ?? false
   const canPickSize = sizes.length > 0
 
+  const isDuplicate = productId
+    ? existingLines.some(
+        (l) =>
+          l.product_id === productId &&
+          (l.color_id ?? null) === (colorId || null) &&
+          (l.size_id ?? null) === (sizeId || null),
+      )
+    : false
+
   return (
     <Drawer
       open={open}
@@ -1866,13 +1888,25 @@ function AddLineDrawer2({
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!productId || qty < 0 || saving} onClick={handleAdd}>
+          <button className="btn primary" disabled={!productId || qty < 0 || saving || isDuplicate} onClick={handleAdd}>
             <Icon name="plus" size={13} />Добавить
           </button>
         </>
       }
     >
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
+      {isDuplicate && (
+        <div style={{
+          padding: '8px 12px', marginBottom: 10,
+          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
+          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
+          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <Icon name="alert" size={13} />
+          Такой товар уже есть в таблице
+        </div>
+      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>

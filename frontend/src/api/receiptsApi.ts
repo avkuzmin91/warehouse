@@ -183,8 +183,30 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
 }
 
-export function getReceipt(docId: string) {
-  return request<ReceiptDetail>(`/receipts/${docId}`)
+function normalizeReceiptQcStatus(status: string): ReceiptQcStatus {
+  return status === 'completed' ? 'done' : (status as ReceiptQcStatus)
+}
+
+function normalizeReceiptDetail(detail: ReceiptDetail): ReceiptDetail {
+  return {
+    ...detail,
+    lines: detail.lines.map((line) => ({
+      ...line,
+      qc_status: normalizeReceiptQcStatus(line.qc_status),
+    })),
+    state: {
+      ...detail.state,
+      lines: detail.state.lines.map((line) => ({
+        ...line,
+        qc_status: normalizeReceiptQcStatus(line.qc_status),
+      })),
+    },
+  }
+}
+
+export async function getReceipt(docId: string) {
+  const detail = await request<ReceiptDetail>(`/receipts/${docId}`)
+  return normalizeReceiptDetail(detail)
 }
 
 export function createReceipt(payload: ReceiptCreatePayload) {

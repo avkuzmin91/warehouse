@@ -417,6 +417,7 @@ export function ReceiptCreateFeature() {
         key={showAddLine ? 'open' : 'closed'}
         open={showAddLine}
         clientId={clientId}
+        existingLines={lines}
         onClose={() => setShowAddLine(false)}
         onAdd={(line) => {
           setLines((ls) => [...ls, { ...line, _id: genId() }])
@@ -468,11 +469,13 @@ function OpPreviewItem({ icon, tone, title, sub }: { icon: string; tone: string;
 function AddLineDrawer({
   open,
   clientId,
+  existingLines,
   onClose,
   onAdd,
 }: {
   open: boolean
   clientId: string
+  existingLines: DraftLine[]
   onClose: () => void
   onAdd: (line: ReceiptLineInput) => void
 }) {
@@ -531,6 +534,15 @@ function AddLineDrawer({
   const needsSize = selectedProduct?.requires_size ?? false
   const canPickSize = sizes.length > 0
 
+  const isDuplicate = productId
+    ? existingLines.some(
+        (l) =>
+          l.product_id === productId &&
+          (l.color_id ?? null) === (colorId || null) &&
+          (l.size_id ?? null) === (sizeId || null),
+      )
+    : false
+
   return (
     <Drawer
       open={open}
@@ -543,7 +555,7 @@ function AddLineDrawer({
           <button className="btn" onClick={onClose}>Отмена</button>
           <button
             className="btn primary"
-            disabled={!productId || qty < 1 || (needsSize && !sizeId)}
+            disabled={!productId || qty < 1 || (needsSize && !sizeId) || isDuplicate}
             onClick={handleAdd}
           >
             <Icon name="plus" size={13} />Добавить
@@ -551,6 +563,18 @@ function AddLineDrawer({
         </>
       }
     >
+      {isDuplicate && (
+        <div style={{
+          padding: '8px 12px', marginBottom: 10,
+          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
+          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
+          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <Icon name="alert" size={13} />
+          Такой товар уже есть в таблице
+        </div>
+      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
