@@ -30,6 +30,7 @@ from config import (
     RECEIPT_STATUSES_ALL,
 )
 from dbconn import get_connection
+from modules.auth.service import get_current_manager
 from modules.receipts.schemas import (
     ReceiptDetailResponse,
     ReceiptDocCreate,
@@ -53,8 +54,7 @@ from modules.receipts.service import (
 
 router = APIRouter(tags=["receipts"])
 
-# Dependency placeholder — подключается в app.py
-_get_manager = lambda: None  # noqa: E731
+_get_manager = get_current_manager
 
 
 def _now() -> str:
@@ -91,7 +91,7 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
 
         conn.execute(
             """
-            INSERT INTO receipt2_docs
+            INSERT INTO receipt_docs
               (id, doc_number, client_id, supplier_name, arrival_date, status,
                zone_id, zone_name, ttn, logistics_cost, created_at, created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -109,7 +109,7 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
             ),
         )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_DOC_CREATE, now, uid),
         )
 
@@ -117,7 +117,7 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
             line_id = str(uuid4())
             conn.execute(
                 """
-                INSERT INTO receipt2_lines
+                INSERT INTO receipt_lines
                   (id, doc_id, product_id, product_name, product_sku,
                    color_id, color_name, size_id, size_name, planned_qty, created_at, created_by)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -131,7 +131,7 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
                 ),
             )
             conn.execute(
-                "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_ADD, line.planned_qty,
                  _line_label(line.product_sku, line.color_name, line.size_name, line.planned_qty), now, uid),
             )
@@ -168,7 +168,7 @@ def receipts_summary(
             params.append(date_to)
         where = " AND ".join(conds)
         rows = conn.execute(
-            f"SELECT d.status, d.arrival_date FROM receipt2_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE {where}",
+            f"SELECT d.status, d.arrival_date FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE {where}",
             params,
         ).fetchall()
     total = len(rows)
@@ -231,7 +231,7 @@ def list_receipts(
 def get_receipt(doc_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT d.*, cl.name AS client_name FROM receipt2_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.id = ? AND d.is_deleted = 0",
+            "SELECT d.*, cl.name AS client_name FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.id = ? AND d.is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
@@ -240,11 +240,11 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         state = compute_state(conn, doc_id)
 
         lines_rows = conn.execute(
-            "SELECT * FROM receipt2_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+            "SELECT * FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
         ).fetchall()
         ops_rows = conn.execute(
-            "SELECT o.*, u.email AS user_email FROM receipt2_ops o LEFT JOIN users u ON u.id = o.created_by WHERE o.doc_id = ? ORDER BY o.created_at DESC",
+            "SELECT o.*, u.email AS user_email FROM receipt_ops o LEFT JOIN users u ON u.id = o.created_by WHERE o.doc_id = ? ORDER BY o.created_at DESC",
             (doc_id,),
         ).fetchall()
 
@@ -308,7 +308,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT * FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT * FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -367,10 +367,10 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
         if updates:
             now = _now()
             updates.append("updated_at = ?"); params.append(now); params.append(doc_id)
-            conn.execute(f"UPDATE receipt2_docs SET {', '.join(updates)} WHERE id = ?", params)
+            conn.execute(f"UPDATE receipt_docs SET {', '.join(updates)} WHERE id = ?", params)
             if changed:
                 conn.execute(
-                    "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
                     (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE,
                      "; ".join(f"{k}: {v}" for k, v in changed.items()), now, uid),
                 )
@@ -383,7 +383,7 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -394,7 +394,7 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
         line_id = str(uuid4())
         conn.execute(
             """
-            INSERT INTO receipt2_lines
+            INSERT INTO receipt_lines
               (id, doc_id, product_id, product_name, product_sku,
                color_id, color_name, size_id, size_name, planned_qty, created_at, created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -404,7 +404,7 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
              payload.planned_qty, now, uid),
         )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_ADD, payload.planned_qty,
              _line_label(payload.product_sku, payload.color_name, payload.size_name, payload.planned_qty), now, uid),
         )
@@ -417,23 +417,23 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
         line_row = conn.execute(
-            "SELECT id, planned_qty FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, planned_qty FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
         old_qty = line_row["planned_qty"]
         now = _now()
-        conn.execute("UPDATE receipt2_lines SET planned_qty = ? WHERE id = ?", (payload.planned_qty, line_id))
+        conn.execute("UPDATE receipt_lines SET planned_qty = ? WHERE id = ?", (payload.planned_qty, line_id))
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_UPDATE, payload.planned_qty,
              f"План: {old_qty} → {payload.planned_qty} шт.", now, uid),
         )
@@ -446,14 +446,14 @@ def delete_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Удалить строку можно только в статусе 'Создание' или 'В плане'")
         line_row = conn.execute(
-            "SELECT id, product_sku, color_name, size_name, planned_qty FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, product_sku, color_name, size_name, planned_qty FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
@@ -465,9 +465,9 @@ def delete_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
         if line_row["size_name"]:
             parts.append(str(line_row["size_name"]))
         parts.append(f"{line_row['planned_qty']} шт.")
-        conn.execute("UPDATE receipt2_lines SET is_deleted = 1 WHERE id = ?", (line_id,))
+        conn.execute("UPDATE receipt_lines SET is_deleted = 1 WHERE id = ?", (line_id,))
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_DELETE,
              "Товар удалён: " + " / ".join(parts), now, uid),
         )
@@ -479,13 +479,13 @@ def delete_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
 def delete_receipt(doc_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) != RECEIPT_STATUS_DRAFT:
             raise HTTPException(status_code=400, detail="Удалить можно только черновик")
-        conn.execute("UPDATE receipt2_docs SET is_deleted = 1 WHERE id = ?", (doc_id,))
+        conn.execute("UPDATE receipt_docs SET is_deleted = 1 WHERE id = ?", (doc_id,))
         conn.commit()
     return {"message": "ok"}
 
@@ -497,21 +497,21 @@ def record_receipt_op(doc_id: str, payload: ReceiptOpRecord, user=Depends(_get_m
         raise HTTPException(status_code=400, detail=f"Тип операции: {RECEIPT_OP_RECEIVING} | {RECEIPT_OP_DEFECT_FIX}")
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(status_code=400, detail="Операцию можно записывать только в статусе 'on_review'")
         line_row = conn.execute(
-            "SELECT id FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (payload.line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=400, detail="Строка не найдена в этом документе")
         now = _now()
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,reason,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,reason,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, payload.line_id, payload.op_type, payload.qty,
              payload.reason, payload.comment, now, uid),
         )
@@ -529,30 +529,30 @@ def complete_receipt_line(
     now = _now()
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(status_code=400, detail="QC можно выполнить только в статусе 'on_review'")
         line_row = conn.execute(
-            "SELECT id FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
         if body and body.accepted is not None and body.accepted >= 0:
             conn.execute(
-                "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (str(uuid4()), doc_id, line_id, RECEIPT_OP_RECEIVING_CORRECTION, body.accepted, "QC корректировка", now, uid),
             )
         if body and body.defect is not None and body.defect >= 0:
             conn.execute(
-                "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (str(uuid4()), doc_id, line_id, RECEIPT_OP_DEFECT_CORRECTION, body.defect, "QC корректировка брака", now, uid),
             )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_COMPLETE, "Строка проверена", now, uid),
         )
         conn.commit()
@@ -565,20 +565,20 @@ def reopen_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
     now = _now()
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
             raise HTTPException(status_code=400, detail="Переоткрыть строку можно только в статусе 'on_review'")
         line_row = conn.execute(
-            "SELECT id FROM receipt2_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
             (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_REOPEN, "Строка возвращена на проверку", now, uid),
         )
         conn.commit()
@@ -598,7 +598,7 @@ def arrive_receipt(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -610,17 +610,17 @@ def arrive_receipt(doc_id: str, user=Depends(_get_manager)):
             )
         now = _now()
         conn.execute(
-            "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
             (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
         if current == RECEIPT_STATUS_DRAFT:
             conn.execute(
-                "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
                 (str(uuid4()), doc_id, RECEIPT_OP_PLAN_FIX,
                  "Создание → В плане (авто при фиксации прибытия)", now, uid),
             )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
              "В плане → На проверке (фиксация прибытия)", now, uid),
         )
@@ -633,7 +633,7 @@ def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -641,11 +641,11 @@ def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=400, detail="Аннулировать можно только документ в статусе 'В плане'")
         now = _now()
         conn.execute(
-            "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
             (RECEIPT_STATUS_CANCELLED, now, doc_id),
         )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_CANCEL, "В пути → Аннулирован", now, uid),
         )
         conn.commit()
@@ -657,7 +657,7 @@ def reopen_receipt(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -665,11 +665,11 @@ def reopen_receipt(doc_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=400, detail="Вернуть на проверку можно только завершённый документ")
         now = _now()
         conn.execute(
-            "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
             (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
         conn.execute(
-            "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE,
              "Завершён → На проверке (возврат на проверку)", now, uid),
         )

@@ -18,6 +18,7 @@ import { getBalances } from '../../api/balancesApi'
 import type { BalanceItem } from '../../api/balancesApi'
 import { ShipmentStepper } from '../features/inventory/ShipmentStepper'
 import { Badge } from '../primitives/Badge'
+import type { BadgeTone } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { Avatar, getInitials } from '../primitives/Avatar'
 import { EmptyState } from '../primitives/EmptyState'
@@ -120,7 +121,7 @@ export function InventoryShipmentDetailPage() {
     setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
-  }, [doc?.id]) // only on doc load, not every re-render
+  }, [doc])
 
   const load = useCallback(async () => {
     if (!docId) return
@@ -166,19 +167,22 @@ export function InventoryShipmentDetailPage() {
   const isReady = status === 'ready'
   const isEditable = isPlanned || isReady
 
+  const shipmentClientId = doc?.client_id ?? null
+  const shipmentCargoType = doc?.cargo_type
+
   const loadBalances = useCallback(async () => {
-    if (!doc?.client_id || !isEditable) {
+    if (!shipmentClientId || !isEditable) {
       setBalances([])
       return
     }
     const res = await getBalances({
       limit: 200,
       only_positive: true,
-      client_id: doc.client_id,
-      has_defect: doc.cargo_type === 'defect' ? true : undefined,
+      client_id: shipmentClientId,
+      has_defect: shipmentCargoType === 'defect' ? true : undefined,
     })
-    setBalances(res.items.filter((b) => doc.cargo_type === 'defect' ? b.defect > 0 : b.good > 0))
-  }, [doc?.client_id, doc?.cargo_type, isEditable])
+    setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good > 0))
+  }, [shipmentClientId, shipmentCargoType, isEditable])
 
   useEffect(() => {
     loadBalances().catch(() => {})
@@ -396,7 +400,7 @@ export function InventoryShipmentDetailPage() {
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/shipments')}>
               <Icon name="arrowLeft" size={14} />
             </button>
-            <Badge tone={SHIPMENT_STATUS_TONES[status!] as any} dot>
+            <Badge tone={SHIPMENT_STATUS_TONES[status!] as BadgeTone} dot>
               {SHIPMENT_STATUS_LABELS[status!]}
             </Badge>
             <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>

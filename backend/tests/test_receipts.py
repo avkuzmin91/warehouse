@@ -47,8 +47,8 @@ def test_create_receipt_returns_doc_id(admin_client, client_id):
     r2 = admin_client.get(f"/receipts/{doc_id}")
     assert r2.status_code == 200, r2.text
     detail = r2.json()
-    assert detail["status"] == "draft"
-    assert detail["doc_number"].startswith("WH2-")
+    assert detail["doc"]["status"] == "draft"
+    assert detail["doc"]["doc_number"].startswith("WH-")
 
 
 def test_receipt_advance_state_machine(admin_client, client_id):
@@ -95,3 +95,40 @@ def test_receipt_list_returns_pagination(admin_client):
     assert "total" in data
     assert "page" in data
     assert data["page"] == 1
+
+
+def test_complete_receipt_line_sets_qc_status_done(admin_client, client_id):
+    line_id = str(uuid.uuid4())
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [{
+        "product_id": str(uuid.uuid4()),
+        "product_name": "Test Product",
+        "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
+        "color_id": None,
+        "color_name": None,
+        "size_id": None,
+        "size_name": None,
+        "planned_qty": 3,
+    }]
+    response = admin_client.post("/receipts", json=payload)
+    assert response.status_code == 200, response.text
+    doc_id = response.json()["message"]
+
+    detail = admin_client.get(f"/receipts/{doc_id}")
+    assert detail.status_code == 200, detail.text
+    line_id = detail.json()["lines"][0]["id"]
+
+    arrive = admin_client.post(f"/receipts/{doc_id}/arrive")
+    assert arrive.status_code == 200, arrive.text
+
+    complete = admin_client.post(
+        f"/receipts/{doc_id}/lines/{line_id}/qc-complete",
+        json={"accepted": 3, "defect": 0},
+    )
+    assert complete.status_code == 200, complete.text
+
+    updated = admin_client.get(f"/receipts/{doc_id}")
+    assert updated.status_code == 200, updated.text
+    data = updated.json()
+    assert data["lines"][0]["qc_status"] == "done"
+    assert data["state"]["all_qc_done"] is True

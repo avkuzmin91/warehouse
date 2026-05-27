@@ -27,13 +27,13 @@ def next_doc_number(connection) -> str:
     """
     row = connection.execute(
         """
-        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 6) AS INTEGER)), 0) AS max_n
-        FROM shipment2_docs
-        WHERE doc_number LIKE 'SHP2-%'
+        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
+        FROM shipment_docs
+        WHERE doc_number LIKE 'SHP-%'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1
-    return f"SHP2-{n:04d}"
+    return f"SHP-{n:04d}"
 
 
 def normalize_cargo_type(raw: str | None) -> str:
@@ -50,12 +50,12 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
     from modules.balances.service import get_available_good_qty
 
     lines = connection.execute(
-        "SELECT * FROM shipment2_lines WHERE doc_id = ? AND is_deleted = 0",
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchall()
 
     doc_row = connection.execute(
-        "SELECT client_id, cargo_type FROM shipment2_docs WHERE id = ?",
+        "SELECT client_id, cargo_type FROM shipment_docs WHERE id = ?",
         (doc_id,),
     ).fetchone()
 
@@ -89,7 +89,7 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
 def advance_shipment(connection, doc_id: str, user_id: str) -> str:
     """Переводит документ на следующий статус. При переходе ready → shipped проверяет остатки."""
     row = connection.execute(
-        "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0",
+        "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchone()
     if not row:
@@ -105,11 +105,11 @@ def advance_shipment(connection, doc_id: str, user_id: str) -> str:
 
     now = _now()
     connection.execute(
-        "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
+        "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
         (next_status, now, doc_id),
     )
     connection.execute(
-        "INSERT INTO shipment2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, "advance", f"{current} → {next_status}", now, user_id),
     )
     connection.commit()

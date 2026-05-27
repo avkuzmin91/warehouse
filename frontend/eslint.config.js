@@ -18,5 +18,21 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Current data-loading components intentionally update local state from effects.
+      // The app is not yet structured around React Compiler data primitives.
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
+  {
+    files: [
+      'src/ui/routes/**/*.tsx',
+      'src/ui/primitives/**/*.tsx',
+      'src/ui/feedback/**/*.tsx',
+    ],
+    rules: {
+      // Route and primitive modules intentionally export small helpers/types next to components.
+      'react-refresh/only-export-components': 'off',
+    },
   },
 ])

@@ -3,7 +3,7 @@
 
 Запуск:
     python seed_test_data.py            # обычный режим (идемпотентно по имени)
-    python seed_test_data.py --reset    # очистить inventory_operations и таблицы товаров/справочников
+    python seed_test_data.py --reset    # очистить документы поступлений/отгрузок и таблицы товаров/справочников
 
 Перед запуском создайте БД в PostgreSQL и задайте DATABASE_URL (см. backend/dbconn.py).
 
@@ -375,7 +375,12 @@ def _seed_products(
 
 
 def _reset(con: Any) -> None:
-    con.execute("DELETE FROM inventory_operations")
+    con.execute("DELETE FROM receipt_ops")
+    con.execute("DELETE FROM receipt_lines")
+    con.execute("DELETE FROM receipt_docs")
+    con.execute("DELETE FROM shipment_ops")
+    con.execute("DELETE FROM shipment_lines")
+    con.execute("DELETE FROM shipment_docs")
     con.execute("DELETE FROM product_variants")
     con.execute("DELETE FROM products")
     con.execute("DELETE FROM clients")

@@ -369,8 +369,8 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
                    GREATEST(0, COALESCE(b.good_in, 0) - COALESCE(sg.shipped_good, 0)) AS stock,
                    GREATEST(0, COALESCE(b.defect_in, 0) - COALESCE(sd.shipped_defect, 0)) AS defect_qty,
                    CASE WHEN EXISTS (
-                       SELECT 1 FROM receipt2_lines rl
-                       JOIN receipt2_docs rd ON rd.id = rl.doc_id
+                       SELECT 1 FROM receipt_lines rl
+                       JOIN receipt_docs rd ON rd.id = rl.doc_id
                        WHERE rl.product_id = v.product_id
                          AND rl.color_id IS NOT DISTINCT FROM v.color_id
                          AND rl.size_id IS NOT DISTINCT FROM v.size_id
@@ -383,31 +383,31 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
                 SELECT l.product_id, l.color_id, l.size_id,
                        SUM(COALESCE((
                            SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt2_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction' ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt2_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
+                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction' ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
                            )
                        ), 0)) AS good_in,
                        SUM(COALESCE((
                            SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt2_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction' ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt2_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
+                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction' ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
                            )
                        ), 0)) AS defect_in
-                FROM receipt2_lines l
-                JOIN receipt2_docs d ON d.id = l.doc_id
+                FROM receipt_lines l
+                JOIN receipt_docs d ON d.id = l.doc_id
                 WHERE l.product_id = ? AND l.is_deleted = 0
                   AND d.is_deleted = 0 AND d.status IN ('done', 'on_review')
                 GROUP BY l.product_id, l.color_id, l.size_id
             ) b ON b.product_id = v.product_id AND b.color_id IS NOT DISTINCT FROM v.color_id AND b.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
                 SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_good
-                FROM shipment2_lines sl JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
                 WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'good'
                 GROUP BY sl.product_id, sl.color_id, sl.size_id
             ) sg ON sg.product_id = v.product_id AND sg.color_id IS NOT DISTINCT FROM v.color_id AND sg.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
                 SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_defect
-                FROM shipment2_lines sl JOIN shipment2_docs sd ON sd.id = sl.doc_id
+                FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
                 WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
                 GROUP BY sl.product_id, sl.color_id, sl.size_id
             ) sd ON sd.product_id = v.product_id AND sd.color_id IS NOT DISTINCT FROM v.color_id AND sd.size_id IS NOT DISTINCT FROM v.size_id
@@ -471,8 +471,8 @@ def _apply_product_variant_deleted_flag(item_id: str, variant_id: str, admin_id:
                 return MessageResponse(message="Вариант отключён")
             has_receipts = connection.execute(
                 """
-                SELECT 1 FROM receipt2_lines rl
-                JOIN receipt2_docs rd ON rd.id = rl.doc_id
+                SELECT 1 FROM receipt_lines rl
+                JOIN receipt_docs rd ON rd.id = rl.doc_id
                 WHERE rl.product_id = ?
                   AND rl.color_id IS NOT DISTINCT FROM ?
                   AND rl.size_id IS NOT DISTINCT FROM ?

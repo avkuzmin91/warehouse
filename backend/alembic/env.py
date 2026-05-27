@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
-import psycopg
 from alembic import context
+from sqlalchemy import create_engine
 
 config = context.config
 
@@ -12,6 +12,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
 def run_migrations_offline() -> None:
@@ -25,10 +27,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    # Alembic не знает о psycopg_pool — используем прямое соединение только для миграций.
-    connectable = psycopg.connect(DATABASE_URL)
-    with connectable:
-        context.configure(connection=connectable)
+    connectable = create_engine(DATABASE_URL, pool_pre_ping=True)
+    with connectable.connect() as connection:
+        context.configure(connection=connection)
         with context.begin_transaction():
             context.run_migrations()
 

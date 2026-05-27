@@ -129,7 +129,16 @@ export function InventoryShipmentCreatePage() {
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         ship_date:      shipDate || null,
         comment:        comment || null,
-        lines:          lines.map(({ _key, available, ...l }) => l),
+        lines:          lines.map((line) => ({
+          product_id: line.product_id,
+          product_name: line.product_name,
+          product_sku: line.product_sku,
+          color_id: line.color_id,
+          color_name: line.color_name,
+          size_id: line.size_id,
+          size_name: line.size_name,
+          qty: line.qty,
+        })),
       })
       const docId = res.message
       if (toPacking) await advanceShipment(docId)

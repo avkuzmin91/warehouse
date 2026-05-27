@@ -3,7 +3,7 @@ import { broadcastAuthLogout } from '../auth/tabSync'
 import { clearProfileCache } from './profileCache'
 import { setAccessTokenMemory } from './tokenStore'
 
-/** 401 с Bearer: сброс сессии, broadcast вкладкам, редирект на вход (как в legacy api.ts). */
+/** 401 с Bearer: сброс сессии, broadcast вкладкам, редирект на вход. */
 export function invalidateSessionAfterUnauthorizedApi(): void {
   setAccessTokenMemory(null)
   clearProfileCache()

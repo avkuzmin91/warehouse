@@ -30,13 +30,13 @@ def next_doc_number(connection) -> str:
     """
     row = connection.execute(
         """
-        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
-        FROM receipt2_docs
-        WHERE doc_number LIKE 'WH2-%'
+        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 4) AS INTEGER)), 0) AS max_n
+        FROM receipt_docs
+        WHERE doc_number LIKE 'WH-%'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1
-    return f"WH2-{n:05d}"
+    return f"WH-{n:05d}"
 
 
 def compute_state(connection, doc_id: str) -> dict:
@@ -45,11 +45,11 @@ def compute_state(connection, doc_id: str) -> dict:
     Используется для detail-view. Для list-view используй list_receipts (агрегирующий SQL).
     """
     ops = connection.execute(
-        "SELECT * FROM receipt2_ops WHERE doc_id = ? ORDER BY created_at",
+        "SELECT * FROM receipt_ops WHERE doc_id = ? ORDER BY created_at",
         (doc_id,),
     ).fetchall()
     lines_rows = connection.execute(
-        "SELECT * FROM receipt2_lines WHERE doc_id = ? AND is_deleted = 0",
+        "SELECT * FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchall()
 
@@ -89,7 +89,7 @@ def compute_state(connection, doc_id: str) -> dict:
             elif ot == RECEIPT_OP_DEFECT_CORRECTION:
                 line["defect"] = qty
             elif ot == RECEIPT_OP_LINE_QC_COMPLETE:
-                line["qc_status"] = "completed"
+                line["qc_status"] = "done"
             elif ot == RECEIPT_OP_LINE_QC_REOPEN:
                 line["qc_status"] = "pending"
 
@@ -98,7 +98,7 @@ def compute_state(connection, doc_id: str) -> dict:
     total_planned = sum(l["planned_qty"] for l in line_list)
     total_accepted = sum(l["accepted"] for l in line_list)
     total_defect = sum(l["defect"] for l in line_list)
-    all_qc_done = all(l["qc_status"] == "completed" for l in line_list) if line_list else False
+    all_qc_done = all(l["qc_status"] == "done" for l in line_list) if line_list else False
 
     return {
         "lines": line_list,
@@ -158,7 +158,7 @@ def list_receipts_aggregated(
     where = " AND ".join(conds)
 
     total_row = connection.execute(
-        f"SELECT COUNT(*) AS cnt FROM receipt2_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE {where}",
+        f"SELECT COUNT(*) AS cnt FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE {where}",
         params,
     ).fetchone()
     total = int(total_row["cnt"]) if total_row else 0
@@ -179,25 +179,25 @@ def list_receipts_aggregated(
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN l.planned_qty ELSE 0 END), 0) AS total_planned,
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN (
                 SELECT COALESCE(
-                    (SELECT o2.qty FROM receipt2_ops o2
+                    (SELECT o2.qty FROM receipt_ops o2
                      WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
                      ORDER BY o2.created_at DESC LIMIT 1),
-                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt2_ops o2
+                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt_ops o2
                      WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
                 )
             ) ELSE 0 END), 0) AS total_accepted,
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN (
                 SELECT COALESCE(
-                    (SELECT o2.qty FROM receipt2_ops o2
+                    (SELECT o2.qty FROM receipt_ops o2
                      WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
                      ORDER BY o2.created_at DESC LIMIT 1),
-                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt2_ops o2
+                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt_ops o2
                      WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
                 )
             ) ELSE 0 END), 0) AS total_defect
-        FROM receipt2_docs d
+        FROM receipt_docs d
         LEFT JOIN clients cl ON cl.id = d.client_id
-        LEFT JOIN receipt2_lines l ON l.doc_id = d.id
+        LEFT JOIN receipt_lines l ON l.doc_id = d.id
         WHERE {where}
         GROUP BY d.id
         ORDER BY d.arrival_date DESC, d.created_at DESC
@@ -212,7 +212,7 @@ def list_receipts_aggregated(
 def advance_receipt(connection, doc_id: str, user_id: str) -> str:
     """Переводит документ на следующий статус по цепочке. Возвращает новый статус."""
     doc_row = connection.execute(
-        "SELECT status FROM receipt2_docs WHERE id = ? AND is_deleted = 0",
+        "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchone()
     if not doc_row:
@@ -233,11 +233,11 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
 
     now = _now()
     connection.execute(
-        "UPDATE receipt2_docs SET status = ?, updated_at = ? WHERE id = ?",
+        "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
         (next_status, now, doc_id),
     )
     connection.execute(
-        "INSERT INTO receipt2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (
             str(uuid4()), doc_id, op_type,
             f"{RECEIPT_STATUS_RU.get(current, current)} → {RECEIPT_STATUS_RU.get(next_status, next_status)}",

@@ -40,7 +40,7 @@ const TAB_STATUS: Partial<Record<TabId, ReceiptStatus>> = {
   drafts: 'planned',
 }
 
-const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: string }[] = [
+const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] = [
   { status: 'planned',   label: 'В плане',      tone: 'info' },
   { status: 'on_review', label: 'На проверке',  tone: 'warning' },
   { status: 'done',      label: 'Завершён',      tone: 'success' },
@@ -111,7 +111,7 @@ export function InventoryReceiptsListPage() {
       setLoading(false)
       setInitialLoading(false)
     })
-  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, retryTick])
+  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, retryTick, initialLoading])
 
   useEffect(() => {
     if (view !== 'kanban') return
@@ -376,7 +376,7 @@ function KanbanBoard({ items, loading, onNavigate }: {
         return (
           <div key={col.status} style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-              <Badge tone={col.tone as any} dot>{col.label}</Badge>
+              <Badge tone={col.tone} dot>{col.label}</Badge>
               <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{loading ? '…' : colItems.length}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

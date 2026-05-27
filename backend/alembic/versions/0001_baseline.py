@@ -1,4 +1,4 @@
-"""Baseline schema — все таблицы приложения (без inventory_operations).
+"""Baseline schema — актуальная схема приложения.
 
 Revision ID: 0001
 Revises:
@@ -13,8 +13,61 @@ branch_labels = None
 depends_on = None
 
 
+def _rename_table_sql(old_name: str, new_name: str) -> str:
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{old_name}') IS NOT NULL
+           AND to_regclass('public.{new_name}') IS NULL THEN
+            ALTER TABLE {old_name} RENAME TO {new_name};
+        ELSIF to_regclass('public.{old_name}') IS NOT NULL
+              AND to_regclass('public.{new_name}') IS NOT NULL THEN
+            RAISE EXCEPTION 'Both {old_name} and {new_name} exist; manual merge is required';
+        END IF;
+    END $$;
+    """
+
+
+def _rename_index_sql(old_name: str, new_name: str) -> str:
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{old_name}') IS NOT NULL
+           AND to_regclass('public.{new_name}') IS NULL THEN
+            ALTER INDEX {old_name} RENAME TO {new_name};
+        END IF;
+    END $$;
+    """
+
+
+def _rename_legacy_receipt_shipment_tables(op) -> None:
+    table_renames = [
+        ("receipt2_docs", "receipt_docs"),
+        ("receipt2_lines", "receipt_lines"),
+        ("receipt2_ops", "receipt_ops"),
+        ("shipment2_docs", "shipment_docs"),
+        ("shipment2_lines", "shipment_lines"),
+        ("shipment2_ops", "shipment_ops"),
+    ]
+    index_renames = [
+        ("idx_r2docs_client", "idx_receipt_docs_client"),
+        ("idx_r2lines_doc", "idx_receipt_lines_doc"),
+        ("idx_r2ops_doc", "idx_receipt_ops_doc"),
+        ("idx_s2docs_client", "idx_shipment_docs_client"),
+        ("idx_s2lines_doc", "idx_shipment_lines_doc"),
+        ("idx_s2ops_doc", "idx_shipment_ops_doc"),
+    ]
+
+    for old_name, new_name in table_renames:
+        op.execute(_rename_table_sql(old_name, new_name))
+    for old_name, new_name in index_renames:
+        op.execute(_rename_index_sql(old_name, new_name))
+
+
 def upgrade() -> None:
     from alembic import op
+
+    _rename_legacy_receipt_shipment_tables(op)
 
     # ------------------------------------------------------------------
     # Расширение для case-insensitive fold (ё → е)
@@ -28,15 +81,6 @@ def upgrade() -> None:
         AS $fold$
             SELECT replace(lower(COALESCE(input, '')), 'ё', 'е')
         $fold$
-    """)
-
-    # ------------------------------------------------------------------
-    # Служебная таблица для idempotent-миграций (legacy; оставляем для совместимости)
-    # ------------------------------------------------------------------
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS app_migrations (
-            id TEXT PRIMARY KEY
-        )
     """)
 
     # ------------------------------------------------------------------
@@ -208,10 +252,10 @@ def upgrade() -> None:
     """)
 
     # ------------------------------------------------------------------
-    # Поступления v2
+    # Поступления
     # ------------------------------------------------------------------
     op.execute("""
-        CREATE TABLE IF NOT EXISTS receipt2_docs (
+        CREATE TABLE IF NOT EXISTS receipt_docs (
             id             TEXT PRIMARY KEY,
             doc_number     TEXT NOT NULL UNIQUE,
             client_id      TEXT NOT NULL,
@@ -229,12 +273,12 @@ def upgrade() -> None:
             is_deleted     INTEGER NOT NULL DEFAULT 0
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_r2docs_client ON receipt2_docs(client_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_receipt_docs_client ON receipt_docs(client_id)")
 
     op.execute("""
-        CREATE TABLE IF NOT EXISTS receipt2_lines (
+        CREATE TABLE IF NOT EXISTS receipt_lines (
             id           TEXT PRIMARY KEY,
-            doc_id       TEXT NOT NULL REFERENCES receipt2_docs(id),
+            doc_id       TEXT NOT NULL REFERENCES receipt_docs(id),
             product_id   TEXT NOT NULL,
             product_name TEXT NOT NULL,
             product_sku  TEXT NOT NULL,
@@ -248,12 +292,12 @@ def upgrade() -> None:
             is_deleted   INTEGER NOT NULL DEFAULT 0
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_r2lines_doc ON receipt2_lines(doc_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_receipt_lines_doc ON receipt_lines(doc_id)")
 
     op.execute("""
-        CREATE TABLE IF NOT EXISTS receipt2_ops (
+        CREATE TABLE IF NOT EXISTS receipt_ops (
             id         TEXT PRIMARY KEY,
-            doc_id     TEXT NOT NULL REFERENCES receipt2_docs(id),
+            doc_id     TEXT NOT NULL REFERENCES receipt_docs(id),
             line_id    TEXT,
             op_type    TEXT NOT NULL,
             qty        INTEGER,
@@ -264,13 +308,13 @@ def upgrade() -> None:
             created_by TEXT
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_r2ops_doc ON receipt2_ops(doc_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_receipt_ops_doc ON receipt_ops(doc_id)")
 
     # ------------------------------------------------------------------
-    # Отгрузки v2
+    # Отгрузки
     # ------------------------------------------------------------------
     op.execute("""
-        CREATE TABLE IF NOT EXISTS shipment2_docs (
+        CREATE TABLE IF NOT EXISTS shipment_docs (
             id          TEXT PRIMARY KEY,
             doc_number  TEXT NOT NULL UNIQUE,
             cargo_type  TEXT NOT NULL DEFAULT 'good',
@@ -287,12 +331,12 @@ def upgrade() -> None:
             is_deleted  INTEGER NOT NULL DEFAULT 0
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_s2docs_client ON shipment2_docs(client_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_shipment_docs_client ON shipment_docs(client_id)")
 
     op.execute("""
-        CREATE TABLE IF NOT EXISTS shipment2_lines (
+        CREATE TABLE IF NOT EXISTS shipment_lines (
             id           TEXT PRIMARY KEY,
-            doc_id       TEXT NOT NULL REFERENCES shipment2_docs(id),
+            doc_id       TEXT NOT NULL REFERENCES shipment_docs(id),
             product_id   TEXT NOT NULL,
             product_name TEXT NOT NULL,
             product_sku  TEXT NOT NULL,
@@ -305,27 +349,27 @@ def upgrade() -> None:
             is_deleted   INTEGER NOT NULL DEFAULT 0
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_s2lines_doc ON shipment2_lines(doc_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_shipment_lines_doc ON shipment_lines(doc_id)")
 
     op.execute("""
-        CREATE TABLE IF NOT EXISTS shipment2_ops (
+        CREATE TABLE IF NOT EXISTS shipment_ops (
             id         TEXT PRIMARY KEY,
-            doc_id     TEXT NOT NULL REFERENCES shipment2_docs(id),
+            doc_id     TEXT NOT NULL REFERENCES shipment_docs(id),
             op_type    TEXT NOT NULL,
             comment    TEXT,
             created_at TEXT NOT NULL,
             created_by TEXT
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_s2ops_doc ON shipment2_ops(doc_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_shipment_ops_doc ON shipment_ops(doc_id)")
 
 
 def downgrade() -> None:
     from alembic import op
 
     for tbl in [
-        "shipment2_ops", "shipment2_lines", "shipment2_docs",
-        "receipt2_ops", "receipt2_lines", "receipt2_docs",
+        "shipment_ops", "shipment_lines", "shipment_docs",
+        "receipt_ops", "receipt_lines", "receipt_docs",
         "import_movement_logs",
         "product_variants", "products",
         "defect_reasons", "carriers", "warehouses", "unloading_zones",
@@ -333,7 +377,6 @@ def downgrade() -> None:
         "auth_refresh_superseded", "auth_sessions",
         "users",
         "record_actuality",
-        "app_migrations",
     ]:
         op.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
     op.execute("DROP FUNCTION IF EXISTS fold_ci(TEXT)")

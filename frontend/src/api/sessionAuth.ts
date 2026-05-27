@@ -95,6 +95,7 @@ export async function authLogout(): Promise<void> {
       body: '{}',
     })
   } catch {
+    // Logout is best-effort; local session cleanup still runs below.
   } finally {
     clearToken()
     broadcastAuthLogout()

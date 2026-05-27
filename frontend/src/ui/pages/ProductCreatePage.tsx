@@ -82,23 +82,33 @@ export function ProductCreatePage() {
 
   const [touched, setTouched] = useState<Partial<Record<FieldKey, boolean>>>({})
   const [submitError, setSubmitError] = useState('')
+  const [lookupError, setLookupError] = useState('')
   const [saving, setSaving] = useState(false)
 
   const requiresColor = productTypes.find((t) => t.id === typeId)?.requires_color ?? false
   const requiresSize = productTypes.find((t) => t.id === typeId)?.requires_size ?? false
 
   useEffect(() => {
-    Promise.all([
+    let alive = true
+    setLookupError('')
+    Promise.allSettled([
       getInventoryProductTypes(),
       getInventoryClients(),
       getInventoryColors(),
       getInventorySizes(),
-    ]).then(([types, cls, cols, szs]: [InventoryProductTypeLookup[], DictionaryItem[], DictionaryItem[], DictionaryItem[]]) => {
-      setProductTypes(types)
-      setClients(cls.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
-      setColorOptions(cols.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
-      setSizeOptions(szs.map((s: DictionaryItem) => ({ value: s.id, label: s.name })))
-    }).catch(() => null)
+    ]).then((results) => {
+      if (!alive) return
+      const [types, cls, cols, szs] = results
+      if (types.status === 'fulfilled') setProductTypes(types.value)
+      if (cls.status === 'fulfilled') setClients(cls.value.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
+      if (cols.status === 'fulfilled') setColorOptions(cols.value.map((c: DictionaryItem) => ({ value: c.id, label: c.name })))
+      if (szs.status === 'fulfilled') setSizeOptions(szs.value.map((s: DictionaryItem) => ({ value: s.id, label: s.name })))
+      const failed = results.find((r) => r.status === 'rejected')
+      if (failed?.status === 'rejected') {
+        setLookupError(failed.reason instanceof Error ? failed.reason.message : 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ С‡Р°СЃС‚СЊ СЃРїСЂР°РІРѕС‡РЅРёРєРѕРІ')
+      }
+    })
+    return () => { alive = false }
   }, [])
 
   // ── Валидация ──────────────────────────────────────────────────────────────
@@ -197,6 +207,11 @@ export function ProductCreatePage() {
       }
     >
       <form id="product-create-form" onSubmit={handleSubmit} noValidate>
+        {lookupError && (
+          <div style={{ marginBottom: 16, padding: '10px 14px', background: 'color-mix(in oklab, var(--c-warning) 10%, transparent)', border: '1px solid color-mix(in oklab, var(--c-warning) 30%, transparent)', borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 13 }}>
+            {lookupError}
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
 
           {/* ── Левая колонка ── */}

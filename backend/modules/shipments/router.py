@@ -17,6 +17,7 @@ from config import (
     SHIPMENT_TRANSITIONS,
 )
 from dbconn import get_connection
+from modules.auth.service import get_current_manager
 from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
@@ -31,7 +32,7 @@ from modules.shipments.service import advance_shipment, next_doc_number, normali
 
 router = APIRouter(tags=["shipments"])
 
-_get_manager = lambda: None  # noqa: E731 — заменяется в app.py
+_get_manager = get_current_manager
 
 
 def _now() -> str:
@@ -48,7 +49,7 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
     with get_connection() as conn:
         doc_num = next_doc_number(conn)
         conn.execute(
-            """INSERT INTO shipment2_docs
+            """INSERT INTO shipment_docs
                (id,doc_number,cargo_type,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
@@ -57,14 +58,14 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
         )
         for line in body.lines:
             conn.execute(
-                """INSERT INTO shipment2_lines
+                """INSERT INTO shipment_lines
                    (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty, now),
             )
         conn.execute(
-            "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+            "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
             (str(uuid4()), doc_id, "doc_create", now, uid),
         )
         conn.commit()
@@ -94,7 +95,7 @@ def shipments_summary(
             conds.append("d.ship_date <= ?"); params.append(date_to)
         where = " AND ".join(conds)
         rows = conn.execute(
-            f"SELECT d.status, d.ship_date FROM shipment2_docs d WHERE {where}", params
+            f"SELECT d.status, d.ship_date FROM shipment_docs d WHERE {where}", params
         ).fetchall()
     today = date.today().isoformat()
     return {
@@ -145,15 +146,15 @@ def list_shipments(
             conds.append("d.ship_date <= ?"); params.append(date_to)
         where = " AND ".join(conds)
         total = int(conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM shipment2_docs d WHERE {where}", params
+            f"SELECT COUNT(*) AS cnt FROM shipment_docs d WHERE {where}", params
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
         rows = conn.execute(
             f"""SELECT d.*,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                     COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty
-                FROM shipment2_docs d
-                LEFT JOIN shipment2_lines l ON l.doc_id = d.id
+                FROM shipment_docs d
+                LEFT JOIN shipment_lines l ON l.doc_id = d.id
                 WHERE {where}
                 GROUP BY d.id
                 ORDER BY d.created_at DESC
@@ -186,17 +187,17 @@ def list_shipments(
 def get_shipment(doc_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT * FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         lines_rows = conn.execute(
-            "SELECT * FROM shipment2_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+            "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
         ).fetchall()
         ops_rows = conn.execute(
             """SELECT o.*, u.email AS user_email
-               FROM shipment2_ops o LEFT JOIN users u ON u.id = o.created_by
+               FROM shipment_ops o LEFT JOIN users u ON u.id = o.created_by
                WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
             (doc_id,),
         ).fetchall()
@@ -253,7 +254,7 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -266,7 +267,7 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             return {"message": "ok"}
         sets = ", ".join(f"{k} = ?" for k in fields)
         conn.execute(
-            f"UPDATE shipment2_docs SET {sets}, updated_at = ? WHERE id = ?",
+            f"UPDATE shipment_docs SET {sets}, updated_at = ? WHERE id = ?",
             list(fields.values()) + [now, doc_id],
         )
         conn.commit()
@@ -278,7 +279,7 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -286,7 +287,7 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         line_id = str(uuid4())
         conn.execute(
-            """INSERT INTO shipment2_lines
+            """INSERT INTO shipment_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
@@ -300,14 +301,14 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
 def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=Depends(_get_manager)):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Состав отгрузки нельзя менять после отправки")
         conn.execute(
-            """UPDATE shipment2_lines SET
+            """UPDATE shipment_lines SET
                product_id=?,product_name=?,product_sku=?,color_id=?,color_name=?,
                size_id=?,size_name=?,qty=?
                WHERE id=? AND doc_id=? AND is_deleted=0""",
@@ -323,14 +324,14 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
 def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         conn.execute(
-            "UPDATE shipment2_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
+            "UPDATE shipment_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),
         )
         conn.commit()
@@ -351,18 +352,18 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Нельзя отменить отправленный документ")
         conn.execute(
-            "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
+            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
             (SHIPMENT_STATUS_CANCELLED, now, doc_id),
         )
         conn.execute(
-            "INSERT INTO shipment2_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
+            "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
             (str(uuid4()), doc_id, "cancel", now, uid),
         )
         conn.commit()
@@ -375,7 +376,7 @@ def revert_shipment(doc_id: str, user=Depends(_get_manager)):
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment2_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -384,11 +385,11 @@ def revert_shipment(doc_id: str, user=Depends(_get_manager)):
         if not prev_status:
             raise HTTPException(status_code=400, detail=f"Нельзя откатить из статуса «{current}»")
         conn.execute(
-            "UPDATE shipment2_docs SET status=?, updated_at=? WHERE id=?",
+            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
             (prev_status, now, doc_id),
         )
         conn.execute(
-            "INSERT INTO shipment2_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, "revert", f"{current} → {prev_status}", now, uid),
         )
         conn.commit()
@@ -400,7 +401,7 @@ def delete_shipment_doc(doc_id: str, user=Depends(_get_manager)):
     now = _now()
     with get_connection() as conn:
         conn.execute(
-            "UPDATE shipment2_docs SET is_deleted=1, updated_at=? WHERE id=?",
+            "UPDATE shipment_docs SET is_deleted=1, updated_at=? WHERE id=?",
             (now, doc_id),
         )
         conn.commit()

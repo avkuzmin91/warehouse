@@ -1,8 +1,8 @@
 """Интеграционные тесты балансов.
 
 Балансы считаются из:
-  - receipt2_ops (op_type=receiving/defect_fix) для поступлений со статусом on_review или done
-  - shipment2_lines (shipment2_docs.status=shipped) для отгрузок
+  - receipt_ops (op_type=receiving/defect_fix) для поступлений со статусом on_review или done
+  - shipment_lines (shipment_docs.status=shipped) для отгрузок
 
 Тесты вставляют данные напрямую в БД, минуя полный API,
 чтобы контролировать точные суммы и избежать зависимости от UI-флоу приёмки.
@@ -59,22 +59,22 @@ def product_ids():
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _insert_receipt(conn, client_id: str, status: str) -> str:
-    """Вставляет receipt2_docs, возвращает doc_id."""
+    """Вставляет receipt_docs, возвращает doc_id."""
     doc_id = str(uuid.uuid4())
     conn.execute(
-        """INSERT INTO receipt2_docs
+        """INSERT INTO receipt_docs
            (id, doc_number, client_id, status, is_deleted, created_at, created_by)
            VALUES (?, ?, ?, ?, 0, NOW(), 'test')""",
-        (doc_id, f"WH2-T-{doc_id}", client_id, status),
+        (doc_id, f"WH-T-{doc_id}", client_id, status),
     )
     return doc_id
 
 
 def _insert_receipt_line(conn, doc_id: str, product_id: str, color_id: str | None, size_id: str | None, planned_qty: int) -> str:
-    """Вставляет receipt2_lines, возвращает line_id."""
+    """Вставляет receipt_lines, возвращает line_id."""
     line_id = str(uuid.uuid4())
     conn.execute(
-        """INSERT INTO receipt2_lines
+        """INSERT INTO receipt_lines
            (id, doc_id, product_id, product_name, product_sku,
             color_id, color_name, size_id, size_name,
             planned_qty, is_deleted, created_at, created_by)
@@ -87,9 +87,9 @@ def _insert_receipt_line(conn, doc_id: str, product_id: str, color_id: str | Non
 
 
 def _insert_receiving_op(conn, doc_id: str, line_id: str, qty: int) -> None:
-    """Вставляет receipt2_ops с op_type=receiving."""
+    """Вставляет receipt_ops с op_type=receiving."""
     conn.execute(
-        """INSERT INTO receipt2_ops
+        """INSERT INTO receipt_ops
            (id, doc_id, line_id, op_type, qty, created_at, created_by)
            VALUES (?, ?, ?, 'receiving', ?, NOW(), 'test')""",
         (str(uuid.uuid4()), doc_id, line_id, qty),
@@ -97,9 +97,9 @@ def _insert_receiving_op(conn, doc_id: str, line_id: str, qty: int) -> None:
 
 
 def _insert_defect_op(conn, doc_id: str, line_id: str, qty: int) -> None:
-    """Вставляет receipt2_ops с op_type=defect_fix."""
+    """Вставляет receipt_ops с op_type=defect_fix."""
     conn.execute(
-        """INSERT INTO receipt2_ops
+        """INSERT INTO receipt_ops
            (id, doc_id, line_id, op_type, qty, created_at, created_by)
            VALUES (?, ?, ?, 'defect_fix', ?, NOW(), 'test')""",
         (str(uuid.uuid4()), doc_id, line_id, qty),
@@ -107,21 +107,21 @@ def _insert_defect_op(conn, doc_id: str, line_id: str, qty: int) -> None:
 
 
 def _insert_shipment(conn, client_id: str, cargo_type: str, status: str) -> str:
-    """Вставляет shipment2_docs, возвращает doc_id."""
+    """Вставляет shipment_docs, возвращает doc_id."""
     doc_id = str(uuid.uuid4())
     conn.execute(
-        """INSERT INTO shipment2_docs
+        """INSERT INTO shipment_docs
            (id, doc_number, cargo_type, client_id, client_name,
             status, is_deleted, created_at, created_by)
            VALUES (?, ?, ?, ?, 'Test Client', ?, 0, NOW(), 'test')""",
-        (doc_id, f"SHP2-T-{doc_id}", cargo_type, client_id, status),
+        (doc_id, f"SHP-T-{doc_id}", cargo_type, client_id, status),
     )
     return doc_id
 
 
 def _insert_shipment_line(conn, doc_id: str, product_id: str, color_id: str | None, size_id: str | None, qty: int) -> None:
     conn.execute(
-        """INSERT INTO shipment2_lines
+        """INSERT INTO shipment_lines
            (id, doc_id, product_id, product_name, product_sku,
             color_id, color_name, size_id, size_name,
             qty, is_deleted, created_at)
@@ -136,20 +136,20 @@ def _cleanup_test_docs(client_id: str) -> None:
     """Удаляет все тестовые документы для данного клиента."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id FROM receipt2_docs WHERE client_id = ?", (client_id,)
+            "SELECT id FROM receipt_docs WHERE client_id = ?", (client_id,)
         ).fetchall()
         for r in rows:
-            conn.execute("DELETE FROM receipt2_ops WHERE doc_id = ?", (r["id"],))
-            conn.execute("DELETE FROM receipt2_lines WHERE doc_id = ?", (r["id"],))
-        conn.execute("DELETE FROM receipt2_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM receipt_ops WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (r["id"],))
+        conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
 
         rows = conn.execute(
-            "SELECT id FROM shipment2_docs WHERE client_id = ?", (client_id,)
+            "SELECT id FROM shipment_docs WHERE client_id = ?", (client_id,)
         ).fetchall()
         for r in rows:
-            conn.execute("DELETE FROM shipment2_lines WHERE doc_id = ?", (r["id"],))
-            conn.execute("DELETE FROM shipment2_ops WHERE doc_id = ?", (r["id"],))
-        conn.execute("DELETE FROM shipment2_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM shipment_lines WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM shipment_ops WHERE doc_id = ?", (r["id"],))
+        conn.execute("DELETE FROM shipment_docs WHERE client_id = ?", (client_id,))
         conn.commit()
 
 

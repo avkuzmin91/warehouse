@@ -45,7 +45,7 @@ def test_create_shipment_returns_doc_id(admin_client, client_id):
     assert r2.status_code == 200, r2.text
     detail = r2.json()
     assert detail["status"] == "draft"
-    assert detail["doc_number"].startswith("SHP2-")
+    assert detail["doc_number"].startswith("SHP-")
 
 
 def test_shipment_advance_draft_to_packing(admin_client, client_id):

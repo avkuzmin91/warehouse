@@ -3,8 +3,6 @@ import { KPI } from '../primitives/KPI'
 import { Card, CardBody, CardHead } from '../primitives/Card'
 import { Icon } from '../primitives/Icon'
 import { EmptyState } from '../primitives/EmptyState'
-import { WarehouseMapCard } from '../widgets/WarehouseMapCard'
-import { ActivityFeedCard } from '../widgets/ActivityFeedCard'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('ru-RU', {
@@ -54,7 +52,18 @@ export function HomePage() {
             </CardBody>
           </Card>
 
-          <WarehouseMapCard />
+          <Card>
+            <CardHead>
+              <Icon name="map" size={15} style={{ color: 'var(--c-accent)' }} />
+              <div className="card-head-title">Карта склада недоступна</div>
+            </CardHead>
+            <CardBody>
+              <EmptyState
+                title="Схема ячеек не подключена"
+                sub="Фейковые данные карты склада удалены. Для фактических остатков используйте раздел «Остатки»."
+              />
+            </CardBody>
+          </Card>
         </div>
 
         <div className="col gap-16">
@@ -90,7 +99,18 @@ export function HomePage() {
             </CardBody>
           </Card>
 
-          <ActivityFeedCard />
+          <Card>
+            <CardHead>
+              <Icon name="clock" size={15} style={{ color: 'var(--c-accent)' }} />
+              <div className="card-head-title">Лента событий недоступна</div>
+            </CardHead>
+            <CardBody>
+              <EmptyState
+                title="История событий не подключена"
+                sub="Моковая лента удалена, чтобы главная страница не показывала тестовые операции как реальные."
+              />
+            </CardBody>
+          </Card>
         </div>
       </div>
     </div>

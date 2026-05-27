@@ -23,6 +23,7 @@ from rate_limit.login_rate_limit import check_login_rate_limits, close_login_red
 from modules.auth.router import router as auth_router
 from modules.balances.router import router as balances_router
 from modules.dictionaries.router import router as dictionaries_router
+from modules.inventory.router import router as inventory_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
     yield
     close_pool()
     try:
-        close_login_redis()
+        await close_login_redis()
     except Exception:
         pass
 
@@ -193,6 +194,7 @@ def removed_client_portal_api(removed_path: str):
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(dictionaries_router)
+app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)

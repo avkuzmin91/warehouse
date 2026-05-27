@@ -13,11 +13,10 @@ def get_balances(
     only_positive: bool,
     has_defect: bool,
 ) -> BalanceListResponse:
-    """Агрегирует остатки из receipt2_* и shipment2_* таблиц.
+    """Агрегирует остатки из receipt_* и shipment_* таблиц.
 
-    Источник данных о приёмке: receipt2_ops (op_type=receiving/receiving_correction/defect_fix/defect_correction).
-    Источник данных об отгрузке: shipment2_lines + shipment2_docs (status=shipped).
-    inventory_operations не используется.
+    Источник данных о приёмке: receipt_ops (op_type=receiving/receiving_correction/defect_fix/defect_correction).
+    Источник данных об отгрузке: shipment_lines + shipment_docs (status=shipped).
     """
     doc_conds = ["d.is_deleted = 0"]
     doc_params: list = []
@@ -74,35 +73,35 @@ def get_balances(
                 MAX(l.size_name)     AS size_name,
                 SUM(COALESCE((
                     SELECT COALESCE(
-                        (SELECT o2.qty FROM receipt2_ops o2
+                        (SELECT o2.qty FROM receipt_ops o2
                          WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
                          ORDER BY o2.created_at DESC LIMIT 1),
-                        (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                        (SELECT SUM(o2.qty) FROM receipt_ops o2
                          WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
                     )
                 ), 0)) AS good_in,
                 SUM(COALESCE((
                     SELECT COALESCE(
-                        (SELECT o2.qty FROM receipt2_ops o2
+                        (SELECT o2.qty FROM receipt_ops o2
                          WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
                          ORDER BY o2.created_at DESC LIMIT 1),
-                        (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                        (SELECT SUM(o2.qty) FROM receipt_ops o2
                          WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
                     )
                 ), 0)) AS defect_in,
                 SUM(CASE WHEN d.status = 'on_review' AND NOT EXISTS (
-                    SELECT 1 FROM receipt2_ops oq
+                    SELECT 1 FROM receipt_ops oq
                     WHERE oq.line_id = l.id AND oq.op_type = 'line_qc_complete'
                       AND NOT EXISTS (
-                          SELECT 1 FROM receipt2_ops orp
+                          SELECT 1 FROM receipt_ops orp
                           WHERE orp.line_id = l.id
                             AND orp.op_type = 'line_qc_reopen'
                             AND orp.created_at > oq.created_at
                       )
                 ) THEN COALESCE(l.planned_qty, 0) ELSE 0 END) AS on_review,
                 COUNT(DISTINCT l.doc_id) AS docs_count
-            FROM receipt2_lines l
-            JOIN receipt2_docs d ON d.id = l.doc_id
+            FROM receipt_lines l
+            JOIN receipt_docs d ON d.id = l.doc_id
             LEFT JOIN clients cl ON cl.id = d.client_id
             WHERE {line_where}
             GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
@@ -110,8 +109,8 @@ def get_balances(
         LEFT JOIN (
             SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
                    SUM(sl.qty) AS shipped_good
-            FROM shipment2_lines sl
-            JOIN shipment2_docs sd ON sd.id = sl.doc_id
+            FROM shipment_lines sl
+            JOIN shipment_docs sd ON sd.id = sl.doc_id
             WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
               AND sd.status = 'shipped' AND sd.cargo_type = 'good'
             GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
@@ -123,8 +122,8 @@ def get_balances(
         LEFT JOIN (
             SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
                    SUM(sl.qty) AS shipped_defect
-            FROM shipment2_lines sl
-            JOIN shipment2_docs sd ON sd.id = sl.doc_id
+            FROM shipment_lines sl
+            JOIN shipment_docs sd ON sd.id = sl.doc_id
             WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
               AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
             GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
@@ -189,7 +188,7 @@ def get_available_good_qty(
     """Возвращает доступное кол-во годного товара для конкретной позиции.
 
     Используется shipments/service.py для проверки остатков перед отгрузкой.
-    Считает: принятое годное (из receipt2_ops) − уже отгруженное хорошее (из shipment2_lines shipped).
+    Считает: принятое годное (из receipt_ops) − уже отгруженное хорошее (из shipment_lines shipped).
     """
     # --- принятое годное ---
     in_conds = [
@@ -221,15 +220,15 @@ def get_available_good_qty(
         f"""
         SELECT COALESCE(SUM((
             SELECT COALESCE(
-                (SELECT o2.qty FROM receipt2_ops o2
+                (SELECT o2.qty FROM receipt_ops o2
                  WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
                  ORDER BY o2.created_at DESC LIMIT 1),
-                (SELECT SUM(o2.qty) FROM receipt2_ops o2
+                (SELECT SUM(o2.qty) FROM receipt_ops o2
                  WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
             )
         )), 0) AS good_in
-        FROM receipt2_lines l
-        JOIN receipt2_docs d ON d.id = l.doc_id
+        FROM receipt_lines l
+        JOIN receipt_docs d ON d.id = l.doc_id
         WHERE {in_where}
         """,
         in_params,
@@ -261,8 +260,8 @@ def get_available_good_qty(
     out_row = connection.execute(
         f"""
         SELECT COALESCE(SUM(sl.qty), 0) AS shipped
-        FROM shipment2_lines sl
-        JOIN shipment2_docs sd ON sd.id = sl.doc_id
+        FROM shipment_lines sl
+        JOIN shipment_docs sd ON sd.id = sl.doc_id
         WHERE {out_where}
         """,
         out_params,

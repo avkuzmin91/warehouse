@@ -38,7 +38,7 @@ export function SimpleDictionaryListPage({ entity }: Props) {
     )
       .then((r) => { setItems(r.items); setTotal(r.total); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [page, search, entity])
+  }, [page, search, entity, meta.nameKey])
 
   return (
     <ListPage

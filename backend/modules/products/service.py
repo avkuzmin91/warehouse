@@ -494,8 +494,8 @@ def _sync_product_variants_from_request(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неизвестный вариант")
             has_receipts = connection.execute(
                 """
-                SELECT 1 FROM receipt2_lines rl
-                JOIN receipt2_docs rd ON rd.id = rl.doc_id
+                SELECT 1 FROM receipt_lines rl
+                JOIN receipt_docs rd ON rd.id = rl.doc_id
                 WHERE rl.product_id = ?
                   AND rl.color_id IS NOT DISTINCT FROM ?
                   AND rl.size_id IS NOT DISTINCT FROM ?

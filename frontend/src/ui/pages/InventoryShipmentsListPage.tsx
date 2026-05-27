@@ -18,6 +18,7 @@ import { Pagination } from '../data/Pagination'
 import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
 import { DateRange } from '../data/DateRange'
 import { Badge } from '../primitives/Badge'
+import type { BadgeTone } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
@@ -39,7 +40,7 @@ const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
   planned: 'packing',
 }
 
-const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: string }[] = [
+const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
   { status: 'packing', label: 'В плане',   tone: 'info' },
   { status: 'ready',   label: 'На сборке', tone: 'accent' },
   { status: 'shipped', label: 'Завершён',  tone: 'success' },
@@ -333,7 +334,7 @@ export function InventoryShipmentsListPage() {
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td>{item.carrier ?? '—'}</Td>
                       <Td>
-                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as any} dot>
+                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
                           {item.status_label}
                         </Badge>
                       </Td>
@@ -376,7 +377,7 @@ function KanbanBoard({ items, loading, onNavigate }: {
         return (
           <div key={col.status} style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
             <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-              <Badge tone={col.tone as any} dot>{col.label}</Badge>
+              <Badge tone={col.tone} dot>{col.label}</Badge>
               <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{loading ? '…' : colItems.length}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

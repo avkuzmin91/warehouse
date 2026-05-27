@@ -134,6 +134,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (error instanceof TypeError) {
       throw new Error(
         'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn app:app --host 127.0.0.1 --port 8000',
+        { cause: error },
       )
     }
     throw error
@@ -174,6 +175,7 @@ export async function requestForm<T>(path: string, init?: RequestInit): Promise<
     if (error instanceof TypeError) {
       throw new Error(
         'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn app:app --host 127.0.0.1 --port 8000',
+        { cause: error },
       )
     }
     throw error

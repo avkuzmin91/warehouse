@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../primitives/Icon'
 import { DatePicker } from '../primitives/DatePicker'
@@ -24,8 +24,7 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
   const [popStyle, setPopStyle] = useState({ top: 0, left: 0 })
   const triggerRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
-  // Unique id so outside-click handler can find this component's subtree including portals
-  const groupId = useRef(`dr-${Math.random().toString(36).slice(2)}`)
+  const groupId = useId()
 
   const hasValue = Boolean(from || to)
 
@@ -78,7 +77,7 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
       if (triggerRef.current?.contains(target)) return
       if (popoverRef.current?.contains(target)) return
       // Check any portaled dialogs (DatePicker calendars) that belong to our group
-      const groupDialogs = document.querySelectorAll(`[data-daterange-group="${groupId.current}"]`)
+      const groupDialogs = document.querySelectorAll(`[data-daterange-group="${groupId}"]`)
       if (Array.from(groupDialogs).some(d => d.contains(target))) return
       setOpen(false)
     }
@@ -91,14 +90,14 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
       document.removeEventListener('mousedown', handleDown)
       document.removeEventListener('keydown', handleKey)
     }
-  }, [open])
+  }, [open, groupId])
 
   const popover = open && createPortal(
     <div
       ref={popoverRef}
       role="dialog"
       aria-label="Фильтр по дате"
-      data-daterange-group={groupId.current}
+      data-daterange-group={groupId}
       style={{
         position: 'absolute',
         top: popStyle.top,
@@ -122,7 +121,7 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
           value={from}
           onChange={onFromChange}
           placeholder="дд.мм.гггг"
-          portalGroup={groupId.current}
+          portalGroup={groupId}
         />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -131,7 +130,7 @@ export function DateRange({ from, to, onFromChange, onToChange, onClear }: DateR
           value={to}
           onChange={onToChange}
           placeholder="дд.мм.гггг"
-          portalGroup={groupId.current}
+          portalGroup={groupId}
         />
       </div>
     </div>,

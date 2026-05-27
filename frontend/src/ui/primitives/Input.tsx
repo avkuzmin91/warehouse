@@ -13,7 +13,7 @@ export function Input({ inputSize, className = '', ...rest }: InputProps) {
   )
 }
 
-interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {}
+type TextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement>
 
 export function Textarea({ className = '', ...rest }: TextareaProps) {
   return (
