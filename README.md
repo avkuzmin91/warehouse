@@ -147,6 +147,7 @@ cd frontend && npm install && npm run dev
 | `POSTGRES_PASSWORD_TEST` | **да** — CI пишет в **`.env.test`** как `POSTGRES_PASSWORD=…` для **`docker-compose.test.yml`** (сервис **`db`**) и синхронизирует **`DATABASE_URL`**. | — |
 | `POSTGRES_PASSWORD` | — | **да** (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
+| `JWT_SECRET` | **да** (≥ 32 символов, пишется в `.env.test` / `.env.prod` для backend) | **да** |
 | `DOCKERHUB_USERNAME` | опционально | опционально |
 | `DOCKERHUB_TOKEN` | опционально | опционально |
 

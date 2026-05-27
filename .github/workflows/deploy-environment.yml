@@ -68,6 +68,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_PASSWORD_TEST: ${{ secrets.POSTGRES_PASSWORD_TEST }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${DATABASE_URL}" ]; then
@@ -82,6 +83,10 @@ jobs:
             echo "::error title=Test secret missing::Секрет VITE_API_BASE_URL пуст или не задан."
             exit 1
           fi
+          if [ -z "${JWT_SECRET}" ] || [ "${#JWT_SECRET}" -lt 32 ]; then
+            echo "::error title=Test secret missing::Секрет JWT_SECRET пуст или короче 32 символов (backend/config.py). Задайте в Repository secrets или Environment test."
+            exit 1
+          fi
           echo "Test required secrets are set (values not logged)."
 
       # До rsync: иначе в логе appleboy видно printf с пустым первым аргументом.
@@ -90,6 +95,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${POSTGRES_PASSWORD}" ]; then
@@ -98,6 +104,10 @@ jobs:
           fi
           if [ -z "${VITE_API_BASE_URL}" ]; then
             echo "::error title=Prod secret missing::В GitHub нет непустого секрета VITE_API_BASE_URL (Repository secrets или Environment production)."
+            exit 1
+          fi
+          if [ -z "${JWT_SECRET}" ] || [ "${#JWT_SECRET}" -lt 32 ]; then
+            echo "::error title=Prod secret missing::Секрет JWT_SECRET пуст или короче 32 символов. Задайте в Repository secrets или Environment production."
             exit 1
           fi
           echo "Prod required secrets are set (values not logged)."
@@ -134,10 +144,11 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
+            printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\nJWT_SECRET=%s\n' \
               "${{ secrets.DATABASE_URL }}" \
               "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+              "${{ secrets.VITE_API_BASE_URL }}" \
+              "${{ secrets.JWT_SECRET }}" > "${{ inputs.env_file }}"
             sed -i 's/\r//g' "${{ inputs.env_file }}"
             python3 scripts/ci-normalize-database-url-test.py "${{ inputs.env_file }}"
             export APP_VERSION
@@ -161,9 +172,10 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
+            printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\nJWT_SECRET=%s\n' \
               "${{ secrets.POSTGRES_PASSWORD }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
+              "${{ secrets.VITE_API_BASE_URL }}" \
+              "${{ secrets.JWT_SECRET }}" > "${{ inputs.env_file }}"
             sed -i 's/\r//g' "${{ inputs.env_file }}"
             if ! grep -qE '^POSTGRES_PASSWORD=.+$' "${{ inputs.env_file }}"; then
               echo "ERROR: пароль БД пуст после подстановки. Задайте секрет POSTGRES_PASSWORD (Repository secrets / Environment production)." >&2
@@ -171,6 +183,10 @@ jobs:
             fi
             if ! grep -qE '^VITE_API_BASE_URL=.+$' "${{ inputs.env_file }}"; then
               echo "ERROR: VITE_API_BASE_URL пустой или отсутствует. Добавьте репозиторный секрет **VITE_API_BASE_URL** (Actions → Repository secrets) или в Environment **production** (часто значение **/api**)." >&2
+              exit 1
+            fi
+            if ! grep -qE '^JWT_SECRET=.{32,}$' "${{ inputs.env_file }}"; then
+              echo "ERROR: JWT_SECRET пустой, короче 32 символов или отсутствует. Добавьте секрет JWT_SECRET (Environment production или Repository secrets)." >&2
               exit 1
             fi
             export APP_VERSION
