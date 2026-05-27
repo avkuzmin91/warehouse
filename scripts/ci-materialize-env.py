@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Собрать env-файл деплоя из переменных окружения (секреты GitHub Actions)."""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+
+def _req(name: str) -> str:
+    val = os.environ.get(name, "")
+    if not val:
+        print(f"ERROR: переменная окружения {name} не задана.", file=sys.stderr)
+        sys.exit(1)
+    return val
+
+
+def _write_lines(path: pathlib.Path, lines: list[str]) -> None:
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        print("usage: ci-materialize-env.py <test|prod> <output-path>", file=sys.stderr)
+        sys.exit(2)
+
+    kind = sys.argv[1]
+    out = pathlib.Path(sys.argv[2])
+
+    if kind == "test":
+        jwt = _req("JWT_SECRET")
+        if len(jwt) < 32:
+            print("ERROR: JWT_SECRET короче 32 символов.", file=sys.stderr)
+            sys.exit(1)
+        _write_lines(
+            out,
+            [
+                f"DATABASE_URL={_req('DATABASE_URL')}",
+                f"POSTGRES_PASSWORD={_req('POSTGRES_PASSWORD')}",
+                f"VITE_API_BASE_URL={_req('VITE_API_BASE_URL')}",
+                f"JWT_SECRET={jwt}",
+            ],
+        )
+    elif kind == "prod":
+        jwt = _req("JWT_SECRET")
+        if len(jwt) < 32:
+            print("ERROR: JWT_SECRET короче 32 символов.", file=sys.stderr)
+            sys.exit(1)
+        _write_lines(
+            out,
+            [
+                f"POSTGRES_PASSWORD={_req('POSTGRES_PASSWORD')}",
+                f"VITE_API_BASE_URL={_req('VITE_API_BASE_URL')}",
+                f"JWT_SECRET={jwt}",
+            ],
+        )
+    else:
+        print(f"ERROR: unknown kind {kind!r}", file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

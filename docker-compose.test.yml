@@ -33,6 +33,7 @@ services:
     environment:
       APP_ENV: test
       APP_VERSION: ${APP_VERSION:-}
+      JWT_SECRET: ${JWT_SECRET}
     env_file:
       - .env.test
     # Фото товаров и import staging — на хосте (как prod, отдельный каталог).

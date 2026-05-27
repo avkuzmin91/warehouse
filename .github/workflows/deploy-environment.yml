@@ -112,6 +112,44 @@ jobs:
           fi
           echo "Prod required secrets are set (values not logged)."
 
+      - name: Materialize test env file
+        if: inputs.deploy_kind == 'test'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/ci-materialize-env.py test .env.deploy.staging
+          python3 scripts/ci-normalize-database-url-test.py .env.deploy.staging
+          python3 -c "
+          import pathlib
+          text = pathlib.Path('.env.deploy.staging').read_text(encoding='utf-8')
+          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
+          assert len(jwt) >= 32, 'JWT_SECRET missing or too short in staged env file'
+          print('Staged test env file OK (JWT_SECRET length', len(jwt), ')')
+          "
+
+      - name: Materialize prod env file
+        if: inputs.deploy_kind == 'prod'
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/ci-materialize-env.py prod .env.deploy.staging
+          python3 -c "
+          import pathlib
+          text = pathlib.Path('.env.deploy.staging').read_text(encoding='utf-8')
+          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
+          assert len(jwt) >= 32, 'JWT_SECRET missing or too short in staged env file'
+          print('Staged prod env file OK (JWT_SECRET length', len(jwt), ')')
+          "
+
       - name: Rsync repository to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
@@ -144,13 +182,18 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\nJWT_SECRET=%s\n' \
-              "${{ secrets.DATABASE_URL }}" \
-              "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" \
-              "${{ secrets.JWT_SECRET }}" > "${{ inputs.env_file }}"
-            sed -i 's/\r//g' "${{ inputs.env_file }}"
-            python3 scripts/ci-normalize-database-url-test.py "${{ inputs.env_file }}"
+            if [ ! -f .env.deploy.staging ]; then
+              echo "ERROR: .env.deploy.staging не найден после rsync — проверьте шаг Materialize test env file." >&2
+              exit 1
+            fi
+            install -m 600 .env.deploy.staging "${{ inputs.env_file }}"
+            rm -f .env.deploy.staging
+            python3 -c "
+          import pathlib
+          text = pathlib.Path('${{ inputs.env_file }}').read_text(encoding='utf-8')
+          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
+          assert len(jwt) >= 32, 'JWT_SECRET missing on server after install'
+          "
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
@@ -172,11 +215,12 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\nJWT_SECRET=%s\n' \
-              "${{ secrets.POSTGRES_PASSWORD }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" \
-              "${{ secrets.JWT_SECRET }}" > "${{ inputs.env_file }}"
-            sed -i 's/\r//g' "${{ inputs.env_file }}"
+            if [ ! -f .env.deploy.staging ]; then
+              echo "ERROR: .env.deploy.staging не найден после rsync." >&2
+              exit 1
+            fi
+            install -m 600 .env.deploy.staging "${{ inputs.env_file }}"
+            rm -f .env.deploy.staging
             if ! grep -qE '^POSTGRES_PASSWORD=.+$' "${{ inputs.env_file }}"; then
               echo "ERROR: пароль БД пуст после подстановки. Задайте секрет POSTGRES_PASSWORD (Repository secrets / Environment production)." >&2
               exit 1
@@ -185,10 +229,12 @@ jobs:
               echo "ERROR: VITE_API_BASE_URL пустой или отсутствует. Добавьте репозиторный секрет **VITE_API_BASE_URL** (Actions → Repository secrets) или в Environment **production** (часто значение **/api**)." >&2
               exit 1
             fi
-            if ! grep -qE '^JWT_SECRET=.{32,}$' "${{ inputs.env_file }}"; then
-              echo "ERROR: JWT_SECRET пустой, короче 32 символов или отсутствует. Добавьте секрет JWT_SECRET (Environment production или Repository secrets)." >&2
-              exit 1
-            fi
+            python3 -c "
+          import pathlib
+          text = pathlib.Path('${{ inputs.env_file }}').read_text(encoding='utf-8')
+          jwt = next((l.split('=', 1)[1] for l in text.splitlines() if l.startswith('JWT_SECRET=')), '')
+          assert len(jwt) >= 32, 'JWT_SECRET missing on server after install'
+          "
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
