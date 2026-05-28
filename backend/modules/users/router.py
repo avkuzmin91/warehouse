@@ -102,10 +102,10 @@ def list_users(admin=Depends(get_current_admin)):
 
 @router.patch("/{user_id}/role", response_model=MessageResponse)
 def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get_current_admin)):
-    if payload.role not in ("user", "manager", "client"):
+    if payload.role not in ("user", "manager", "warehouse_manager", "client"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Можно назначить роль: user, manager или client",
+            detail="Можно назначить роль: user, manager, warehouse_manager или client",
         )
     if user_id == admin["id"]:
         raise HTTPException(

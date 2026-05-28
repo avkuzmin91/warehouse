@@ -23,7 +23,7 @@ def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
 
 
 def ensure_admin_account(user: Mapping[str, Any]) -> None:
-    if user["role"] not in ("admin", "manager"):
+    if user["role"] not in ("admin", "manager", "warehouse_manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,

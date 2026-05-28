@@ -27,7 +27,7 @@ const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> 
   user: '',
 }
 
-const ASSIGNABLE_ROLES = ['user', 'manager', 'client'] as const
+const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'client'] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
 const ROLE_FILTERS = [
@@ -40,7 +40,7 @@ const ROLE_FILTERS = [
 ] as const
 
 function hasAdminAccess(role: string | undefined) {
-  return role === 'admin' || role === 'manager'
+  return role === 'admin' || role === 'manager' || role === 'warehouse_manager'
 }
 
 interface RoleMenuProps {
@@ -61,7 +61,7 @@ function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const isFixed = currentRole === 'admin' || currentRole === 'warehouse_manager'
+  const isFixed = currentRole === 'admin'
   if (isFixed) {
     return <Badge tone={ROLE_TONE[currentRole] ?? ''}>{ROLE_LABELS[currentRole] ?? currentRole}</Badge>
   }

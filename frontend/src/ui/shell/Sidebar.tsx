@@ -54,7 +54,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const navigate = useNavigate()
   const isClient = user?.role === 'client'
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
-  const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager'
+  const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
   const initials = getInitials(displayName)

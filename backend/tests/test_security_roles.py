@@ -27,8 +27,8 @@ def test_ensure_admin_rejects_plain_user():
     assert ctx.value.detail == FORBIDDEN_DETAIL
 
 
-@pytest.mark.parametrize("role", ["admin", "manager"])
-def test_ensure_admin_accepts_admin_and_manager(role: str):
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager"])
+def test_ensure_admin_accepts_privileged_roles(role: str):
     ensure_admin_account(
         {
             "id": "1",

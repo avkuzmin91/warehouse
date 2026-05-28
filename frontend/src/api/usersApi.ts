@@ -5,7 +5,7 @@ export function getUsers() {
   return request<UserListItem[]>('/users')
 }
 
-export function updateUserRole(userId: string, role: 'user' | 'manager' | 'client') {
+export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'client') {
   return request<{ message: string }>(`/users/${userId}/role`, {
     method: 'PATCH',
     body: JSON.stringify({ role }),
