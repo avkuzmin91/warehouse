@@ -75,16 +75,20 @@ export function InventoryReceiptsListPage() {
   useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
 
   useEffect(() => {
+    const ctrl = new AbortController()
     getReceiptsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }).then(setSummary).catch(() => {})
+    }, ctrl.signal).then(setSummary).catch(() => {})
+    return () => ctrl.abort()
   }, [clientId, search, dateFrom, dateTo, locationKey])
 
   useEffect(() => {
     if (view !== 'table') return
+    const ctrl = new AbortController()
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
     setLoading(true)
     setLoadError(null)
     const effectiveStatus = statusFilter || TAB_STATUS[tab]
@@ -97,24 +101,32 @@ export function InventoryReceiptsListPage() {
       overdue: tab === 'overdue' && !statusFilter ? true : undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }).then((res) => {
+    }, ctrl.signal).then((res) => {
+      if (ctrl.signal.aborted) return
       setItems(res.items)
       setTotal(res.total)
       setLoadError(null)
     }).catch((e) => {
+      if (ctrl.signal.aborted) return
       console.error('[receipts] load failed:', e)
       setLoadError(e instanceof Error ? e.message : String(e))
       if (initialLoading) {
-        setTimeout(() => setRetryTick((t) => t + 1), 400)
+        retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 400)
       }
     }).finally(() => {
+      if (ctrl.signal.aborted) return
       setLoading(false)
       setInitialLoading(false)
     })
+    return () => {
+      ctrl.abort()
+      if (retryTimer) clearTimeout(retryTimer)
+    }
   }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, retryTick, initialLoading])
 
   useEffect(() => {
     if (view !== 'kanban') return
+    const ctrl = new AbortController()
     getReceipts({
       page: 1,
       limit: 200,
@@ -122,7 +134,8 @@ export function InventoryReceiptsListPage() {
       client_id: clientId || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }).then((res) => setKanbanItems(res.items)).catch(() => {})
+    }, ctrl.signal).then((res) => setKanbanItems(res.items)).catch(() => {})
+    return () => ctrl.abort()
   }, [view, search, clientId, dateFrom, dateTo])
 
   // When tab changes reset page and clear manual status chip

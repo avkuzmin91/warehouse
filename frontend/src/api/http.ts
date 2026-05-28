@@ -5,6 +5,11 @@ import { getToken } from './tokenStore'
 
 const AUTH_PATHS_NO_SESSION_INVALIDATION_ON_401 = new Set(['/auth/login', '/auth/register'])
 
+export type RequestOptions = RequestInit & {
+  /** Не реагировать на 401 (используется для logout — сессия и так сбрасывается). */
+  skipUnauthorizedHandler?: boolean
+}
+
 function headerHasBearerAuthorization(headers: Record<string, string>): boolean {
   const a = headers.Authorization
   return typeof a === 'string' && a.startsWith('Bearer ')
@@ -105,16 +110,35 @@ export function formatApiErrorDetail(body: unknown, httpStatus: number): string 
   return fallback
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken()
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+async function doFetch(
+  path: string,
+  init: RequestOptions | undefined,
+  headers: Record<string, string>,
+): Promise<Response> {
+  try {
+    return await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
+      headers,
+    })
+  } catch (error) {
+    if (error instanceof TypeError) {
+      const msg = import.meta.env.DEV
+        ? 'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn app:app --host 127.0.0.1 --port 8000'
+        : 'Сервер недоступен. Проверьте подключение и повторите попытку.'
+      throw new Error(msg, { cause: error })
+    }
+    throw error
   }
+}
 
+function buildAuthHeaders(path: string, init: RequestOptions | undefined, contentTypeJson: boolean): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (contentTypeJson) headers['Content-Type'] = 'application/json'
   if (init?.headers) {
     Object.assign(headers, init.headers as Record<string, string>)
   }
-
+  const token = getToken()
   if (token) {
     const pathKey = apiPathWithoutQuery(path)
     const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
@@ -122,65 +146,28 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers.Authorization = `Bearer ${token}`
     }
   }
+  return headers
+}
 
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
-      headers,
-    })
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(
-        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn app:app --host 127.0.0.1 --port 8000',
-        { cause: error },
-      )
-    }
-    throw error
+export async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  const headers = buildAuthHeaders(path, init, true)
+  const response = await doFetch(path, init, headers)
+  if (!init?.skipUnauthorizedHandler) {
+    throwIfUnauthorizedApi(path, response, headers)
   }
-
-  throwIfUnauthorizedApi(path, response, headers)
-
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, response.status))
   }
-
   return response.json() as Promise<T>
 }
 
-export async function requestForm<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken()
-  const headers: Record<string, string> = {}
-  if (init?.headers) {
-    Object.assign(headers, init.headers as Record<string, string>)
+export async function requestForm<T>(path: string, init?: RequestOptions): Promise<T> {
+  const headers = buildAuthHeaders(path, init, false)
+  const response = await doFetch(path, init, headers)
+  if (!init?.skipUnauthorizedHandler) {
+    throwIfUnauthorizedApi(path, response, headers)
   }
-  if (token) {
-    const pathKey = apiPathWithoutQuery(path)
-    const publicAuth = pathKey === '/auth/login' || pathKey === '/auth/register'
-    if (!publicAuth) {
-      headers.Authorization = `Bearer ${token}`
-    }
-  }
-
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
-      headers,
-    })
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(
-        'Сервер API недоступен. Запустите бэкенд: в папке backend выполните python -m uvicorn app:app --host 127.0.0.1 --port 8000',
-        { cause: error },
-      )
-    }
-    throw error
-  }
-  throwIfUnauthorizedApi(path, response, headers)
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(formatApiErrorDetail(body, response.status))

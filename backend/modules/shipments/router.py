@@ -127,8 +127,15 @@ def list_shipments(
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
-        if status and status in SHIPMENT_STATUSES_ALL:
-            conds.append("d.status = ?"); params.append(status)
+        if status:
+            # Поддерживаем как одно значение, так и CSV ("shipped,cancelled" — вкладка «Завершённые»).
+            requested = [s.strip() for s in status.split(",") if s.strip()]
+            allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
+            if len(allowed) == 1:
+                conds.append("d.status = ?"); params.append(allowed[0])
+            elif len(allowed) > 1:
+                placeholders = ",".join("?" for _ in allowed)
+                conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
         if overdue:
             today = date.today().isoformat()
             conds.append("d.status IN ('ready', 'packing')")

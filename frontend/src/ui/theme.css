@@ -95,7 +95,7 @@ a { color: inherit; text-decoration: none; }
 ::selection { background: var(--c-accent-bg); color: var(--c-accent-text); }
 
 /* === App layout === */
-.app-root { display: flex; height: 100vh; background: var(--c-bg); }
+.app-root { display: flex; height: 100vh; height: 100dvh; background: var(--c-bg); }
 
 /* sidebar */
 .sidebar {
@@ -515,6 +515,7 @@ a { color: inherit; text-decoration: none; }
 .auth-page {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1030,43 +1031,6 @@ a { color: inherit; text-decoration: none; }
 .dp-footer-btn:hover { background: var(--c-accent-bg); }
 .dp-footer-btn.muted { color: var(--c-text-subtle); }
 .dp-footer-btn.muted:hover { background: var(--c-bg-hover); color: var(--c-text); }
-
-/* === Concept B (Workspace) overrides === */
-[data-concept="B"] .sidebar { display: none; }
-[data-concept="B"] .topbar {
-  height: 56px;
-  flex: 0 0 56px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--c-border);
-}
-[data-concept="B"] .topbar-brand {
-  display: flex; align-items: center; gap: 10px; margin-right: 20px;
-  font-weight: 600; font-size: 14px;
-}
-[data-concept="B"] .topnav {
-  display: flex; gap: 2px; margin-left: 12px;
-}
-[data-concept="B"] .topnav-item {
-  padding: 6px 12px;
-  font-size: 13px;
-  color: var(--c-text-muted);
-  border-radius: var(--r-md);
-  cursor: pointer;
-  font-weight: 450;
-}
-[data-concept="B"] .topnav-item:hover { background: var(--c-bg-hover); color: var(--c-text); }
-[data-concept="B"] .topnav-item.active {
-  color: var(--c-accent-text);
-  background: var(--c-accent-bg);
-  font-weight: 500;
-}
-[data-concept="A"] .topnav, [data-concept="A"] .topbar-brand { display: none; }
-
-/* Workspace: softer cards */
-[data-concept="B"] .card { border-radius: 10px; box-shadow: var(--sh-1); }
-[data-concept="B"] .t-wrap { border-radius: 10px; box-shadow: var(--sh-1); }
-[data-concept="B"] .kpi { border-radius: 10px; box-shadow: var(--sh-1); }
-[data-concept="B"] .page { padding: 28px 36px 60px 36px; }
 
 /* === Command palette === */
 .cmdk-backdrop {

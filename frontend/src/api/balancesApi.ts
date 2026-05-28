@@ -33,7 +33,7 @@ export type BalanceListResponse = {
   limit: number
 }
 
-export function getBalances(params: BalanceListParams = {}) {
+export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
@@ -42,5 +42,5 @@ export function getBalances(params: BalanceListParams = {}) {
   if (params.only_positive === false) sp.set('only_positive', 'false')
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
-  return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`)
+  return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`, { signal })
 }

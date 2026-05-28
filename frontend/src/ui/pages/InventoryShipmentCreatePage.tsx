@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
@@ -491,23 +491,27 @@ function BalancePicker({ clientId, cargoType, selectedKeys, onAdd, onClose }: {
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    const ctrl = new AbortController()
     setLoading(true)
-    try {
-      const res = await getBalances({
-        limit: 200,
-        search: search || undefined,
-        only_positive: true,
-        client_id: clientId || undefined,
-        has_defect: cargoType === 'defect' ? true : undefined,
+    getBalances({
+      limit: 200,
+      search: search || undefined,
+      only_positive: true,
+      client_id: clientId || undefined,
+      has_defect: cargoType === 'defect' ? true : undefined,
+    }, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return
+        setItems(res.items.filter((b) => cargoType === 'defect' ? b.defect > 0 : b.good > 0))
       })
-      setItems(res.items.filter((b) => cargoType === 'defect' ? b.defect > 0 : b.good > 0))
-    } finally {
-      setLoading(false)
-    }
+      .catch(() => { /* aborted or error */ })
+      .finally(() => {
+        if (ctrl.signal.aborted) return
+        setLoading(false)
+      })
+    return () => ctrl.abort()
   }, [search, clientId, cargoType])
-
-  useEffect(() => { load() }, [load])
 
   const available = pending
     ? (cargoType === 'defect' ? pending.item.defect : pending.item.good)

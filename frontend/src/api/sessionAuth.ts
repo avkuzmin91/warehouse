@@ -1,6 +1,6 @@
 import { broadcastAuthLogout } from '../auth/tabSync'
 import { API_BASE_URL, AUTH_FETCH_CREDENTIALS } from './constants'
-import { formatApiErrorDetail, request } from './http'
+import { request } from './http'
 import {
   clearProfileCache,
   meCacheTtlMs,
@@ -83,16 +83,11 @@ export async function ensureSessionBootstrapped(): Promise<boolean> {
 }
 
 export async function authLogout(): Promise<void> {
-  const token = getToken()
   try {
-    await fetch(`${API_BASE_URL}/auth/logout`, {
+    await request<unknown>('/auth/logout', {
       method: 'POST',
-      credentials: AUTH_FETCH_CREDENTIALS,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
       body: '{}',
+      skipUnauthorizedHandler: true,
     })
   } catch {
     // Logout is best-effort; local session cleanup still runs below.
@@ -126,7 +121,7 @@ export function changePassword(currentPassword: string, newPassword: string) {
   })
 }
 
-export function me(): Promise<User> {
+export function me(signal?: AbortSignal): Promise<User> {
   const token = getToken()
   if (!token) {
     return Promise.reject(new Error('Недействительный токен'))
@@ -139,7 +134,7 @@ export function me(): Promise<User> {
   if (inflight) {
     return inflight
   }
-  const p = request<User>('/auth/me')
+  const p = request<User>('/auth/me', { signal })
     .then((user) => {
       const t = getToken()
       if (t) {
@@ -158,16 +153,12 @@ export function me(): Promise<User> {
   return p
 }
 
-export async function fetchSystemVersion(): Promise<{ version: string; environment: string }> {
-  const response = await fetch(`${API_BASE_URL}/version`, {
+export function fetchSystemVersion(signal?: AbortSignal) {
+  return request<{ version: string; environment: string }>('/version', {
     method: 'GET',
-    credentials: AUTH_FETCH_CREDENTIALS,
+    signal,
+    skipUnauthorizedHandler: true,
   })
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(formatApiErrorDetail(body, response.status))
-  }
-  return response.json() as Promise<{ version: string; environment: string }>
 }
 
 export { clearProfileCache } from './profileCache'

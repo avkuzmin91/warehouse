@@ -19,9 +19,9 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      // Current data-loading components intentionally update local state from effects.
-      // The app is not yet structured around React Compiler data primitives.
-      'react-hooks/set-state-in-effect': 'off',
+      // Data-loading effects routinely setState from async fetches. Treat as warn so we see
+      // new offenders but legacy hooks don't block CI.
+      'react-hooks/set-state-in-effect': 'warn',
     },
   },
   {

@@ -96,7 +96,8 @@ export type ShipmentListResponse = {
 export type ShipmentListParams = {
   page?:      number
   limit?:     number
-  status?:    ShipmentStatus
+  /** Один статус или массив (бэкенд принимает CSV для status IN (...)). */
+  status?:    ShipmentStatus | ShipmentStatus[]
   client_id?: string
   search?:    string
   date_from?: string
@@ -158,7 +159,9 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   const sp = new URLSearchParams()
   if (params.page)      sp.set('page', String(params.page))
   if (params.limit)     sp.set('limit', String(params.limit))
-  if (params.status)    sp.set('status', params.status)
+  if (params.status) {
+    sp.set('status', Array.isArray(params.status) ? params.status.join(',') : params.status)
+  }
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
   if (params.date_from) sp.set('date_from', params.date_from)

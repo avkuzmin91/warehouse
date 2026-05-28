@@ -44,10 +44,6 @@ export function getInventoryProductSkus() {
   return request<string[]>('/inventory/lookups/skus')
 }
 
-export function getInventoryShipmentDestinations() {
-  return request<DictionaryItem[]>('/inventory/lookups/shipment-destinations')
-}
-
 export function getInventoryWarehouses() {
   return request<DictionaryItem[]>('/inventory/lookups/warehouses')
 }

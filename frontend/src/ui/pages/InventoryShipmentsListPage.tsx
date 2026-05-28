@@ -81,79 +81,62 @@ export function InventoryShipmentsListPage() {
   useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
 
   useEffect(() => {
+    const ctrl = new AbortController()
     getShipmentsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }).then(setSummary).catch(() => {})
+    }, ctrl.signal).then(setSummary).catch(() => {})
+    return () => ctrl.abort()
   }, [clientId, search, dateFrom, dateTo, locationKey, reloadTick])
 
   useEffect(() => {
     if (view !== 'table') return
+    const ctrl = new AbortController()
     setLoading(true)
     const isOverdueTab = tab === 'overdue' && !statusFilter
     const isDoneTab = tab === 'done' && !statusFilter
-    const singleStatus = statusFilter || TAB_STATUS[tab]
+    const statusParam: ShipmentStatus | ShipmentStatus[] | undefined = statusFilter
+      ? statusFilter
+      : isDoneTab
+        ? (['shipped', 'cancelled'] as ShipmentStatus[])
+        : TAB_STATUS[tab]
 
-    const fetchPage = async () => {
-      if (isOverdueTab) {
-        const res = await listShipments({
-          page, limit: PAGE_SIZE,
-          search: search.trim() || undefined,
-          client_id: clientId || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-          overdue: true,
-        })
+    listShipments({
+      page, limit: PAGE_SIZE,
+      search: search.trim() || undefined,
+      client_id: clientId || undefined,
+      status: statusParam,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      overdue: isOverdueTab ? true : undefined,
+    }, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return
         setItems(res.items)
         setTotal(res.total)
-      } else if (isDoneTab) {
-        const results = await Promise.all(
-          (['shipped', 'cancelled'] as ShipmentStatus[]).map((s) =>
-            listShipments({
-              page: 1, limit: 200,
-              search: search.trim() || undefined,
-              client_id: clientId || undefined,
-              status: s,
-              date_from: dateFrom || undefined,
-              date_to: dateTo || undefined,
-            })
-          )
-        )
-        const merged = results.flatMap((r) => r.items)
-          .sort((a, b) => b.created_at.localeCompare(a.created_at))
-        const offset = (page - 1) * PAGE_SIZE
-        setItems(merged.slice(offset, offset + PAGE_SIZE))
-        setTotal(merged.length)
-      } else {
-        const res = await listShipments({
-          page, limit: PAGE_SIZE,
-          search: search.trim() || undefined,
-          client_id: clientId || undefined,
-          status: singleStatus || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-        })
-        setItems(res.items)
-        setTotal(res.total)
-      }
-    }
-    fetchPage().catch((e) => console.error(e)).finally(() => {
-      setLoading(false)
-      setInitialLoading(false)
-    })
+      })
+      .catch((e) => { if (!ctrl.signal.aborted) console.error(e) })
+      .finally(() => {
+        if (ctrl.signal.aborted) return
+        setLoading(false)
+        setInitialLoading(false)
+      })
+    return () => ctrl.abort()
   }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, reloadTick])
 
   useEffect(() => {
     if (view !== 'kanban') return
+    const ctrl = new AbortController()
     listShipments({
       page: 1, limit: 200,
       search: search.trim() || undefined,
       client_id: clientId || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }).then((res) => setKanbanItems(res.items)).catch(() => {})
+    }, ctrl.signal).then((res) => setKanbanItems(res.items)).catch(() => {})
+    return () => ctrl.abort()
   }, [view, search, clientId, dateFrom, dateTo])
 
   function handleTabChange(t: TabId) {

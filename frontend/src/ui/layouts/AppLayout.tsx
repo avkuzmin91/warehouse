@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { ensureSessionBootstrapped, getToken, me } from '../../api/sessionAuth'
 import { isSessionExpiredError } from '../../auth/sessionError'
+import { CurrentUserProvider } from '../../hooks/CurrentUserProvider'
 import { AppShell } from '../shell/AppShell'
 import { ConfirmDialogProvider } from '../feedback/ConfirmDialog'
 import { ToastProvider } from '../feedback/Toast'
@@ -31,7 +32,7 @@ export function AppLayout() {
 
   if (boot === 'pending' || boot === 'checking') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--c-text-muted)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh', color: 'var(--c-text-muted)', fontSize: 13 }}>
         Проверка сессии…
       </div>
     )
@@ -42,10 +43,12 @@ export function AppLayout() {
   }
 
   return (
-    <ToastProvider>
-      <ConfirmDialogProvider>
-        <AppShell />
-      </ConfirmDialogProvider>
-    </ToastProvider>
+    <CurrentUserProvider>
+      <ToastProvider>
+        <ConfirmDialogProvider>
+          <AppShell />
+        </ConfirmDialogProvider>
+      </ToastProvider>
+    </CurrentUserProvider>
   )
 }

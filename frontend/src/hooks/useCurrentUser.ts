@@ -1,23 +1,8 @@
-import { useState, useEffect } from 'react'
-import { me } from '../api/sessionAuth'
-import type { User } from '../api/typesUser'
+import { useContext } from 'react'
+import { CurrentUserContext, type CurrentUser } from './currentUserContext'
 
-export interface CurrentUser {
-  user: User | null
-  loading: boolean
-}
+export type { CurrentUser }
 
 export function useCurrentUser(): CurrentUser {
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    me()
-      .then((u) => { if (!cancelled) { setUser(u); setLoading(false) } })
-      .catch(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [])
-
-  return { user, loading }
+  return useContext(CurrentUserContext)
 }
