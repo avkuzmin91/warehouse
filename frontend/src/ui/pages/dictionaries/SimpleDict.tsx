@@ -17,6 +17,7 @@ type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 interface SimpleDictProps {
   typeId: DictionaryTypeId
   title: string
+  refreshKey: number
   onEdit: (item: AnyDictItem) => void
   onTotalLoaded: (total: number) => void
 }
@@ -27,7 +28,7 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString('ru', { day: 'numeric', month: 'short' })
 }
 
-export function SimpleDict({ typeId, title, onEdit, onTotalLoaded }: SimpleDictProps) {
+export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }: SimpleDictProps) {
   const [items, setItems] = useState<AnyDictItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -81,13 +82,12 @@ export function SimpleDict({ typeId, title, onEdit, onTotalLoaded }: SimpleDictP
 
   useEffect(() => {
     setSearch('')
-    setItems([])
   }, [typeId])
 
   useEffect(() => {
     const timer = setTimeout(() => load(search), 250)
     return () => clearTimeout(timer)
-  }, [search, load])
+  }, [search, load, refreshKey])
 
   return (
     <div className="t-wrap">

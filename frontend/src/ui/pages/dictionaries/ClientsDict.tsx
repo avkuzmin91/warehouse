@@ -8,11 +8,12 @@ import { Avatar, getInitials } from '../../primitives/Avatar'
 import { EmptyState } from '../../primitives/EmptyState'
 
 interface ClientsDictProps {
+  refreshKey: number
   onEdit: (item: DictionaryItem) => void
   onTotalLoaded: (total: number) => void
 }
 
-export function ClientsDict({ onEdit, onTotalLoaded }: ClientsDictProps) {
+export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictProps) {
   const [items, setItems] = useState<DictionaryItem[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -21,7 +22,7 @@ export function ClientsDict({ onEdit, onTotalLoaded }: ClientsDictProps) {
     getClients({ page: 1, limit: 100 })
       .then((res) => { setItems(res.items); onTotalLoaded(res.total); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [onTotalLoaded])
+  }, [onTotalLoaded, refreshKey])
 
   return (
     <div className="t-wrap">

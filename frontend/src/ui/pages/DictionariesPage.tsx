@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Icon } from '../primitives/Icon'
 import { EmptyState } from '../primitives/EmptyState'
@@ -13,11 +13,23 @@ import { ClientSheet } from './dictionaries/ClientSheet'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../api/domainTypes'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
+type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'>
 
 type SheetState =
   | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
   | { type: 'client'; isNew: boolean; initial: DictionaryItem | null }
   | null
+
+function isSimpleDictionaryType(id: DictionaryTypeId): id is SimpleDictionaryTypeId {
+  return id === 'product-types'
+    || id === 'sizes'
+    || id === 'colors'
+    || id === 'suppliers'
+    || id === 'unloading-zones'
+    || id === 'warehouses'
+    || id === 'carriers'
+    || id === 'reasons'
+}
 
 export function DictionariesPage() {
   const navigate = useNavigate()
@@ -25,8 +37,28 @@ export function DictionariesPage() {
   const [sheet, setSheet] = useState<SheetState>(null)
   const [counts, setCounts] = useState<Partial<Record<DictionaryTypeId, number>>>({})
   const [refreshKey, setRefreshKey] = useState(0)
+  const [lastSimpleType, setLastSimpleType] = useState<SimpleDictionaryTypeId>(
+    isSimpleDictionaryType(active) ? active : 'sizes',
+  )
+  const [visitedPanels, setVisitedPanels] = useState({
+    products: active === 'products',
+    clients: active === 'clients',
+    simple: isSimpleDictionaryType(active),
+  })
 
   const dictDef = DICTIONARY_TYPES.find((d) => d.id === active)
+
+  useEffect(() => {
+    if (isSimpleDictionaryType(active)) {
+      setLastSimpleType(active)
+    }
+
+    setVisitedPanels((prev) => ({
+      products: prev.products || active === 'products',
+      clients: prev.clients || active === 'clients',
+      simple: prev.simple || isSimpleDictionaryType(active),
+    }))
+  }, [active])
 
   const handleCreate = () => {
     if (active === 'products') {
@@ -76,36 +108,6 @@ export function DictionariesPage() {
 
   const handleSaved = () => setRefreshKey((k) => k + 1)
 
-  const renderContent = () => {
-    if (active === 'products') {
-      return <ProductsDict key={`products-${refreshKey}`} onTotalLoaded={handleTotalLoaded('products')} />
-    }
-    if (active === 'clients') {
-      return <ClientsDict key={`clients-${refreshKey}`} onEdit={openClientEdit} onTotalLoaded={handleTotalLoaded('clients')} />
-    }
-    if (active === 'product-types' || active === 'sizes' || active === 'colors' || active === 'suppliers' || active === 'unloading-zones' || active === 'warehouses' || active === 'carriers' || active === 'reasons') {
-      return (
-        <SimpleDict
-          key={`${active}-${refreshKey}`}
-          typeId={active}
-          title={dictDef?.sheetKind ?? 'Значение'}
-          onEdit={openSimpleEdit}
-          onTotalLoaded={handleTotalLoaded(active)}
-        />
-      )
-    }
-    // warehouses, reasons, carriers — no API endpoint yet
-    return (
-      <div style={{ padding: 40 }}>
-        <EmptyState
-          title="Данные появятся при подключении API"
-          sub={`Справочник «${dictDef?.name ?? active}» ещё не подключён`}
-        />
-        {/* TODO: подключить API для {active} */}
-      </div>
-    )
-  }
-
   const createLabel =
     active === 'products' ? 'Новый товар' :
     active === 'clients' ? 'Новый клиент' :
@@ -138,7 +140,40 @@ export function DictionariesPage() {
           onSelect={setActive}
           counts={counts}
         />
-        <div>{renderContent()}</div>
+        <div>
+          {visitedPanels.products && (
+            <div style={{ display: active === 'products' ? 'block' : 'none' }}>
+              <ProductsDict refreshKey={refreshKey} onTotalLoaded={handleTotalLoaded('products')} />
+            </div>
+          )}
+
+          {visitedPanels.clients && (
+            <div style={{ display: active === 'clients' ? 'block' : 'none' }}>
+              <ClientsDict refreshKey={refreshKey} onEdit={openClientEdit} onTotalLoaded={handleTotalLoaded('clients')} />
+            </div>
+          )}
+
+          {visitedPanels.simple && (
+            <div style={{ display: isSimpleDictionaryType(active) ? 'block' : 'none' }}>
+              <SimpleDict
+                typeId={lastSimpleType}
+                refreshKey={refreshKey}
+                title={DICTIONARY_TYPES.find((d) => d.id === lastSimpleType)?.sheetKind ?? 'Значение'}
+                onEdit={openSimpleEdit}
+                onTotalLoaded={handleTotalLoaded(lastSimpleType)}
+              />
+            </div>
+          )}
+
+          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && (
+            <div style={{ padding: 40 }}>
+              <EmptyState
+                title="Данные появятся при подключении API"
+                sub={`Справочник «${dictDef?.name ?? active}» ещё не подключён`}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {sheet?.type === 'simple' && (

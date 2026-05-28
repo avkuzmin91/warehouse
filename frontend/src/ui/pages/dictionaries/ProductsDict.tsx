@@ -20,10 +20,11 @@ const ACTUALITY_OPTIONS = [
 ]
 
 interface ProductsDictProps {
+  refreshKey: number
   onTotalLoaded: (total: number) => void
 }
 
-export function ProductsDict({ onTotalLoaded }: ProductsDictProps) {
+export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
   const navigate = useNavigate()
 
   const [products, setProducts] = useState<ProductItem[]>([])
@@ -72,7 +73,7 @@ export function ProductsDict({ onTotalLoaded }: ProductsDictProps) {
   useEffect(() => {
     const timer = setTimeout(() => load(search, typeId, clientId, actuality, page), search ? 250 : 0)
     return () => clearTimeout(timer)
-  }, [search, typeId, clientId, actuality, page, load])
+  }, [search, typeId, clientId, actuality, page, load, refreshKey])
 
   // Reset to page 1 when filters change
   useEffect(() => { setPage(1) }, [search, typeId, clientId, actuality])

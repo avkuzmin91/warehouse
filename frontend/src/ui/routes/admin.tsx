@@ -1,5 +1,6 @@
 import { lazy } from 'react'
 import { Navigate, Route } from 'react-router-dom'
+import { DictionariesPage } from '../pages/DictionariesPage'
 
 const HomePage = lazy(() =>
   import('../pages/HomePage').then((m) => ({ default: m.HomePage })),
@@ -15,9 +16,6 @@ const AnalyticsPage = lazy(() =>
 )
 const UsersPage = lazy(() =>
   import('../pages/UsersPage').then((m) => ({ default: m.UsersPage })),
-)
-const DictionariesPage = lazy(() =>
-  import('../pages/DictionariesPage').then((m) => ({ default: m.DictionariesPage })),
 )
 const ClientCreatePage = lazy(() =>
   import('../pages/ClientCreatePage').then((m) => ({ default: m.ClientCreatePage })),
