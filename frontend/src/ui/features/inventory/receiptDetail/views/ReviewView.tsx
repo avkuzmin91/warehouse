@@ -81,20 +81,23 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     const deltaAccepted = draft.accepted - line.accepted
     const deltaDefect = draft.defect - line.defect
     if (deltaAccepted === 0 && deltaDefect === 0) return
+    setLineError((prev) => { const next = { ...prev }; delete next[lineId]; return next })
     setSaving((prev) => ({ ...prev, [lineId]: true }))
     try {
       if (deltaAccepted > 0) {
         await recordReceiptOp(docId, { line_id: lineId, op_type: 'receiving', qty: deltaAccepted })
       } else if (deltaAccepted < 0) {
-        await recordReceiptOp(docId, { line_id: lineId, op_type: 'receiving_correction', qty: deltaAccepted })
+        await recordReceiptOp(docId, { line_id: lineId, op_type: 'receiving_correction', qty: draft.accepted })
       }
       if (deltaDefect > 0) {
         await recordReceiptOp(docId, { line_id: lineId, op_type: 'defect_fix', qty: deltaDefect })
       } else if (deltaDefect < 0) {
-        await recordReceiptOp(docId, { line_id: lineId, op_type: 'defect_correction', qty: deltaDefect })
+        await recordReceiptOp(docId, { line_id: lineId, op_type: 'defect_correction', qty: draft.defect })
       }
       await onReload()
       setDrafts((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+    } catch (e) {
+      setLineError((prev) => ({ ...prev, [lineId]: e instanceof Error ? e.message : 'РћС€РёР±РєР°' }))
     } finally {
       setSaving((prev) => { const next = { ...prev }; delete next[lineId]; return next })
     }

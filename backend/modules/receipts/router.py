@@ -493,8 +493,19 @@ def delete_receipt(doc_id: str, user=Depends(_get_manager)):
 @router.post("/receipts/{doc_id}/ops")
 def record_receipt_op(doc_id: str, payload: ReceiptOpRecord, user=Depends(_get_manager)):
     uid = str(user["id"])
-    if payload.op_type not in {RECEIPT_OP_RECEIVING, RECEIPT_OP_DEFECT_FIX}:
-        raise HTTPException(status_code=400, detail=f"Тип операции: {RECEIPT_OP_RECEIVING} | {RECEIPT_OP_DEFECT_FIX}")
+    if payload.op_type not in {
+        RECEIPT_OP_RECEIVING,
+        RECEIPT_OP_DEFECT_FIX,
+        RECEIPT_OP_RECEIVING_CORRECTION,
+        RECEIPT_OP_DEFECT_CORRECTION,
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported op_type: {RECEIPT_OP_RECEIVING} | {RECEIPT_OP_DEFECT_FIX} | "
+                f"{RECEIPT_OP_RECEIVING_CORRECTION} | {RECEIPT_OP_DEFECT_CORRECTION}"
+            ),
+        )
     with get_connection() as conn:
         doc_row = conn.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
