@@ -22,7 +22,6 @@
 |-----------|----------|
 | test | **5434** |
 | dev | **5435** |
-| Legacy `docker-compose.yml` | **5432** |
 
 **БД:** одно runtime-окружение — один экземпляр Postgres и один том; не смешивать prod/test/dev.
 
@@ -31,7 +30,6 @@
 | `docker-compose.prod.yml` | `app` (см. env) | `db_data` | Production |
 | `docker-compose.test.yml` | `app_test` | `db_test_data` | Staging / test |
 | `docker-compose.dev.yml` | `app` | `db_data_dev` | Development |
-| `docker-compose.yml` (legacy) | `wms` | `postgres_data` | Не prod |
 
 В **`DATABASE_URL`** хост `db` и имя БД должны совпадать с **`POSTGRES_DB`** / сервисом **`db`** **этого же** compose. Миграции — только против нужной БД.
 
@@ -147,6 +145,7 @@ cd frontend && npm install && npm run dev
 | `POSTGRES_PASSWORD_TEST` | **да** — CI пишет в **`.env.test`** как `POSTGRES_PASSWORD=…` для **`docker-compose.test.yml`** (сервис **`db`**) и синхронизирует **`DATABASE_URL`**. | — |
 | `POSTGRES_PASSWORD` | — | **да** (см. **`.env.prod.example`**) |
 | `VITE_API_BASE_URL` | да | да |
+| `JWT_SECRET` | **да** (≥ 32 символов, пишется в `.env.test` / `.env.prod` для backend) | **да** |
 | `DOCKERHUB_USERNAME` | опционально | опционально |
 | `DOCKERHUB_TOKEN` | опционально | опционально |
 

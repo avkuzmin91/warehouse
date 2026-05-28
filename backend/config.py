@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# JWT / Auth
+# ---------------------------------------------------------------------------
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if len(JWT_SECRET) < 32:
+    raise RuntimeError(
+        "Переменная окружения JWT_SECRET отсутствует или слишком короткая (минимум 32 символа). "
+        "Установите JWT_SECRET перед запуском приложения."
+    )
+
+JWT_ALGORITHM = "HS256"
+TOKEN_TTL_MINUTES = 60
+
+AUTH_REFRESH_COOKIE_NAME = "wms_rt"
+AUTH_REFRESH_COOKIE_PATH = "/api"
+AUTH_REFRESH_TTL_DAYS = 30
+AUTH_REFRESH_COOKIE_SAMESITE = "lax"
+
+AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
+AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
+AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))
+AUTH_JTI_DENYLIST_MAX = int(os.environ.get("AUTH_JTI_DENYLIST_MAX", "5000"))
+
+# ---------------------------------------------------------------------------
+# Uploads
+# ---------------------------------------------------------------------------
+
+def _resolve_uploads_dir() -> Path:
+    raw = (os.environ.get("WAREHOUSE_UPLOADS_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parent / "uploads"
+
+
+UPLOADS_DIR = _resolve_uploads_dir()
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 МБ
+
+# ---------------------------------------------------------------------------
+# Справочники
+# ---------------------------------------------------------------------------
+
+DICTIONARY_TABLES = frozenset({
+    "clients", "colors", "sizes", "product_types", "suppliers",
+    "unloading_zones", "warehouses", "carriers", "defect_reasons",
+})
+
+# Системный справочник «актуальность записи»
+RECORD_ACTUALITY_YES_ID = "00000000-0000-4000-8000-000000000001"
+RECORD_ACTUALITY_NO_ID = "00000000-0000-4000-8000-000000000002"
+
+# ---------------------------------------------------------------------------
+# Поступления (receipt_*)
+# ---------------------------------------------------------------------------
+
+RECEIPT_STATUS_DRAFT     = "draft"
+RECEIPT_STATUS_PLANNED   = "planned"
+RECEIPT_STATUS_ON_REVIEW = "on_review"
+RECEIPT_STATUS_IN_REVIEW_LEGACY = "in_review"   # нормализуется → on_review при старте
+RECEIPT_STATUS_DONE      = "done"
+RECEIPT_STATUS_CANCELLED = "cancelled"
+
+RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
+    RECEIPT_STATUS_DRAFT,
+    RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_CANCELLED,
+})
+
+RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
+    RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_PLANNED:   RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_ON_REVIEW: RECEIPT_STATUS_DONE,
+}
+
+RECEIPT_STATUS_RU: dict[str, str] = {
+    RECEIPT_STATUS_DRAFT:     "Создание",
+    RECEIPT_STATUS_PLANNED:   "В плане",
+    RECEIPT_STATUS_ON_REVIEW: "На проверке",
+    RECEIPT_STATUS_DONE:      "Завершён",
+    RECEIPT_STATUS_CANCELLED: "Аннулирован",
+}
+
+# Типы операций журнала поступлений
+RECEIPT_OP_DOC_CREATE          = "doc_create"
+RECEIPT_OP_DOC_UPDATE          = "doc_update"
+RECEIPT_OP_LINE_ADD            = "line_add"
+RECEIPT_OP_LINE_UPDATE         = "line_update"
+RECEIPT_OP_LINE_DELETE         = "line_delete"
+RECEIPT_OP_RECEIVING           = "receiving"
+RECEIPT_OP_RECEIVING_CORRECTION = "receiving_correction"
+RECEIPT_OP_DEFECT_FIX          = "defect_fix"
+RECEIPT_OP_DEFECT_CORRECTION   = "defect_correction"
+RECEIPT_OP_QC_COMPLETE         = "qc_complete"
+RECEIPT_OP_LINE_QC_COMPLETE    = "line_qc_complete"
+RECEIPT_OP_LINE_QC_REOPEN      = "line_qc_reopen"
+RECEIPT_OP_PLAN_FIX            = "plan_fix"
+RECEIPT_OP_ARRIVAL_FIX         = "arrival_fix"
+RECEIPT_OP_CANCEL              = "cancel"
+
+RECEIPT_OP_TYPES_ALL: frozenset[str] = frozenset({
+    RECEIPT_OP_DOC_CREATE, RECEIPT_OP_DOC_UPDATE,
+    RECEIPT_OP_LINE_ADD, RECEIPT_OP_LINE_UPDATE,
+    RECEIPT_OP_ARRIVAL_FIX, RECEIPT_OP_RECEIVING,
+    RECEIPT_OP_DEFECT_FIX, RECEIPT_OP_QC_COMPLETE,
+    RECEIPT_OP_LINE_QC_COMPLETE, RECEIPT_OP_LINE_QC_REOPEN,
+})
+
+# Статусы line-уровня (QC)
+RECEIPT_LINE_QC_STATUS_PENDING   = "pending"
+RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
+
+# ---------------------------------------------------------------------------
+# Отгрузки (shipment_*)
+# ---------------------------------------------------------------------------
+
+SHIPMENT_STATUS_DRAFT     = "draft"
+SHIPMENT_STATUS_PACKING   = "packing"
+SHIPMENT_STATUS_READY     = "ready"
+SHIPMENT_STATUS_SHIPPED   = "shipped"
+SHIPMENT_STATUS_CANCELLED = "cancelled"
+
+SHIPMENT_STATUSES_ALL: list[str] = [
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_READY,
+    SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_CANCELLED,
+]
+
+SHIPMENT_STATUS_LABELS: dict[str, str] = {
+    SHIPMENT_STATUS_DRAFT:     "Черновик",
+    SHIPMENT_STATUS_PACKING:   "На сборке",
+    SHIPMENT_STATUS_READY:     "Готово",
+    SHIPMENT_STATUS_SHIPPED:   "Завершён",
+    SHIPMENT_STATUS_CANCELLED: "Аннулирован",
+}
+
+SHIPMENT_TRANSITIONS: dict[str, str] = {
+    SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_READY,
+    SHIPMENT_STATUS_READY:   SHIPMENT_STATUS_SHIPPED,
+}
+
+SHIPMENT_REVERT_TRANSITIONS: dict[str, str] = {
+    SHIPMENT_STATUS_READY: SHIPMENT_STATUS_PACKING,
+}
+
+SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_READY,
+})
+
+SHIPMENT_CARGO_GOOD   = "good"
+SHIPMENT_CARGO_DEFECT = "defect"
+
+# ---------------------------------------------------------------------------
+# Сортировка — словари допустимых колонок (для SQL ORDER BY)
+# ---------------------------------------------------------------------------
+
+CLIENT_LIST_SORT_COLUMNS: dict[str, str] = {
+    "name":       "LOWER(d.name)",
+    "created_at": "d.created_at",
+    "is_active":  "d.is_active",
+}
+SIZE_LIST_SORT_COLUMNS: dict[str, str] = {
+    "name":       "LOWER(d.name)",
+    "created_at": "d.created_at",
+    "is_active":  "d.is_active",
+}
+COLOR_LIST_SORT_COLUMNS: dict[str, str] = {
+    "name":       "LOWER(d.name)",
+    "created_at": "d.created_at",
+    "is_active":  "d.is_active",
+}
+PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
+    "sku_base":   "LOWER(p.sku)",
+    "name":       "LOWER(p.name)",
+    "type":       "LOWER(COALESCE(pt.name, ''))",
+    "client":     "LOWER(COALESCE(c.name, ''))",
+    "created_at": "p.created_at",
+    "is_active":  "p.is_active",
+}
+
+# ---------------------------------------------------------------------------
+# Логгеры
+# ---------------------------------------------------------------------------
+
+auth_log = logging.getLogger("warehouse.auth")

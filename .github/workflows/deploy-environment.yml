@@ -68,6 +68,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_PASSWORD_TEST: ${{ secrets.POSTGRES_PASSWORD_TEST }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${DATABASE_URL}" ]; then
@@ -82,6 +83,10 @@ jobs:
             echo "::error title=Test secret missing::Секрет VITE_API_BASE_URL пуст или не задан."
             exit 1
           fi
+          if [ -z "${JWT_SECRET}" ] || [ "${#JWT_SECRET}" -lt 32 ]; then
+            echo "::error title=Test secret missing::Секрет JWT_SECRET пуст или короче 32 символов (backend/config.py). Задайте в Repository secrets или Environment test."
+            exit 1
+          fi
           echo "Test required secrets are set (values not logged)."
 
       # До rsync: иначе в логе appleboy видно printf с пустым первым аргументом.
@@ -90,6 +95,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${POSTGRES_PASSWORD}" ]; then
@@ -100,7 +106,37 @@ jobs:
             echo "::error title=Prod secret missing::В GitHub нет непустого секрета VITE_API_BASE_URL (Repository secrets или Environment production)."
             exit 1
           fi
+          if [ -z "${JWT_SECRET}" ] || [ "${#JWT_SECRET}" -lt 32 ]; then
+            echo "::error title=Prod secret missing::Секрет JWT_SECRET пуст или короче 32 символов. Задайте в Repository secrets или Environment production."
+            exit 1
+          fi
           echo "Prod required secrets are set (values not logged)."
+
+      - name: Materialize test env file
+        if: inputs.deploy_kind == 'test'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/ci-materialize-env.py test .env.deploy.staging
+          python3 scripts/ci-normalize-database-url-test.py .env.deploy.staging
+          python3 scripts/ci-verify-jwt-in-env.py .env.deploy.staging
+
+      - name: Materialize prod env file
+        if: inputs.deploy_kind == 'prod'
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/ci-materialize-env.py prod .env.deploy.staging
+          python3 scripts/ci-verify-jwt-in-env.py .env.deploy.staging
 
       - name: Rsync repository to server
         uses: burnett01/rsync-deployments@7.0.1
@@ -134,12 +170,13 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'DATABASE_URL=%s\nPOSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
-              "${{ secrets.DATABASE_URL }}" \
-              "${{ secrets.POSTGRES_PASSWORD_TEST }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
-            sed -i 's/\r//g' "${{ inputs.env_file }}"
-            python3 scripts/ci-normalize-database-url-test.py "${{ inputs.env_file }}"
+            if [ ! -f .env.deploy.staging ]; then
+              echo "ERROR: .env.deploy.staging не найден после rsync — проверьте шаг Materialize test env file." >&2
+              exit 1
+            fi
+            install -m 600 .env.deploy.staging "${{ inputs.env_file }}"
+            rm -f .env.deploy.staging
+            python3 scripts/ci-verify-jwt-in-env.py "${{ inputs.env_file }}"
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 
@@ -161,10 +198,12 @@ jobs:
             else
               echo "WARN: задайте секреты DOCKERHUB_USERNAME и DOCKERHUB_TOKEN (оба непустые), иначе Docker Hub — анонимный лимит." >&2
             fi
-            printf 'POSTGRES_PASSWORD=%s\nVITE_API_BASE_URL=%s\n' \
-              "${{ secrets.POSTGRES_PASSWORD }}" \
-              "${{ secrets.VITE_API_BASE_URL }}" > "${{ inputs.env_file }}"
-            sed -i 's/\r//g' "${{ inputs.env_file }}"
+            if [ ! -f .env.deploy.staging ]; then
+              echo "ERROR: .env.deploy.staging не найден после rsync." >&2
+              exit 1
+            fi
+            install -m 600 .env.deploy.staging "${{ inputs.env_file }}"
+            rm -f .env.deploy.staging
             if ! grep -qE '^POSTGRES_PASSWORD=.+$' "${{ inputs.env_file }}"; then
               echo "ERROR: пароль БД пуст после подстановки. Задайте секрет POSTGRES_PASSWORD (Repository secrets / Environment production)." >&2
               exit 1
@@ -173,6 +212,7 @@ jobs:
               echo "ERROR: VITE_API_BASE_URL пустой или отсутствует. Добавьте репозиторный секрет **VITE_API_BASE_URL** (Actions → Repository secrets) или в Environment **production** (часто значение **/api**)." >&2
               exit 1
             fi
+            python3 scripts/ci-verify-jwt-in-env.py "${{ inputs.env_file }}"
             export APP_VERSION
             docker compose --env-file "${{ inputs.env_file }}" -f "${{ inputs.compose_file }}" up -d --build
 

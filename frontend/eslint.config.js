@@ -18,5 +18,21 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Data-loading effects routinely setState from async fetches. Treat as warn so we see
+      // new offenders but legacy hooks don't block CI.
+      'react-hooks/set-state-in-effect': 'warn',
+    },
+  },
+  {
+    files: [
+      'src/ui/routes/**/*.tsx',
+      'src/ui/primitives/**/*.tsx',
+      'src/ui/feedback/**/*.tsx',
+    ],
+    rules: {
+      // Route and primitive modules intentionally export small helpers/types next to components.
+      'react-refresh/only-export-components': 'off',
+    },
   },
 ])

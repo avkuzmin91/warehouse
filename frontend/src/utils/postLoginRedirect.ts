@@ -1,4 +1,4 @@
-import type { User } from '../api'
+import type { User } from '../api/typesUser'
 
 /** Куда вести пользователя после успешной аутентификации. */
 export function postAuthLandingPath(user: User): string {

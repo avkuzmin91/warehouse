@@ -14,7 +14,8 @@ if not os.environ.get("DATABASE_URL"):
 
 from fastapi.testclient import TestClient
 
-from main import app, get_current_user
+from app import app
+from modules.auth.service import get_current_user
 from security import FORBIDDEN_DETAIL
 
 
@@ -42,8 +43,6 @@ def _clear_dependency_overrides():
     [
         ("client", "client-uuid-1"),
         ("user", None),
-        ("manager", None),
-        ("warehouse_manager", None),
     ],
 )
 def test_get_users_forbidden_non_admin(role: str, client_id: str | None):
@@ -53,7 +52,7 @@ def test_get_users_forbidden_non_admin(role: str, client_id: str | None):
     assert r.json()["detail"] == FORBIDDEN_DETAIL
 
 
-@pytest.mark.parametrize("role", ["client", "user", "manager", "warehouse_manager"])
+@pytest.mark.parametrize("role", ["client", "user"])
 def test_get_clients_forbidden_non_admin(role: str):
     app.dependency_overrides[get_current_user] = _user_row(
         role,
@@ -64,11 +63,11 @@ def test_get_clients_forbidden_non_admin(role: str):
     assert r.json()["detail"] == FORBIDDEN_DETAIL
 
 
-def test_get_analytics_movement_forbidden_client():
+def test_get_analytics_movement_removed():
     app.dependency_overrides[get_current_user] = _user_row("client", client_id="client-uuid-1")
     r = TestClient(app).get(
         "/analytics/movement",
         headers={"Authorization": "Bearer test-token"},
     )
-    assert r.status_code == 403
-    assert r.json()["detail"] == FORBIDDEN_DETAIL
+    assert r.status_code == 410
+    assert r.json()["detail"] == "Аналитика отключена"

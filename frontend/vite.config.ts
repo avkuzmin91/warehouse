@@ -38,6 +38,20 @@ export default defineConfig(async () => {
 
   return {
     plugins,
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined
+            if (id.includes('/react-dom/') || id.includes('\\react-dom\\')) return 'vendor-react-dom'
+            if (id.includes('/react-router') || id.includes('\\react-router')) return 'vendor-router'
+            if (id.includes('/react-window/') || id.includes('\\react-window\\')) return 'vendor-virtual-list'
+            if (id.includes('/react/') || id.includes('\\react\\')) return 'vendor-react'
+            return undefined
+          },
+        },
+      },
+    },
     server: {
       host: true,
       port: 5173,

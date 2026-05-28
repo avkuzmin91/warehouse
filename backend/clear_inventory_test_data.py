@@ -1,4 +1,4 @@
-"""Очистка тестовых данных: товары, варианты, приёмка/отгрузка/остатки (через inventory_operations)."""
+"""Очистка тестовых данных: товары, варианты, приёмка/отгрузка/остатки (через документы поступлений/отгрузок)."""
 from __future__ import annotations
 
 import os
@@ -20,7 +20,12 @@ UPLOADS_DIR = _resolve_uploads_dir()
 def main() -> None:
     with get_connection() as conn:
         try:
-            n_ops = conn.execute("DELETE FROM inventory_operations").rowcount
+            n_receipt_ops = conn.execute("DELETE FROM receipt_ops").rowcount
+            n_receipt_lines = conn.execute("DELETE FROM receipt_lines").rowcount
+            n_receipt_docs = conn.execute("DELETE FROM receipt_docs").rowcount
+            n_shipment_ops = conn.execute("DELETE FROM shipment_ops").rowcount
+            n_shipment_lines = conn.execute("DELETE FROM shipment_lines").rowcount
+            n_shipment_docs = conn.execute("DELETE FROM shipment_docs").rowcount
             n_var = conn.execute("DELETE FROM product_variants").rowcount
             n_prod = conn.execute("DELETE FROM products").rowcount
             conn.commit()
@@ -28,7 +33,9 @@ def main() -> None:
             conn.rollback()
             raise
         print(
-            f"OK: удалено операций учёта: {n_ops}, вариантов: {n_var}, товаров: {n_prod}"
+            f"OK: receipt ops/lines/docs: {n_receipt_ops}/{n_receipt_lines}/{n_receipt_docs}, "
+            f"shipment ops/lines/docs: {n_shipment_ops}/{n_shipment_lines}/{n_shipment_docs}, "
+            f"variants: {n_var}, products: {n_prod}"
         )
 
     removed = 0

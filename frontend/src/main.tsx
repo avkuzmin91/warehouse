@@ -1,10 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import './auth-critical.css'
-import App from './App'
 import { RootErrorBoundary } from './RootErrorBoundary'
 import { routerBasename } from './utils/routerBase'
+import { App } from './ui/App'
+import './ui/fonts.css'
+import './ui/theme.css'
 
 /** Заголовок вкладки: `VITE_APP_TITLE` при сборке (prod/test) или pack-men - dev в `npm run dev`. */
 function applyDocumentTitle(): void {
@@ -20,8 +21,11 @@ applyDocumentTitle()
 
 const rootEl = document.getElementById('root')
 if (!rootEl) {
-  document.body.innerHTML =
-    '<p style="font-family:system-ui;padding:24px">Не найден элемент #root в index.html.</p>'
+  const p = document.createElement('p')
+  p.style.fontFamily = 'system-ui'
+  p.style.padding = '24px'
+  p.textContent = 'Не найден элемент #root в index.html.'
+  document.body.appendChild(p)
 } else {
   createRoot(rootEl).render(
     <StrictMode>

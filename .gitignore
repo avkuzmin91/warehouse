@@ -3,6 +3,7 @@
 .env.dev
 .env.test
 .env.prod
+.env.deploy.staging
 backend/.env
 
 # Дубликат у корня репозитория (в compose используется nginx/nginx.conf)

@@ -23,7 +23,7 @@ def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
 
 
 def ensure_admin_account(user: Mapping[str, Any]) -> None:
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "manager", "warehouse_manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -35,19 +35,4 @@ def ensure_manager_staff(user: Mapping[str, Any]) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
-        )
-
-
-def ensure_client_portal_account(user: Mapping[str, Any]) -> None:
-    """Роль client и назначенный client_id; иначе 403 (в т.ч. сообщение об активации)."""
-    if user["role"] != "client":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=FORBIDDEN_DETAIL,
-        )
-    cid = user_client_id_opt(user) or ""
-    if not cid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Обратитесь к администратору для активации доступа",
         )
