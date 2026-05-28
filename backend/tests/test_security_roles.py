@@ -12,19 +12,32 @@ from security import (
 )
 
 
-def test_ensure_admin_rejects_non_admin():
+def test_ensure_admin_rejects_plain_user():
     with pytest.raises(HTTPException) as ctx:
         ensure_admin_account(
             {
                 "id": "1",
                 "email": "u@x",
-                "role": "manager",
+                "role": "user",
                 "created_at": "",
                 "client_id": None,
             }
         )
     assert ctx.value.status_code == 403
     assert ctx.value.detail == FORBIDDEN_DETAIL
+
+
+@pytest.mark.parametrize("role", ["admin", "manager"])
+def test_ensure_admin_accepts_admin_and_manager(role: str):
+    ensure_admin_account(
+        {
+            "id": "1",
+            "email": "u@x",
+            "role": role,
+            "created_at": "",
+            "client_id": None,
+        }
+    )
 
 
 def test_ensure_manager_rejects_plain_user():

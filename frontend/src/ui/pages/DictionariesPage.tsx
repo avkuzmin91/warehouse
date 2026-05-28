@@ -37,26 +37,19 @@ export function DictionariesPage() {
   const [sheet, setSheet] = useState<SheetState>(null)
   const [counts, setCounts] = useState<Partial<Record<DictionaryTypeId, number>>>({})
   const [refreshKey, setRefreshKey] = useState(0)
-  const [lastSimpleType, setLastSimpleType] = useState<SimpleDictionaryTypeId>(
-    isSimpleDictionaryType(active) ? active : 'sizes',
-  )
   const [visitedPanels, setVisitedPanels] = useState({
     products: active === 'products',
     clients: active === 'clients',
-    simple: isSimpleDictionaryType(active),
+    simple: true,
   })
 
   const dictDef = DICTIONARY_TYPES.find((d) => d.id === active)
 
   useEffect(() => {
-    if (isSimpleDictionaryType(active)) {
-      setLastSimpleType(active)
-    }
-
     setVisitedPanels((prev) => ({
       products: prev.products || active === 'products',
       clients: prev.clients || active === 'clients',
-      simple: prev.simple || isSimpleDictionaryType(active),
+      simple: true,
     }))
   }, [active])
 
@@ -154,15 +147,19 @@ export function DictionariesPage() {
           )}
 
           {visitedPanels.simple && (
-            <div style={{ display: isSimpleDictionaryType(active) ? 'block' : 'none' }}>
-              <SimpleDict
-                typeId={lastSimpleType}
-                refreshKey={refreshKey}
-                title={DICTIONARY_TYPES.find((d) => d.id === lastSimpleType)?.sheetKind ?? 'Значение'}
-                onEdit={openSimpleEdit}
-                onTotalLoaded={handleTotalLoaded(lastSimpleType)}
-              />
-            </div>
+            (DICTIONARY_TYPES
+              .filter((d): d is typeof d & { id: SimpleDictionaryTypeId } => isSimpleDictionaryType(d.id))
+              .map((d) => d.id) as SimpleDictionaryTypeId[]).map((typeId) => (
+              <div key={typeId} style={{ display: active === typeId ? 'block' : 'none' }}>
+                <SimpleDict
+                  typeId={typeId}
+                  refreshKey={refreshKey}
+                  title={DICTIONARY_TYPES.find((d) => d.id === typeId)?.sheetKind ?? 'Значение'}
+                  onEdit={openSimpleEdit}
+                  onTotalLoaded={handleTotalLoaded(typeId)}
+                />
+              </div>
+            ))
           )}
 
           {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && (

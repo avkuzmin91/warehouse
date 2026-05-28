@@ -31,6 +31,7 @@ function formatDate(iso: string | null | undefined): string {
 export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }: SimpleDictProps) {
   const [items, setItems] = useState<AnyDictItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadedOnce, setLoadedOnce] = useState(false)
   const [search, setSearch] = useState('')
 
   const load = useCallback(async (q: string) => {
@@ -73,6 +74,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
         setItems([])
         onTotalLoaded(0)
       }
+      setLoadedOnce(true)
     } catch {
       setItems([])
     } finally {
@@ -94,6 +96,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
       <div className="card-head">
         <div className="card-head-title">{title}</div>
         <div className="right row gap-8">
+          {loading && loadedOnce && <span className="text-xs subtle">Обновление...</span>}
           <div className="topbar-search" style={{ minWidth: 220, height: 26 }}>
             <Icon name="search" size={12} />
             <input
@@ -120,7 +123,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
           </tr>
         </thead>
         <tbody>
-          {loading ? (
+          {loading && !loadedOnce ? (
             <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24 }}>
               <span className="text-sm muted">Загрузка…</span>
             </td></tr>

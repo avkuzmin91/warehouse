@@ -53,8 +53,7 @@ interface SidebarProps {
 export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const navigate = useNavigate()
   const isClient = user?.role === 'client'
-  const isAdmin = user?.role === 'admin'
-  const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager'
+  const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
   const initials = getInitials(displayName)
@@ -125,10 +124,10 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
           {OPS_NAV.map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}
-          {isManagerOrAdmin && (
+          {hasAdminAccess && (
             <>
               {!collapsed && <div className="sidebar-section">Управление</div>}
-              {ADMIN_NAV.filter((item) => isAdmin || item.to !== '/analytics').map((item) => (
+              {ADMIN_NAV.map((item) => (
                 <NavItem key={item.to} {...item} collapsed={collapsed} />
               ))}
             </>

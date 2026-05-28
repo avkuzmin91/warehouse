@@ -43,7 +43,6 @@ def _clear_dependency_overrides():
     [
         ("client", "client-uuid-1"),
         ("user", None),
-        ("manager", None),
         ("warehouse_manager", None),
     ],
 )
@@ -54,7 +53,7 @@ def test_get_users_forbidden_non_admin(role: str, client_id: str | None):
     assert r.json()["detail"] == FORBIDDEN_DETAIL
 
 
-@pytest.mark.parametrize("role", ["client", "user", "manager", "warehouse_manager"])
+@pytest.mark.parametrize("role", ["client", "user", "warehouse_manager"])
 def test_get_clients_forbidden_non_admin(role: str):
     app.dependency_overrides[get_current_user] = _user_row(
         role,
