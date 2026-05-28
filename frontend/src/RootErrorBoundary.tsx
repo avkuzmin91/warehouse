@@ -4,16 +4,47 @@ type Props = { children: ReactNode }
 
 type State = { error: Error | null }
 
+const CHUNK_RELOAD_KEY = 'wms:chunk-reload-attempted'
+
+function isDynamicImportError(error: Error): boolean {
+  const message = String(error?.message ?? '')
+  const name = String(error?.name ?? '')
+  return (
+    name === 'ChunkLoadError' ||
+    message.includes('Failed to fetch dynamically imported module') ||
+    message.includes('Importing a module script failed') ||
+    message.includes('error loading dynamically imported module') ||
+    message.includes('Unable to preload CSS')
+  )
+}
+
 /** Ловит необработанные ошибки рендера, чтобы не оставлять пустой #root. */
 export class RootErrorBoundary extends Component<Props, State> {
   state: State = { error: null }
+  private clearReloadMarkerTimer: number | undefined
 
   static getDerivedStateFromError(error: Error): State {
     return { error }
   }
 
+  componentDidMount() {
+    this.clearReloadMarkerTimer = window.setTimeout(() => {
+      sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+    }, 10000)
+  }
+
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(error, info.componentStack)
+    if (isDynamicImportError(error) && sessionStorage.getItem(CHUNK_RELOAD_KEY) !== '1') {
+      sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+      window.location.reload()
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.clearReloadMarkerTimer !== undefined) {
+      window.clearTimeout(this.clearReloadMarkerTimer)
+    }
   }
 
   render() {

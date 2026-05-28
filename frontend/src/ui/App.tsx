@@ -1,14 +1,11 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthTabSync } from '../auth/AuthTabSync'
 import { authRoutes } from './routes/auth'
 import { inventoryRoutes } from './routes/inventory'
 import { cabinetRoutes } from './routes/cabinet'
 import { adminRoutes } from './routes/admin'
-
-const AppLayout = lazy(() =>
-  import('./layouts/AppLayout').then((m) => ({ default: m.AppLayout })),
-)
+import { AppLayout } from './layouts/AppLayout'
 
 function LoadingFallback() {
   return (
