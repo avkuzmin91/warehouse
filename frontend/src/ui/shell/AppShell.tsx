@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, Suspense } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
@@ -31,7 +31,9 @@ export function AppShell() {
       <main className="main">
         <Topbar onCmd={openCmd} onToggleSidebar={toggleSidebar} sidebarCollapsed={sidebarCollapsed} />
         <div className="content">
-          <Outlet />
+          <Suspense>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
       <CommandPalette open={cmdOpen} onClose={closeCmd} />

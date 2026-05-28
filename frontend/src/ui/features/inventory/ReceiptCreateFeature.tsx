@@ -18,12 +18,14 @@ import type { DictionaryItem, InventoryProductLookup } from '../../../api/domain
 import { Combobox } from '../../data/Combobox'
 import { FormPage } from '../../layouts/FormPage'
 import { Card, CardHead, CardBody } from '../../primitives/Card'
+import { Alert } from '../../primitives/Alert'
 import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { Select } from '../../primitives/Select'
 import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
+import { useApi } from '../../../hooks/useApi'
 import { ReceiptStepper } from './ReceiptStepper'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -35,9 +37,6 @@ function genId() {
 export function ReceiptCreateFeature() {
   const navigate = useNavigate()
 
-  const [clients, setClients] = useState<DictionaryItem[]>([])
-  const [suppliers, setSuppliers] = useState<DictionaryItem[]>([])
-  const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
@@ -50,11 +49,14 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  useEffect(() => {
-    getInventoryClients().then((res) => setClients(res.filter((c) => c.is_active && !c.is_deleted)))
-    getInventorySuppliers().then((res) => setSuppliers(res.filter((s) => s.is_active && !s.is_deleted)))
-    getInventoryUnloadingZones().then((res) => setUnloadingZones(res.filter((z) => z.is_active && !z.is_deleted)))
-  }, [])
+  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
+  const clients: DictionaryItem[] = (clientsData ?? []).filter((c) => c.is_active && !c.is_deleted)
+
+  const { data: suppliersData } = useApi((signal) => getInventorySuppliers(signal), [])
+  const suppliers: DictionaryItem[] = (suppliersData ?? []).filter((s) => s.is_active && !s.is_deleted)
+
+  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
+  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
@@ -137,14 +139,7 @@ export function ReceiptCreateFeature() {
       <ReceiptStepper status="draft" style={{ marginTop: -10 }} />
 
       {error && (
-        <div style={{
-          padding: '10px 14px', marginBottom: 16,
-          background: 'color-mix(in oklab, var(--c-danger) 10%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--c-danger) 30%, transparent)',
-          borderRadius: 'var(--r-md)', color: 'var(--c-danger)', fontSize: 13,
-        }}>
-          {error}
-        </div>
+        <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>

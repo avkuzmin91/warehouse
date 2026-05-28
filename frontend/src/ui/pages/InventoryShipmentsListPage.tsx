@@ -22,6 +22,8 @@ import type { BadgeTone } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
+import { fmtDateShort as fmtDate } from '../../utils/format'
+import { useApi } from '../../hooks/useApi'
 
 const PAGE_SIZE = 25
 
@@ -46,11 +48,6 @@ const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] 
   { status: 'shipped', label: 'Завершён',  tone: 'success' },
 ]
 
-function fmtDate(s: string | null) {
-  if (!s) return '—'
-  return new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
-}
-
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
   draft:   'В план',
   packing: 'Начать сборку',
@@ -71,25 +68,24 @@ export function InventoryShipmentsListPage() {
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | ''>('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [clients, setClients] = useState<DictionaryItem[]>([])
   const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [summary, setSummary] = useState<ShipmentsSummary>({ all: 0, active: 0, done: 0, packing: 0, ready: 0, overdue: 0 })
   const [kanbanItems, setKanbanItems] = useState<ShipmentListItem[]>([])
   const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
-  useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
+  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
+  const clients: DictionaryItem[] = clientsData ?? []
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    getShipmentsSummary({
+  const { data: summaryData } = useApi(
+    (signal) => getShipmentsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }, ctrl.signal).then(setSummary).catch(() => {})
-    return () => ctrl.abort()
-  }, [clientId, search, dateFrom, dateTo, locationKey, reloadTick])
+    }, signal),
+    [clientId, search, dateFrom, dateTo, locationKey, reloadTick],
+  )
+  const summary: ShipmentsSummary = summaryData ?? { all: 0, active: 0, done: 0, packing: 0, ready: 0, overdue: 0 }
 
   useEffect(() => {
     if (view !== 'table') return

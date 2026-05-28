@@ -9,6 +9,7 @@ import {
 } from '../../api/inventoryLookupsApi'
 import type { DictionaryItem, InventoryProductTypeLookup } from '../../api/domainTypes'
 import { FormPage } from '../layouts/FormPage'
+import { Alert } from '../primitives/Alert'
 import { Field, Input } from '../primitives/Input'
 import { Toggle } from '../primitives/Checkbox'
 import { Combobox } from '../data/Combobox'
@@ -208,9 +209,7 @@ export function ProductCreatePage() {
     >
       <form id="product-create-form" onSubmit={handleSubmit} noValidate>
         {lookupError && (
-          <div style={{ marginBottom: 16, padding: '10px 14px', background: 'color-mix(in oklab, var(--c-warning) 10%, transparent)', border: '1px solid color-mix(in oklab, var(--c-warning) 30%, transparent)', borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 13 }}>
-            {lookupError}
-          </div>
+          <Alert tone="warning" icon={false} style={{ marginBottom: 16 }}>{lookupError}</Alert>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
 
@@ -426,9 +425,7 @@ export function ProductCreatePage() {
         </div>
 
         {submitError && (
-          <div style={{ marginTop: 16, padding: '10px 14px', background: 'color-mix(in oklab, var(--c-danger) 10%, transparent)', border: '1px solid color-mix(in oklab, var(--c-danger) 30%, transparent)', borderRadius: 'var(--r-md)', color: 'var(--c-danger)', fontSize: 13 }}>
-            {submitError}
-          </div>
+          <Alert tone="danger" icon={false} style={{ marginTop: 16 }}>{submitError}</Alert>
         )}
       </form>
     </FormPage>

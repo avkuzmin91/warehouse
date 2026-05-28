@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
-import { getBalances } from '../../api/balancesApi'
 import type { BalanceItem } from '../../api/balancesApi'
 import {
   getInventoryCarriers,
@@ -15,21 +14,16 @@ import type { ComboboxOption } from '../data/Combobox'
 import { Icon } from '../primitives/Icon'
 import { Field } from '../primitives/Input'
 import { DatePicker } from '../primitives/DatePicker'
+import { Alert } from '../primitives/Alert'
 import { EmptyState } from '../primitives/EmptyState'
 import { ShipmentStepper } from '../features/inventory/ShipmentStepper'
+import { BalancePicker } from '../features/inventory/shared/BalancePicker'
+import { NumberStep } from '../features/inventory/shared/NumberStep'
+import { fmtYmdAsDmy } from '../../utils/format'
+import { balanceKey } from '../../utils/balanceKey'
+import { useApi } from '../../hooks/useApi'
 
 type DraftLine = ShipmentLineIn & { _key: string; available: number }
-
-function formatYmdAsDmy(value: string | null): string {
-  if (!value) return '—'
-  const [year, month, day] = value.split('-')
-  if (!year || !month || !day) return value
-  return `${day}-${month}-${year}`
-}
-
-function balanceKey(b: BalanceItem) {
-  return `${b.product_id}__${b.color_id ?? ''}__${b.size_id ?? ''}`
-}
 
 export function InventoryShipmentCreatePage() {
   const navigate = useNavigate()
@@ -50,15 +44,12 @@ export function InventoryShipmentCreatePage() {
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const [clients, setClients] = useState<DictionaryItem[]>([])
-  const [destinations, setDestinations] = useState<DictionaryItem[]>([])
-  const [carriers, setCarriers] = useState<DictionaryItem[]>([])
-
-  useEffect(() => {
-    getInventoryClients().then(setClients).catch(() => {})
-    getInventoryWarehouses().then(setDestinations).catch(() => {})
-    getInventoryCarriers().then(setCarriers).catch(() => {})
-  }, [])
+  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
+  const clients: DictionaryItem[] = clientsData ?? []
+  const { data: destinationsData } = useApi((signal) => getInventoryWarehouses(signal), [])
+  const destinations: DictionaryItem[] = destinationsData ?? []
+  const { data: carriersData } = useApi((signal) => getInventoryCarriers(signal), [])
+  const carriers: DictionaryItem[] = carriersData ?? []
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const destinationOptions: ComboboxOption[] = destinations.map((d) => ({ value: d.id, label: d.name }))
@@ -190,15 +181,9 @@ export function InventoryShipmentCreatePage() {
       <ShipmentStepper status="draft" style={{ marginTop: -10 }} />
 
       {hasOverflow && (
-        <div style={{
-          padding: '10px 14px', marginBottom: 14,
-          background: 'var(--c-warning-bg)', color: 'var(--c-warning)',
-          border: '1px solid #ead1a3', borderRadius: 'var(--r-md)',
-          display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
-        }}>
-          <Icon name="alert" size={15} />
+        <Alert tone="warning" style={{ marginBottom: 14 }}>
           <span style={{ fontWeight: 500 }}>Запрошено больше, чем доступно по одной или нескольким позициям.</span>
-        </div>
+        </Alert>
       )}
 
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -356,7 +341,7 @@ export function InventoryShipmentCreatePage() {
               <span style={{ color: 'var(--c-text-muted)' }}>Кол-во</span>
               <span className="mono" style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Дата</span>
-              <span className="mono" style={{ textAlign: 'right' }}>{formatYmdAsDmy(shipDate)}</span>
+              <span className="mono" style={{ textAlign: 'right' }}>{fmtYmdAsDmy(shipDate)}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Перевозчик</span>
               <span style={{ textAlign: 'right', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{carrier || '—'}</span>
               {logisticsCost && (
@@ -448,220 +433,3 @@ function CargoTypeToggle({ value, onChange }: { value: ShipmentCargoType; onChan
   )
 }
 
-function NumberStep({ value, onChange, min = 1 }: { value: number; onChange: (v: number) => void; min?: number }) {
-  return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 26, width: 110, background: 'var(--c-bg-elev)' }}>
-      <button
-        className="btn ghost icon sm"
-        style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-        onClick={() => onChange(value - 1)}
-        disabled={value <= min}
-      >
-        <Icon name="minus" size={10} />
-      </button>
-      <input
-        inputMode="numeric"
-        value={value}
-        onChange={(e) => {
-          const next = parseInt(e.target.value.replace(/\D/g, '')) || 0
-          onChange(next)
-        }}
-        style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
-      />
-      <button
-        className="btn ghost icon sm"
-        style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-        onClick={() => onChange(value + 1)}
-      >
-        <Icon name="plus" size={10} />
-      </button>
-    </div>
-  )
-}
-
-function BalancePicker({ clientId, cargoType, selectedKeys, onAdd, onClose }: {
-  clientId: string | null
-  cargoType: ShipmentCargoType
-  selectedKeys: string[]
-  onAdd: (b: BalanceItem, qty: number) => void
-  onClose: () => void
-}) {
-  const [search, setSearch] = useState('')
-  const [items, setItems] = useState<BalanceItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
-
-  useEffect(() => {
-    const ctrl = new AbortController()
-    setLoading(true)
-    getBalances({
-      limit: 200,
-      search: search || undefined,
-      only_positive: true,
-      client_id: clientId || undefined,
-      has_defect: cargoType === 'defect' ? true : undefined,
-    }, ctrl.signal)
-      .then((res) => {
-        if (ctrl.signal.aborted) return
-        setItems(res.items.filter((b) => cargoType === 'defect' ? b.defect > 0 : b.good > 0))
-      })
-      .catch(() => { /* aborted or error */ })
-      .finally(() => {
-        if (ctrl.signal.aborted) return
-        setLoading(false)
-      })
-    return () => ctrl.abort()
-  }, [search, clientId, cargoType])
-
-  const available = pending
-    ? (cargoType === 'defect' ? pending.item.defect : pending.item.good)
-    : 0
-
-  return (
-    <>
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 400 }} onClick={onClose} />
-      <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 520,
-        background: 'var(--c-bg-elev)', boxShadow: '-4px 0 24px rgba(0,0,0,.18)',
-        zIndex: 401, display: 'flex', flexDirection: 'column',
-      }}>
-        <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--c-border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 15 }}>Подобрать товар</div>
-              <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-                {cargoType === 'defect' ? 'Только брак' : 'Только годный товар'}
-                {clientId ? ' · по выбранному клиенту' : ''}
-              </div>
-            </div>
-            <button className="btn ghost icon" onClick={onClose}><Icon name="x" size={16} /></button>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <Icon name="search" size={14} style={{ position: 'absolute', left: 10, top: 8, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
-            <input
-              className="input"
-              style={{ paddingLeft: 32 }}
-              placeholder="SKU, название, цвет, размер…"
-              value={search}
-              autoFocus
-              onChange={(e) => { setSearch(e.target.value); setPending(null) }}
-            />
-          </div>
-        </div>
-
-        {pending ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, gap: 20 }}>
-            <div style={{
-              padding: '14px 16px', borderRadius: 8,
-              border: '1px solid var(--c-accent)', background: 'var(--c-accent-bg)',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{pending.item.product_name}</div>
-              <div className="t-sub mono" style={{ marginTop: 2 }}>
-                {[pending.item.product_sku, pending.item.color_name, pending.item.size_name].filter(Boolean).join(' · ')}
-              </div>
-              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
-                Доступно:{' '}
-                <span className="mono" style={{ fontWeight: 600, color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)' }}>
-                  {available}
-                </span> шт
-              </div>
-            </div>
-
-            <div>
-              <label className="field-label"><span>К отгрузке</span></label>
-              <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${pending.qty > available ? 'var(--c-warning)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 30, width: 160, background: 'var(--c-bg-elev)' }}>
-                <button
-                  className="btn ghost icon sm"
-                  style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                  onClick={() => setPending((p) => p && { ...p, qty: Math.max(0, p.qty - 1) })}
-                >
-                  <Icon name="minus" size={11} />
-                </button>
-                <input
-                  inputMode="numeric"
-                  value={pending.qty}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value.replace(/\D/g, '')) || 0
-                    setPending((p) => p && { ...p, qty: v })
-                  }}
-                  style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: pending.qty > available ? 'var(--c-warning)' : undefined }}
-                />
-                <button
-                  className="btn ghost icon sm"
-                  style={{ height: 28, width: 26, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                  onClick={() => setPending((p) => p && { ...p, qty: p.qty + 1 })}
-                >
-                  <Icon name="plus" size={11} />
-                </button>
-              </div>
-              {pending.qty > available && (
-                <div style={{ fontSize: 12, color: 'var(--c-warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="alert" size={12} />Превышает доступный остаток
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {loading ? (
-              <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: 12 }}>Загрузка…</div>
-            ) : items.length === 0 ? (
-              <EmptyState title="Ничего не найдено" sub="Нет остатков по заданному запросу" />
-            ) : (
-              items.map((b) => {
-                const key = balanceKey(b)
-                const added = selectedKeys.includes(key)
-                return (
-                  <div
-                    key={key}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
-                      borderRadius: 8, border: `1px solid ${added ? 'var(--c-accent)' : 'var(--c-border)'}`,
-                      cursor: added ? 'default' : 'pointer',
-                      background: added ? 'var(--c-accent-bg)' : undefined,
-                      opacity: added ? 0.75 : 1,
-                    }}
-                    onClick={() => { if (!added) setPending({ item: b, qty: 0 }) }}
-                  >
-                    <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{b.product_name}</div>
-                      <div className="t-sub mono">{[b.product_sku, b.color_name, b.size_name].filter(Boolean).join(' · ')}</div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div className="mono" style={{ color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
-                        {cargoType === 'defect' ? b.defect : b.good}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
-                    </div>
-                    <Icon name={added ? 'check' : 'plus'} size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
-                  </div>
-                )
-              })
-            )}
-          </div>
-        )}
-
-        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--c-border)', display: 'flex', gap: 8 }}>
-          {pending ? (
-            <>
-              <button className="btn" style={{ flex: 1 }} onClick={() => setPending(null)}>Назад</button>
-              <button
-                className="btn primary"
-                style={{ flex: 1 }}
-                disabled={pending.qty <= 0}
-                onClick={() => onAdd(pending.item, pending.qty)}
-              >
-                <Icon name="plus" size={13} />Добавить
-              </button>
-            </>
-          ) : (
-            <button className="btn" style={{ width: '100%' }} onClick={onClose}>Готово</button>
-          )}
-        </div>
-      </div>
-    </>
-  )
-}

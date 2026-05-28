@@ -21,6 +21,8 @@ import type { BadgeTone } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
+import { fmtDate } from '../../utils/format'
+import { useApi } from '../../hooks/useApi'
 
 const PAGE_SIZE = 25
 
@@ -46,11 +48,6 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
   { status: 'done',      label: 'Завершён',      tone: 'success' },
 ]
 
-function fmtDate(s: string | null) {
-  if (!s) return '—'
-  return new Date(s).toLocaleDateString('ru-RU')
-}
-
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
   const { key: locationKey } = useLocation()
@@ -67,23 +64,22 @@ export function InventoryReceiptsListPage() {
   const [dateTo, setDateTo] = useState('')
   const [statusFilter, setStatusFilter] = useState<ReceiptStatus | ''>('')
   const [items, setItems] = useState<ReceiptListItem[]>([])
-  const [clients, setClients] = useState<DictionaryItem[]>([])
   const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [summary, setSummary] = useState<ReceiptsSummary>({ all: 0, active: 0, done: 0, drafts: 0, overdue: 0 })
   const [kanbanItems, setKanbanItems] = useState<ReceiptListItem[]>([])
 
-  useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
+  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
+  const clients: DictionaryItem[] = clientsData ?? []
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    getReceiptsSummary({
+  const { data: summaryData } = useApi(
+    (signal) => getReceiptsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-    }, ctrl.signal).then(setSummary).catch(() => {})
-    return () => ctrl.abort()
-  }, [clientId, search, dateFrom, dateTo, locationKey])
+    }, signal),
+    [clientId, search, dateFrom, dateTo, locationKey],
+  )
+  const summary: ReceiptsSummary = summaryData ?? { all: 0, active: 0, done: 0, drafts: 0, overdue: 0 }
 
   useEffect(() => {
     if (view !== 'table') return
