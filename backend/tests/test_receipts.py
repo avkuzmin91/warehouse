@@ -132,3 +132,40 @@ def test_complete_receipt_line_sets_qc_status_done(admin_client, client_id):
     data = updated.json()
     assert data["lines"][0]["qc_status"] == "done"
     assert data["state"]["all_qc_done"] is True
+
+
+def test_record_receipt_op_sets_line_qc_status_in_progress(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [{
+        "product_id": str(uuid.uuid4()),
+        "product_name": "Test Product",
+        "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
+        "color_id": None,
+        "color_name": None,
+        "size_id": None,
+        "size_name": None,
+        "planned_qty": 3,
+    }]
+    response = admin_client.post("/receipts", json=payload)
+    assert response.status_code == 200, response.text
+    doc_id = response.json()["message"]
+
+    arrive = admin_client.post(f"/receipts/{doc_id}/arrive")
+    assert arrive.status_code == 200, arrive.text
+
+    detail = admin_client.get(f"/receipts/{doc_id}")
+    assert detail.status_code == 200, detail.text
+    line_id = detail.json()["lines"][0]["id"]
+
+    op = admin_client.post(
+        f"/receipts/{doc_id}/ops",
+        json={"line_id": line_id, "op_type": "receiving", "qty": 1},
+    )
+    assert op.status_code == 200, op.text
+
+    updated = admin_client.get(f"/receipts/{doc_id}")
+    assert updated.status_code == 200, updated.text
+    data = updated.json()
+    assert data["lines"][0]["accepted"] == 1
+    assert data["lines"][0]["qc_status"] == "in_progress"
+    assert data["state"]["lines"][0]["qc_status"] == "in_progress"

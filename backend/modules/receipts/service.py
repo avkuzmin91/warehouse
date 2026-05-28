@@ -81,17 +81,29 @@ def compute_state(connection, doc_id: str) -> dict:
             if ot == RECEIPT_OP_RECEIVING:
                 line["accepted"] += qty
                 line["ops_count"] += 1
+                if line["qc_status"] != "done":
+                    line["qc_status"] = "in_progress"
             elif ot == RECEIPT_OP_DEFECT_FIX:
                 line["defect"] += qty
                 line["ops_count"] += 1
+                if line["qc_status"] != "done":
+                    line["qc_status"] = "in_progress"
             elif ot == RECEIPT_OP_RECEIVING_CORRECTION:
                 line["accepted"] = qty
+                if line["qc_status"] != "done":
+                    line["qc_status"] = "in_progress"
             elif ot == RECEIPT_OP_DEFECT_CORRECTION:
                 line["defect"] = qty
+                if line["qc_status"] != "done":
+                    line["qc_status"] = "in_progress"
             elif ot == RECEIPT_OP_LINE_QC_COMPLETE:
                 line["qc_status"] = "done"
             elif ot == RECEIPT_OP_LINE_QC_REOPEN:
-                line["qc_status"] = "pending"
+                line["qc_status"] = (
+                    "in_progress"
+                    if line["accepted"] > 0 or line["defect"] > 0 or line["ops_count"] > 0
+                    else "pending"
+                )
 
     line_list = list(lines.values())
     sku_count = len(line_list)

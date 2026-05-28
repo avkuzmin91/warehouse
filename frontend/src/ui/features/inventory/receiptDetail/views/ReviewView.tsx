@@ -302,7 +302,8 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 {lines.map((line) => {
                   const draft = getDraft(line)
                   const isDone = line.qc_status === 'done'
-                  const isInProgress = line.qc_status === 'in_progress'
+                  const hasSavedProgress = line.accepted > 0 || line.defect > 0 || line.ops_count > 0
+                  const isInProgress = !isDone && (line.qc_status === 'in_progress' || hasSavedProgress)
                   const isCompleting = completing[line.id] ?? false
                   const isSaving = saving[line.id] ?? false
                   const isReopening = reopening[line.id] ?? false
