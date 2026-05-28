@@ -769,6 +769,16 @@ a { color: inherit; text-decoration: none; }
 .auth-input:hover:not(:focus) { background: transparent; }
 .auth-input:focus { background: transparent; }
 .auth-input.error { background: transparent; }
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:hover,
+.auth-input:-webkit-autofill:focus,
+.auth-input:-webkit-autofill:active {
+  -webkit-text-fill-color: #0f0e1a;
+  caret-color: #0f0e1a;
+  box-shadow: 0 0 0 1000px #ffffff inset;
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset;
+  transition: background-color 9999s ease-out;
+}
 
 .auth-pw-toggle {
   position: absolute;
