@@ -140,7 +140,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:     "Черновик",
     SHIPMENT_STATUS_PACKING:   "На сборке",
     SHIPMENT_STATUS_READY:     "Готово",
-    SHIPMENT_STATUS_SHIPPED:   "Отправлено",
+    SHIPMENT_STATUS_SHIPPED:   "Завершён",
     SHIPMENT_STATUS_CANCELLED: "Аннулирован",
 }
 

@@ -6,7 +6,7 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создание',
   packing:   'В плане',
   ready:     'На сборке',
-  shipped:   'Завершение',
+  shipped:   'Завершён',
   cancelled: 'Аннулирован',
 }
 
