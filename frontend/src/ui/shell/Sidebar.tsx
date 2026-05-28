@@ -38,7 +38,7 @@ const CLIENT_NAV: NavItem[] = [
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
   manager: 'Менеджер',
-  user: 'Оператор',
+  user: 'Ожидает доступа',
   warehouse_manager: 'Кладовщик',
   client: 'Клиент',
 }
@@ -53,6 +53,7 @@ interface SidebarProps {
 export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const navigate = useNavigate()
   const isClient = user?.role === 'client'
+  const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
@@ -121,7 +122,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
       ) : (
         <>
           {!collapsed && <div className="sidebar-section">Склад</div>}
-          {OPS_NAV.map((item) => (
+          {hasStaffAccess && OPS_NAV.map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}
           {hasAdminAccess && (

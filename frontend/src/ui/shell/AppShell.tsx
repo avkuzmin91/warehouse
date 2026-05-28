@@ -4,9 +4,10 @@ import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
 import { CommandPalette } from './CommandPalette'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { PendingAccessPage } from '../pages/PendingAccessPage'
 
 export function AppShell() {
-  const { user } = useCurrentUser()
+  const { user, loading } = useCurrentUser()
   const [cmdOpen, setCmdOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -24,6 +25,18 @@ export function AppShell() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh', color: 'var(--c-text-muted)', fontSize: 13 }}>
+        Проверка доступа...
+      </div>
+    )
+  }
+
+  if (user?.role === 'user') {
+    return <PendingAccessPage email={user.email} />
+  }
 
   return (
     <div className={`app-root${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>

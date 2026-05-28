@@ -14,7 +14,7 @@ import { SkeletonRows } from '../primitives/Skeleton'
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
   manager: 'Менеджер',
-  user: 'Оператор',
+  user: 'Ожидает доступа',
   client: 'Клиент',
   warehouse_manager: 'Кладовщик',
 }
@@ -35,7 +35,7 @@ const ROLE_FILTERS = [
   { role: 'admin', label: 'Администраторы', icon: 'shield' },
   { role: 'manager', label: 'Менеджеры', icon: 'star' },
   { role: 'warehouse_manager', label: 'Кладовщики', icon: 'archive' },
-  { role: 'user', label: 'Операторы', icon: 'user' },
+  { role: 'user', label: 'Ожидают доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const
 
@@ -441,7 +441,7 @@ export function UsersPage() {
               {loadError}
             </Alert>
           )}
-          <div className="t-wrap">
+          <div className="t-wrap" style={{ overflow: 'visible' }}>
             <table className="t">
               <thead>
                 <tr>
