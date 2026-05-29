@@ -176,14 +176,14 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     <div className="page">
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+          <div className="detail-status-row">
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
             <Badge tone={receiptStatusTone(doc.status) as BadgeTone} dot>
               {RECEIPT_STATUS_LABELS[doc.status]}
             </Badge>
-            <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+            <span className="detail-meta">
               {doc.doc_number} · {doc.client_name ?? '—'}
             </span>
           </div>
@@ -191,14 +191,14 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
             <span className="mono" style={{ fontWeight: 500 }}>{doc.doc_number}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="row gap-8">
           {isReadonly && (
             <button className="btn ghost" onClick={onReopen} disabled={advancing}>
               <Icon name="arrowLeft" size={14} />Вернуть на проверку
             </button>
           )}
           {!isReadonly && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <div className="detail-actions">
               <button
                 className="btn primary"
                 onClick={() => { if (!allDone) { setShowBlockHint(true) } else { onAdvance() } }}
@@ -207,7 +207,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 <Icon name="check" size={14} />Завершить проверку
               </button>
               {showBlockHint && !allDone && (
-                <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+                <div className="block-reasons">
                   · Осталось проверить строк: {lines.length - doneLinesCount}
                 </div>
               )}
@@ -296,12 +296,12 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
         )
       })()}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="split-380">
+        <div className="col gap-16">
           {/* Таблица строк */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="boxes" size={15} className="ic-accent" />
               <span className="card-head-title">Товары</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               {!isReadonly && allDone && (
@@ -583,13 +583,13 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
         </div>
 
         {/* Правая колонка: Готовность + Журнал */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {[
                 {
                   ok: lines.length > 0,
@@ -602,27 +602,24 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                   error: `Осталось проверить: ${lines.length - doneLinesCount}`,
                 },
               ].map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--c-success-bg)', color: 'var(--c-success)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', border: '1.5px dashed var(--c-text-faint)', flexShrink: 0 }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.ok ? c.label : c.error}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.ok ? c.label : c.error}</span>
                 </div>
               ))}
             </div>
           </Card>
 
         {/* Журнал операций */}
-        <div
-          className="card"
-          style={{ position: 'sticky', top: 0, width: '100%', maxWidth: '100%', boxSizing: 'border-box', maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}
-        >
-          <CardHead style={{ borderBottom: '1px solid var(--c-border)', flexShrink: 0 } as React.CSSProperties}>
-            <Icon name="layers" size={15} style={{ color: 'var(--c-accent)' }} />
+        <div className="card ops-card" style={{ top: 0, maxHeight: 'calc(100vh - 80px)' }}>
+          <CardHead>
+            <Icon name="layers" size={15} className="ic-accent" />
             <span className="card-head-title">Журнал операций</span>
             <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{ops.length}</Badge>
           </CardHead>
@@ -642,21 +639,20 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               onClear={() => setFilterLine(null)}
             />
           </div>
-          <div style={{ flex: '1 1 auto', overflow: 'auto', padding: '4px 0' }}>
+          <div className="ops-card-body">
             {visibleOps.length === 0 ? (
-              <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+              <div className="ops-card-empty">
                 {filterLine || filterType ? 'Под фильтр ничего не попало' : 'Нет операций'}
               </div>
             ) : (
-              <div style={{ position: 'relative' }}>
-                <div style={{ position: 'absolute', left: 22, top: 12, bottom: 12, width: 1, background: 'var(--c-border)' }} />
+              <div className="ops-timeline">
                 {visibleOps.map((op) => (
                   <OpEntry key={op.id} op={op} onFilterLine={(lid) => setFilterLine(lid)} />
                 ))}
               </div>
             )}
           </div>
-          <div style={{ padding: '8px 12px', borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <div className="ops-card-foot">
             <Icon name="shield" size={11} />
             <span>Операции не редактируются. Удаление запрещено.</span>
           </div>

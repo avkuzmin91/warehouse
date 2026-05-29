@@ -165,19 +165,19 @@ export function PlannedView({
     <div className="page">
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+          <div className="detail-status-row">
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
             <Badge tone="info" dot>{RECEIPT_STATUS_LABELS['planned']}</Badge>
-            <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+            <span className="detail-meta">
               {doc.doc_number} · {doc.client_name ?? '—'}
             </span>
           </div>
           <div className="page-title">{doc.doc_number}</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div className="detail-actions">
+          <div className="detail-actions-row">
             <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
               <Icon name="x" size={14} />Аннулировать
             </button>
@@ -195,7 +195,7 @@ export function PlannedView({
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+            <div className="block-reasons">
               {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
             </div>
           )}
@@ -208,16 +208,16 @@ export function PlannedView({
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20, alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="split-360">
+        <div className="col gap-16">
           {/* Основная информация */}
           <Card>
             <CardHead>
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="file" size={15} className="ic-accent" />
               <span className="card-head-title">Основная информация</span>
             </CardHead>
             <CardBody>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="field-label"><span>Клиент</span></label>
                   <input className="input" value={doc.client_name ?? ''} disabled />
@@ -257,10 +257,10 @@ export function PlannedView({
           {/* Строки */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="boxes" size={15} className="ic-accent" />
               <span className="card-head-title">Товары</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
                 <Icon name="plus" size={12} />Добавить строку
               </button>
@@ -309,17 +309,17 @@ export function PlannedView({
                                 clearable
                               />
                             </div>
-                            {pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') && (
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
-                                disabled={savingStorage[l.id]}
-                                onClick={() => void handleSaveLineStorage(l.id, pendingStorage[l.id])}
-                                title="Сохранить"
-                              >
-                                <Icon name="save" size={14} />
-                              </button>
-                            )}
+                            <button
+                              className="btn ghost icon sm"
+                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? 'visible' : 'hidden', pointerEvents: pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? undefined : 'none' }}
+                              disabled={pendingStorage[l.id] === undefined || pendingStorage[l.id] === (l.storage_zone_id ?? '') || savingStorage[l.id]}
+                              onClick={() => { if (pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')) void handleSaveLineStorage(l.id, pendingStorage[l.id]) }}
+                              title="Сохранить"
+                              aria-hidden={pendingStorage[l.id] === undefined || pendingStorage[l.id] === (l.storage_zone_id ?? '')}
+                              tabIndex={pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? 0 : -1}
+                            >
+                              <Icon name="save" size={14} />
+                            </button>
                           </div>
                         </Td>
                         <Td>
@@ -337,12 +337,15 @@ export function PlannedView({
                                 <Icon name="plus" size={10} />
                               </button>
                             </div>
-                            {isDirty && (
-                              <button className="btn ghost icon sm" style={{ color: 'var(--c-accent)', flexShrink: 0 }} disabled={isSaving}
-                                onClick={() => void handleSaveLineQty(l.id, displayQty)} title="Сохранить">
-                                <Icon name="save" size={14} />
-                              </button>
-                            )}
+                            <button className="btn ghost icon sm"
+                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: isDirty ? 'visible' : 'hidden', pointerEvents: isDirty ? undefined : 'none' }}
+                              disabled={!isDirty || isSaving}
+                              onClick={() => { if (isDirty) void handleSaveLineQty(l.id, displayQty) }}
+                              title="Сохранить"
+                              aria-hidden={!isDirty}
+                              tabIndex={isDirty ? 0 : -1}>
+                              <Icon name="save" size={14} />
+                            </button>
                           </div>
                         </Td>
                         <Td>
@@ -355,9 +358,9 @@ export function PlannedView({
                   })}
                 </tbody>
                 <tfoot>
-                  <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={5} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого: {totalSku} SKU</td>
-                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
+                  <tr className="sum">
+                    <td colSpan={5}>Итого: {totalSku} SKU</td>
+                    <td className="num">{totalQty}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -367,81 +370,61 @@ export function PlannedView({
         </div>
 
         {/* Правая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {readyChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--c-success-bg)', color: 'var(--c-success)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', border: '1.5px dashed var(--c-text-faint)', flexShrink: 0 }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.label}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
                 </div>
               ))}
             </div>
           </Card>
           <Card>
             <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="chart" size={15} className="ic-accent" />
               <span className="card-head-title">Итого</span>
             </CardHead>
-            <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span style={{ textAlign: 'right' }} className="mono">{totalSku}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-              <span style={{ textAlign: 'right' }} className="mono">{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>План, шт</span>
-              <span style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }} className="mono">{totalQty}</span>
+            <div className="totals-grid">
+              <span className="key">SKU</span>
+              <span className="val mono">{totalSku}</span>
+              <span className="key">Строк</span>
+              <span className="val mono">{lines.length}</span>
+              <span className="key">План, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
 
           {/* Журнал операций */}
-          <div
-            className="card"
-            style={{
-              position: 'sticky', top: 16, alignSelf: 'flex-start', width: '100%',
-              maxHeight: 'calc(100vh - 200px)',
-              display: 'flex', flexDirection: 'column',
-            }}
-          >
-            <div className="card-head" style={{ borderBottom: '1px solid var(--c-border)', flexShrink: 0 }}>
-              <Icon name="layers" size={15} style={{ color: 'var(--c-accent)' }} />
+          <div className="card ops-card">
+            <div className="card-head">
+              <Icon name="layers" size={15} className="ic-accent" />
               <span className="card-head-title">Журнал операций</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{detail.ops.length}</Badge>
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 3 }}>
-                </span>
             </div>
-            <div style={{ flex: '1 1 auto', overflow: 'auto', padding: '4px 0' }}>
+            <div className="ops-card-body">
               {detail.ops.length === 0 ? (
-                <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
-                  Нет операций
-                </div>
+                <div className="ops-card-empty">Нет операций</div>
               ) : (
-                <div style={{ position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: 22, top: 12, bottom: 12, width: 1, background: 'var(--c-border)' }} />
+                <div className="ops-timeline">
                   {detail.ops.map((op) => (
                     <OpEntry key={op.id} op={op} onFilterLine={() => {}} />
                   ))}
                 </div>
               )}
             </div>
-            <div style={{
-              padding: '8px 12px',
-              borderTop: '1px solid var(--c-border)',
-              background: 'var(--c-bg-sunken)',
-              fontSize: 11,
-              color: 'var(--c-text-subtle)',
-              display: 'flex', alignItems: 'center', gap: 6,
-              flexShrink: 0,
-            }}>
+            <div className="ops-card-foot">
               <Icon name="shield" size={11} />
               <span>Операции не редактируются. Удаление запрещено.</span>
             </div>

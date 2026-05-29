@@ -101,8 +101,8 @@ export function ReceiptCreateFeature() {
 
       backTo="/inventory/receipts"
       actions={
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div className="detail-actions">
+          <div className="detail-actions-row">
             <button className="btn" onClick={() => navigate('/inventory/receipts')} disabled={saving}>
               Отмена
             </button>
@@ -115,7 +115,7 @@ export function ReceiptCreateFeature() {
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+            <div className="block-reasons">
               {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
             </div>
           )}
@@ -128,17 +128,17 @@ export function ReceiptCreateFeature() {
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+      <div className="split-300">
         {/* Левая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           {/* Основная информация */}
           <Card>
             <CardHead>
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="file" size={15} className="ic-accent" />
               <span className="card-head-title">Основная информация</span>
             </CardHead>
             <CardBody>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
@@ -199,10 +199,10 @@ export function ReceiptCreateFeature() {
           {/* Товары */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="boxes" size={15} className="ic-accent" />
               <span className="card-head-title">Товары</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <button
                 className="btn sm primary"
                 onClick={() => setShowAddLine(true)}
@@ -274,13 +274,9 @@ export function ReceiptCreateFeature() {
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
-                      Итого: {totalSku} SKU
-                    </td>
-                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>
-                      {totalQty}
-                    </td>
+                  <tr className="sum">
+                    <td colSpan={4}>Итого: {totalSku} SKU</td>
+                    <td className="num">{totalQty}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -291,33 +287,24 @@ export function ReceiptCreateFeature() {
         </div>
 
         {/* Правая колонка: чеклист + превью операций + итого */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
           {/* Готовность */}
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {readyChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      background: 'var(--c-success-bg)', color: 'var(--c-success)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      flexShrink: 0,
-                    }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      border: '1.5px dashed var(--c-text-faint)',
-                      flexShrink: 0,
-                    }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.label}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
                 </div>
               ))}
             </div>
@@ -326,9 +313,9 @@ export function ReceiptCreateFeature() {
           {/* Предпросмотр операций */}
           <Card>
             <CardHead>
-              <Icon name="layers" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="layers" size={15} className="ic-accent" />
               <span className="card-head-title">Будут зафиксированы</span>
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+              <span className="right text-xs subtle">
                 {1 + lines.length} опер.
               </span>
             </CardHead>
@@ -344,7 +331,7 @@ export function ReceiptCreateFeature() {
                 />
               ))}
               {lines.length > 4 && (
-                <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', padding: '3px 14px 6px 46px' }}>
+                <div className="text-xs subtle" style={{ padding: '3px 14px 6px 46px' }}>
                   и ещё {lines.length - 4} строк…
                 </div>
               )}
@@ -354,16 +341,16 @@ export function ReceiptCreateFeature() {
           {/* Итого */}
           <Card>
             <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="chart" size={15} className="ic-accent" />
               <span className="card-head-title">Итого</span>
             </CardHead>
-            <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span style={{ textAlign: 'right' }} className="mono">{totalSku}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-              <span style={{ textAlign: 'right' }} className="mono">{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>План, шт</span>
-              <span style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }} className="mono">{totalQty}</span>
+            <div className="totals-grid">
+              <span className="key">SKU</span>
+              <span className="val mono">{totalSku}</span>
+              <span className="key">Строк</span>
+              <span className="val mono">{lines.length}</span>
+              <span className="key">План, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
         </div>

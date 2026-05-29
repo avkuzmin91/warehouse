@@ -312,17 +312,17 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                                 <Icon name="plus" size={10} />
                               </button>
                             </div>
-                            {isDirty && (
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
-                                disabled={isSaving}
-                                onClick={() => void handleSaveLineQty(l.id, displayQty)}
-                                title="Сохранить"
-                              >
-                                <Icon name="save" size={14} />
-                              </button>
-                            )}
+                            <button
+                              className="btn ghost icon sm"
+                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: isDirty ? 'visible' : 'hidden', pointerEvents: isDirty ? undefined : 'none' }}
+                              disabled={!isDirty || isSaving}
+                              onClick={() => { if (isDirty) void handleSaveLineQty(l.id, displayQty) }}
+                              title="Сохранить"
+                              aria-hidden={!isDirty}
+                              tabIndex={isDirty ? 0 : -1}
+                            >
+                              <Icon name="save" size={14} />
+                            </button>
                           </div>
                         </Td>
                         <Td>
