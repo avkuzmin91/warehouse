@@ -28,6 +28,27 @@ export function useFilterParam(key: string, def: string): [string, (v: string) =
   return [value, setValue]
 }
 
+export function useFilterParamsActions() {
+  const [, setParams] = useSearchParams()
+
+  function setMany(updates: Record<string, string | null | undefined>) {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        for (const [key, value] of Object.entries(updates)) {
+          if (value == null || value === '') next.delete(key)
+          else next.set(key, value)
+        }
+        next.delete('page')
+        return next
+      },
+      { replace: false },
+    )
+  }
+
+  return { setMany }
+}
+
 /**
  * Читает page из URL. Смена страницы использует replace:true — не засоряет историю.
  */

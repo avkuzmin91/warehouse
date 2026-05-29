@@ -70,6 +70,21 @@ def _line_label(product_sku, color_name, size_name, qty) -> str:
     return f"{sku}{f' ({attrs})' if attrs else ''}{qty_part}"
 
 
+def _validate_receipt_lines_have_storage(connection, doc_id: str) -> None:
+    missing = connection.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM receipt_lines
+        WHERE doc_id = ?
+          AND is_deleted = 0
+          AND NULLIF(TRIM(COALESCE(storage_zone_id, '')), '') IS NULL
+        """,
+        (doc_id,),
+    ).fetchone()
+    if int(missing["cnt"] if missing else 0) > 0:
+        raise HTTPException(status_code=400, detail="Укажите зону хранения для каждой строки поступления")
+
+
 @router.post("/receipts")
 def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
     uid = str(user["id"])
@@ -119,14 +134,16 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
                 """
                 INSERT INTO receipt_lines
                   (id, doc_id, product_id, product_name, product_sku,
-                   color_id, color_name, size_id, size_name, planned_qty, created_at, created_by)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   color_id, color_name, size_id, size_name,
+                   storage_zone_id, storage_zone_name, planned_qty, created_at, created_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     line_id, doc_id,
                     line.product_id, line.product_name, line.product_sku,
                     line.color_id, line.color_name,
                     line.size_id, line.size_name,
+                    line.storage_zone_id, line.storage_zone_name,
                     line.planned_qty, now, uid,
                 ),
             )
@@ -268,6 +285,8 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
             color_name=lr["color_name"],
             size_id=lr["size_id"],
             size_name=lr["size_name"],
+            storage_zone_id=lr["storage_zone_id"],
+            storage_zone_name=lr["storage_zone_name"],
             planned_qty=int(lr["planned_qty"]),
             accepted=state_by_line.get(str(lr["id"]), {}).get("accepted", 0),
             defect=state_by_line.get(str(lr["id"]), {}).get("defect", 0),
@@ -404,11 +423,13 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
             """
             INSERT INTO receipt_lines
               (id, doc_id, product_id, product_name, product_sku,
-               color_id, color_name, size_id, size_name, planned_qty, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               color_id, color_name, size_id, size_name,
+               storage_zone_id, storage_zone_name, planned_qty, created_at, created_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (line_id, doc_id, payload.product_id, payload.product_name, payload.product_sku,
              payload.color_id, payload.color_name, payload.size_id, payload.size_name,
+             payload.storage_zone_id, payload.storage_zone_name,
              payload.planned_qty, now, uid),
         )
         conn.execute(
@@ -423,29 +444,60 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
 @router.patch("/receipts/{doc_id}/lines/{line_id}")
 def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, user=Depends(_get_manager)):
     uid = str(user["id"])
+    provided_fields = getattr(payload, "model_fields_set", None)
+    if provided_fields is None:
+        provided_fields = getattr(payload, "__fields_set__", set())
     with get_connection() as conn:
         doc_row = conn.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
+        status = str(doc_row["status"])
+        if payload.planned_qty is not None and status not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
+        if (("storage_zone_id" in provided_fields) or ("storage_zone_name" in provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_REVIEW):
+            raise HTTPException(status_code=400, detail="Изменить зону хранения можно только в статусе 'В плане' или 'На проверке'")
         line_row = conn.execute(
-            "SELECT id, planned_qty FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, planned_qty, storage_zone_name FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
-        old_qty = line_row["planned_qty"]
         now = _now()
-        conn.execute("UPDATE receipt_lines SET planned_qty = ? WHERE id = ?", (payload.planned_qty, line_id))
-        conn.execute(
-            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_UPDATE, payload.planned_qty,
-             f"План: {old_qty} → {payload.planned_qty} шт.", now, uid),
-        )
-        conn.commit()
+        updates: list[str] = []
+        params: list = []
+        comments: list[str] = []
+        op_qty = payload.planned_qty
+
+        if payload.planned_qty is not None:
+            old_qty = line_row["planned_qty"]
+            updates.append("planned_qty = ?")
+            params.append(payload.planned_qty)
+            if int(old_qty) != payload.planned_qty:
+                comments.append(f"План: {old_qty} → {payload.planned_qty} шт.")
+        if "storage_zone_id" in provided_fields:
+            updates.append("storage_zone_id = ?")
+            params.append((payload.storage_zone_id or "").strip() or None)
+        if "storage_zone_name" in provided_fields:
+            old_zone = str(line_row["storage_zone_name"] or "").strip() or "—"
+            new_zone = (payload.storage_zone_name or "").strip() or None
+            updates.append("storage_zone_name = ?")
+            params.append(new_zone)
+            new_zone_display = new_zone or "—"
+            if old_zone != new_zone_display:
+                comments.append(f"Хранение: {old_zone} → {new_zone_display}")
+
+        if updates:
+            params.append(line_id)
+            conn.execute(f"UPDATE receipt_lines SET {', '.join(updates)} WHERE id = ?", params)
+            if comments:
+                conn.execute(
+                    "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+                    (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_UPDATE, op_qty,
+                     "; ".join(comments), now, uid),
+                )
+            conn.commit()
     return {"message": "ok"}
 
 
@@ -627,6 +679,8 @@ def arrive_receipt(doc_id: str, user=Depends(_get_manager)):
                 status_code=400,
                 detail="Зафиксировать прибытие можно только из статуса 'Создание' или 'В плане'",
             )
+        if current == RECEIPT_STATUS_PLANNED:
+            _validate_receipt_lines_have_storage(conn, doc_id)
         now = _now()
         conn.execute(
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",

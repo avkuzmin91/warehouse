@@ -8,8 +8,11 @@ import {
   recordReceiptOp,
   receiptStatusTone,
   reopenReceiptLine,
+  updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail, ReceiptLine } from '../../../../../api/receiptsApi'
+import type { DictionaryItem } from '../../../../../api/domainTypes'
+import { Combobox } from '../../../../data/Combobox'
 import { FilterChip } from '../../../../data/FiltersBar'
 import { Table, Td } from '../../../../data/Table'
 import { Badge } from '../../../../primitives/Badge'
@@ -17,6 +20,7 @@ import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
+import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { OpEntry } from '../components/OpEntry'
 
@@ -41,11 +45,16 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
   const [drafts, setDrafts] = useState<Record<string, LineQcDraft>>({})
   const [completing, setCompleting] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [pendingStorage, setPendingStorage] = useState<Record<string, string>>({})
+  const [savingStorage, setSavingStorage] = useState<Record<string, boolean>>({})
   const [reopening, setReopening] = useState<Record<string, boolean>>({})
   const [lineError, setLineError] = useState<Record<string, string>>({})
   const [filterLine, setFilterLine] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string | null>(null)
   const [showBlockHint, setShowBlockHint] = useState(false)
+
+  const { unloadingZones: zonesAll } = useLookups()
+  const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function getDraft(line: ReceiptLine): LineQcDraft {
     return drafts[line.id] ?? { accepted: line.accepted, defect: line.defect }
@@ -115,6 +124,21 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     }
   }
 
+  async function handleSaveLineStorage(lineId: string, zoneId: string) {
+    const selectedZone = storageZones.find((z) => z.id === zoneId)
+    setSavingStorage((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await updateReceiptLine(docId, lineId, {
+        storage_zone_id: zoneId || null,
+        storage_zone_name: selectedZone?.name ?? null,
+      })
+      setPendingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+      await onReload()
+    } finally {
+      setSavingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+    }
+  }
+
   const allDone = lines.length > 0 && lines.every((l) => l.qc_status === 'done')
   const doneLinesCount = lines.filter((l) => l.qc_status === 'done').length
 
@@ -165,9 +189,6 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
           </div>
           <div className="page-title" style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
             <span className="mono" style={{ fontWeight: 500 }}>{doc.doc_number}</span>
-            {doc.zone_name && (
-              <span style={{ fontSize: 14, color: 'var(--c-text-muted)', fontWeight: 450 }}>· {doc.zone_name}</span>
-            )}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -294,6 +315,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 <tr>
                   <th style={{ width: 20 }} />
                   <th>Товар</th>
+                  <th style={{ width: 170 }}>Хранение</th>
                   <th style={{ width: 55, textAlign: 'right' }}>План</th>
                   <th style={{ width: 124, textAlign: 'right' }}>Принято</th>
                   <th style={{ width: 124, textAlign: 'right' }}>Брак</th>
@@ -349,6 +371,35 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                           {line.color_name ? ` · ${line.color_name}` : ''}
                           {line.size_name ? ` · ${line.size_name}` : ''}
                         </div>
+                      </Td>
+                      <Td>
+                        {isReadonly ? (
+                          <span>{line.storage_zone_name || '—'}</span>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 166 }}>
+                            <div className="storage-cell-combobox">
+                              <Combobox
+                                value={pendingStorage[line.id] ?? line.storage_zone_id ?? ''}
+                                placeholder="Выберите"
+                                options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
+                                onChange={(value) => setPendingStorage((prev) => ({ ...prev, [line.id]: String(value ?? '') }))}
+                                disabled={savingStorage[line.id] || storageZones.length === 0}
+                                clearable
+                              />
+                            </div>
+                            {pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '') && (
+                              <button
+                                className="btn ghost icon sm"
+                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
+                                disabled={savingStorage[line.id]}
+                                onClick={() => void handleSaveLineStorage(line.id, pendingStorage[line.id])}
+                                title="Сохранить"
+                              >
+                                <Icon name="save" size={14} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </Td>
                       <Td className="num" style={{ color: 'var(--c-text-muted)' }}>{line.planned_qty}</Td>
                       <Td style={{ textAlign: 'right' }}>
@@ -484,6 +535,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 <tr style={{ background: 'var(--c-bg-sunken)' }}>
                   <td />
                   <td style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого</td>
+                  <td />
                   <td className="num" style={{ padding: '10px 12px', color: 'var(--c-text-muted)' }}>{totals.planned}</td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{totals.accepted}</td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600, color: totals.defect > 0 ? 'var(--c-warning)' : undefined }}>
@@ -519,16 +571,8 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 <div>{doc.supplier_name || '—'}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>ТТН</div>
-                <div className="mono">{doc.ttn || '—'}</div>
-              </div>
-              <div>
                 <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Дата прибытия</div>
                 <div>{fmtDate(doc.arrival_date)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Зона разгрузки</div>
-                <div>{doc.zone_name || '—'}</div>
               </div>
               <div>
                 <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Стоимость логистики</div>

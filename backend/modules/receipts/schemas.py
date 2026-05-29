@@ -22,6 +22,8 @@ class ReceiptLineCreate(BaseModel):
     color_name: str | None = None
     size_id: str | None = None
     size_name: str | None = None
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
     planned_qty: int = Field(ge=1)
 
 
@@ -43,11 +45,15 @@ class ReceiptLineAdd(BaseModel):
     color_name: str | None = None
     size_id: str | None = None
     size_name: str | None = None
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
     planned_qty: int = Field(ge=1)
 
 
 class ReceiptLineUpdate(BaseModel):
-    planned_qty: int = Field(ge=1)
+    planned_qty: int | None = Field(default=None, ge=1)
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
 
 
 class ReceiptOpRecord(BaseModel):
@@ -90,6 +96,8 @@ class ReceiptLineResponse(BaseModel):
     color_name: str | None = None
     size_id: str | None = None
     size_name: str | None = None
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
     planned_qty: int
     accepted: int = 0
     defect: int = 0

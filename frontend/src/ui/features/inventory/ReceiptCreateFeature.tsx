@@ -37,8 +37,6 @@ export function ReceiptCreateFeature() {
   const [clientId, setClientId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
-  const [ttn, setTtn] = useState('')
-  const [zoneId, setZoneId] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [saving, setSaving] = useState(false)
@@ -46,10 +44,9 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { clients: clientsAll, suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
+  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
   const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
-  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
@@ -68,14 +65,10 @@ export function ReceiptCreateFeature() {
     setError('')
     setSaving(true)
     try {
-      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       const res = await createReceipt({
         client_id: clientId,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
-        ttn: ttn.trim() || null,
-        zone_id: zoneId || null,
-        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
@@ -185,30 +178,6 @@ export function ReceiptCreateFeature() {
                     <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={setArrivalDate} />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Номер ТТН</span>
-                  </label>
-                  <input
-                    className="input"
-                    placeholder="TTN-00001"
-                    value={ttn}
-                    onChange={(e) => setTtn(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Зона разгрузки</span>
-                  </label>
-                  <Combobox
-                    value={zoneId}
-                    placeholder="Выберите зону…"
-                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
-                    prefix="map"
-                    onChange={(v) => setZoneId(String(v ?? ''))}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">
@@ -364,7 +333,7 @@ export function ReceiptCreateFeature() {
               </span>
             </CardHead>
             <div style={{ padding: '4px 0 8px' }}>
-              <OpPreviewItem icon="plus" tone="accent" title="Создание документа" sub="черновик · клиент, дата, ТТН, зона" />
+              <OpPreviewItem icon="plus" tone="accent" title="Создание документа" sub="черновик · клиент, дата" />
               {lines.slice(0, 4).map((l) => (
                 <OpPreviewItem
                   key={l._id}
@@ -405,7 +374,6 @@ export function ReceiptCreateFeature() {
         key={showAddLine ? 'open' : 'closed'}
         open={showAddLine}
         clientId={clientId}
-        existingLines={lines}
         onClose={() => setShowAddLine(false)}
         onAdd={(line) => {
           setLines((ls) => [...ls, { ...line, _id: genId() }])
@@ -457,13 +425,11 @@ function OpPreviewItem({ icon, tone, title, sub }: { icon: string; tone: string;
 function AddLineDrawer({
   open,
   clientId,
-  existingLines,
   onClose,
   onAdd,
 }: {
   open: boolean
   clientId: string
-  existingLines: DraftLine[]
   onClose: () => void
   onAdd: (line: ReceiptLineInput) => void
 }) {
@@ -522,15 +488,6 @@ function AddLineDrawer({
   const needsSize = selectedProduct?.requires_size ?? false
   const canPickSize = sizes.length > 0
 
-  const isDuplicate = productId
-    ? existingLines.some(
-        (l) =>
-          l.product_id === productId &&
-          (l.color_id ?? null) === (colorId || null) &&
-          (l.size_id ?? null) === (sizeId || null),
-      )
-    : false
-
   return (
     <Drawer
       open={open}
@@ -543,7 +500,7 @@ function AddLineDrawer({
           <button className="btn" onClick={onClose}>Отмена</button>
           <button
             className="btn primary"
-            disabled={!productId || qty < 1 || (needsSize && !sizeId) || isDuplicate}
+            disabled={!productId || qty < 1 || (needsSize && !sizeId)}
             onClick={handleAdd}
           >
             <Icon name="plus" size={13} />Добавить
@@ -551,18 +508,6 @@ function AddLineDrawer({
         </>
       }
     >
-      {isDuplicate && (
-        <div style={{
-          padding: '8px 12px', marginBottom: 10,
-          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
-          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <Icon name="alert" size={13} />
-          Такой товар уже есть в таблице
-        </div>
-      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>

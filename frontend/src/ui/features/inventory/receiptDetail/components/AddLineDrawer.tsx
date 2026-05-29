@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { addReceiptLine } from '../../../../../api/receiptsApi'
-import type { ReceiptLine } from '../../../../../api/receiptsApi'
 import {
   getInventoryColorsForProductSku,
   getInventoryProducts,
@@ -15,7 +14,6 @@ import { Select } from '../../../../primitives/Select'
 type Props = {
   docId: string
   clientId: string
-  existingLines: ReceiptLine[]
   open: boolean
   onClose: () => void
   onAdded: () => void
@@ -24,7 +22,7 @@ type Props = {
 /**
  * Drawer для добавления строки в существующий документ поступления (draft/planned views).
  */
-export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, onAdded }: Props) {
+export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props) {
   const [products, setProducts] = useState<InventoryProductLookup[]>([])
   const [productId, setProductId] = useState('')
   const [colors, setColors] = useState<DictionaryItem[]>([])
@@ -91,15 +89,6 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
     }
   }
 
-  const isDuplicate = productId
-    ? existingLines.some(
-        (l) =>
-          l.product_id === productId &&
-          (l.color_id ?? null) === (colorId || null) &&
-          (l.size_id ?? null) === (sizeId || null),
-      )
-    : false
-
   return (
     <Drawer
       open={open}
@@ -109,25 +98,13 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!productId || qty < 0 || saving || isDuplicate} onClick={handleAdd}>
+          <button className="btn primary" disabled={!productId || qty < 0 || saving} onClick={handleAdd}>
             <Icon name="plus" size={13} />Добавить
           </button>
         </>
       }
     >
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
-      {isDuplicate && (
-        <div style={{
-          padding: '8px 12px', marginBottom: 10,
-          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
-          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <Icon name="alert" size={13} />
-          Такой товар уже есть в таблице
-        </div>
-      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>

@@ -34,10 +34,22 @@ _auth_log = logging.getLogger("warehouse.auth")
 
 # ── Application lifespan ──────────────────────────────────────────────────────
 
+def _ensure_runtime_schema() -> None:
+    """Small guard for direct dev starts that bypass `alembic upgrade head`."""
+    with get_connection() as conn:
+        conn.execute("""
+            ALTER TABLE IF EXISTS receipt_lines
+                ADD COLUMN IF NOT EXISTS storage_zone_id TEXT,
+                ADD COLUMN IF NOT EXISTS storage_zone_name TEXT
+        """)
+        conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(exist_ok=True)
     init_pool()
+    _ensure_runtime_schema()
     yield
     close_pool()
     try:

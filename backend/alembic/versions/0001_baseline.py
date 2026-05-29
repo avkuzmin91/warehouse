@@ -286,6 +286,8 @@ def upgrade() -> None:
             color_name   TEXT,
             size_id      TEXT,
             size_name    TEXT,
+            storage_zone_id   TEXT,
+            storage_zone_name TEXT,
             planned_qty  INTEGER NOT NULL DEFAULT 1,
             created_at   TEXT NOT NULL,
             created_by   TEXT,

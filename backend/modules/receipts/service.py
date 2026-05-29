@@ -64,6 +64,8 @@ def compute_state(connection, doc_id: str) -> dict:
             "color_name": lr["color_name"],
             "size_id": lr["size_id"],
             "size_name": lr["size_name"],
+            "storage_zone_id": lr["storage_zone_id"],
+            "storage_zone_name": lr["storage_zone_name"],
             "planned_qty": int(lr["planned_qty"]),
             "accepted": 0,
             "defect": 0,
@@ -243,6 +245,21 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
     if next_status is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
+
+    if current == "planned" and next_status == "on_review":
+        missing = connection.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM receipt_lines
+            WHERE doc_id = ?
+              AND is_deleted = 0
+              AND NULLIF(TRIM(COALESCE(storage_zone_id, '')), '') IS NULL
+            """,
+            (doc_id,),
+        ).fetchone()
+        if int(missing["cnt"] if missing else 0) > 0:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Укажите зону хранения для каждой строки поступления")
 
     op_type = (
         RECEIPT_OP_PLAN_FIX if next_status == "planned" else

@@ -38,8 +38,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [clientId, setClientId] = useState(doc.client_id)
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
-  const [ttn, setTtn] = useState(doc.ttn ?? '')
-  const [zoneId, setZoneId] = useState(doc.zone_id ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -52,10 +50,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { clients: clientsAll, suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
+  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
   const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
-  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
 
@@ -63,14 +60,10 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
     setMetaError('')
     setMetaSaving(true)
     try {
-      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       await updateReceipt(docId, {
         client_id: clientId || undefined,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
-        ttn: ttn.trim() || null,
-        zone_id: zoneId || null,
-        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
       })
       setMetaDirty(false)
@@ -129,20 +122,20 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
       {/* Заголовок */}
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+          <div className="detail-status-row">
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
             <Badge dot>{RECEIPT_STATUS_LABELS['draft']}</Badge>
-            <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+            <span className="detail-meta">
               {doc.doc_number} · создан {fmtDate(doc.created_at)}
               {doc.created_by && ` · ${doc.created_by}`}
             </span>
           </div>
           <div className="page-title">Создание поступления</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div className="detail-actions">
+          <div className="detail-actions-row">
             {metaDirty && (
               <button className="btn" onClick={handleSaveMeta} disabled={metaSaving || !clientId}>
                 <Icon name="check" size={14} />Сохранить изменения
@@ -157,7 +150,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+            <div className="block-reasons">
               {blockReasons.map((r, i) => (
                 <div key={i}>· {r}</div>
               ))}
@@ -172,17 +165,17 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+      <div className="split-300">
         {/* Левая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           {/* Реквизиты */}
           <Card>
             <CardHead>
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="file" size={15} className="ic-accent" />
               <span className="card-head-title">Основная информация</span>
             </CardHead>
             <CardBody>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
@@ -227,32 +220,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Номер ТТН</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <input
-                    className="input"
-                    placeholder="TTN-00001"
-                    value={ttn}
-                    onChange={(e) => { setTtn(e.target.value); markDirty() }}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Зона разгрузки</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={zoneId}
-                    placeholder="Выберите зону…"
-                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
-                    prefix="map"
-                    onChange={(v) => { setZoneId(String(v ?? '')); markDirty() }}
-                    clearable
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
                     <span>Стоимость логистики, ₽</span>
                     <span className="text-xs faint">не обязательно</span>
                   </label>
@@ -272,10 +239,10 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           {/* Строки */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="boxes" size={15} className="ic-accent" />
               <span className="card-head-title">Товары</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <button
                 className="btn sm primary"
                 onClick={() => setShowAddLine(true)}
@@ -368,13 +335,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                   })}
                 </tbody>
                 <tfoot>
-                  <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
-                      Итого: {totalSku} SKU
-                    </td>
-                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>
-                      {totalQty}
-                    </td>
+                  <tr className="sum">
+                    <td colSpan={4}>Итого: {totalSku} SKU</td>
+                    <td className="num">{totalQty}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -385,28 +348,24 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         </div>
 
         {/* Правая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
           {/* Готовность */}
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {readyChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      background: 'var(--c-success-bg)', color: 'var(--c-success)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', border: '1.5px dashed var(--c-text-faint)', flexShrink: 0 }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.label}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
                 </div>
               ))}
             </div>
@@ -415,16 +374,16 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           {/* Итого */}
           <Card>
             <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="chart" size={15} className="ic-accent" />
               <span className="card-head-title">Итого</span>
             </CardHead>
-            <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span style={{ textAlign: 'right' }} className="mono">{totalSku}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-              <span style={{ textAlign: 'right' }} className="mono">{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>План, шт</span>
-              <span style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }} className="mono">{totalQty}</span>
+            <div className="totals-grid">
+              <span className="key">SKU</span>
+              <span className="val mono">{totalSku}</span>
+              <span className="key">Строк</span>
+              <span className="val mono">{lines.length}</span>
+              <span className="key">План, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
         </div>
@@ -434,7 +393,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         key={showAddLine ? 'open' : 'closed'}
         docId={docId}
         clientId={clientId}
-        existingLines={lines}
         open={showAddLine}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}

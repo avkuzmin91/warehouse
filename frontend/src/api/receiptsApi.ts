@@ -55,6 +55,8 @@ export type ReceiptLine = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  storage_zone_id: string | null
+  storage_zone_name: string | null
   planned_qty: number
   accepted: number
   defect: number
@@ -114,6 +116,8 @@ export type ReceiptLineInput = {
   color_name?: string | null
   size_id?: string | null
   size_name?: string | null
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
   planned_qty: number
 }
 
@@ -136,6 +140,12 @@ export type ReceiptUpdatePayload = {
   zone_name?: string | null
   ttn?: string | null
   logistics_cost?: number | null
+}
+
+export type ReceiptLineUpdatePayload = {
+  planned_qty?: number
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
 }
 
 export type ReceiptListParams = {
@@ -237,10 +247,11 @@ export function deleteReceipt(docId: string) {
   return request<{ message: string }>(`/receipts/${docId}`, { method: 'DELETE' })
 }
 
-export function updateReceiptLine(docId: string, lineId: string, plannedQty: number) {
+export function updateReceiptLine(docId: string, lineId: string, payload: number | ReceiptLineUpdatePayload) {
+  const body = typeof payload === 'number' ? { planned_qty: payload } : payload
   return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ planned_qty: plannedQty }),
+    body: JSON.stringify(body),
   })
 }
 

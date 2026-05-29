@@ -47,8 +47,6 @@ export function PlannedView({
 
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
-  const [ttn, setTtn] = useState(doc.ttn ?? '')
-  const [zoneId, setZoneId] = useState(doc.zone_id ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -58,10 +56,13 @@ export function PlannedView({
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
   const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
+  const [pendingStorage, setPendingStorage] = useState<Record<string, string>>({})
+  const [savingStorage, setSavingStorage] = useState<Record<string, boolean>>({})
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { unloadingZones: zonesAll } = useLookups()
-  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
+  const { suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
+  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
+  const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
 
@@ -69,13 +70,9 @@ export function PlannedView({
     setMetaError('')
     setMetaSaving(true)
     try {
-      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       await updateReceipt(docId, {
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
-        ttn: ttn.trim() || null,
-        zone_id: zoneId || null,
-        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
       })
       setMetaDirty(false)
@@ -104,6 +101,21 @@ export function PlannedView({
     }
   }
 
+  async function handleSaveLineStorage(lineId: string, zoneId: string) {
+    const selectedZone = storageZones.find((z) => z.id === zoneId)
+    setSavingStorage((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await updateReceiptLine(docId, lineId, {
+        storage_zone_id: zoneId || null,
+        storage_zone_name: selectedZone?.name ?? null,
+      })
+      setPendingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+      await onReload()
+    } finally {
+      setSavingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+    }
+  }
+
   async function handleDeleteLine(lineId: string, productName: string) {
     const ok = await confirm({
       title: 'Удалить строку?',
@@ -118,6 +130,10 @@ export function PlannedView({
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
+  const missingStorageCount = lines.filter((l) => !l.storage_zone_id).length
+  const hasPendingStorage = Object.keys(pendingStorage).some(
+    (id) => pendingStorage[id] !== (lines.find((l) => l.id === id)?.storage_zone_id ?? ''),
+  )
 
   const today = new Date().toISOString().slice(0, 10)
   const readyChecks = [
@@ -125,6 +141,7 @@ export function PlannedView({
     { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
+    { ok: lines.length > 0 && missingStorageCount === 0, label: 'Зона хранения указана по всем строкам', error: `Не указана зона хранения: ${missingStorageCount}` },
     { ok: !!logisticsCost && parseFloat(logisticsCost) >= 0, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
   ]
 
@@ -132,6 +149,7 @@ export function PlannedView({
 
   const blockReasons = [
     ...(hasPendingQty ? ['Есть несохранённые изменения количества в строках товаров'] : []),
+    ...(hasPendingStorage ? ['Есть несохранённые изменения зоны хранения'] : []),
     ...readyChecks.filter((c) => !c.ok).map((c) => c.error),
   ]
 
@@ -206,30 +224,24 @@ export function PlannedView({
                 </div>
                 <div>
                   <label className="field-label"><span>Поставщик</span></label>
-                  <input className="input" placeholder="Название поставщика" value={supplierName}
-                    onChange={(e) => { setSupplierName(e.target.value); markDirty() }} />
+                  <Combobox
+                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
+                    placeholder="Выберите поставщика"
+                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
+                    onChange={(v) => {
+                      const found = suppliers.find((s) => s.id === String(v ?? ''))
+                      setSupplierName(found?.name ?? '')
+                      markDirty()
+                    }}
+                    clearable
+                    prefix="user"
+                  />
                 </div>
                 <div>
                   <label className="field-label">
                     <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
-                </div>
-                <div>
-                  <label className="field-label"><span>Номер ТТН</span></label>
-                  <input className="input" placeholder="TTN-00001" value={ttn}
-                    onChange={(e) => { setTtn(e.target.value); markDirty() }} />
-                </div>
-                <div>
-                  <label className="field-label"><span>Зона разгрузки</span></label>
-                  <Combobox
-                    value={zoneId}
-                    placeholder="Выберите зону…"
-                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
-                    prefix="map"
-                    onChange={(v) => { setZoneId(String(v ?? '')); markDirty() }}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">
@@ -266,6 +278,7 @@ export function PlannedView({
                     <th>Товар · SKU</th>
                     <th style={{ width: 110 }}>Цвет</th>
                     <th style={{ width: 80 }}>Размер</th>
+                    <th style={{ width: 170 }}>Хранение</th>
                     <th style={{ width: 148 }}>План, шт</th>
                     <th style={{ width: 32 }} />
                   </tr>
@@ -284,6 +297,31 @@ export function PlannedView({
                         </Td>
                         <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
                         <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
+                        <Td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 166 }}>
+                            <div className="storage-cell-combobox">
+                              <Combobox
+                                value={pendingStorage[l.id] ?? l.storage_zone_id ?? ''}
+                                placeholder="Выберите"
+                                options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
+                                onChange={(value) => setPendingStorage((prev) => ({ ...prev, [l.id]: String(value ?? '') }))}
+                                disabled={savingStorage[l.id] || storageZones.length === 0}
+                                clearable
+                              />
+                            </div>
+                            {pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') && (
+                              <button
+                                className="btn ghost icon sm"
+                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
+                                disabled={savingStorage[l.id]}
+                                onClick={() => void handleSaveLineStorage(l.id, pendingStorage[l.id])}
+                                title="Сохранить"
+                              >
+                                <Icon name="save" size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </Td>
                         <Td>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${isDirty ? 'var(--c-accent)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
@@ -318,7 +356,7 @@ export function PlannedView({
                 </tbody>
                 <tfoot>
                   <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого: {totalSku} SKU</td>
+                    <td colSpan={5} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого: {totalSku} SKU</td>
                     <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
                     <td />
                   </tr>
@@ -415,7 +453,6 @@ export function PlannedView({
         key={showAddLine ? 'open' : 'closed'}
         docId={docId}
         clientId={doc.client_id}
-        existingLines={lines}
         open={showAddLine}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}

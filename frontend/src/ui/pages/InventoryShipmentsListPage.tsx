@@ -23,7 +23,7 @@ import { EmptyState } from '../primitives/EmptyState'
 import { fmtDateShort as fmtDate } from '../../utils/format'
 import { useApi } from '../../hooks/useApi'
 import { useLookups } from '../../hooks/useLookups'
-import { useFilterParam, usePageParam } from '../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
@@ -57,7 +57,7 @@ const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
 export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
 
-  const [tab, setTab] = useFilterParam('tab', 'all')
+  const [tab] = useFilterParam('tab', 'all')
   const [search, setSearch] = useFilterParam('search', '')
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
@@ -66,6 +66,7 @@ export function InventoryShipmentsListPage() {
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [view, setView] = useFilterParam('view', 'table')
   const [page, setPage] = usePageParam()
+  const { setMany } = useFilterParamsActions()
 
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -127,8 +128,7 @@ export function InventoryShipmentsListPage() {
 
 
   function handleTabChange(t: TabId) {
-    setTab(t)
-    setStatusFilter('')
+    setMany({ tab: t, status: '' })
   }
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
@@ -225,7 +225,7 @@ export function InventoryShipmentsListPage() {
             from={dateFrom} to={dateTo}
             onFromChange={(v) => setDateFrom(v)}
             onToChange={(v) => setDateTo(v)}
-            onClear={() => { setDateFrom(''); setDateTo('') }}
+            onClear={() => setMany({ from: '', to: '' })}
           />
           <FilterSelect
             label="Статус"
@@ -237,7 +237,7 @@ export function InventoryShipmentsListPage() {
             onChange={(v) => setStatusFilter(v)}
           />
           {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setSkuFilter(''); setDateFrom(''); setDateTo(''); setStatusFilter('') }}>
+            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

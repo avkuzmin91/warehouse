@@ -22,7 +22,7 @@ import { EmptyState } from '../primitives/EmptyState'
 import { fmtDate } from '../../utils/format'
 import { useApi } from '../../hooks/useApi'
 import { useLookups } from '../../hooks/useLookups'
-import { useFilterParam, usePageParam } from '../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
@@ -51,7 +51,7 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
 
-  const [tab, setTab] = useFilterParam('tab', 'all')
+  const [tab] = useFilterParam('tab', 'all')
   const [search, setSearch] = useFilterParam('search', '')
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
@@ -60,6 +60,7 @@ export function InventoryReceiptsListPage() {
   const [statusFilter, setStatusFilter] = useFilterParam('status', '')
   const [view, setView] = useFilterParam('view', 'table')
   const [page, setPage] = usePageParam()
+  const { setMany } = useFilterParamsActions()
 
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -125,8 +126,7 @@ export function InventoryReceiptsListPage() {
 
   function handleTabChange(t: TabId) {
     // Меняем tab + сбрасываем status за один вызов setSearchParams
-    setTab(t)
-    setStatusFilter('')
+    setMany({ tab: t, status: '' })
   }
 
   const STATUS_OPTIONS = [
@@ -209,7 +209,7 @@ export function InventoryReceiptsListPage() {
             from={dateFrom} to={dateTo}
             onFromChange={(v) => setDateFrom(v)}
             onToChange={(v) => setDateTo(v)}
-            onClear={() => { setDateFrom(''); setDateTo('') }}
+            onClear={() => setMany({ from: '', to: '' })}
           />
           <FilterSelect
             label="Статус"
@@ -218,7 +218,7 @@ export function InventoryReceiptsListPage() {
             onChange={(v) => setStatusFilter(v)}
           />
           {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setSkuFilter(''); setDateFrom(''); setDateTo(''); setStatusFilter('') }}>
+            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

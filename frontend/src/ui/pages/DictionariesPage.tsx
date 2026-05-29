@@ -67,7 +67,7 @@ export function DictionariesPage() {
     } else if (active === 'suppliers') {
       setSheet({ type: 'simple', apiType: 'suppliers', kind: 'Поставщик', isNew: true, initial: null })
     } else if (active === 'unloading-zones') {
-      setSheet({ type: 'simple', apiType: 'unloading-zones', kind: 'Зона разгрузки', isNew: true, initial: null })
+      setSheet({ type: 'simple', apiType: 'unloading-zones', kind: 'Зона хранения', isNew: true, initial: null })
     } else if (active === 'warehouses') {
       setSheet({ type: 'simple', apiType: 'warehouses', kind: 'Склад', isNew: true, initial: null })
     } else if (active === 'carriers') {
