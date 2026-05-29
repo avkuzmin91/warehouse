@@ -3,12 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
 import type { BalanceItem } from '../../api/balancesApi'
-import {
-  getInventoryCarriers,
-  getInventoryClients,
-  getInventoryWarehouses,
-} from '../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../api/domainTypes'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
 import { Icon } from '../primitives/Icon'
@@ -21,7 +15,7 @@ import { BalancePicker } from '../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../features/inventory/shared/NumberStep'
 import { fmtYmdAsDmy } from '../../utils/format'
 import { balanceKey } from '../../utils/balanceKey'
-import { useApi } from '../../hooks/useApi'
+import { useLookups } from '../../hooks/useLookups'
 
 type DraftLine = ShipmentLineIn & { _key: string; available: number }
 
@@ -44,12 +38,7 @@ export function InventoryShipmentCreatePage() {
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = clientsData ?? []
-  const { data: destinationsData } = useApi((signal) => getInventoryWarehouses(signal), [])
-  const destinations: DictionaryItem[] = destinationsData ?? []
-  const { data: carriersData } = useApi((signal) => getInventoryCarriers(signal), [])
-  const carriers: DictionaryItem[] = carriersData ?? []
+  const { clients, warehouses: destinations, carriers } = useLookups()
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const destinationOptions: ComboboxOption[] = destinations.map((d) => ({ value: d.id, label: d.name }))

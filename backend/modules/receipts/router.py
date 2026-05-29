@@ -144,6 +144,7 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
 def receipts_summary(
     client_id: str | None = Query(None),
     search: str | None = Query(None),
+    sku: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     user=Depends(_get_manager),
@@ -160,6 +161,12 @@ def receipts_summary(
             s = f"%{search.strip()}%"
             conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
             params += [s, s]
+        if sku:
+            conds.append(
+                "EXISTS (SELECT 1 FROM receipt_lines rl"
+                " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
+            )
+            params.append(f"%{sku.strip()}%")
         if date_from:
             conds.append("d.arrival_date >= ?")
             params.append(date_from)
@@ -191,6 +198,7 @@ def list_receipts(
     status: str | None = Query(None),
     overdue: bool = Query(False),
     search: str | None = Query(None),
+    sku: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     user=Depends(_get_manager),
@@ -199,7 +207,7 @@ def list_receipts(
         total, rows = list_receipts_aggregated(
             conn,
             page=page, limit=limit, client_id=client_id, status=status,
-            overdue=overdue, search=search, date_from=date_from, date_to=date_to,
+            overdue=overdue, search=search, sku=sku, date_from=date_from, date_to=date_to,
             statuses_all=RECEIPT_STATUSES_ALL,
         )
     items = [

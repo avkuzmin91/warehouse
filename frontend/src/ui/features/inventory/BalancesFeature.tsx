@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { getBalances } from '../../../api/balancesApi'
 import type { BalanceItem } from '../../../api/balancesApi'
-import { getInventoryClients } from '../../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../../api/domainTypes'
 import { ListPage } from '../../layouts/ListPage'
+import { useLookups } from '../../../hooks/useLookups'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
 import { FiltersBar, FilterChip, FilterCombobox } from '../../data/FiltersBar'
@@ -23,9 +22,7 @@ export function BalancesFeature() {
   const [clientId, setClientId] = useState('')
   const [onlyPositive, setOnlyPositive] = useState(true)
   const [hasDefect, setHasDefect] = useState(false)
-  const [clients, setClients] = useState<DictionaryItem[]>([])
-
-  useEffect(() => { getInventoryClients().then(setClients).catch(() => {}) }, [])
+  const { clients } = useLookups()
 
   const load = useCallback(async () => {
     setLoading(true)

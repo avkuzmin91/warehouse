@@ -28,24 +28,27 @@ export function useApi<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    setLoading(true)
-    setError(null)
-    fn(ctrl.signal)
-      .then((res) => {
-        if (ctrl.signal.aborted) return
-        setData(res)
-        setLoading(false)
-      })
-      .catch((e) => {
-        if (ctrl.signal.aborted) return
-        setError(e instanceof Error ? e : new Error(String(e)))
-        setLoading(false)
-      })
-    return () => ctrl.abort()
+  useEffect(
+    () => {
+      const ctrl = new AbortController()
+      setLoading(true)
+      setError(null)
+      fn(ctrl.signal)
+        .then((res) => {
+          if (ctrl.signal.aborted) return
+          setData(res)
+          setLoading(false)
+        })
+        .catch((e) => {
+          if (ctrl.signal.aborted) return
+          setError(e instanceof Error ? e : new Error(String(e)))
+          setLoading(false)
+        })
+      return () => ctrl.abort()
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps)
+    deps,
+  )
 
   return { data, loading, error }
 }

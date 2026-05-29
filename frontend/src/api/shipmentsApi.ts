@@ -100,6 +100,7 @@ export type ShipmentListParams = {
   status?:    ShipmentStatus | ShipmentStatus[]
   client_id?: string
   search?:    string
+  sku?:       string
   date_from?: string
   date_to?:   string
   overdue?:   boolean
@@ -145,10 +146,11 @@ export type ShipmentDocCreate = {
 
 export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'>
 
-export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'sku' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
+  if (params.sku)       sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   const q = sp.toString()
@@ -164,6 +166,7 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   }
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
+  if (params.sku)       sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')

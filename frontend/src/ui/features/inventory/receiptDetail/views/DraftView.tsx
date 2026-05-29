@@ -8,11 +8,6 @@ import {
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail } from '../../../../../api/receiptsApi'
-import {
-  getInventoryClients,
-  getInventorySuppliers,
-  getInventoryUnloadingZones,
-} from '../../../../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
 import { Table, Td } from '../../../../data/Table'
@@ -23,7 +18,7 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
-import { useApi } from '../../../../../hooks/useApi'
+import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 
@@ -57,14 +52,10 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = (clientsData ?? []).filter((c) => c.is_active && !c.is_deleted)
-
-  const { data: suppliersData } = useApi((signal) => getInventorySuppliers(signal), [])
-  const suppliers: DictionaryItem[] = (suppliersData ?? []).filter((s) => s.is_active && !s.is_deleted)
-
-  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
-  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
+  const { clients: clientsAll, suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
+  const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
+  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
+  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
 

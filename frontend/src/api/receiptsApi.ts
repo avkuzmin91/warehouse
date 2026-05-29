@@ -145,6 +145,7 @@ export type ReceiptListParams = {
   status?: ReceiptStatus
   overdue?: boolean
   search?: string
+  sku?: string
   date_from?: string
   date_to?: string
 }
@@ -159,10 +160,11 @@ export type ReceiptsSummary = {
   overdue: number
 }
 
-export function getReceiptsSummary(params: Pick<ReceiptListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+export function getReceiptsSummary(params: Pick<ReceiptListParams, 'client_id' | 'search' | 'sku' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search) sp.set('search', params.search)
+  if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   const q = sp.toString()
@@ -177,6 +179,7 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.status) sp.set('status', params.status)
   if (params.overdue) sp.set('overdue', 'true')
   if (params.search) sp.set('search', params.search)
+  if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   const q = sp.toString()

@@ -131,6 +131,7 @@ def list_receipts_aggregated(
     status: str | None,
     overdue: bool,
     search: str | None,
+    sku: str | None,
     date_from: str | None,
     date_to: str | None,
     statuses_all: frozenset[str],
@@ -160,6 +161,12 @@ def list_receipts_aggregated(
         s = f"%{search.strip()}%"
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
         params += [s, s]
+    if sku:
+        conds.append(
+            "EXISTS (SELECT 1 FROM receipt_lines rl"
+            " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
+        )
+        params.append(f"%{sku.strip()}%")
     if date_from:
         conds.append("d.arrival_date >= ?")
         params.append(date_from)

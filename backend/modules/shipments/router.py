@@ -76,6 +76,7 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
 def shipments_summary(
     client_id: str | None = Query(None),
     search:    str | None = Query(None),
+    sku:       str | None = Query(None),
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
     user=Depends(_get_manager),
@@ -89,6 +90,12 @@ def shipments_summary(
             s = f"%{search.strip()}%"
             conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
+        if sku:
+            conds.append(
+                "EXISTS (SELECT 1 FROM shipment_lines sl"
+                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
+            )
+            params.append(f"%{sku.strip()}%")
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -119,6 +126,7 @@ def list_shipments(
     status:    str | None = Query(None),
     client_id: str | None = Query(None),
     search:    str | None = Query(None),
+    sku:       str | None = Query(None),
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
@@ -147,6 +155,12 @@ def list_shipments(
             s = f"%{search.strip()}%"
             conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
+        if sku:
+            conds.append(
+                "EXISTS (SELECT 1 FROM shipment_lines sl"
+                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
+            )
+            params.append(f"%{sku.strip()}%")
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:

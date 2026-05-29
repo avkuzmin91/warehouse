@@ -13,25 +13,14 @@ def get_balances(
     only_positive: bool,
     has_defect: bool,
 ) -> BalanceListResponse:
-    """Агрегирует остатки из receipt_* и shipment_* таблиц.
-
-    Источник данных о приёмке: receipt_ops (op_type=receiving/receiving_correction/defect_fix/defect_correction).
-    Источник данных об отгрузке: shipment_lines + shipment_docs (status=shipped).
-    """
-    doc_conds = ["d.is_deleted = 0"]
+    doc_conds = ["d.is_deleted = 0", "d.status IN ('done', 'on_review')"]
     doc_params: list = []
 
     if client_id:
         doc_conds.append("d.client_id = ?")
         doc_params.append(client_id.strip())
 
-    doc_where = " AND ".join(doc_conds)
-
-    line_conds = [
-        "l.is_deleted = 0",
-        f"({doc_where})",
-        "d.status IN ('done', 'on_review')",
-    ]
+    line_conds = ["l.is_deleted = 0"] + doc_conds
     line_params = list(doc_params)
 
     if search:
@@ -41,11 +30,72 @@ def get_balances(
 
     line_where = " AND ".join(line_conds)
 
-    # Основной агрегирующий запрос.
-    # good_in  — принятое годное количество (последняя корректировка или сумма receiving)
-    # defect_in — принятый брак (последняя корректировка или сумма defect_fix)
-    # on_review — кол-во строк ещё не прошедших QC (статус on_review у документа, нет закрытого line_qc_complete)
+    # ops_agg: один проход по receipt_ops вместо 6 коррелированных подзапросов на строку.
+    # recv_corr/def_corr — последнее значение correction (MAX по qty при одной записи на линию).
+    # on_review: строка ещё на QC, если qc_done_at IS NULL или reopen случился позже.
     agg_query = f"""
+        WITH ops_agg AS (
+            SELECT
+                o.line_id,
+                MAX(CASE WHEN o.op_type = 'receiving_correction' THEN o.qty      END) AS recv_corr,
+                SUM(CASE WHEN o.op_type = 'receiving'            THEN o.qty ELSE 0 END) AS recv_sum,
+                MAX(CASE WHEN o.op_type = 'defect_correction'    THEN o.qty      END) AS def_corr,
+                SUM(CASE WHEN o.op_type = 'defect_fix'           THEN o.qty ELSE 0 END) AS def_sum,
+                MAX(CASE WHEN o.op_type = 'line_qc_complete'     THEN o.created_at END) AS qc_done_at,
+                MAX(CASE WHEN o.op_type = 'line_qc_reopen'       THEN o.created_at END) AS qc_reopen_at
+            FROM receipt_ops o
+            GROUP BY o.line_id
+        ),
+        receipt_agg AS (
+            SELECT
+                l.product_id,
+                l.product_sku,
+                d.client_id,
+                l.color_id,
+                l.size_id,
+                MAX(l.product_name) AS product_name,
+                MAX(cl.name)        AS client_name,
+                MAX(l.color_name)   AS color_name,
+                MAX(l.size_name)    AS size_name,
+                SUM(COALESCE(oa.recv_corr, oa.recv_sum, 0)) AS good_in,
+                SUM(COALESCE(oa.def_corr,  oa.def_sum,  0)) AS defect_in,
+                SUM(CASE
+                    WHEN d.status = 'on_review'
+                     AND (oa.qc_done_at IS NULL
+                          OR (oa.qc_reopen_at IS NOT NULL AND oa.qc_reopen_at > oa.qc_done_at))
+                    THEN GREATEST(0,
+                        COALESCE(l.planned_qty, 0)
+                        - COALESCE(oa.recv_corr, oa.recv_sum, 0)
+                        - COALESCE(oa.def_corr,  oa.def_sum,  0)
+                    )
+                    ELSE 0
+                END) AS on_review,
+                COUNT(DISTINCT l.doc_id) AS docs_count
+            FROM receipt_lines l
+            JOIN receipt_docs d  ON d.id = l.doc_id
+            LEFT JOIN clients cl ON cl.id = d.client_id
+            LEFT JOIN ops_agg oa ON oa.line_id = l.id
+            WHERE {line_where}
+            GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
+        ),
+        shipped_good AS (
+            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
+                   SUM(sl.qty) AS shipped_good
+            FROM shipment_lines sl
+            JOIN shipment_docs sd ON sd.id = sl.doc_id
+            WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
+              AND sd.status = 'shipped' AND sd.cargo_type = 'good'
+            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
+        ),
+        shipped_defect AS (
+            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
+                   SUM(sl.qty) AS shipped_defect
+            FROM shipment_lines sl
+            JOIN shipment_docs sd ON sd.id = sl.doc_id
+            WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
+              AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
+            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
+        )
         SELECT
             r.product_id,
             r.product_sku,
@@ -56,82 +106,21 @@ def get_balances(
             r.client_name,
             r.color_name,
             r.size_name,
-            GREATEST(0, r.good_in - COALESCE(sg.shipped_good, 0))       AS good,
-            GREATEST(0, r.defect_in - COALESCE(sd_out.shipped_defect, 0)) AS defect,
+            GREATEST(0, r.good_in   - COALESCE(sg.shipped_good,   0)) AS good,
+            GREATEST(0, r.defect_in - COALESCE(sd.shipped_defect,  0)) AS defect,
             r.on_review,
             r.docs_count
-        FROM (
-            SELECT
-                l.product_id,
-                l.product_sku,
-                d.client_id,
-                l.color_id,
-                l.size_id,
-                MAX(l.product_name)  AS product_name,
-                MAX(cl.name)         AS client_name,
-                MAX(l.color_name)    AS color_name,
-                MAX(l.size_name)     AS size_name,
-                SUM(COALESCE((
-                    SELECT COALESCE(
-                        (SELECT o2.qty FROM receipt_ops o2
-                         WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
-                         ORDER BY o2.created_at DESC LIMIT 1),
-                        (SELECT SUM(o2.qty) FROM receipt_ops o2
-                         WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
-                    )
-                ), 0)) AS good_in,
-                SUM(COALESCE((
-                    SELECT COALESCE(
-                        (SELECT o2.qty FROM receipt_ops o2
-                         WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
-                         ORDER BY o2.created_at DESC LIMIT 1),
-                        (SELECT SUM(o2.qty) FROM receipt_ops o2
-                         WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
-                    )
-                ), 0)) AS defect_in,
-                SUM(CASE WHEN d.status = 'on_review' AND NOT EXISTS (
-                    SELECT 1 FROM receipt_ops oq
-                    WHERE oq.line_id = l.id AND oq.op_type = 'line_qc_complete'
-                      AND NOT EXISTS (
-                          SELECT 1 FROM receipt_ops orp
-                          WHERE orp.line_id = l.id
-                            AND orp.op_type = 'line_qc_reopen'
-                            AND orp.created_at > oq.created_at
-                      )
-                ) THEN COALESCE(l.planned_qty, 0) ELSE 0 END) AS on_review,
-                COUNT(DISTINCT l.doc_id) AS docs_count
-            FROM receipt_lines l
-            JOIN receipt_docs d ON d.id = l.doc_id
-            LEFT JOIN clients cl ON cl.id = d.client_id
-            WHERE {line_where}
-            GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
-        ) r
-        LEFT JOIN (
-            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
-                   SUM(sl.qty) AS shipped_good
-            FROM shipment_lines sl
-            JOIN shipment_docs sd ON sd.id = sl.doc_id
-            WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
-              AND sd.status = 'shipped' AND sd.cargo_type = 'good'
-            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
-        ) sg
+        FROM receipt_agg r
+        LEFT JOIN shipped_good sg
             ON sg.product_id = r.product_id
-           AND sg.client_id IS NOT DISTINCT FROM r.client_id
-           AND sg.color_id IS NOT DISTINCT FROM r.color_id
-           AND sg.size_id IS NOT DISTINCT FROM r.size_id
-        LEFT JOIN (
-            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
-                   SUM(sl.qty) AS shipped_defect
-            FROM shipment_lines sl
-            JOIN shipment_docs sd ON sd.id = sl.doc_id
-            WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
-              AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
-            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id
-        ) sd_out
-            ON sd_out.product_id = r.product_id
-           AND sd_out.client_id IS NOT DISTINCT FROM r.client_id
-           AND sd_out.color_id IS NOT DISTINCT FROM r.color_id
-           AND sd_out.size_id IS NOT DISTINCT FROM r.size_id
+           AND sg.client_id  IS NOT DISTINCT FROM r.client_id
+           AND sg.color_id   IS NOT DISTINCT FROM r.color_id
+           AND sg.size_id    IS NOT DISTINCT FROM r.size_id
+        LEFT JOIN shipped_defect sd
+            ON sd.product_id = r.product_id
+           AND sd.client_id  IS NOT DISTINCT FROM r.client_id
+           AND sd.color_id   IS NOT DISTINCT FROM r.color_id
+           AND sd.size_id    IS NOT DISTINCT FROM r.size_id
     """
 
     where_parts = []
@@ -141,19 +130,20 @@ def get_balances(
         where_parts.append("defect > 0")
     where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
-    filtered_query = f"SELECT * FROM ({agg_query}) a {where_clause}"
-
-    count_row = connection.execute(
-        f"SELECT COUNT(*) AS cnt FROM ({filtered_query}) q",
-        line_params,
-    ).fetchone()
-    total = int(count_row["cnt"]) if count_row else 0
-
+    # COUNT(*) OVER() — один проход вместо двух отдельных запросов к БД.
     offset = (page - 1) * limit
     rows = connection.execute(
-        f"{filtered_query} ORDER BY product_name, color_name, size_name LIMIT ? OFFSET ?",
+        f"""
+        SELECT *, COUNT(*) OVER() AS _total_count
+        FROM ({agg_query}) a
+        {where_clause}
+        ORDER BY product_name, color_name, size_name
+        LIMIT ? OFFSET ?
+        """,
         line_params + [limit, offset],
     ).fetchall()
+
+    total = int(rows[0]["_total_count"]) if rows else 0
 
     items = [
         BalanceItem(
@@ -187,10 +177,8 @@ def get_available_good_qty(
 ) -> int:
     """Возвращает доступное кол-во годного товара для конкретной позиции.
 
-    Используется shipments/service.py для проверки остатков перед отгрузкой.
-    Считает: принятое годное (из receipt_ops) − уже отгруженное хорошее (из shipment_lines shipped).
+    Используется shipments/service.py перед переводом в статус 'shipped'.
     """
-    # --- принятое годное ---
     in_conds = [
         "l.is_deleted = 0", "d.is_deleted = 0",
         "d.status IN ('done', 'on_review')",
@@ -218,24 +206,29 @@ def get_available_good_qty(
 
     in_row = connection.execute(
         f"""
-        SELECT COALESCE(SUM((
-            SELECT COALESCE(
-                (SELECT o2.qty FROM receipt_ops o2
-                 WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
-                 ORDER BY o2.created_at DESC LIMIT 1),
-                (SELECT SUM(o2.qty) FROM receipt_ops o2
-                 WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
-            )
-        )), 0) AS good_in
-        FROM receipt_lines l
-        JOIN receipt_docs d ON d.id = l.doc_id
-        WHERE {in_where}
+        WITH matched_lines AS (
+            SELECT l.id
+            FROM receipt_lines l
+            JOIN receipt_docs d ON d.id = l.doc_id
+            WHERE {in_where}
+        ),
+        ops_agg AS (
+            SELECT
+                o.line_id,
+                MAX(CASE WHEN o.op_type = 'receiving_correction' THEN o.qty      END) AS recv_corr,
+                SUM(CASE WHEN o.op_type = 'receiving'            THEN o.qty ELSE 0 END) AS recv_sum
+            FROM receipt_ops o
+            WHERE o.line_id IN (SELECT id FROM matched_lines)
+            GROUP BY o.line_id
+        )
+        SELECT COALESCE(SUM(COALESCE(oa.recv_corr, oa.recv_sum, 0)), 0) AS good_in
+        FROM matched_lines ml
+        LEFT JOIN ops_agg oa ON oa.line_id = ml.id
         """,
         in_params,
     ).fetchone()
     good_in = int(in_row["good_in"]) if in_row else 0
 
-    # --- уже отгруженное годное ---
     out_conds = [
         "sl.is_deleted = 0", "sd.is_deleted = 0",
         "sd.status = 'shipped'", "sd.cargo_type = 'good'",

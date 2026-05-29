@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getProducts, getProductVariants } from '../../../api/adminApi'
-import { getInventoryProductTypes, getInventoryClients } from '../../../api/inventoryLookupsApi'
+import { getInventoryProductTypes } from '../../../api/inventoryLookupsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
-import type { ProductItem, ProductVariantItem, DictionaryItem, InventoryProductTypeLookup } from '../../../api/domainTypes'
+import type { ProductItem, ProductVariantItem, InventoryProductTypeLookup } from '../../../api/domainTypes'
+import { useLookups } from '../../../hooks/useLookups'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
 import { Checkbox } from '../../primitives/Checkbox'
@@ -38,7 +39,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
   const [actuality, setActuality] = useState('')
 
   const [productTypes, setProductTypes] = useState<InventoryProductTypeLookup[]>([])
-  const [clients, setClients] = useState<DictionaryItem[]>([])
+  const { clients } = useLookups()
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [variants, setVariants] = useState<ProductVariantItem[]>([])
@@ -46,7 +47,6 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
 
   useEffect(() => {
     getInventoryProductTypes().then(setProductTypes).catch(() => {})
-    getInventoryClients().then(setClients).catch(() => {})
   }, [])
 
   const load = useCallback(async (q: string, tid: string, cid: string, act: string, pg: number) => {

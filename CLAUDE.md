@@ -4,11 +4,22 @@
 - PostgreSQL (psycopg). The `dbconn.py` adapter auto-converts `?` → `%s`, so `?` placeholders are fine in queries.
 - Boolean columns use integers (0/1), not TRUE/FALSE — `COALESCE(is_deleted, 0) = 0` is correct.
 
-## Inventory system — legacy warning
-`inventory_operations` is **dead legacy (v1)**. It has ~8 rows and is only populated by an old Excel import path. **Never use it for balance/stock/defect calculations.**
+## Inventory tables
+All real inventory data lives in these tables (current names after migration 0002):
 
-All real inventory data lives in:
-- `receipt2_docs`, `receipt2_lines`, `receipt2_ops` — receipts
-- `shipment2_docs`, `shipment2_lines` — shipments
+**Receipts**
+- `receipt_docs` — документы поступлений
+- `receipt_lines` — строки (товар, SKU, плановые кол-ва)
+- `receipt_ops` — журнал операций (приёмка, брак, QC)
 
-Use these tables for any stock, good qty, or defect qty queries.
+**Shipments**
+- `shipment_docs` — документы отгрузок
+- `shipment_lines` — строки (товар, SKU, кол-ва)
+- `shipment_ops` — журнал операций
+
+**Балансы** считаются из `receipt_ops` (op_type: receiving / receiving_correction / defect_fix / defect_correction) минус `shipment_lines` где `shipment_docs.status = 'shipped'`.
+
+## Legacy — не использовать
+- `inventory_operations` — удалена (migration 0003). Не использовать ни в каких расчётах.
+- `app_migrations` — удалена (migration 0004).
+- Имена `receipt2_*` / `shipment2_*` — исторические, таблиц с таким именем больше нет.

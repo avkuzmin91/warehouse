@@ -26,9 +26,8 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Field } from '../../primitives/Input'
-import { getInventoryCarriers, getInventoryWarehouses } from '../../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../../api/domainTypes'
 import { fmtDateLong } from '../../../utils/format'
+import { useLookups } from '../../../hooks/useLookups'
 import { balanceKey } from '../../../utils/balanceKey'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
@@ -55,9 +54,9 @@ export function InventoryShipmentDetailPage() {
 
   const today = new Date().toISOString().slice(0, 10)
 
+  const { warehouses: infoWarehouses, carriers: infoCarriers } = useLookups()
+
   // Info form state (used when status === 'packing')
-  const [infoWarehouses, setInfoWarehouses] = useState<DictionaryItem[]>([])
-  const [infoCarriers, setInfoCarriers] = useState<DictionaryItem[]>([])
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
   const [infoDestinationName, setInfoDestinationName] = useState<string | null>(null)
@@ -68,11 +67,6 @@ export function InventoryShipmentDetailPage() {
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
-
-  useEffect(() => {
-    getInventoryWarehouses().then(setInfoWarehouses).catch(() => {})
-    getInventoryCarriers().then(setInfoCarriers).catch(() => {})
-  }, [])
 
   // Sync form when doc loads
   useEffect(() => {

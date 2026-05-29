@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   getReceipts,
   getReceiptsSummary,
@@ -9,8 +9,6 @@ import {
   isReceiptOverdue,
 } from '../../api/receiptsApi'
 import type { ReceiptListItem, ReceiptStatus, ReceiptsSummary } from '../../api/receiptsApi'
-import { getInventoryClients } from '../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../api/domainTypes'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -23,6 +21,8 @@ import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
 import { fmtDate } from '../../utils/format'
 import { useApi } from '../../hooks/useApi'
+import { useLookups } from '../../hooks/useLookups'
+import { useFilterParam, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
@@ -50,34 +50,35 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
 
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
-  const { key: locationKey } = useLocation()
-  const [tab, setTab] = useState<TabId>('all')
+
+  const [tab, setTab] = useFilterParam('tab', 'all')
+  const [search, setSearch] = useFilterParam('search', '')
+  const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
+  const [dateFrom, setDateFrom] = useFilterParam('from', '')
+  const [dateTo, setDateTo] = useFilterParam('to', '')
+  const [statusFilter, setStatusFilter] = useFilterParam('status', '')
+  const [view, setView] = useFilterParam('view', 'table')
+  const [page, setPage] = usePageParam()
+
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [retryTick, setRetryTick] = useState(0)
-  const [search, setSearch] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [statusFilter, setStatusFilter] = useState<ReceiptStatus | ''>('')
   const [items, setItems] = useState<ReceiptListItem[]>([])
-  const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [kanbanItems, setKanbanItems] = useState<ReceiptListItem[]>([])
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = clientsData ?? []
+  const { clients } = useLookups()
 
   const { data: summaryData } = useApi(
     (signal) => getReceiptsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
+      sku: skuFilter.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }, signal),
-    [clientId, search, dateFrom, dateTo, locationKey],
+    [clientId, search, skuFilter, dateFrom, dateTo],
   )
   const summary: ReceiptsSummary = summaryData ?? { all: 0, active: 0, done: 0, drafts: 0, overdue: 0 }
 
@@ -87,13 +88,14 @@ export function InventoryReceiptsListPage() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     setLoading(true)
     setLoadError(null)
-    const effectiveStatus = statusFilter || TAB_STATUS[tab]
+    const effectiveStatus = statusFilter || TAB_STATUS[tab as TabId]
     getReceipts({
       page,
       limit: PAGE_SIZE,
       search: search.trim() || undefined,
+      sku: skuFilter.trim() || undefined,
       client_id: clientId || undefined,
-      status: effectiveStatus,
+      status: effectiveStatus as ReceiptStatus | undefined,
       overdue: tab === 'overdue' && !statusFilter ? true : undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -118,27 +120,13 @@ export function InventoryReceiptsListPage() {
       ctrl.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, retryTick, initialLoading])
+  }, [view, page, search, skuFilter, clientId, statusFilter, tab, dateFrom, dateTo, retryTick, initialLoading])
 
-  useEffect(() => {
-    if (view !== 'kanban') return
-    const ctrl = new AbortController()
-    getReceipts({
-      page: 1,
-      limit: 200,
-      search: search.trim() || undefined,
-      client_id: clientId || undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, ctrl.signal).then((res) => setKanbanItems(res.items)).catch(() => {})
-    return () => ctrl.abort()
-  }, [view, search, clientId, dateFrom, dateTo])
 
-  // When tab changes reset page and clear manual status chip
   function handleTabChange(t: TabId) {
+    // Меняем tab + сбрасываем status за один вызов setSearchParams
     setTab(t)
     setStatusFilter('')
-    setPage(1)
   }
 
   const STATUS_OPTIONS = [
@@ -189,30 +177,48 @@ export function InventoryReceiptsListPage() {
               style={{ paddingLeft: 28, width: 220 }}
               placeholder="Номер или клиент…"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              onChange={(e) => setSearch(e.target.value)}
             />
+          </div>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Icon name="tag" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
+            <input
+              className="input sm"
+              style={{ paddingLeft: 28, width: 160, paddingRight: skuFilter ? 26 : undefined }}
+              placeholder="SKU товара…"
+              value={skuFilter}
+              onChange={(e) => setSkuFilter(e.target.value)}
+            />
+            {skuFilter && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => setSkuFilter('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
           </div>
           <FilterCombobox
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            onChange={(v) => { setClientId(v); setPage(1) }}
+            onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
           <DateRange
             from={dateFrom} to={dateTo}
-            onFromChange={(v) => { setDateFrom(v); setPage(1) }}
-            onToChange={(v) => { setDateTo(v); setPage(1) }}
-            onClear={() => { setDateFrom(''); setDateTo(''); setPage(1) }}
+            onFromChange={(v) => setDateFrom(v)}
+            onToChange={(v) => setDateTo(v)}
+            onClear={() => { setDateFrom(''); setDateTo('') }}
           />
           <FilterSelect
             label="Статус"
             value={statusFilter}
             options={STATUS_OPTIONS}
-            onChange={(v) => { setStatusFilter(v as ReceiptStatus | ''); setPage(1) }}
+            onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setDateFrom(''); setDateTo(''); setStatusFilter(''); setPage(1) }}>
+          {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
+            <button className="btn ghost sm" onClick={() => { setClientId(''); setSkuFilter(''); setDateFrom(''); setDateTo(''); setStatusFilter('') }}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -229,7 +235,7 @@ export function InventoryReceiptsListPage() {
                 onClick={() => handleTabChange(t.id)}
               >
                 {t.label}
-                <span className="tab-count">{summary[t.id]}</span>
+                <span className="tab-count">{summary[t.id as keyof ReceiptsSummary]}</span>
               </button>
             ))}
           </div>
@@ -367,69 +373,148 @@ export function InventoryReceiptsListPage() {
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
       ) : (
-        <KanbanBoard items={kanbanItems} loading={loading} onNavigate={(id) => navigate(`/inventory/receipts/${id}`)} />
+        <KanbanBoard
+          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }}
+          onNavigate={(id) => navigate(`/inventory/receipts/${id}`)}
+        />
       )}
     </ListPage>
   )
 }
 
-function KanbanBoard({ items, loading, onNavigate }: {
-  items: ReceiptListItem[]
-  loading: boolean
+const KANBAN_PAGE = 20
+
+type KanbanFilters = {
+  search?: string
+  sku?: string
+  client_id?: string
+  date_from?: string
+  date_to?: string
+}
+
+function KanbanBoard({ filters, onNavigate }: {
+  filters: KanbanFilters
   onNavigate: (id: string) => void
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, alignItems: 'start' }}>
-      {KANBAN_COLS.map((col) => {
-        const colItems = items.filter((i) => i.status === col.status)
-        return (
-          <div key={col.status} style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
-            <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-              <Badge tone={col.tone} dot>{col.label}</Badge>
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{loading ? '…' : colItems.length}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {colItems.map((item) => {
-                const overdue = isReceiptOverdue(item)
-                return (
-                  <div
-                    key={item.id}
-                    className="card"
-                    style={{
-                      padding: 10, cursor: 'pointer',
-                      ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
-                    }}
-                    onClick={() => onNavigate(item.id)}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                      {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-                      <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-                        {item.arrival_date ? new Date(item.arrival_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-                    {item.supplier_name && (
-                      <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>{item.supplier_name}</div>
-                    )}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-                      <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_planned} шт</span>
-                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                      <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                      {item.total_defect > 0 && (
-                        <>
-                          <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                          <span style={{ fontSize: 12, color: 'var(--c-warning)', fontWeight: 500 }}>брак: {item.total_defect}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+      {KANBAN_COLS.map((col) => (
+        <KanbanColumn key={col.status} col={col} filters={filters} onNavigate={onNavigate} />
+      ))}
+    </div>
+  )
+}
+
+function KanbanColumn({ col, filters, onNavigate }: {
+  col: typeof KANBAN_COLS[number]
+  filters: KanbanFilters
+  onNavigate: (id: string) => void
+}) {
+  const [items, setItems] = useState<ReceiptListItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}`
+  const prevFilterKey = useRef(filterKey)
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const isReset = prevFilterKey.current !== filterKey
+    prevFilterKey.current = filterKey
+    const activePage = isReset ? 1 : page
+    if (isReset) {
+      setPage(1)
+      setItems([])
+    }
+    if (activePage === 1) setLoading(true); else setLoadingMore(true)
+    getReceipts({
+      page: activePage,
+      limit: KANBAN_PAGE,
+      status: col.status,
+      ...filters,
+    }, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return
+        setTotal(res.total)
+        setItems((prev) => activePage === 1 ? res.items : [...prev, ...res.items])
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (ctrl.signal.aborted) return
+        setLoading(false)
+        setLoadingMore(false)
+      })
+    return () => ctrl.abort()
+  }, [page, filterKey, col.status])
+
+  const hasMore = items.length < total
+
+  return (
+    <div style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
+        <Badge tone={col.tone} dot>{col.label}</Badge>
+        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+          {loading ? '…' : total}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
+            <div style={{ width: 20, height: 20, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
           </div>
-        )
-      })}
+        ) : items.length === 0 ? (
+          <div style={{ padding: '16px 6px', fontSize: 12, color: 'var(--c-text-faint)', textAlign: 'center' }}>Нет документов</div>
+        ) : (
+          items.map((item) => {
+            const overdue = isReceiptOverdue(item)
+            return (
+              <div
+                key={item.id}
+                className="card"
+                style={{
+                  padding: 10, cursor: 'pointer',
+                  ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
+                }}
+                onClick={() => onNavigate(item.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+                  {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
+                    {item.arrival_date ? new Date(item.arrival_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
+                {item.supplier_name && (
+                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>{item.supplier_name}</div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_planned} шт</span>
+                  <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+                  <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
+                  {item.total_defect > 0 && (
+                    <>
+                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+                      <span style={{ fontSize: 12, color: 'var(--c-warning)', fontWeight: 500 }}>брак: {item.total_defect}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })
+        )}
+        {hasMore && (
+          <button
+            className="btn ghost sm"
+            style={{ width: '100%', justifyContent: 'center', color: 'var(--c-text-subtle)', fontSize: 12 }}
+            disabled={loadingMore}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            {loadingMore ? '…' : `Ещё ${total - items.length}`}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

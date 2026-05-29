@@ -8,7 +8,6 @@ import {
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail } from '../../../../../api/receiptsApi'
-import { getInventoryUnloadingZones } from '../../../../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
 import { Table, Td } from '../../../../data/Table'
@@ -18,7 +17,7 @@ import { Badge } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
-import { useApi } from '../../../../../hooks/useApi'
+import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -61,8 +60,8 @@ export function PlannedView({
   const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
-  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
+  const { unloadingZones: zonesAll } = useLookups()
+  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
 

@@ -7,9 +7,6 @@ import {
 } from '../../../api/receiptsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
-  getInventoryClients,
-  getInventorySuppliers,
-  getInventoryUnloadingZones,
   getInventoryProducts,
   getInventoryColorsForProductSku,
   getInventorySizesForProductSkuAndColor,
@@ -25,7 +22,7 @@ import { Select } from '../../primitives/Select'
 import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
-import { useApi } from '../../../hooks/useApi'
+import { useLookups } from '../../../hooks/useLookups'
 import { ReceiptStepper } from './ReceiptStepper'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -49,14 +46,10 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = (clientsData ?? []).filter((c) => c.is_active && !c.is_deleted)
-
-  const { data: suppliersData } = useApi((signal) => getInventorySuppliers(signal), [])
-  const suppliers: DictionaryItem[] = (suppliersData ?? []).filter((s) => s.is_active && !s.is_deleted)
-
-  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
-  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
+  const { clients: clientsAll, suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
+  const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
+  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
+  const unloadingZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
