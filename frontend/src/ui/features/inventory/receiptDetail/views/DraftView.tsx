@@ -10,7 +10,6 @@ import {
 import type { ReceiptDetail } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
-import { Table, Td } from '../../../../data/Table'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
@@ -19,9 +18,9 @@ import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
-import { NumberStep } from '../../shared/NumberStep'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
+import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 
 type Props = {
   docId: string
@@ -47,7 +46,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
-  const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
 
   const [showAddLine, setShowAddLine] = useState(false)
 
@@ -57,38 +55,51 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   function markDirty() { setMetaDirty(true) }
 
-  async function handleSaveMeta() {
+  const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
+  const hasUnsavedChanges = metaDirty || hasPendingQty
+
+  async function handleSaveChanges(): Promise<boolean> {
+    if (!hasUnsavedChanges) return true
     setMetaError('')
     setMetaSaving(true)
     try {
-      await updateReceipt(docId, {
-        client_id: clientId || undefined,
-        supplier_name: supplierName.trim() || null,
-        arrival_date: arrivalDate || null,
-        logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
-      })
+      if (metaDirty) {
+        await updateReceipt(docId, {
+          client_id: clientId || undefined,
+          supplier_name: supplierName.trim() || null,
+          arrival_date: arrivalDate || null,
+          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+        })
+      }
+      for (const line of lines) {
+        const qty = pendingQty[line.id]
+        if (qty === undefined || qty === line.planned_qty) continue
+        await updateReceiptLine(docId, line.id, qty)
+      }
       setMetaDirty(false)
+      setPendingQty({})
       await onReload()
+      return true
     } catch (e: unknown) {
       setMetaError(e instanceof Error ? e.message : 'Ошибка')
+      return false
     } finally {
       setMetaSaving(false)
     }
   }
 
-  function setPendingQtyFor(lineId: string, qty: number) {
-    setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
+  function handleResetChanges() {
+    setClientId(doc.client_id)
+    setSupplierName(doc.supplier_name ?? '')
+    setArrivalDate(doc.arrival_date ?? '')
+    setLogisticsCost(doc.logistics_cost ? String(doc.logistics_cost) : '')
+    setMetaDirty(false)
+    setPendingQty({})
+    setMetaError('')
   }
 
-  async function handleSaveLineQty(lineId: string, qty: number) {
-    setSavingQty((prev) => ({ ...prev, [lineId]: true }))
-    try {
-      await updateReceiptLine(docId, lineId, qty)
-      setPendingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-      await onReload()
-    } finally {
-      setSavingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-    }
+  function setPendingQtyFor(lineId: string, qty: number) {
+    setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
   }
 
   async function handleDeleteLine(lineId: string, productName: string) {
@@ -114,7 +125,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   ]
 
   const blockReasons = [
-    ...(metaDirty ? ['Есть несохранённые изменения реквизитов'] : []),
+    ...(hasUnsavedChanges ? ['Есть несохранённые изменения'] : []),
     ...readyChecks.filter((c) => !c.ok).map((c) => c.error),
   ]
 
@@ -137,9 +148,14 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         </div>
         <div className="detail-actions">
           <div className="detail-actions-row">
-            {metaDirty && (
-              <button className="btn" onClick={handleSaveMeta} disabled={metaSaving || !clientId}>
-                <Icon name="check" size={14} />Сохранить изменения
+            {hasUnsavedChanges && (
+              <button className="btn ghost" onClick={handleResetChanges} disabled={metaSaving}>
+                <Icon name="x" size={14} />Отменить изменения
+              </button>
+            )}
+            {hasUnsavedChanges && (
+              <button className="btn" onClick={handleSaveChanges} disabled={metaSaving || !clientId}>
+                <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
             <button
@@ -261,69 +277,15 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                 </div>
               </div>
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · SKU</th>
-                    <th style={{ width: 110 }}>Цвет</th>
-                    <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 148 }}>План, шт</th>
-                    <th style={{ width: 32 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, i) => {
-                    const displayQty = pendingQty[l.id] ?? l.planned_qty
-                    const isDirty = pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty
-                    const isSaving = savingQty[l.id] ?? false
-                    return (
-                      <tr key={l.id}>
-                        <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
-                        <Td>
-                          <div style={{ fontWeight: 450 }}>{l.product_name}</div>
-                          <div className="t-sub mono">{l.product_sku}</div>
-                        </Td>
-                        <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <NumberStep
-                              value={displayQty}
-                              onChange={(v) => setPendingQtyFor(l.id, Math.max(1, v))}
-                              tone={isDirty ? 'accent' : 'normal'}
-                              width={120}
-                            />
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: isDirty ? 'visible' : 'hidden', pointerEvents: isDirty ? undefined : 'none' }}
-                              disabled={!isDirty || isSaving}
-                              onClick={() => { if (isDirty) void handleSaveLineQty(l.id, displayQty) }}
-                              title="Сохранить"
-                              aria-hidden={!isDirty}
-                              tabIndex={isDirty ? 0 : -1}
-                            >
-                              <Icon name="save" size={14} />
-                            </button>
-                          </div>
-                        </Td>
-                        <Td>
-                          <button className="btn ghost icon sm" onClick={() => void handleDeleteLine(l.id, l.product_name)}>
-                            <Icon name="trash" size={13} />
-                          </button>
-                        </Td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="sum">
-                    <td colSpan={4}>Итого: {totalSku} SKU</td>
-                    <td className="num">{totalQty}</td>
-                    <td />
-                  </tr>
-                </tfoot>
-              </Table>
+              <ReceiptLinesTable
+                stage="draft"
+                lines={lines}
+                saving={metaSaving}
+                plannedQty={(l) => pendingQty[l.id] ?? l.planned_qty}
+                plannedDirty={(l) => pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty}
+                onPlannedQty={(l, v) => setPendingQtyFor(l.id, v)}
+                onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
+              />
             )}
           </Card>
 

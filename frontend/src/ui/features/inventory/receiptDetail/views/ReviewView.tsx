@@ -11,9 +11,7 @@ import {
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail, ReceiptLine } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
-import { Combobox } from '../../../../data/Combobox'
 import { FilterChip } from '../../../../data/FiltersBar'
-import { Table, Td } from '../../../../data/Table'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
@@ -22,6 +20,7 @@ import { fmtDate } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { OpEntry } from '../components/OpEntry'
+import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 
 type LineQcDraft = {
   accepted: number
@@ -36,11 +35,6 @@ type Props = {
   onReopen: () => void
   advancing: boolean
 }
-
-const tintArr = 'var(--c-bg-sunken)'
-const tintGood = 'color-mix(in oklab, var(--c-success) 7%, var(--c-bg-elev))'
-const tintDef = 'color-mix(in oklab, var(--c-warning) 8%, var(--c-bg-elev))'
-const groupBorder = '1px solid var(--c-border)'
 
 export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advancing }: Props) {
   const navigate = useNavigate()
@@ -128,24 +122,6 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     } finally {
       setSavingZone((prev) => { const next = { ...prev }; delete next[key]; return next })
     }
-  }
-
-  function zoneCell(line: ReceiptLine, kind: ZoneKind) {
-    const savedId = lineZoneId(line, kind) ?? ''
-    if (isReadonly) return <span className="t-sub">{lineZoneName(line, kind) || '—'}</span>
-    const key = `${kind}:${line.id}`
-    return (
-      <div className="storage-cell-combobox" style={{ width: '100%' }}>
-        <Combobox
-          value={savedId}
-          placeholder="Выберите"
-          options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
-          onChange={(value) => void handleSaveLineZone(line.id, kind, String(value ?? ''))}
-          disabled={savingZone[key] || storageZones.length === 0}
-          clearable
-        />
-      </div>
-    )
   }
 
   const allDone = lines.length > 0 && lines.every((l) => l.qc_status === 'done')
@@ -321,256 +297,23 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 </span>
               )}
             </CardHead>
-            <Table>
-              <thead>
-                <tr>
-                  <th rowSpan={2} style={{ width: 20 }} />
-                  <th rowSpan={2}>Товар</th>
-                  <th rowSpan={2} style={{ width: 50, textAlign: 'right' }}>План</th>
-                  <th colSpan={2} style={{ background: tintArr, textAlign: 'center', borderLeft: groupBorder }}>
-                    Принято
-                  </th>
-                  <th
-                    colSpan={2}
-                    style={{ background: tintGood, color: 'var(--c-success)', textAlign: 'center', borderLeft: groupBorder }}
-                  >
-                    Годен
-                  </th>
-                  <th
-                    colSpan={2}
-                    style={{ background: tintDef, color: 'var(--c-warning)', textAlign: 'center', borderLeft: groupBorder }}
-                  >
-                    Брак
-                  </th>
-                  <th rowSpan={2} style={{ width: 96, borderLeft: groupBorder }}>Статус</th>
-                  <th rowSpan={2} style={{ width: 130 }}>Действие</th>
-                </tr>
-                <tr>
-                  <th style={{ width: 70, textAlign: 'right', background: tintArr, borderLeft: groupBorder }}>Кол-во</th>
-                  <th style={{ width: 150, background: tintArr }}>Место</th>
-                  <th style={{ width: 92, textAlign: 'right', background: tintGood, borderLeft: groupBorder }}>Кол-во</th>
-                  <th style={{ width: 150, background: tintGood }}>Место</th>
-                  <th style={{ width: 92, textAlign: 'right', background: tintDef, borderLeft: groupBorder }}>Кол-во</th>
-                  <th style={{ width: 150, background: tintDef }}>Место</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line) => {
-                  const draft = getDraft(line)
-                  const isDone = line.qc_status === 'done'
-                  const hasSavedProgress = line.accepted > 0 || line.defect > 0 || line.ops_count > 0
-                  const isInProgress = !isDone && (line.qc_status === 'in_progress' || hasSavedProgress)
-                  const isCompleting = completing[line.id] ?? false
-                  const isReopening = reopening[line.id] ?? false
-                  const lineErr = lineError[line.id]
-                  // Места годного/брака обязательны (бэкенд дублирует). Учитываем уже сохранённое место.
-                  const needGoodZone = draft.accepted > 0 && !(line.good_zone_id || '').trim()
-                  const needDefectZone = draft.defect > 0 && !(line.defect_zone_id || '').trim()
-                  const zoneBlocked = needGoodZone || needDefectZone
-
-                  // Расхождение считается «на лету» относительно «Принято» (фактически прибыло),
-                  // в т.ч. для строк в работе — предварительно (зафиксируется при завершении).
-                  const processed = isDone ? (line.accepted + line.defect) : (draft.accepted + draft.defect)
-                  const base = line.accepted_qty ?? 0
-                  const surplus = base ? Math.max(0, processed - base) : 0
-                  const shortage = base ? Math.max(0, base - processed) : 0
-                  const matched = processed === base && base > 0 && (isDone || isInProgress)
-                  const preliminary = !isDone
-
-                  const statusColor = isDone
-                    ? 'var(--c-success)'
-                    : isInProgress
-                    ? 'var(--c-info, #3b82f6)'
-                    : 'var(--c-text-faint)'
-
-                  const statusBg = isDone
-                    ? 'var(--c-success-bg)'
-                    : isInProgress
-                    ? 'color-mix(in oklab, var(--c-info, #3b82f6) 12%, transparent)'
-                    : 'transparent'
-
-                  const statusLabel = isDone ? 'Проверено' : isInProgress ? 'В работе' : 'Не начато'
-
-                  return (
-                    <tr key={line.id}>
-                      <Td>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: isDone ? 'var(--c-success)' : isInProgress ? 'var(--c-info, #3b82f6)' : 'var(--c-border-strong)' }} />
-                      </Td>
-                      <Td>
-                        <div style={{ fontWeight: 500 }}>{line.product_name}</div>
-                        <div className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-                          {line.product_sku}
-                          {line.color_name ? ` · ${line.color_name}` : ''}
-                          {line.size_name ? ` · ${line.size_name}` : ''}
-                        </div>
-                      </Td>
-                      <Td className="num" style={{ color: 'var(--c-text-muted)' }}>{line.planned_qty}</Td>
-
-                      <Td className="num" style={{ textAlign: 'right', fontWeight: 700, background: tintArr, borderLeft: groupBorder }}>
-                        {line.accepted_qty ?? '—'}
-                      </Td>
-                      <Td style={{ background: tintArr }}>{zoneCell(line, 'storage')}</Td>
-
-                      <Td style={{ textAlign: 'right', background: tintGood, borderLeft: groupBorder }}>
-                        {isDone || isReadonly ? (
-                          <span className="num" style={{ fontWeight: 500 }}>{line.accepted}</span>
-                        ) : (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 26, width: 92, background: 'var(--c-bg-elev)' }}>
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ height: 24, width: 22, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                              disabled={isCompleting}
-                              onClick={() => setDraftField(line.id, 'accepted', draft.accepted - 1, line.accepted, line.defect)}
-                            >
-                              <Icon name="minus" size={10} />
-                            </button>
-                            <input
-                              inputMode="numeric"
-                              value={draft.accepted}
-                              disabled={isCompleting}
-                              onChange={(e) => {
-                                const v = parseInt(e.target.value.replace(/\D/g, '')) || 0
-                                setDraftField(line.id, 'accepted', v, line.accepted, line.defect)
-                              }}
-                              style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
-                            />
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ height: 24, width: 22, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                              disabled={isCompleting}
-                              onClick={() => setDraftField(line.id, 'accepted', draft.accepted + 1, line.accepted, line.defect)}
-                            >
-                              <Icon name="plus" size={10} />
-                            </button>
-                          </div>
-                        )}
-                      </Td>
-                      <Td style={{ background: tintGood }}>{zoneCell(line, 'good')}</Td>
-
-                      <Td style={{ textAlign: 'right', background: tintDef, borderLeft: groupBorder }}>
-                        {isDone || isReadonly ? (
-                          <span className="num" style={{ fontWeight: 500, color: line.defect > 0 ? 'var(--c-warning)' : undefined }}>
-                            {line.defect}
-                          </span>
-                        ) : (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 26, width: 92, background: 'var(--c-bg-elev)' }}>
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ height: 24, width: 22, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                              disabled={isCompleting}
-                              onClick={() => setDraftField(line.id, 'defect', draft.defect - 1, line.accepted, line.defect)}
-                            >
-                              <Icon name="minus" size={10} />
-                            </button>
-                            <input
-                              inputMode="numeric"
-                              value={draft.defect}
-                              disabled={isCompleting}
-                              onChange={(e) => {
-                                const v = parseInt(e.target.value.replace(/\D/g, '')) || 0
-                                setDraftField(line.id, 'defect', v, line.accepted, line.defect)
-                              }}
-                              style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: draft.defect > 0 ? 'var(--c-warning)' : undefined }}
-                            />
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ height: 24, width: 22, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                              disabled={isCompleting}
-                              onClick={() => setDraftField(line.id, 'defect', draft.defect + 1, line.accepted, line.defect)}
-                            >
-                              <Icon name="plus" size={10} />
-                            </button>
-                          </div>
-                        )}
-                      </Td>
-                      <Td style={{ background: tintDef }}>{zoneCell(line, 'defect')}</Td>
-
-                      <Td style={{ borderLeft: groupBorder }}>
-                        <div>
-                          <span style={{
-                            fontSize: 11.5, fontWeight: 500, padding: '2px 7px', borderRadius: 'var(--r-sm)',
-                            color: statusColor, background: statusBg,
-                          }}>
-                            {statusLabel}
-                          </span>
-                          {surplus > 0 && (
-                            <div
-                              style={{ fontSize: 11, color: 'var(--c-info, #3b82f6)', marginTop: 3, opacity: preliminary ? 0.85 : 1 }}
-                              title={preliminary ? 'Предварительно — зафиксируется при завершении' : undefined}
-                            >
-                              ▲ +{surplus} излишек
-                            </div>
-                          )}
-                          {shortage > 0 && (
-                            <div
-                              style={{ fontSize: 11, color: 'var(--c-warning)', marginTop: 3, opacity: preliminary ? 0.85 : 1 }}
-                              title={preliminary ? 'Предварительно — зафиксируется при завершении' : undefined}
-                            >
-                              ▼ −{shortage} недостача
-                            </div>
-                          )}
-                          {matched && (
-                            <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 3 }}>= сходится</div>
-                          )}
-                        </div>
-                      </Td>
-                      <Td>
-                        {isDone ? (
-                          <button
-                            className="btn ghost sm"
-                            onClick={() => void handleReopen(line.id)}
-                            disabled={isReopening || isReadonly}
-                          >
-                            <Icon name="edit" size={12} />Изменить
-                          </button>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                            <button
-                              className="btn sm primary"
-                              onClick={() => void handleCompleteClick(line)}
-                              disabled={isCompleting || zoneBlocked}
-                              title={zoneBlocked ? 'Укажите место хранения' : undefined}
-                            >
-                              <Icon name="check" size={12} />Завершить
-                            </button>
-                            {zoneBlocked && (
-                              <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', maxWidth: 160 }}>
-                                {needGoodZone ? 'Укажите место годного' : 'Укажите место брака'}
-                              </div>
-                            )}
-                            {lineErr && (
-                              <div style={{ fontSize: 11, color: 'var(--c-danger)', maxWidth: 160 }}>{lineErr}</div>
-                            )}
-                          </div>
-                        )}
-                      </Td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={11} style={{ padding: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '10px 14px',
-                      background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5 }}>
-                      <span style={{ fontWeight: 500 }}>Итого</span>
-                      <span style={{ color: 'var(--c-text-subtle)' }}>План <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-text)' }}>{totals.planned}</b></span>
-                      <span style={{ color: 'var(--c-text-subtle)' }}>Принято <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-text)' }}>{totals.acceptedQty}</b></span>
-                      <span style={{ color: 'var(--c-text-subtle)' }}>Годен <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-success)' }}>{totals.accepted}</b></span>
-                      <span style={{ color: 'var(--c-text-subtle)' }}>Брак <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-warning)' }}>{totals.defect}</b></span>
-                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
-                        {totals.surplus === 0 && totals.shortage === 0
-                          ? <span style={{ color: 'var(--c-text-faint)' }}>✓ расхождений нет</span>
-                          : <>
-                              {totals.surplus  > 0 && <span style={{ color: 'var(--c-info, #3b82f6)' }}>▲ +{totals.surplus} излишек</span>}
-                              {totals.shortage > 0 && <span style={{ color: 'var(--c-warning)' }}>▼ −{totals.shortage} недостача</span>}
-                            </>}
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              </tfoot>
-            </Table>
+            <ReceiptLinesTable
+              stage="review"
+              lines={lines}
+              zones={storageZones}
+              readonly={isReadonly}
+              getDraft={(l) => getDraft(l)}
+              onDraftField={(l, field, v) => setDraftField(l.id, field, v, l.accepted, l.defect)}
+              zoneValue={(l, kind) => lineZoneId(l, kind) ?? ''}
+              zoneName={(l, kind) => lineZoneName(l, kind)}
+              zoneSaving={(l, kind) => savingZone[`${kind}:${l.id}`] ?? false}
+              onZone={(l, kind, v) => void handleSaveLineZone(l.id, kind, v)}
+              completing={(l) => completing[l.id] ?? false}
+              reopening={(l) => reopening[l.id] ?? false}
+              lineError={(l) => lineError[l.id]}
+              onComplete={(l) => void handleCompleteClick(l)}
+              onReopen={(l) => void handleReopen(l.id)}
+            />
           </Card>
 
           {/* Основная информация */}

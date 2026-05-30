@@ -10,7 +10,6 @@ import {
 import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
-import { Table, Td } from '../../../../data/Table'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
@@ -18,10 +17,10 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { useLookups } from '../../../../../hooks/useLookups'
-import { NumberStep } from '../../shared/NumberStep'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
+import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 
 type Props = {
   docId: string
@@ -303,90 +302,21 @@ export function PlannedView({
                 <div style={{ fontSize: 14, fontWeight: 500 }}>Нет строк</div>
               </div>
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · SKU</th>
-                    <th style={{ width: 110 }}>Цвет</th>
-                    <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 170 }}>Место (на проверке)</th>
-                    <th style={{ width: 148 }}>План, шт</th>
-                    <th style={{ width: 148 }}>Принят, шт</th>
-                    <th style={{ width: 32 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, i) => {
-                    const displayQty = plannedQtyFor(l.id)
-                    const isDirty = pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty
-                    const storageDirty = pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')
-                    return (
-                      <tr key={l.id}>
-                        <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
-                        <Td>
-                          <div style={{ fontWeight: 450 }}>{l.product_name}</div>
-                          <div className="t-sub mono">{l.product_sku}</div>
-                        </Td>
-                        <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 166 }}>
-                            <div className="storage-cell-combobox">
-                              <Combobox
-                                value={pendingStorage[l.id] ?? l.storage_zone_id ?? ''}
-                                placeholder="Выберите"
-                                options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
-                                onChange={(value) => setPendingStorage((prev) => ({ ...prev, [l.id]: String(value ?? '') }))}
-                                disabled={metaSaving || storageZones.length === 0}
-                                clearable
-                              />
-                            </div>
-                            <span style={{ display: 'inline-flex', width: 28, color: 'var(--c-accent)', visibility: storageDirty ? 'visible' : 'hidden' }}>
-                              <Icon name="edit" size={13} />
-                            </span>
-                          </div>
-                        </Td>
-                        <Td>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <NumberStep
-                              value={displayQty}
-                              onChange={(v) => setPendingQtyFor(l.id, Math.max(1, v))}
-                              tone={isDirty ? 'accent' : 'normal'}
-                              disabled={metaSaving}
-                              width={120}
-                            />
-                            <span style={{ display: 'inline-flex', width: 28, color: 'var(--c-accent)', visibility: isDirty ? 'visible' : 'hidden' }}>
-                              <Icon name="edit" size={13} />
-                            </span>
-                          </div>
-                        </Td>
-                        <Td>
-                          <NumberStep
-                            value={acceptedFor(l.id)}
-                            onChange={(v) => setAccepted((prev) => ({ ...prev, [l.id]: Math.max(0, v) }))}
-                            disabled={metaSaving}
-                            width={120}
-                          />
-                        </Td>
-                        <Td>
-                          <button className="btn ghost icon sm" onClick={() => void handleDeleteLine(l.id, l.product_name)}>
-                            <Icon name="trash" size={13} />
-                          </button>
-                        </Td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="sum">
-                    <td colSpan={5}>Итого: {totalSku} SKU</td>
-                    <td className="num">{totalQty}</td>
-                    <td className="num">{totalAccepted}</td>
-                    <td />
-                  </tr>
-                </tfoot>
-              </Table>
+              <ReceiptLinesTable
+                stage="planned"
+                lines={lines}
+                zones={storageZones}
+                saving={metaSaving}
+                plannedQty={(l) => plannedQtyFor(l.id)}
+                plannedDirty={(l) => pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty}
+                onPlannedQty={(l, v) => setPendingQtyFor(l.id, v)}
+                accepted={(l) => acceptedFor(l.id)}
+                onAccepted={(l, v) => setAccepted((prev) => ({ ...prev, [l.id]: v }))}
+                storageValue={(l) => pendingStorage[l.id] ?? l.storage_zone_id ?? ''}
+                storageDirty={(l) => pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')}
+                onStorage={(l, v) => setPendingStorage((prev) => ({ ...prev, [l.id]: v }))}
+                onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
+              />
             )}
           </Card>
         </div>
