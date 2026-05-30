@@ -68,24 +68,45 @@ def test_shipment_advance_packing_to_ready(admin_client, client_id):
     assert r3.json()["message"] == "ready"
 
 
-def test_shipment_ready_to_shipped_insufficient_stock_returns_409(admin_client, client_id):
-    """Отгрузка готового товара при нехватке остатков → 409."""
-    fake_product_id = str(uuid.uuid4())
-    lines = [
-        {
-            "product_id": fake_product_id,
-            "product_name": "Fake Product",
-            "product_sku": "FAKE-001",
-            "color_id": str(uuid.uuid4()),
-            "color_name": "Red",
-            "size_id": None,
-            "size_name": None,
-            "qty": 999,
-        }
-    ]
-    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, lines))
+def _fake_line() -> dict:
+    return {
+        "product_id": str(uuid.uuid4()),
+        "product_name": "Fake Product",
+        "product_sku": "FAKE-001",
+        "color_id": str(uuid.uuid4()),
+        "color_name": "Red",
+        "size_id": None,
+        "size_name": None,
+        "qty": 999,
+    }
+
+
+def test_shipment_ready_to_shipped_unallocated_zones_returns_400(admin_client, client_id):
+    """Отгрузка годного без распределения по зонам → 400 (нужно распределить)."""
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
+
+    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    admin_client.post(f"/shipments/{doc_id}/advance")  # packing → ready
+
+    r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # ready → shipped
+    assert r_ship.status_code == 400, r_ship.text
+
+
+def test_shipment_ready_to_shipped_insufficient_stock_returns_409(admin_client, client_id):
+    """Распределено по зоне, но остатка в зоне нет → 409."""
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+
+    line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    zone_id = str(uuid.uuid4())
+    r_zones = admin_client.put(
+        f"/shipments/{doc_id}/lines/{line_id}/zones",
+        json={"zones": [{"storage_zone_id": zone_id, "storage_zone_name": "Зона А", "qty": 999}]},
+    )
+    assert r_zones.status_code == 200, r_zones.text
 
     admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
     admin_client.post(f"/shipments/{doc_id}/advance")  # packing → ready

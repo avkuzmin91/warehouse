@@ -7,7 +7,7 @@ import {
   updateReceipt,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
-import type { ReceiptDetail } from '../../../../../api/receiptsApi'
+import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
 import { Table, Td } from '../../../../data/Table'
@@ -18,6 +18,7 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { NumberStep } from '../../shared/NumberStep'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -26,8 +27,7 @@ type Props = {
   docId: string
   detail: ReceiptDetail
   onReload: () => Promise<void>
-  onUpdateLineQty: (lineId: string, qty: number) => void
-  onArrive: () => void
+  onArrive: (lines: ReceiptArriveLine[]) => void
   onCancel: () => void
   advancing: boolean
 }
@@ -36,7 +36,6 @@ export function PlannedView({
   docId,
   detail,
   onReload,
-  onUpdateLineQty,
   onArrive,
   onCancel,
   advancing,
@@ -55,10 +54,25 @@ export function PlannedView({
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
-  const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
   const [pendingStorage, setPendingStorage] = useState<Record<string, string>>({})
-  const [savingStorage, setSavingStorage] = useState<Record<string, boolean>>({})
+  const [accepted, setAccepted] = useState<Record<string, number>>({})
   const [showAddLine, setShowAddLine] = useState(false)
+
+  // «Принят» вводится при фиксации прибытия. Предзаполняем планом как наиболее частым значением.
+  function acceptedFor(lineId: string): number {
+    const line = lines.find((l) => l.id === lineId)
+    return accepted[lineId] ?? line?.accepted_qty ?? line?.planned_qty ?? 0
+  }
+
+  function plannedQtyFor(lineId: string): number {
+    const line = lines.find((l) => l.id === lineId)
+    return pendingQty[lineId] ?? line?.planned_qty ?? 0
+  }
+
+  function storageZoneFor(lineId: string): string {
+    const line = lines.find((l) => l.id === lineId)
+    return pendingStorage[lineId] ?? line?.storage_zone_id ?? ''
+  }
 
   const { suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
   const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
@@ -66,16 +80,36 @@ export function PlannedView({
 
   function markDirty() { setMetaDirty(true) }
 
-  async function handleSaveMeta(): Promise<boolean> {
+  async function handleSaveChanges(): Promise<boolean> {
+    if (!hasUnsavedChanges) return true
     setMetaError('')
     setMetaSaving(true)
     try {
-      await updateReceipt(docId, {
-        supplier_name: supplierName.trim() || null,
-        arrival_date: arrivalDate || null,
-        logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
-      })
+      if (metaDirty) {
+        await updateReceipt(docId, {
+          supplier_name: supplierName.trim() || null,
+          arrival_date: arrivalDate || null,
+          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+        })
+      }
+      for (const line of lines) {
+        const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
+        const storageDirty = pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '')
+        if (!qtyDirty && !storageDirty) continue
+
+        const payload: ReceiptLineUpdatePayload = {}
+        if (qtyDirty) payload.planned_qty = pendingQty[line.id] ?? line.planned_qty
+        if (storageDirty) {
+          const zoneId = pendingStorage[line.id] ?? ''
+          const selectedZone = storageZones.find((z) => z.id === zoneId)
+          payload.storage_zone_id = zoneId || null
+          payload.storage_zone_name = selectedZone?.name ?? null
+        }
+        await updateReceiptLine(docId, line.id, payload)
+      }
       setMetaDirty(false)
+      setPendingQty({})
+      setPendingStorage({})
       await onReload()
       return true
     } catch (e: unknown) {
@@ -90,30 +124,14 @@ export function PlannedView({
     setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
   }
 
-  async function handleSaveLineQty(lineId: string, qty: number) {
-    setSavingQty((prev) => ({ ...prev, [lineId]: true }))
-    try {
-      await updateReceiptLine(docId, lineId, qty)
-      setPendingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-      onUpdateLineQty(lineId, qty)
-    } finally {
-      setSavingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-    }
-  }
-
-  async function handleSaveLineStorage(lineId: string, zoneId: string) {
-    const selectedZone = storageZones.find((z) => z.id === zoneId)
-    setSavingStorage((prev) => ({ ...prev, [lineId]: true }))
-    try {
-      await updateReceiptLine(docId, lineId, {
-        storage_zone_id: zoneId || null,
-        storage_zone_name: selectedZone?.name ?? null,
-      })
-      setPendingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-      await onReload()
-    } finally {
-      setSavingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-    }
+  function handleResetChanges() {
+    setSupplierName(doc.supplier_name ?? '')
+    setArrivalDate(doc.arrival_date ?? '')
+    setLogisticsCost(doc.logistics_cost ? String(doc.logistics_cost) : '')
+    setMetaDirty(false)
+    setPendingQty({})
+    setPendingStorage({})
+    setMetaError('')
   }
 
   async function handleDeleteLine(lineId: string, productName: string) {
@@ -128,9 +146,10 @@ export function PlannedView({
     await onReload()
   }
 
-  const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
+  const totalQty = lines.reduce((s, l) => s + plannedQtyFor(l.id), 0)
+  const totalAccepted = lines.reduce((s, l) => s + acceptedFor(l.id), 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
-  const missingStorageCount = lines.filter((l) => !l.storage_zone_id).length
+  const missingStorageCount = lines.filter((l) => !storageZoneFor(l.id)).length
   const hasPendingStorage = Object.keys(pendingStorage).some(
     (id) => pendingStorage[id] !== (lines.find((l) => l.id === id)?.storage_zone_id ?? ''),
   )
@@ -140,25 +159,28 @@ export function PlannedView({
     { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
     { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
-    { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
-    { ok: lines.length > 0 && missingStorageCount === 0, label: 'Зона хранения указана по всем строкам', error: `Не указана зона хранения: ${missingStorageCount}` },
+    { ok: lines.length > 0 && lines.every((l) => plannedQtyFor(l.id) >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
+    { ok: lines.length > 0 && missingStorageCount === 0, label: 'Место (на проверке) указано по всем строкам', error: `Не указано место (на проверке): ${missingStorageCount}` },
+    { ok: lines.length > 0 && lines.every((l) => acceptedFor(l.id) >= 0), label: 'Принят указан по всем строкам', error: 'Укажите принятое количество по всем строкам' },
     { ok: !!logisticsCost && parseFloat(logisticsCost) >= 0, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
   ]
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
+  const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage
+  const pendingLinesCount = lines.filter((line) => {
+    const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
+    const storageDirty = pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '')
+    return qtyDirty || storageDirty
+  }).length
 
-  const blockReasons = [
-    ...(hasPendingQty ? ['Есть несохранённые изменения количества в строках товаров'] : []),
-    ...(hasPendingStorage ? ['Есть несохранённые изменения зоны хранения'] : []),
-    ...readyChecks.filter((c) => !c.ok).map((c) => c.error),
-  ]
+  const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
   async function handleArrive() {
-    if (metaDirty) {
-      const ok = await handleSaveMeta()
+    if (hasUnsavedChanges) {
+      const ok = await handleSaveChanges()
       if (!ok) return
     }
-    onArrive()
+    onArrive(lines.map((l) => ({ line_id: l.id, accepted_qty: acceptedFor(l.id) })))
   }
 
   return (
@@ -181,8 +203,13 @@ export function PlannedView({
             <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
               <Icon name="x" size={14} />Аннулировать
             </button>
-            {metaDirty && (
-              <button className="btn" onClick={handleSaveMeta} disabled={metaSaving}>
+            {hasUnsavedChanges && (
+              <button className="btn ghost" onClick={handleResetChanges} disabled={metaSaving}>
+                <Icon name="x" size={14} />Отменить изменения
+              </button>
+            )}
+            {hasUnsavedChanges && (
+              <button className="btn" onClick={handleSaveChanges} disabled={metaSaving}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
@@ -197,6 +224,11 @@ export function PlannedView({
           {showBlockReasons && blockReasons.length > 0 && (
             <div className="block-reasons">
               {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
+            </div>
+          )}
+          {hasUnsavedChanges && (
+            <div className="block-reasons">
+              · Несохранено: {metaDirty ? 'реквизиты' : ''}{metaDirty && pendingLinesCount > 0 ? ', ' : ''}{pendingLinesCount > 0 ? `строки (${pendingLinesCount})` : ''}
             </div>
           )}
         </div>
@@ -278,16 +310,17 @@ export function PlannedView({
                     <th>Товар · SKU</th>
                     <th style={{ width: 110 }}>Цвет</th>
                     <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 170 }}>Хранение</th>
+                    <th style={{ width: 170 }}>Место (на проверке)</th>
                     <th style={{ width: 148 }}>План, шт</th>
+                    <th style={{ width: 148 }}>Принят, шт</th>
                     <th style={{ width: 32 }} />
                   </tr>
                 </thead>
                 <tbody>
                   {lines.map((l, i) => {
-                    const displayQty = pendingQty[l.id] ?? l.planned_qty
+                    const displayQty = plannedQtyFor(l.id)
                     const isDirty = pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty
-                    const isSaving = savingQty[l.id] ?? false
+                    const storageDirty = pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')
                     return (
                       <tr key={l.id}>
                         <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
@@ -305,48 +338,36 @@ export function PlannedView({
                                 placeholder="Выберите"
                                 options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
                                 onChange={(value) => setPendingStorage((prev) => ({ ...prev, [l.id]: String(value ?? '') }))}
-                                disabled={savingStorage[l.id] || storageZones.length === 0}
+                                disabled={metaSaving || storageZones.length === 0}
                                 clearable
                               />
                             </div>
-                            <button
-                              className="btn ghost icon sm"
-                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? 'visible' : 'hidden', pointerEvents: pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? undefined : 'none' }}
-                              disabled={pendingStorage[l.id] === undefined || pendingStorage[l.id] === (l.storage_zone_id ?? '') || savingStorage[l.id]}
-                              onClick={() => { if (pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')) void handleSaveLineStorage(l.id, pendingStorage[l.id]) }}
-                              title="Сохранить"
-                              aria-hidden={pendingStorage[l.id] === undefined || pendingStorage[l.id] === (l.storage_zone_id ?? '')}
-                              tabIndex={pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '') ? 0 : -1}
-                            >
-                              <Icon name="save" size={14} />
-                            </button>
+                            <span style={{ display: 'inline-flex', width: 28, color: 'var(--c-accent)', visibility: storageDirty ? 'visible' : 'hidden' }}>
+                              <Icon name="edit" size={13} />
+                            </span>
                           </div>
                         </Td>
                         <Td>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${isDirty ? 'var(--c-accent)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
-                              <button className="btn ghost icon sm" style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, Math.max(1, displayQty - 1))}>
-                                <Icon name="minus" size={10} />
-                              </button>
-                              <input inputMode="numeric" value={displayQty}
-                                onChange={(e) => { const v = Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1); setPendingQtyFor(l.id, v) }}
-                                style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: isDirty ? 'var(--c-accent)' : undefined }} />
-                              <button className="btn ghost icon sm" style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, displayQty + 1)}>
-                                <Icon name="plus" size={10} />
-                              </button>
-                            </div>
-                            <button className="btn ghost icon sm"
-                              style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: isDirty ? 'visible' : 'hidden', pointerEvents: isDirty ? undefined : 'none' }}
-                              disabled={!isDirty || isSaving}
-                              onClick={() => { if (isDirty) void handleSaveLineQty(l.id, displayQty) }}
-                              title="Сохранить"
-                              aria-hidden={!isDirty}
-                              tabIndex={isDirty ? 0 : -1}>
-                              <Icon name="save" size={14} />
-                            </button>
+                            <NumberStep
+                              value={displayQty}
+                              onChange={(v) => setPendingQtyFor(l.id, Math.max(1, v))}
+                              tone={isDirty ? 'accent' : 'normal'}
+                              disabled={metaSaving}
+                              width={120}
+                            />
+                            <span style={{ display: 'inline-flex', width: 28, color: 'var(--c-accent)', visibility: isDirty ? 'visible' : 'hidden' }}>
+                              <Icon name="edit" size={13} />
+                            </span>
                           </div>
+                        </Td>
+                        <Td>
+                          <NumberStep
+                            value={acceptedFor(l.id)}
+                            onChange={(v) => setAccepted((prev) => ({ ...prev, [l.id]: Math.max(0, v) }))}
+                            disabled={metaSaving}
+                            width={120}
+                          />
                         </Td>
                         <Td>
                           <button className="btn ghost icon sm" onClick={() => void handleDeleteLine(l.id, l.product_name)}>
@@ -361,6 +382,7 @@ export function PlannedView({
                   <tr className="sum">
                     <td colSpan={5}>Итого: {totalSku} SKU</td>
                     <td className="num">{totalQty}</td>
+                    <td className="num">{totalAccepted}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -403,6 +425,8 @@ export function PlannedView({
               <span className="val mono">{lines.length}</span>
               <span className="key">План, шт</span>
               <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
+              <span className="key">Принят, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalAccepted}</span>
             </div>
           </Card>
 

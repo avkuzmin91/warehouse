@@ -19,6 +19,7 @@ import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { NumberStep } from '../../shared/NumberStep'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 
@@ -287,31 +288,12 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                         <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
                         <Td>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${isDirty ? 'var(--c-accent)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, Math.max(1, displayQty - 1))}
-                              >
-                                <Icon name="minus" size={10} />
-                              </button>
-                              <input
-                                inputMode="numeric"
-                                value={displayQty}
-                                onChange={(e) => {
-                                  const v = Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1)
-                                  setPendingQtyFor(l.id, v)
-                                }}
-                                style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: isDirty ? 'var(--c-accent)' : undefined }}
-                              />
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, displayQty + 1)}
-                              >
-                                <Icon name="plus" size={10} />
-                              </button>
-                            </div>
+                            <NumberStep
+                              value={displayQty}
+                              onChange={(v) => setPendingQtyFor(l.id, Math.max(1, v))}
+                              tone={isDirty ? 'accent' : 'normal'}
+                              width={120}
+                            />
                             <button
                               className="btn ghost icon sm"
                               style={{ color: 'var(--c-accent)', flexShrink: 0, width: 28, height: 28, visibility: isDirty ? 'visible' : 'hidden', pointerEvents: isDirty ? undefined : 'none' }}

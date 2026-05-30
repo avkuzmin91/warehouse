@@ -1,4 +1,4 @@
-import { BalancesFeature } from '../features/inventory/BalancesFeature'
+import { BalancesFeature } from '../features/inventory/balances/BalancesFeature'
 
 export function InventoryBalancesPage() {
   return <BalancesFeature />

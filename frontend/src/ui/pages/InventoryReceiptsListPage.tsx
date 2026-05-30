@@ -333,7 +333,7 @@ export function InventoryReceiptsListPage() {
                       <Td>
                         {(() => {
                           const processed = item.total_accepted + item.total_defect
-                          const pct = item.total_planned > 0 ? Math.min(100, Math.round(processed / item.total_planned * 100)) : 0
+                          const pct = item.total_accepted_qty > 0 ? Math.min(100, Math.round(processed / item.total_accepted_qty * 100)) : 0
                           const isActive = item.status === 'on_review' || item.status === 'done'
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           return (

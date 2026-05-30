@@ -45,8 +45,9 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
   const [drafts, setDrafts] = useState<Record<string, LineQcDraft>>({})
   const [completing, setCompleting] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
-  const [pendingStorage, setPendingStorage] = useState<Record<string, string>>({})
-  const [savingStorage, setSavingStorage] = useState<Record<string, boolean>>({})
+  // Ключ места: `${kind}:${lineId}`, kind ∈ 'storage' | 'good' | 'defect'.
+  const [pendingZone, setPendingZone] = useState<Record<string, string>>({})
+  const [savingZone, setSavingZone] = useState<Record<string, boolean>>({})
   const [reopening, setReopening] = useState<Record<string, boolean>>({})
   const [lineError, setLineError] = useState<Record<string, string>>({})
   const [filterLine, setFilterLine] = useState<string | null>(null)
@@ -124,19 +125,69 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     }
   }
 
-  async function handleSaveLineStorage(lineId: string, zoneId: string) {
+  type ZoneKind = 'storage' | 'good' | 'defect'
+
+  function lineZoneId(line: ReceiptLine, kind: ZoneKind): string | null {
+    if (kind === 'good') return line.good_zone_id
+    if (kind === 'defect') return line.defect_zone_id
+    return line.storage_zone_id
+  }
+  function lineZoneName(line: ReceiptLine, kind: ZoneKind): string | null {
+    if (kind === 'good') return line.good_zone_name
+    if (kind === 'defect') return line.defect_zone_name
+    return line.storage_zone_name
+  }
+
+  async function handleSaveLineZone(lineId: string, kind: ZoneKind, zoneId: string) {
+    const key = `${kind}:${lineId}`
     const selectedZone = storageZones.find((z) => z.id === zoneId)
-    setSavingStorage((prev) => ({ ...prev, [lineId]: true }))
+    const payload =
+      kind === 'good'
+        ? { good_zone_id: zoneId || null, good_zone_name: selectedZone?.name ?? null }
+        : kind === 'defect'
+        ? { defect_zone_id: zoneId || null, defect_zone_name: selectedZone?.name ?? null }
+        : { storage_zone_id: zoneId || null, storage_zone_name: selectedZone?.name ?? null }
+    setSavingZone((prev) => ({ ...prev, [key]: true }))
     try {
-      await updateReceiptLine(docId, lineId, {
-        storage_zone_id: zoneId || null,
-        storage_zone_name: selectedZone?.name ?? null,
-      })
-      setPendingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+      await updateReceiptLine(docId, lineId, payload)
+      setPendingZone((prev) => { const next = { ...prev }; delete next[key]; return next })
       await onReload()
     } finally {
-      setSavingStorage((prev) => { const next = { ...prev }; delete next[lineId]; return next })
+      setSavingZone((prev) => { const next = { ...prev }; delete next[key]; return next })
     }
+  }
+
+  function zoneCell(line: ReceiptLine, kind: ZoneKind) {
+    const savedId = lineZoneId(line, kind) ?? ''
+    if (isReadonly) return <span>{lineZoneName(line, kind) || '—'}</span>
+    const key = `${kind}:${line.id}`
+    const cur = pendingZone[key] ?? savedId
+    const dirty = pendingZone[key] !== undefined && pendingZone[key] !== savedId
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 166 }}>
+        <div className="storage-cell-combobox">
+          <Combobox
+            value={cur}
+            placeholder="Выберите"
+            options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
+            onChange={(value) => setPendingZone((prev) => ({ ...prev, [key]: String(value ?? '') }))}
+            disabled={savingZone[key] || storageZones.length === 0}
+            clearable
+          />
+        </div>
+        {dirty && (
+          <button
+            className="btn ghost icon sm"
+            style={{ color: 'var(--c-accent)', flexShrink: 0 }}
+            disabled={savingZone[key]}
+            onClick={() => void handleSaveLineZone(line.id, kind, pendingZone[key])}
+            title="Сохранить"
+          >
+            <Icon name="save" size={14} />
+          </button>
+        )}
+      </div>
+    )
   }
 
   const allDone = lines.length > 0 && lines.every((l) => l.qc_status === 'done')
@@ -148,18 +199,20 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
       const accepted = l.qc_status === 'done' ? l.accepted : d.accepted
       const defect = l.qc_status === 'done' ? l.defect : d.defect
       const processed = accepted + defect
+      const acceptedQty = l.accepted_qty ?? 0
       acc.planned += l.planned_qty
+      acc.acceptedQty += acceptedQty
       acc.accepted += accepted
       acc.defect += defect
       acc.processed += processed
-      // Отклонения только по проверенным строкам (qc_status === 'done'), чтобы пересорт не компенсировался
+      // Отклонения считаются относительно «Принят» (фактически прибыло), только по проверенным строкам.
       if (l.qc_status === 'done') {
-        acc.surplus += Math.max(0, processed - l.planned_qty)
-        acc.shortage += Math.max(0, l.planned_qty - processed)
+        acc.surplus += Math.max(0, processed - acceptedQty)
+        acc.shortage += Math.max(0, acceptedQty - processed)
       }
       return acc
     },
-    { planned: 0, accepted: 0, defect: 0, processed: 0, surplus: 0, shortage: 0 },
+    { planned: 0, acceptedQty: 0, accepted: 0, defect: 0, processed: 0, surplus: 0, shortage: 0 },
   )
   const totalSurplus = totals.surplus
   const totalShortage = totals.shortage
@@ -220,10 +273,11 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
 
       {/* KPI */}
       {(() => {
+        // Контроли считаются относительно «Принят» (фактически прибыло), не «План».
         // Виджет 1: % обработки — НЕ ограничиваем 100%
-        const processedPct = totals.planned > 0 ? Math.round(totals.processed / totals.planned * 100) : 0
+        const processedPct = totals.acceptedQty > 0 ? Math.round(totals.processed / totals.acceptedQty * 100) : 0
         // Виджет 2: % принятых — ограничиваем 100%, излишек показываем отдельно
-        const acceptedPct = totals.planned > 0 ? Math.min(100, Math.round(totals.accepted / totals.planned * 100)) : 0
+        const acceptedPct = totals.acceptedQty > 0 ? Math.min(100, Math.round(totals.accepted / totals.acceptedQty * 100)) : 0
         return (
           <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 20 }}>
             {/* 1. Проверено = объём обработки (принято + брак) */}
@@ -231,7 +285,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               <div className="kpi-label">Проверено</div>
               <div className="kpi-value">
                 {totals.processed}
-                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.planned}</span>
+                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.acceptedQty}</span>
               </div>
               <div style={{ fontSize: 12, color: processedPct > 100 ? 'var(--c-info, #3b82f6)' : 'var(--c-text-subtle)', marginTop: 2, fontWeight: processedPct > 100 ? 600 : 400 }}>{processedPct}%</div>
               <div className="prog" style={{ marginTop: 6 }}>
@@ -243,7 +297,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               <div className="kpi-label">Принято</div>
               <div className="kpi-value">
                 {totals.accepted}
-                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.planned}</span>
+                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.acceptedQty}</span>
               </div>
               <div style={{ fontSize: 12, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: 'var(--c-info, #3b82f6)', fontWeight: 600 }}>{acceptedPct}%</span>
@@ -315,11 +369,14 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                 <tr>
                   <th style={{ width: 20 }} />
                   <th>Товар</th>
-                  <th style={{ width: 170 }}>Хранение</th>
-                  <th style={{ width: 55, textAlign: 'right' }}>План</th>
-                  <th style={{ width: 124, textAlign: 'right' }}>Принято</th>
-                  <th style={{ width: 124, textAlign: 'right' }}>Брак</th>
-                  <th style={{ width: 130 }}>Статус</th>
+                  <th style={{ width: 150 }}>Место (на проверке)</th>
+                  <th style={{ width: 50, textAlign: 'right' }}>План</th>
+                  <th style={{ width: 60, textAlign: 'right' }}>Принят</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>Годный</th>
+                  <th style={{ width: 150 }}>Место (годный)</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>Брак</th>
+                  <th style={{ width: 150 }}>Место (брак)</th>
+                  <th style={{ width: 120 }}>Статус</th>
                   <th style={{ width: 120 }}>Действия</th>
                 </tr>
               </thead>
@@ -334,6 +391,10 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                   const isReopening = reopening[line.id] ?? false
                   const hasDraftChange = draft.accepted !== line.accepted || draft.defect !== line.defect
                   const lineErr = lineError[line.id]
+                  // Места годного/брака обязательны (бэкенд дублирует). Учитываем уже сохранённое место.
+                  const needGoodZone = draft.accepted > 0 && !(line.good_zone_id || '').trim()
+                  const needDefectZone = draft.defect > 0 && !(line.defect_zone_id || '').trim()
+                  const zoneBlocked = needGoodZone || needDefectZone
 
                   const processed = isDone ? (line.accepted + line.defect) : (draft.accepted + draft.defect)
                   const defectPct = processed > 0 ? Math.round((isDone ? line.defect : draft.defect) / processed * 100) : 0
@@ -341,8 +402,9 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                   let surplus = 0
                   let shortage = 0
                   if (isDone) {
-                    surplus = Math.max(0, processed - line.planned_qty)
-                    shortage = Math.max(0, line.planned_qty - processed)
+                    const acceptedQty = line.accepted_qty ?? 0
+                    surplus = Math.max(0, processed - acceptedQty)
+                    shortage = Math.max(0, acceptedQty - processed)
                   }
 
                   const statusColor = isDone
@@ -372,36 +434,9 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                           {line.size_name ? ` · ${line.size_name}` : ''}
                         </div>
                       </Td>
-                      <Td>
-                        {isReadonly ? (
-                          <span>{line.storage_zone_name || '—'}</span>
-                        ) : (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 166 }}>
-                            <div className="storage-cell-combobox">
-                              <Combobox
-                                value={pendingStorage[line.id] ?? line.storage_zone_id ?? ''}
-                                placeholder="Выберите"
-                                options={storageZones.map((z) => ({ value: z.id, label: z.name }))}
-                                onChange={(value) => setPendingStorage((prev) => ({ ...prev, [line.id]: String(value ?? '') }))}
-                                disabled={savingStorage[line.id] || storageZones.length === 0}
-                                clearable
-                              />
-                            </div>
-                            {pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '') && (
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
-                                disabled={savingStorage[line.id]}
-                                onClick={() => void handleSaveLineStorage(line.id, pendingStorage[line.id])}
-                                title="Сохранить"
-                              >
-                                <Icon name="save" size={14} />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </Td>
+                      <Td>{zoneCell(line, 'storage')}</Td>
                       <Td className="num" style={{ color: 'var(--c-text-muted)' }}>{line.planned_qty}</Td>
+                      <Td className="num" style={{ fontWeight: 500 }}>{line.accepted_qty ?? '—'}</Td>
                       <Td style={{ textAlign: 'right' }}>
                         {isDone || isReadonly ? (
                           <span style={{ fontWeight: 500 }}>{line.accepted}</span>
@@ -436,6 +471,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                           </div>
                         )}
                       </Td>
+                      <Td>{zoneCell(line, 'good')}</Td>
                       <Td style={{ textAlign: 'right' }}>
                         {isDone || isReadonly ? (
                           <span style={{ fontWeight: 500, color: line.defect > 0 ? 'var(--c-warning)' : undefined }}>
@@ -473,6 +509,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                           </div>
                         )}
                       </Td>
+                      <Td>{zoneCell(line, 'defect')}</Td>
                       <Td>
                         <div>
                           <span style={{
@@ -515,11 +552,17 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                                 <button
                                   className="btn sm primary"
                                   onClick={() => void handleCompleteClick(line)}
-                                  disabled={isCompleting || isSaving}
+                                  disabled={isCompleting || isSaving || zoneBlocked}
+                                  title={zoneBlocked ? 'Укажите место хранения' : undefined}
                                 >
                                   <Icon name="check" size={12} />Завершить
                                 </button>
                               </div>
+                              {zoneBlocked && (
+                                <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', maxWidth: 160 }}>
+                                  {needGoodZone ? 'Укажите место годного' : 'Укажите место брака'}
+                                </div>
+                              )}
                               {lineErr && (
                                 <div style={{ fontSize: 11, color: 'var(--c-danger)', maxWidth: 160 }}>{lineErr}</div>
                               )}
@@ -537,7 +580,9 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                   <td style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого</td>
                   <td />
                   <td className="num" style={{ padding: '10px 12px', color: 'var(--c-text-muted)' }}>{totals.planned}</td>
+                  <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{totals.acceptedQty}</td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{totals.accepted}</td>
+                  <td />
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600, color: totals.defect > 0 ? 'var(--c-warning)' : undefined }}>
                     {totals.defect}
                     {totals.defect > 0 && totals.processed > 0 && (
@@ -546,6 +591,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
                       </span>
                     )}
                   </td>
+                  <td />
                   <td colSpan={2} style={{ padding: '10px 12px', fontSize: 12 }}>
                     {totalSurplus > 0 && <span style={{ color: 'var(--c-info, #3b82f6)', marginRight: 10 }}>▲ +{totalSurplus} излишек</span>}
                     {totalShortage > 0 && <span style={{ color: 'var(--c-warning)' }}>▼ −{totalShortage} недостача</span>}

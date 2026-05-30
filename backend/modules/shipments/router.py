@@ -24,6 +24,8 @@ from modules.shipments.schemas import (
     ShipmentDocUpdate,
     ShipmentLineIn,
     ShipmentLineItem,
+    ShipmentLineZoneItem,
+    ShipmentLineZonesSet,
     ShipmentListItem,
     ShipmentListResponse,
     ShipmentOpItem,
@@ -216,12 +218,27 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
         ).fetchall()
+        zone_rows = conn.execute(
+            "SELECT * FROM shipment_line_zones WHERE doc_id = ? ORDER BY created_at",
+            (doc_id,),
+        ).fetchall()
         ops_rows = conn.execute(
             """SELECT o.*, u.email AS user_email
                FROM shipment_ops o LEFT JOIN users u ON u.id = o.created_by
                WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
             (doc_id,),
         ).fetchall()
+
+    zones_by_line: dict[str, list[ShipmentLineZoneItem]] = {}
+    for z in zone_rows:
+        zones_by_line.setdefault(str(z["line_id"]), []).append(
+            ShipmentLineZoneItem(
+                id=str(z["id"]),
+                storage_zone_id=z["storage_zone_id"],
+                storage_zone_name=z["storage_zone_name"],
+                qty=int(z["qty"]),
+            )
+        )
 
     lines = [
         ShipmentLineItem(
@@ -234,6 +251,7 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             size_id=l["size_id"],
             size_name=l["size_name"],
             qty=int(l["qty"]),
+            zones=zones_by_line.get(str(l["id"]), []),
         )
         for l in lines_rows
     ]
@@ -337,6 +355,48 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
              line_id, doc_id),
         )
+        # Изменение количества обнуляет распределение по зонам — иначе сумма зон разойдётся с qty.
+        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.put("/shipments/{doc_id}/lines/{line_id}/zones")
+def set_shipment_line_zones(doc_id: str, line_id: str, body: ShipmentLineZonesSet, user=Depends(_get_manager)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc_row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc_row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(doc_row["status"]) == SHIPMENT_STATUS_SHIPPED:
+            raise HTTPException(status_code=400, detail="Распределение по зонам нельзя менять после отправки")
+        line_row = conn.execute(
+            "SELECT * FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line_row:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        if any(z.qty > int(line_row["qty"]) for z in body.zones):
+            raise HTTPException(status_code=400, detail="Количество по зоне превышает количество строки")
+        if sum(z.qty for z in body.zones) > int(line_row["qty"]):
+            raise HTTPException(status_code=400, detail="Сумма по зонам превышает количество строки")
+
+        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
+        for z in body.zones:
+            conn.execute(
+                """INSERT INTO shipment_line_zones
+                   (id,doc_id,line_id,storage_zone_id,storage_zone_name,qty,created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (str(uuid4()), doc_id, line_id, z.storage_zone_id, z.storage_zone_name, z.qty, now),
+            )
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, "line_zones_set",
+             f"Распределение по зонам: «{line_row['product_name']}»", now, uid),
+        )
         conn.commit()
     return {"message": "ok"}
 
@@ -355,6 +415,7 @@ def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
             "UPDATE shipment_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),
         )
+        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
         conn.commit()
     return {"message": "ok"}
 

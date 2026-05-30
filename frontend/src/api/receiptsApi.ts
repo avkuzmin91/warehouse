@@ -16,6 +16,7 @@ export type ReceiptOpType =
   | 'line_update'
   | 'plan_fix'
   | 'arrival_fix'
+  | 'arrival_accept'
   | 'receiving'
   | 'defect_fix'
   | 'qc_complete'
@@ -57,7 +58,12 @@ export type ReceiptLine = {
   size_name: string | null
   storage_zone_id: string | null
   storage_zone_name: string | null
+  good_zone_id: string | null
+  good_zone_name: string | null
+  defect_zone_id: string | null
+  defect_zone_name: string | null
   planned_qty: number
+  accepted_qty: number | null
   accepted: number
   defect: number
   ops_count: number
@@ -81,6 +87,7 @@ export type ReceiptOp = {
 export type ReceiptState = {
   lines: ReceiptLine[]
   total_planned: number
+  total_accepted_qty: number
   total_accepted: number
   total_defect: number
   sku_count: number
@@ -97,6 +104,7 @@ export type ReceiptDetail = {
 export type ReceiptListItem = ReceiptDoc & {
   sku_count: number
   total_planned: number
+  total_accepted_qty: number
   total_accepted: number
   total_defect: number
 }
@@ -144,8 +152,13 @@ export type ReceiptUpdatePayload = {
 
 export type ReceiptLineUpdatePayload = {
   planned_qty?: number
+  accepted_qty?: number
   storage_zone_id?: string | null
   storage_zone_name?: string | null
+  good_zone_id?: string | null
+  good_zone_name?: string | null
+  defect_zone_id?: string | null
+  defect_zone_name?: string | null
 }
 
 export type ReceiptListParams = {
@@ -300,9 +313,12 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
-export function arriveReceipt(docId: string) {
+export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
+
+export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
   return request<{ message: string }>(`/receipts/${docId}/arrive`, {
     method: 'POST',
+    body: JSON.stringify({ lines }),
   })
 }
 
@@ -347,6 +363,7 @@ export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
   line_update: 'Изменение строки',
   plan_fix: 'Запланировано поступление',
   arrival_fix: 'Фиксация прибытия',
+  arrival_accept: 'Принят при прибытии',
   receiving: 'Приёмка товара',
   defect_fix: 'Фиксация брака',
   qc_complete: 'Завершение проверки',

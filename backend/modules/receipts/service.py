@@ -67,6 +67,7 @@ def compute_state(connection, doc_id: str) -> dict:
             "storage_zone_id": lr["storage_zone_id"],
             "storage_zone_name": lr["storage_zone_name"],
             "planned_qty": int(lr["planned_qty"]),
+            "accepted_qty": int(lr["accepted_qty"]) if lr["accepted_qty"] is not None else None,
             "accepted": 0,
             "defect": 0,
             "ops_count": 0,
@@ -110,6 +111,7 @@ def compute_state(connection, doc_id: str) -> dict:
     line_list = list(lines.values())
     sku_count = len(line_list)
     total_planned = sum(l["planned_qty"] for l in line_list)
+    total_accepted_qty = sum(l["accepted_qty"] or 0 for l in line_list)
     total_accepted = sum(l["accepted"] for l in line_list)
     total_defect = sum(l["defect"] for l in line_list)
     all_qc_done = all(l["qc_status"] == "done" for l in line_list) if line_list else False
@@ -118,6 +120,7 @@ def compute_state(connection, doc_id: str) -> dict:
         "lines": line_list,
         "sku_count": sku_count,
         "total_planned": total_planned,
+        "total_accepted_qty": total_accepted_qty,
         "total_accepted": total_accepted,
         "total_defect": total_defect,
         "all_qc_done": all_qc_done,
@@ -198,6 +201,7 @@ def list_receipts_aggregated(
             MAX(cl.name) AS client_name,
             COUNT(DISTINCT CASE WHEN l.is_deleted = 0 THEN l.id END) AS sku_count,
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN l.planned_qty ELSE 0 END), 0) AS total_planned,
+            COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN COALESCE(l.accepted_qty, 0) ELSE 0 END), 0) AS total_accepted_qty,
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN (
                 SELECT COALESCE(
                     (SELECT o2.qty FROM receipt_ops o2

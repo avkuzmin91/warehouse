@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import type React from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -14,7 +14,7 @@ import {
   SHIPMENT_STATUS_TONES,
 } from '../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../api/shipmentsApi'
-import { getBalances } from '../../../api/balancesApi'
+import { getBalances, getBalancesByZone } from '../../../api/balancesApi'
 import type { BalanceItem } from '../../../api/balancesApi'
 import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
 import { Badge } from '../../primitives/Badge'
@@ -33,6 +33,7 @@ import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
 import { CargoTypeDisplay } from './components/CargoTypeDisplay'
 import { OpEntry } from './components/OpEntry'
+import { ZoneAllocationEditor } from './components/ZoneAllocationEditor'
 import { lineAvailable } from './shared/opLabels'
 
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
@@ -54,7 +55,12 @@ export function InventoryShipmentDetailPage() {
 
   const today = new Date().toISOString().slice(0, 10)
 
-  const { warehouses: infoWarehouses, carriers: infoCarriers } = useLookups()
+  const { warehouses: infoWarehouses, carriers: infoCarriers, unloadingZones } = useLookups()
+  const storageZones = unloadingZones.filter((z) => z.is_active && !z.is_deleted)
+
+  // Доступный годный остаток по зонам: balanceKey(line) → { zoneId: qty }. '' = без зоны.
+  const [zoneAvail, setZoneAvail] = useState<Record<string, Record<string, number>>>({})
+  const [expandedZones, setExpandedZones] = useState<Record<string, boolean>>({})
 
   // Info form state (used when status === 'packing')
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
@@ -146,6 +152,26 @@ export function InventoryShipmentDetailPage() {
     loadBalances().catch(() => {})
   }, [loadBalances])
 
+  const loadZoneBalances = useCallback(async () => {
+    if (!shipmentClientId || !isEditable || shipmentCargoType !== 'good') {
+      setZoneAvail({})
+      return
+    }
+    const res = await getBalancesByZone({ client_id: shipmentClientId })
+    const map: Record<string, Record<string, number>> = {}
+    for (const item of res.items) {
+      if (item.status !== 'good' || item.qty <= 0) continue
+      const key = balanceKey(item)
+      const zoneId = item.location_id ?? ''
+      ;(map[key] ??= {})[zoneId] = item.qty
+    }
+    setZoneAvail(map)
+  }, [shipmentClientId, shipmentCargoType, isEditable])
+
+  useEffect(() => {
+    loadZoneBalances().catch(() => {})
+  }, [loadZoneBalances])
+
   useEffect(() => {
     if (!doc) {
       setDrafts({})
@@ -219,6 +245,7 @@ export function InventoryShipmentDetailPage() {
   async function refreshAfterLineChange() {
     await load()
     await loadBalances()
+    await loadZoneBalances()
   }
 
   async function handleAddLine(item: BalanceItem, qty: number) {
@@ -297,6 +324,10 @@ export function InventoryShipmentDetailPage() {
     await act(() => cancelShipment(docId!), '/inventory/shipments')
   }
 
+  const allLinesAllocated =
+    doc?.cargo_type !== 'good' ||
+    (doc?.lines ?? []).every((line) => line.zones.reduce((s, z) => s + z.qty, 0) === line.qty)
+
   const shipChecks = [
     { ok: !!infoClientId,        error: 'Укажите клиента' },
     { ok: !!infoDestinationName, error: 'Укажите назначение' },
@@ -305,6 +336,7 @@ export function InventoryShipmentDetailPage() {
     { ok: !!infoCarrierName,     error: 'Укажите перевозчика' },
     { ok: !!infoLogisticsCost,   error: 'Укажите стоимость логистики' },
     { ok: !hasOverflow,          error: 'Количество товара в некоторых строках превышает доступный остаток' },
+    { ok: allLinesAllocated,     error: 'Распределите все строки по зонам хранения' },
   ]
   const shipBlockReasons = shipChecks.filter((c) => !c.ok).map((c) => c.error)
 
@@ -555,8 +587,13 @@ export function InventoryShipmentDetailPage() {
                     const isSaving = saving[line.id] ?? false
                     const hasDraftChange = draft.qty !== line.qty
                     const over = isEditable && draft.qty > line.available
+                    const isGood = doc.cargo_type === 'good'
+                    const allocated = line.zones.reduce((s, z) => s + z.qty, 0)
+                    const zoneOk = line.zones.length > 0 && allocated === line.qty
+                    const expanded = expandedZones[line.id] ?? false
                     return (
-                      <tr key={line.id} style={over ? { background: 'var(--c-warning-bg)' } : {}}>
+                      <Fragment key={line.id}>
+                      <tr style={over ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></td>
                         <td>
                           <div style={{ fontWeight: 450 }}>{line.product_name}</div>
@@ -596,6 +633,34 @@ export function InventoryShipmentDetailPage() {
                           </td>
                         )}
                       </tr>
+                      {isEditable && isGood && (
+                        <tr>
+                          <td colSpan={5} style={{ paddingTop: 0, paddingBottom: 0, background: 'var(--c-bg-sunken)' }}>
+                            <button
+                              className="btn ghost sm"
+                              style={{ color: zoneOk ? 'var(--c-success)' : 'var(--c-warning)' }}
+                              onClick={() => setExpandedZones((prev) => ({ ...prev, [line.id]: !expanded }))}
+                            >
+                              <Icon name={zoneOk ? 'check' : 'alert'} size={12} />
+                              {zoneOk
+                                ? `Зоны распределены (${line.zones.map((z) => `${z.storage_zone_name ?? 'без зоны'} · ${z.qty}`).join(', ')})`
+                                : `Распределите по зонам (${allocated} из ${line.qty})`}
+                              <Icon name="chev" size={12} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
+                            </button>
+                            {expanded && (
+                              <ZoneAllocationEditor
+                                docId={docId!}
+                                line={line}
+                                zoneOptions={storageZones.map((z) => ({ id: z.id, name: z.name }))}
+                                available={zoneAvail[balanceKey(line)] ?? {}}
+                                disabled={acting}
+                                onSaved={refreshAfterLineChange}
+                              />
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     )
                   })}
                 </tbody>

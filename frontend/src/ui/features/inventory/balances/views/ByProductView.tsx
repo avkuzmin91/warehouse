@@ -1,19 +1,18 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { getBalances } from '../../../api/balancesApi'
-import type { BalanceItem } from '../../../api/balancesApi'
-import { ListPage } from '../../layouts/ListPage'
-import { useLookups } from '../../../hooks/useLookups'
-import { Table, Td } from '../../data/Table'
-import { Pagination } from '../../data/Pagination'
-import { FiltersBar, FilterChip, FilterCombobox } from '../../data/FiltersBar'
-import { KPI } from '../../primitives/KPI'
-import { Icon } from '../../primitives/Icon'
-import { SkeletonRows } from '../../primitives/Skeleton'
-import { EmptyState } from '../../primitives/EmptyState'
+import { getBalances } from '../../../../../api/balancesApi'
+import type { BalanceItem } from '../../../../../api/balancesApi'
+import { useLookups } from '../../../../../hooks/useLookups'
+import { Table, Td } from '../../../../data/Table'
+import { Pagination } from '../../../../data/Pagination'
+import { FiltersBar, FilterChip, FilterCombobox } from '../../../../data/FiltersBar'
+import { KPI } from '../../../../primitives/KPI'
+import { Icon } from '../../../../primitives/Icon'
+import { SkeletonRows } from '../../../../primitives/Skeleton'
+import { EmptyState } from '../../../../primitives/EmptyState'
 
 const PAGE_SIZE = 50
 
-export function BalancesFeature() {
+export function ByProductView() {
   const [items, setItems] = useState<BalanceItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -53,10 +52,8 @@ export function BalancesFeature() {
   }, [items])
 
   return (
-    <ListPage
-      title="Остатки"
-      subtitle={`Позиций: ${total}`}
-      filters={
+    <>
+      <div style={{ marginBottom: 14 }}>
         <FiltersBar>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
@@ -93,8 +90,8 @@ export function BalancesFeature() {
             </button>
           )}
         </FiltersBar>
-      }
-    >
+      </div>
+
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <KPI label="Всего единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
         <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} unit="шт" />
@@ -154,6 +151,6 @@ export function BalancesFeature() {
         </tbody>
       </Table>
       <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
-    </ListPage>
+    </>
   )
 }

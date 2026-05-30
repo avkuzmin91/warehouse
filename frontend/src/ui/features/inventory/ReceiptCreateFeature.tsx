@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import {
   createReceipt,
   advanceReceiptStatus,
-  arriveReceipt,
 } from '../../../api/receiptsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
@@ -23,6 +22,7 @@ import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
+import { NumberStep } from './shared/NumberStep'
 import { ReceiptStepper } from './ReceiptStepper'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -60,7 +60,7 @@ export function ReceiptCreateFeature() {
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
-  async function handleSave(mode: 'plan' | 'arrive') {
+  async function handleSave() {
     if (!clientId) { setError('Укажите клиента'); return }
     setError('')
     setSaving(true)
@@ -74,11 +74,7 @@ export function ReceiptCreateFeature() {
         lines: lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message
-      if (mode === 'plan') {
-        await advanceReceiptStatus(docId)
-      } else {
-        await arriveReceipt(docId)
-      }
+      await advanceReceiptStatus(docId)
       navigate(`/inventory/receipts/${docId}`)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -108,7 +104,7 @@ export function ReceiptCreateFeature() {
             </button>
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave('plan') } }}
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave() } }}
               disabled={saving}
             >
               <Icon name="check" size={14} />Запланировать поступление
@@ -242,28 +238,11 @@ export function ReceiptCreateFeature() {
                       <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
                       <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
                       <Td>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
-                          <button
-                            className="btn ghost icon sm"
-                            style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                            onClick={() => handleUpdateQty(l._id, Math.max(1, l.planned_qty - 1))}
-                          >
-                            <Icon name="minus" size={10} />
-                          </button>
-                          <input
-                            inputMode="numeric"
-                            value={l.planned_qty}
-                            onChange={(e) => handleUpdateQty(l._id, Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
-                            style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
-                          />
-                          <button
-                            className="btn ghost icon sm"
-                            style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                            onClick={() => handleUpdateQty(l._id, l.planned_qty + 1)}
-                          >
-                            <Icon name="plus" size={10} />
-                          </button>
-                        </div>
+                        <NumberStep
+                          value={l.planned_qty}
+                          onChange={(v) => handleUpdateQty(l._id, Math.max(1, v))}
+                          width={120}
+                        />
                       </Td>
                       <Td>
                         <button className="btn ghost icon sm" onClick={() => handleRemoveLine(l._id)}>

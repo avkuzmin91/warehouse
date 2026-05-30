@@ -47,7 +47,7 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
     Вызывается перед переходом ready → shipped.
     Бросает HTTPException(409) если какой-то позиции не хватает.
     """
-    from modules.balances.service import get_available_good_qty
+    from modules.balances.service import get_available_good_qty_by_zone
 
     lines = connection.execute(
         "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0",
@@ -69,21 +69,39 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
     client_id = doc_row["client_id"] if doc_row else None
 
     for line in lines:
-        available = get_available_good_qty(
-            connection,
-            product_id=str(line["product_id"]),
-            color_id=line["color_id"],
-            size_id=line["size_id"],
-            client_id=client_id,
-        )
-        if available < int(line["qty"]):
+        zones = connection.execute(
+            "SELECT storage_zone_id, storage_zone_name, qty FROM shipment_line_zones WHERE line_id = ?",
+            (str(line["id"]),),
+        ).fetchall()
+
+        allocated = sum(int(z["qty"]) for z in zones)
+        if allocated != int(line["qty"]):
             raise HTTPException(
-                status_code=409,
+                status_code=400,
                 detail=(
-                    f"Недостаточно товара для отгрузки: «{line['product_name']}» "
-                    f"(нужно {line['qty']}, доступно {available})"
+                    f"Распределите строку «{line['product_name']}» по зонам: "
+                    f"распределено {allocated} из {line['qty']}"
                 ),
             )
+
+        for z in zones:
+            available = get_available_good_qty_by_zone(
+                connection,
+                product_id=str(line["product_id"]),
+                color_id=line["color_id"],
+                size_id=line["size_id"],
+                client_id=client_id,
+                storage_zone_id=z["storage_zone_id"],
+            )
+            if available < int(z["qty"]):
+                zone_label = z["storage_zone_name"] or "Без зоны"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Недостаточно товара в зоне «{zone_label}» для «{line['product_name']}» "
+                        f"(нужно {z['qty']}, доступно {available})"
+                    ),
+                )
 
 
 def advance_shipment(connection, doc_id: str, user_id: str) -> str:

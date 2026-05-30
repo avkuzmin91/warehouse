@@ -6,7 +6,7 @@ import {
   getReceipt,
   reopenReceipt,
 } from '../../../../api/receiptsApi'
-import type { ReceiptDetail } from '../../../../api/receiptsApi'
+import type { ReceiptArriveLine, ReceiptDetail } from '../../../../api/receiptsApi'
 import { useConfirm } from '../../../feedback/ConfirmDialog'
 import { DraftView } from './views/DraftView'
 import { PlannedView } from './views/PlannedView'
@@ -28,21 +28,6 @@ export function ReceiptDetailFeature({ docId }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [advancing, setAdvancing] = useState(false)
-
-  function handleUpdateLineQty(lineId: string, qty: number) {
-    setDetail((prev) => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        lines: prev.lines.map((l) => l.id === lineId ? { ...l, planned_qty: qty } : l),
-        state: {
-          ...prev.state,
-          lines: prev.state.lines.map((l) => l.id === lineId ? { ...l, planned_qty: qty } : l),
-          total_planned: prev.state.lines.reduce((s, l) => s + (l.id === lineId ? qty : l.planned_qty), 0),
-        },
-      }
-    })
-  }
 
   const load = useCallback(async () => {
     try {
@@ -69,10 +54,10 @@ export function ReceiptDetailFeature({ docId }: Props) {
     }
   }
 
-  async function handleArrive() {
+  async function handleArrive(lines: ReceiptArriveLine[]) {
     setAdvancing(true)
     try {
-      await arriveReceipt(docId)
+      await arriveReceipt(docId, lines)
       await load()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
@@ -154,7 +139,6 @@ export function ReceiptDetailFeature({ docId }: Props) {
         docId={docId}
         detail={detail}
         onReload={load}
-        onUpdateLineQty={handleUpdateLineQty}
         onArrive={handleArrive}
         onCancel={handleCancel}
         advancing={advancing}

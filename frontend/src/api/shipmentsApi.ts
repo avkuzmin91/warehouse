@@ -32,11 +32,6 @@ export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
 
 export type ShipmentCargoType = 'good' | 'defect'
 
-export const SHIPMENT_CARGO_LABELS: Record<ShipmentCargoType, string> = {
-  good:   'Годный товар',
-  defect: 'Брак',
-}
-
 export type ShipmentOpType = 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update'
 
 export type ShipmentOp = {
@@ -46,6 +41,13 @@ export type ShipmentOp = {
   created_at:       string
   created_by:       string | null
   created_by_email: string | null
+}
+
+export type ShipmentLineZone = {
+  id:                string
+  storage_zone_id:   string | null
+  storage_zone_name: string | null
+  qty:               number
 }
 
 export type ShipmentLine = {
@@ -58,6 +60,13 @@ export type ShipmentLine = {
   size_id:      string | null
   size_name:    string | null
   qty:          number
+  zones:        ShipmentLineZone[]
+}
+
+export type ShipmentLineZoneIn = {
+  storage_zone_id:   string | null
+  storage_zone_name: string | null
+  qty:               number
 }
 
 export type ShipmentListItem = {
@@ -196,6 +205,13 @@ export function updateShipmentLine(docId: string, lineId: string, line: Shipment
 
 export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
+}
+
+export function setShipmentLineZones(docId: string, lineId: string, zones: ShipmentLineZoneIn[]) {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/zones`, {
+    method: 'PUT',
+    body: JSON.stringify({ zones }),
+  })
 }
 
 export function advanceShipment(id: string) {

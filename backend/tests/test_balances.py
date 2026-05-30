@@ -70,18 +70,18 @@ def _insert_receipt(conn, client_id: str, status: str) -> str:
     return doc_id
 
 
-def _insert_receipt_line(conn, doc_id: str, product_id: str, color_id: str | None, size_id: str | None, planned_qty: int) -> str:
+def _insert_receipt_line(conn, doc_id: str, product_id: str, color_id: str | None, size_id: str | None, planned_qty: int, accepted_qty: int | None = None) -> str:
     """Вставляет receipt_lines, возвращает line_id."""
     line_id = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO receipt_lines
            (id, doc_id, product_id, product_name, product_sku,
             color_id, color_name, size_id, size_name,
-            planned_qty, is_deleted, created_at, created_by)
+            planned_qty, accepted_qty, is_deleted, created_at, created_by)
            VALUES (?, ?, ?, 'Test Product', 'TST-SKU',
                    ?, 'Red', ?, NULL,
-                   ?, 0, NOW(), 'test')""",
-        (line_id, doc_id, product_id, color_id, size_id, planned_qty),
+                   ?, ?, 0, NOW(), 'test')""",
+        (line_id, doc_id, product_id, color_id, size_id, planned_qty, accepted_qty),
     )
     return line_id
 
@@ -253,6 +253,31 @@ def test_balance_unchanged_for_ready_shipment(admin_client, client_id, product_i
         assert matched, f"Товар {pid} не найден в балансах"
         # Балансы должны остаться полными — ready не вычитается
         assert matched[0]["good"] == received_qty
+    finally:
+        _cleanup_test_docs(client_id)
+
+
+def test_on_review_remainder_uses_accepted_qty(admin_client, client_id, product_ids):
+    """Остаток «на проверке» = «Принят» минус уже разнесённый годный/брак (не план)."""
+    pid, color_id, size_id = product_ids
+    planned_qty = 30   # информационный план
+    accepted_qty = 25  # фактически принято при прибытии
+    good_qty = 10      # уже разнесено на QC
+
+    with get_connection() as conn:
+        doc_id = _insert_receipt(conn, client_id, "on_review")
+        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, planned_qty, accepted_qty)
+        _insert_receiving_op(conn, doc_id, line_id, good_qty)
+        conn.commit()
+
+    try:
+        r = admin_client.get(f"/balances?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
+        assert matched, "Товар не найден в балансах"
+        assert matched[0]["good"] == good_qty
+        # Остаток на проверке считается от «Принят» (25), а не «План» (30): 25 - 10 = 15.
+        assert matched[0]["on_review"] == accepted_qty - good_qty
     finally:
         _cleanup_test_docs(client_id)
 

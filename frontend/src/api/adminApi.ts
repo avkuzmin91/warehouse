@@ -2,7 +2,6 @@
  * Вызовы API, защищённые на бэкенде ролью admin (и DELETE receipt/shipment).
  * Импортируйте только из lazy-чанков админки / общих форм, где нужны эти методы.
  */
-import { RECORD_ACTUALITY_YES_ID } from './constants'
 import { request, requestForm } from './http'
 import type {
   DictionaryItem,
@@ -233,39 +232,6 @@ export function updateDictionaryItem(
   })
 }
 
-export async function fetchActiveDictionaryItems(apiPath: string): Promise<DictionaryItem[]> {
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
-  const nameQueryKey: 'name' | 'search' = path === '/clients' ? 'search' : 'name'
-  const res = await fetchSimpleDictionaryPage(path, nameQueryKey, {
-    page: 1,
-    limit: 100,
-    actuality_id: RECORD_ACTUALITY_YES_ID,
-    sort: 'name_asc',
-  })
-  return res.items
-}
-
-export async function fetchAllDictionaryItemsForFilter(
-  apiPath: string,
-  nameQueryKey: 'name' | 'search' = 'name',
-): Promise<DictionaryItem[]> {
-  const limit = 100
-  let page = 1
-  const all: DictionaryItem[] = []
-  const maxPages = 50
-  while (page <= maxPages) {
-    const res = await fetchSimpleDictionaryPage(apiPath, nameQueryKey, {
-      page,
-      limit,
-      sort: 'name_asc',
-    })
-    all.push(...res.items)
-    if (res.items.length < limit || all.length >= res.total) break
-    page += 1
-  }
-  return all
-}
-
 export function getProducts(params?: ProductListQueryParams) {
   const sp = new URLSearchParams()
   if (params?.page != null) sp.set('page', String(params.page))
@@ -361,9 +327,3 @@ export function uploadProductDictionaryImage(file: File) {
   })
 }
 
-export function deleteProduct(id: string) {
-  return request<{ message: string }>(`/products/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_deleted: true }),
-  })
-}
