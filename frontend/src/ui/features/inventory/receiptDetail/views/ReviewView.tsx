@@ -6,12 +6,14 @@ import {
   RECEIPT_STATUS_LABELS,
   completeReceiptLine,
   receiptStatusTone,
+  recordReceiptOp,
   reopenReceiptLine,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail, ReceiptLine } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { FilterChip } from '../../../../data/FiltersBar'
+import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
@@ -42,8 +44,10 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
 
   const [drafts, setDrafts] = useState<Record<string, LineQcDraft>>({})
   const [completing, setCompleting] = useState<Record<string, boolean>>({})
-  // Ключ места: `${kind}:${lineId}`, kind ∈ 'storage' | 'good' | 'defect'.
-  const [savingZone, setSavingZone] = useState<Record<string, boolean>>({})
+  // Ключ места: `${kind}:${lineId}`, kind ∈ 'storage' | 'good' | 'defect'. Изменения отложены до «Сохранить».
+  const [pendingZones, setPendingZones] = useState<Record<string, string>>({})
+  const [savingChanges, setSavingChanges] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [reopening, setReopening] = useState<Record<string, boolean>>({})
   const [lineError, setLineError] = useState<Record<string, string>>({})
   const [filterLine, setFilterLine] = useState<string | null>(null)
@@ -66,12 +70,17 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
 
   async function handleCompleteClick(line: ReceiptLine) {
     const lineId = line.id
-    const draft = getDraft(line)
 
     setLineError((prev) => { const next = { ...prev }; delete next[lineId]; return next })
     setCompleting((prev) => ({ ...prev, [lineId]: true }))
     try {
-      await completeReceiptLine(docId, lineId, { accepted: draft.accepted, defect: draft.defect })
+      // Сначала фиксируем отложенные правки (кол-во/места), затем завершаем строку
+      // из сохранённого состояния журнала (без body) — иначе бэкенд отклонит по местам.
+      if (hasUnsavedChanges) {
+        const ok = await handleSaveChanges()
+        if (!ok) return
+      }
+      await completeReceiptLine(docId, lineId)
       await onReload()
       setDrafts((prev) => { const next = { ...prev }; delete next[lineId]; return next })
     } catch (e) {
@@ -106,49 +115,78 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     return line.storage_zone_name
   }
 
-  async function handleSaveLineZone(lineId: string, kind: ZoneKind, zoneId: string) {
-    const key = `${kind}:${lineId}`
+  function zonePayload(kind: ZoneKind, zoneId: string) {
     const selectedZone = storageZones.find((z) => z.id === zoneId)
-    const payload =
-      kind === 'good'
-        ? { good_zone_id: zoneId || null, good_zone_name: selectedZone?.name ?? null }
-        : kind === 'defect'
-        ? { defect_zone_id: zoneId || null, defect_zone_name: selectedZone?.name ?? null }
-        : { storage_zone_id: zoneId || null, storage_zone_name: selectedZone?.name ?? null }
-    setSavingZone((prev) => ({ ...prev, [key]: true }))
+    if (kind === 'good') return { good_zone_id: zoneId || null, good_zone_name: selectedZone?.name ?? null }
+    if (kind === 'defect') return { defect_zone_id: zoneId || null, defect_zone_name: selectedZone?.name ?? null }
+    return { storage_zone_id: zoneId || null, storage_zone_name: selectedZone?.name ?? null }
+  }
+
+  function effectiveZoneId(line: ReceiptLine, kind: ZoneKind): string {
+    return pendingZones[`${kind}:${line.id}`] ?? (lineZoneId(line, kind) ?? '')
+  }
+
+  function setPendingZone(lineId: string, kind: ZoneKind, zoneId: string) {
+    setPendingZones((prev) => ({ ...prev, [`${kind}:${lineId}`]: zoneId }))
+  }
+
+  const hasDirtyQty = lines.some((l) => {
+    const d = drafts[l.id]
+    return d !== undefined && (d.accepted !== l.accepted || d.defect !== l.defect)
+  })
+  const hasDirtyZones = Object.keys(pendingZones).some((key) => {
+    const sep = key.indexOf(':')
+    const kind = key.slice(0, sep) as ZoneKind
+    const line = lines.find((l) => l.id === key.slice(sep + 1))
+    return !!line && pendingZones[key] !== (lineZoneId(line, kind) ?? '')
+  })
+  const hasUnsavedChanges = hasDirtyQty || hasDirtyZones
+
+  async function handleSaveChanges(): Promise<boolean> {
+    setSaveError('')
+    setSavingChanges(true)
     try {
-      await updateReceiptLine(docId, lineId, payload)
+      for (const line of lines) {
+        const d = drafts[line.id]
+        if (!d) continue
+        if (d.accepted !== line.accepted) {
+          await recordReceiptOp(docId, { line_id: line.id, op_type: 'receiving_correction', qty: d.accepted })
+        }
+        if (d.defect !== line.defect) {
+          await recordReceiptOp(docId, { line_id: line.id, op_type: 'defect_correction', qty: d.defect })
+        }
+      }
+      for (const key of Object.keys(pendingZones)) {
+        const sep = key.indexOf(':')
+        const kind = key.slice(0, sep) as ZoneKind
+        const lid = key.slice(sep + 1)
+        const line = lines.find((l) => l.id === lid)
+        if (!line || pendingZones[key] === (lineZoneId(line, kind) ?? '')) continue
+        await updateReceiptLine(docId, lid, zonePayload(kind, pendingZones[key]))
+      }
       await onReload()
+      setDrafts({})
+      setPendingZones({})
+      return true
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      return false
     } finally {
-      setSavingZone((prev) => { const next = { ...prev }; delete next[key]; return next })
+      setSavingChanges(false)
     }
   }
 
   const allDone = lines.length > 0 && lines.every((l) => l.qc_status === 'done')
   const doneLinesCount = lines.filter((l) => l.qc_status === 'done').length
 
-  const totals = lines.reduce(
-    (acc, l) => {
-      const d = getDraft(l)
-      const accepted = l.qc_status === 'done' ? l.accepted : d.accepted
-      const defect = l.qc_status === 'done' ? l.defect : d.defect
-      const processed = accepted + defect
-      const acceptedQty = l.accepted_qty ?? 0
-      acc.planned += l.planned_qty
-      acc.acceptedQty += acceptedQty
-      acc.accepted += accepted
-      acc.defect += defect
-      acc.processed += processed
-      // Отклонения считаются «на лету» относительно «Принят» (фактически прибыло),
-      // в т.ч. по строкам в работе — предварительно (от draft).
-      acc.surplus += acceptedQty ? Math.max(0, processed - acceptedQty) : 0
-      acc.shortage += acceptedQty ? Math.max(0, acceptedQty - processed) : 0
-      return acc
-    },
-    { planned: 0, acceptedQty: 0, accepted: 0, defect: 0, processed: 0, surplus: 0, shortage: 0 },
-  )
-  const totalSurplus = totals.surplus
-  const totalShortage = totals.shortage
+  // «Проверено» в готовности: объём обработки (годен + брак) против фактически прибывшего.
+  // Для строк в работе считаем «на лету» от draft, для завершённых — от сохранённого.
+  const checkedUnits = lines.reduce((s, l) => {
+    const d = getDraft(l)
+    return s + (l.qc_status === 'done' ? l.accepted + l.defect : d.accepted + d.defect)
+  }, 0)
+  const arrivedUnits = lines.reduce((s, l) => s + (l.accepted_qty ?? 0), 0)
+  const checkedPct = arrivedUnits > 0 ? Math.floor((checkedUnits / arrivedUnits) * 100) : 0
 
   const visibleOps = ops.filter((op) => {
     if (filterLine && op.line_id !== filterLine) return false
@@ -185,13 +223,20 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
           )}
           {!isReadonly && (
             <div className="detail-actions">
-              <button
-                className="btn primary"
-                onClick={() => { if (!allDone) { setShowBlockHint(true) } else { onAdvance() } }}
-                disabled={advancing}
-              >
-                <Icon name="check" size={14} />Завершить проверку
-              </button>
+              <div className="detail-actions-row">
+                {hasUnsavedChanges && (
+                  <button className="btn" onClick={() => void handleSaveChanges()} disabled={savingChanges}>
+                    <Icon name="save" size={14} />Сохранить изменения
+                  </button>
+                )}
+                <button
+                  className="btn primary"
+                  onClick={() => { if (!allDone) { setShowBlockHint(true) } else { onAdvance() } }}
+                  disabled={advancing}
+                >
+                  <Icon name="check" size={14} />Завершить проверку
+                </button>
+              </div>
               {showBlockHint && !allDone && (
                 <div className="block-reasons">
                   · Осталось проверить строк: {lines.length - doneLinesCount}
@@ -204,92 +249,45 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
 
       <ReceiptStepper status={doc.status} ops={ops} />
 
-      {/* KPI */}
-      {(() => {
-        // Контроли считаются относительно «Принят» (фактически прибыло), не «План».
-        // Виджет 1: % обработки — НЕ ограничиваем 100%
-        const processedPct = totals.acceptedQty > 0 ? Math.round(totals.processed / totals.acceptedQty * 100) : 0
-        // Виджет 2: % принятых — ограничиваем 100%, излишек показываем отдельно
-        const acceptedPct = totals.acceptedQty > 0 ? Math.min(100, Math.round(totals.accepted / totals.acceptedQty * 100)) : 0
-        return (
-          <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 20 }}>
-            {/* 1. Проверено = объём обработки (принято + брак) */}
-            <div className="kpi">
-              <div className="kpi-label">Проверено</div>
-              <div className="kpi-value">
-                {totals.processed}
-                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.acceptedQty}</span>
-              </div>
-              <div style={{ fontSize: 12, color: processedPct > 100 ? 'var(--c-info, #3b82f6)' : 'var(--c-text-subtle)', marginTop: 2, fontWeight: processedPct > 100 ? 600 : 400 }}>{processedPct}%</div>
-              <div className="prog" style={{ marginTop: 6 }}>
-                <div className="prog-fill" style={{ width: `${Math.min(100, processedPct)}%` }} />
-              </div>
-            </div>
-            {/* 2. Принято = результат склада */}
-            <div className="kpi">
-              <div className="kpi-label">Принято</div>
-              <div className="kpi-value">
-                {totals.accepted}
-                <span style={{ fontSize: 14, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 6 }}>/ {totals.acceptedQty}</span>
-              </div>
-              <div style={{ fontSize: 12, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: 'var(--c-info, #3b82f6)', fontWeight: 600 }}>{acceptedPct}%</span>
-                {totalSurplus > 0 && (
-                  <span style={{ color: 'var(--c-warning)', fontWeight: 600 }}>+{totalSurplus} сверх плана</span>
-                )}
-              </div>
-              <div className="prog" style={{ marginTop: 6 }}>
-                <div className="prog-fill" style={{ width: `${acceptedPct}%` }} />
-              </div>
-            </div>
-            {/* 3. Отклонения = брак, недостача, излишек */}
-            <div className="kpi">
-              <div className="kpi-label">Отклонения</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
-                {totals.defect > 0 && (
-                  <div>
-                    <span style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>Брак: </span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-warning)' }}>{totals.defect}</span>
-                  </div>
-                )}
-                {totalShortage > 0 && (
-                  <div>
-                    <span style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>Недостача: </span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-warning)' }}>−{totalShortage}</span>
-                  </div>
-                )}
-                {totalSurplus > 0 && (
-                  <div>
-                    <span style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>Излишек: </span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-info, #3b82f6)' }}>+{totalSurplus}</span>
-                  </div>
-                )}
-                {totals.defect === 0 && totalShortage === 0 && totalSurplus === 0 && (
-                  <div style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>Нет отклонений</div>
-                )}
-              </div>
-            </div>
-            {/* 4. Состав поступления */}
-            <div className="kpi">
-              <div className="kpi-label">Состав поступления</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 6, columnGap: 10, fontSize: 13, marginTop: 8 }}>
-                <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-                <span style={{ textAlign: 'right', fontWeight: 600 }} className="mono">{detail.state.sku_count}</span>
-                <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-                <span style={{ textAlign: 'right', fontWeight: 600 }} className="mono">{lines.length}</span>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+      {saveError && (
+        <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{saveError}</Alert>
+      )}
 
       <div className="split-380">
         <div className="col gap-16">
+          {/* Основная информация (только просмотр) */}
+          <Card>
+            <CardHead>
+              <Icon name="file" size={15} className="ic-accent" />
+              <span className="card-head-title">Основная информация</span>
+            </CardHead>
+            <CardBody>
+              <div className="form-grid-2">
+                <div>
+                  <label className="field-label"><span>Клиент</span></label>
+                  <input className="input" value={doc.client_name ?? '—'} disabled />
+                </div>
+                <div>
+                  <label className="field-label"><span>Поставщик</span></label>
+                  <input className="input" value={doc.supplier_name || '—'} disabled />
+                </div>
+                <div>
+                  <label className="field-label"><span>Дата прибытия</span></label>
+                  <input className="input" value={fmtDate(doc.arrival_date)} disabled />
+                </div>
+                <div>
+                  <label className="field-label"><span>Стоимость логистики, ₽</span></label>
+                  <input className="input" value={doc.logistics_cost.toLocaleString('ru-RU')} disabled />
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
           {/* Таблица строк */}
           <Card>
             <CardHead>
               <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары</span>
+              <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               {!isReadonly && allDone && (
                 <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--c-success)', fontWeight: 500 }}>
@@ -304,42 +302,16 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               readonly={isReadonly}
               getDraft={(l) => getDraft(l)}
               onDraftField={(l, field, v) => setDraftField(l.id, field, v, l.accepted, l.defect)}
-              zoneValue={(l, kind) => lineZoneId(l, kind) ?? ''}
+              zoneValue={(l, kind) => effectiveZoneId(l, kind)}
               zoneName={(l, kind) => lineZoneName(l, kind)}
-              zoneSaving={(l, kind) => savingZone[`${kind}:${l.id}`] ?? false}
-              onZone={(l, kind, v) => void handleSaveLineZone(l.id, kind, v)}
-              completing={(l) => completing[l.id] ?? false}
+              zoneSaving={() => savingChanges}
+              onZone={(l, kind, v) => setPendingZone(l.id, kind, v)}
+              completing={(l) => (completing[l.id] ?? false) || savingChanges}
               reopening={(l) => reopening[l.id] ?? false}
               lineError={(l) => lineError[l.id]}
               onComplete={(l) => void handleCompleteClick(l)}
               onReopen={(l) => void handleReopen(l.id)}
             />
-          </Card>
-
-          {/* Основная информация */}
-          <Card>
-            <CardHead>
-              <Icon name="file" size={15} />
-              <span className="card-head-title">Основная информация</span>
-            </CardHead>
-            <CardBody style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px 24px', fontSize: 12.5 }}>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Клиент</div>
-                <div>{doc.client_name ?? '—'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Поставщик</div>
-                <div>{doc.supplier_name || '—'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Дата прибытия</div>
-                <div>{fmtDate(doc.arrival_date)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 2 }}>Стоимость логистики</div>
-                <div className="mono">{doc.logistics_cost.toLocaleString('ru-RU')} ₽</div>
-              </div>
-            </CardBody>
           </Card>
         </div>
 
@@ -350,6 +322,19 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
+            <div style={{ padding: '12px 14px 8px', borderBottom: '1px solid var(--c-border)' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
+                <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Проверено, ед.</span>
+                <span style={{ fontSize: 13 }}>
+                  <b className="mono">{checkedUnits}</b>
+                  <span style={{ color: 'var(--c-text-subtle)' }}> / {arrivedUnits}</span>
+                  <span style={{ marginLeft: 8, fontWeight: 600, color: checkedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)' }}>{checkedPct}%</span>
+                </span>
+              </div>
+              <div className="prog">
+                <div className="prog-fill" style={{ width: `${Math.min(100, checkedPct)}%` }} />
+              </div>
+            </div>
             <div className="readiness-list">
               {[
                 {

@@ -268,7 +268,7 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         state = compute_state(conn, doc_id)
 
         lines_rows = conn.execute(
-            "SELECT * FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+            "SELECT * FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
             (doc_id,),
         ).fetchall()
         ops_rows = conn.execute(

@@ -34,7 +34,6 @@ type PlannedProps = {
   accepted: (line: ReceiptLine) => number
   onAccepted: (line: ReceiptLine, v: number) => void
   storageValue: (line: ReceiptLine) => string
-  storageDirty: (line: ReceiptLine) => boolean
   onStorage: (line: ReceiptLine, v: string) => void
   onDelete: (line: ReceiptLine) => void
 }
@@ -64,7 +63,7 @@ export function ReceiptLinesTable(props: Props) {
   const showAccepted = stage === 'planned' || stage === 'review'
   const showQc = stage === 'review'
   const hasGroups = showAccepted || showQc
-  const actionWidth = stage === 'review' ? 130 : 56
+  const actionWidth = stage === 'review' ? 96 : 56
 
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
 
@@ -118,7 +117,7 @@ export function ReceiptLinesTable(props: Props) {
               <th colSpan={2} style={{ background: tintDef, color: 'var(--c-warning)', textAlign: 'center', borderLeft: groupBorder }}>
                 Брак
               </th>
-              <th rowSpan={2} style={{ width: 96, borderLeft: groupBorder }}>Статус</th>
+              <th rowSpan={2} style={{ width: 130, borderLeft: groupBorder }}>Статус</th>
             </>
           )}
           <th
@@ -197,18 +196,13 @@ function Row(props: Props & { line: ReceiptLine }) {
         {props.stage === 'review'
           ? line.planned_qty
           : (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <NumberStep
-                value={props.plannedQty(line)}
-                onChange={(v) => props.onPlannedQty(line, Math.max(1, v))}
-                tone={props.plannedDirty(line) ? 'accent' : 'normal'}
-                disabled={props.saving}
-                width={100}
-              />
-              <span style={{ display: 'inline-flex', width: 18, color: 'var(--c-accent)', visibility: props.plannedDirty(line) ? 'visible' : 'hidden' }}>
-                <Icon name="edit" size={13} />
-              </span>
-            </div>
+            <NumberStep
+              value={props.plannedQty(line)}
+              onChange={(v) => props.onPlannedQty(line, Math.max(1, v))}
+              tone={props.plannedDirty(line) ? 'accent' : 'normal'}
+              disabled={props.saving}
+              width={100}
+            />
           )}
       </Td>
 
@@ -228,7 +222,6 @@ function Row(props: Props & { line: ReceiptLine }) {
               value={props.storageValue(line)}
               zones={props.zones}
               onChange={(v) => props.onStorage(line, v)}
-              dirty={props.storageDirty(line)}
               disabled={props.saving}
             />
           </Td>
@@ -241,9 +234,11 @@ function Row(props: Props & { line: ReceiptLine }) {
         {props.stage === 'review'
           ? <ReviewAction {...props} line={line} />
           : (
-            <button className="btn ghost icon sm" onClick={() => props.onDelete(line)}>
-              <Icon name="trash" size={13} />
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <button className="btn ghost icon sm" onClick={() => props.onDelete(line)}>
+                <Icon name="trash" size={13} />
+              </button>
+            </div>
           )}
       </Td>
     </tr>
@@ -373,7 +368,7 @@ function ReviewAction(props: ReviewProps & { line: ReceiptLine }) {
         disabled={props.completing(line) || zoneBlocked}
         title={zoneBlocked ? 'Укажите место хранения' : undefined}
       >
-        <Icon name="check" size={12} />Завершить
+        Завершить
       </button>
       {zoneBlocked && (
         <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', maxWidth: 160 }}>

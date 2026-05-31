@@ -58,9 +58,13 @@ export function PlannedView({
   const [showAddLine, setShowAddLine] = useState(false)
 
   // «Принят» вводится при фиксации прибытия. Предзаполняем планом как наиболее частым значением.
+  function acceptedBaseline(line: { accepted_qty?: number | null; planned_qty: number }): number {
+    return line.accepted_qty ?? line.planned_qty
+  }
+
   function acceptedFor(lineId: string): number {
     const line = lines.find((l) => l.id === lineId)
-    return accepted[lineId] ?? line?.accepted_qty ?? line?.planned_qty ?? 0
+    return accepted[lineId] ?? (line ? acceptedBaseline(line) : 0)
   }
 
   function plannedQtyFor(lineId: string): number {
@@ -94,10 +98,12 @@ export function PlannedView({
       for (const line of lines) {
         const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
         const storageDirty = pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '')
-        if (!qtyDirty && !storageDirty) continue
+        const acceptedDirty = accepted[line.id] !== undefined && accepted[line.id] !== acceptedBaseline(line)
+        if (!qtyDirty && !storageDirty && !acceptedDirty) continue
 
         const payload: ReceiptLineUpdatePayload = {}
         if (qtyDirty) payload.planned_qty = pendingQty[line.id] ?? line.planned_qty
+        if (acceptedDirty) payload.accepted_qty = accepted[line.id]
         if (storageDirty) {
           const zoneId = pendingStorage[line.id] ?? ''
           const selectedZone = storageZones.find((z) => z.id === zoneId)
@@ -109,6 +115,7 @@ export function PlannedView({
       setMetaDirty(false)
       setPendingQty({})
       setPendingStorage({})
+      setAccepted({})
       await onReload()
       return true
     } catch (e: unknown) {
@@ -121,16 +128,6 @@ export function PlannedView({
 
   function setPendingQtyFor(lineId: string, qty: number) {
     setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
-  }
-
-  function handleResetChanges() {
-    setSupplierName(doc.supplier_name ?? '')
-    setArrivalDate(doc.arrival_date ?? '')
-    setLogisticsCost(doc.logistics_cost ? String(doc.logistics_cost) : '')
-    setMetaDirty(false)
-    setPendingQty({})
-    setPendingStorage({})
-    setMetaError('')
   }
 
   async function handleDeleteLine(lineId: string, productName: string) {
@@ -165,11 +162,16 @@ export function PlannedView({
   ]
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
-  const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage
+  const hasPendingAccepted = Object.keys(accepted).some((id) => {
+    const line = lines.find((l) => l.id === id)
+    return line !== undefined && accepted[id] !== acceptedBaseline(line)
+  })
+  const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage || hasPendingAccepted
   const pendingLinesCount = lines.filter((line) => {
     const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
     const storageDirty = pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '')
-    return qtyDirty || storageDirty
+    const acceptedDirty = accepted[line.id] !== undefined && accepted[line.id] !== acceptedBaseline(line)
+    return qtyDirty || storageDirty || acceptedDirty
   }).length
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
@@ -202,11 +204,6 @@ export function PlannedView({
             <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
               <Icon name="x" size={14} />Аннулировать
             </button>
-            {hasUnsavedChanges && (
-              <button className="btn ghost" onClick={handleResetChanges} disabled={metaSaving}>
-                <Icon name="x" size={14} />Отменить изменения
-              </button>
-            )}
             {hasUnsavedChanges && (
               <button className="btn" onClick={handleSaveChanges} disabled={metaSaving}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -289,7 +286,7 @@ export function PlannedView({
           <Card>
             <CardHead>
               <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары</span>
+              <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               <div className="flex-1" />
               <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
@@ -313,7 +310,6 @@ export function PlannedView({
                 accepted={(l) => acceptedFor(l.id)}
                 onAccepted={(l, v) => setAccepted((prev) => ({ ...prev, [l.id]: v }))}
                 storageValue={(l) => pendingStorage[l.id] ?? l.storage_zone_id ?? ''}
-                storageDirty={(l) => pendingStorage[l.id] !== undefined && pendingStorage[l.id] !== (l.storage_zone_id ?? '')}
                 onStorage={(l, v) => setPendingStorage((prev) => ({ ...prev, [l.id]: v }))}
                 onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
               />

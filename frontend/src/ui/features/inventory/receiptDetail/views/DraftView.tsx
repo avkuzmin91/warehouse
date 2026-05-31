@@ -88,16 +88,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
     }
   }
 
-  function handleResetChanges() {
-    setClientId(doc.client_id)
-    setSupplierName(doc.supplier_name ?? '')
-    setArrivalDate(doc.arrival_date ?? '')
-    setLogisticsCost(doc.logistics_cost ? String(doc.logistics_cost) : '')
-    setMetaDirty(false)
-    setPendingQty({})
-    setMetaError('')
-  }
-
   function setPendingQtyFor(lineId: string, qty: number) {
     setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
   }
@@ -148,11 +138,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         </div>
         <div className="detail-actions">
           <div className="detail-actions-row">
-            {hasUnsavedChanges && (
-              <button className="btn ghost" onClick={handleResetChanges} disabled={metaSaving}>
-                <Icon name="x" size={14} />Отменить изменения
-              </button>
-            )}
             {hasUnsavedChanges && (
               <button className="btn" onClick={handleSaveChanges} disabled={metaSaving || !clientId}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -257,7 +242,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           <Card>
             <CardHead>
               <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары</span>
+              <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               <div className="flex-1" />
               <button
