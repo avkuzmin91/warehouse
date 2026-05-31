@@ -278,7 +278,7 @@ function ReviewCells(props: ReviewProps & { line: ReceiptLine }) {
       zones={props.zones}
       onChange={(v) => props.onZone(line, kind, v)}
       disabled={props.zoneSaving(line, kind)}
-      readonly={props.readonly}
+      readonly={isDone || props.readonly}
       readonlyLabel={props.zoneName(line, kind)}
     />
   )
