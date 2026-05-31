@@ -301,3 +301,90 @@ def test_balance_not_counted_for_draft_receipt(admin_client, client_id, product_
         assert not matched, f"Товар {pid} неожиданно найден в балансах при статусе planned: {matched}"
     finally:
         _cleanup_test_docs(client_id)
+
+
+# ── zone relocations (вариант B) ───────────────────────────────────────────────
+
+def _zone_good(items, location_id) -> int:
+    return sum(i["qty"] for i in items if i["status"] == "good" and i["location_id"] == location_id)
+
+
+def _seed_good_in_zone(conn, client_id, product_ids, zone_id, qty) -> None:
+    pid, color_id, size_id = product_ids
+    doc = _insert_receipt(conn, client_id, "done")
+    line = _insert_receipt_line(conn, doc, pid, color_id, size_id, planned_qty=qty, accepted_qty=qty)
+    _insert_receiving_op(conn, doc, line, qty)
+    conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone_id, line))
+    conn.commit()
+
+
+def test_relocation_moves_good_between_zones(admin_client, client_id, product_ids):
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 10)
+    try:
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_good(items, zone_a) == 10
+
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "status": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 4,
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_good(items, zone_a) == 6
+        assert _zone_good(items, zone_b) == 4
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_appears_in_journal(admin_client, client_id, product_ids):
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 8)
+    try:
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "product_name": "Test Product", "product_sku": "TST-SKU",
+            "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "status": "good", "from_zone_id": zone_a, "to_zone_id": zone_b,
+            "qty": 3, "comment": "перенос",
+        })
+        assert r.status_code == 200, r.text
+
+        j = admin_client.get(f"/balances/relocations?client_id={client_id}")
+        assert j.status_code == 200, j.text
+        data = j.json()
+        assert data["total"] >= 1
+        mine = [i for i in data["items"] if i["product_name"] == "Test Product" and i["qty"] == 3]
+        assert mine, data["items"]
+        assert mine[0]["status"] == "good"
+        assert mine[0]["comment"] == "перенос"
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_over_available_returns_400(admin_client, client_id, product_ids):
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 5)
+    try:
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "status": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 100,
+        })
+        assert r.status_code == 400, r.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)

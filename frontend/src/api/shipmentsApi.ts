@@ -40,13 +40,6 @@ export type ShipmentOp = {
   created_by_email: string | null
 }
 
-export type ShipmentLineZone = {
-  id:                string
-  storage_zone_id:   string | null
-  storage_zone_name: string | null
-  qty:               number
-}
-
 export type ShipmentLine = {
   id:                string
   product_id:        string
@@ -60,13 +53,6 @@ export type ShipmentLine = {
   shipped_qty:       number
   storage_zone_id:   string | null
   storage_zone_name: string | null
-  zones:             ShipmentLineZone[]
-}
-
-export type ShipmentLineZoneIn = {
-  storage_zone_id:   string | null
-  storage_zone_name: string | null
-  qty:               number
 }
 
 export type ShipmentListItem = {
@@ -209,13 +195,6 @@ export function updateShipmentLine(docId: string, lineId: string, line: Shipment
 
 export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
-}
-
-export function setShipmentLineZones(docId: string, lineId: string, zones: ShipmentLineZoneIn[]) {
-  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/zones`, {
-    method: 'PUT',
-    body: JSON.stringify({ zones }),
-  })
 }
 
 export function advanceShipment(id: string) {

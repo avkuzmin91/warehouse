@@ -82,8 +82,8 @@ def _fake_line() -> dict:
     }
 
 
-def test_shipment_packing_to_shipped_unallocated_zone_returns_409(admin_client, client_id):
-    """Отгрузка годного без зоны блокируется проверкой остатков."""
+def test_shipment_packing_to_shipped_missing_zone_returns_400(admin_client, client_id):
+    """Отгрузка годного без указанного места хранения блокируется (400) до проверки остатков."""
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
@@ -96,7 +96,26 @@ def test_shipment_packing_to_shipped_unallocated_zone_returns_409(admin_client, 
     admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
 
     r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
-    assert r_ship.status_code == 409, r_ship.text
+    assert r_ship.status_code == 400, r_ship.text
+
+
+def test_shipment_defect_missing_zone_returns_400(admin_client, client_id):
+    """Гейт распространён на брак: отгрузка брака без места хранения → 400."""
+    payload = _make_shipment_payload(client_id, [_fake_line()])
+    payload["cargo_type"] = "defect"
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    line = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]
+    line["shipped_qty"] = 999
+
+    r_line = admin_client.patch(f"/shipments/{doc_id}/lines/{line['id']}", json=line)
+    assert r_line.status_code == 200, r_line.text
+
+    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+
+    r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
+    assert r_ship.status_code == 400, r_ship.text
 
 
 def test_shipment_packing_to_shipped_insufficient_stock_returns_409(admin_client, client_id):

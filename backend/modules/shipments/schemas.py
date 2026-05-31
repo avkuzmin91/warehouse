@@ -17,23 +17,6 @@ class ShipmentLineIn(BaseModel):
     storage_zone_name: str | None = None
 
 
-class ShipmentLineZoneIn(BaseModel):
-    storage_zone_id:   str | None = None
-    storage_zone_name: str | None = None
-    qty:               int = Field(ge=1)
-
-
-class ShipmentLineZonesSet(BaseModel):
-    zones: list[ShipmentLineZoneIn] = []
-
-
-class ShipmentLineZoneItem(BaseModel):
-    id:                str
-    storage_zone_id:   str | None
-    storage_zone_name: str | None
-    qty:               int
-
-
 class ShipmentDocCreate(BaseModel):
     cargo_type:  str = "good"
     client_id:   str | None = None
@@ -68,7 +51,6 @@ class ShipmentLineItem(BaseModel):
     shipped_qty:       int
     storage_zone_id:   str | None
     storage_zone_name: str | None
-    zones:             list[ShipmentLineZoneItem] = []
 
 
 class ShipmentListItem(BaseModel):

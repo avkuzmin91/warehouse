@@ -29,7 +29,7 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
   const [colorId, setColorId] = useState('')
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [sizeId, setSizeId] = useState('')
-  const [qty, setQty] = useState(0)
+  const [qty, setQty] = useState(1)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -66,7 +66,7 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
   async function handleAdd() {
     if (!selectedProduct) { setError('Выберите товар'); return }
     if (needsSize && !sizeId) { setError('Выберите размер — он обязателен для этого типа товара'); return }
-    if (qty < 0) { setError('Количество не может быть отрицательным'); return }
+    if (qty < 1) { setError('Количество должно быть не меньше 1'); return }
     setError('')
     setSaving(true)
     try {
@@ -98,7 +98,7 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!productId || qty < 0 || saving} onClick={handleAdd}>
+          <button className="btn primary" disabled={!productId || qty < 1 || saving} onClick={handleAdd}>
             <Icon name="plus" size={13} />Добавить
           </button>
         </>
@@ -149,20 +149,20 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
       </div>
       <div style={{ marginTop: 14 }}>
         <label className="field-label">
-          <span>Плановое количество</span>
+          <span>Плановое количество <span style={{ color: 'var(--c-danger)' }}>*</span></span>
         </label>
         <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 30, width: 160, background: 'var(--c-bg-elev)' }}>
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => Math.max(0, q - 1))}
+            onClick={() => setQty((q) => Math.max(1, q - 1))}
           >
             <Icon name="minus" size={11} />
           </button>
           <input
             inputMode="numeric"
             value={qty}
-            onChange={(e) => setQty(Math.max(0, parseInt(e.target.value.replace(/\D/g, '')) || 0))}
+            onChange={(e) => setQty(Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
             style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', background: 'transparent', minWidth: 0 }}
           />
           <button

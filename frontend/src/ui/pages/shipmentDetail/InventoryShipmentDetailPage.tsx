@@ -21,11 +21,12 @@ import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { EmptyState } from '../../primitives/EmptyState'
+import { Tooltip } from '../../primitives/Tooltip'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Drawer } from '../../feedback/Drawer'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
-import { Field } from '../../primitives/Input'
+import { Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { balanceKey } from '../../../utils/balanceKey'
@@ -97,7 +98,7 @@ export function InventoryShipmentDetailPage() {
   useEffect(() => { load() }, [load])
 
   async function handleInfoSave() {
-    if (!docId) return
+    if (!docId) return false
     setInfoSaving(true)
     setError('')
     try {
@@ -113,8 +114,10 @@ export function InventoryShipmentDetailPage() {
       setInfoDirty(false)
       setInfoSaved(true)
       setTimeout(() => setInfoSaved(false), 2000)
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      return false
     } finally {
       setInfoSaving(false)
     }
@@ -144,15 +147,11 @@ export function InventoryShipmentDetailPage() {
     }
     const res = await getBalances(balanceParams)
     setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good > 0))
-    if (shipmentCargoType === 'good') {
-      const zonesRes = await getBalancesByZone({
-        client_id: shipmentClientId,
-        only_positive: true,
-      })
-      setZoneBalances(zonesRes.items.filter((item) => item.status === 'good'))
-    } else {
-      setZoneBalances([])
-    }
+    const zonesRes = await getBalancesByZone({
+      client_id: shipmentClientId,
+      only_positive: true,
+    })
+    setZoneBalances(zonesRes.items.filter((item) => item.status === shipmentCargoType))
   }, [shipmentClientId, shipmentCargoType, canDelete])
 
   useEffect(() => {
@@ -210,9 +209,6 @@ export function InventoryShipmentDetailPage() {
   }
 
   function getDraftAvailable(line: ShipmentLine): number {
-    if (shipmentCargoType !== 'good') {
-      return lineAvailable(line, balances, doc?.cargo_type as ShipmentCargoType)
-    }
     const draft = getDraft(line)
     const zoneId = draft.zoneId || null
     const matched = zoneBalances.find((item) =>
@@ -224,7 +220,6 @@ export function InventoryShipmentDetailPage() {
   }
 
   function getLineZoneOptions(line: ShipmentLine): ZoneChoice[] {
-    if (shipmentCargoType !== 'good') return []
     return zoneBalances
       .filter((item) =>
         item.location_id
@@ -268,6 +263,9 @@ export function InventoryShipmentDetailPage() {
       || d.zoneName !== (line.storage_zone_name ?? null)
   })
 
+  const infoLogisticsNumber = Number(infoLogisticsCost)
+  const infoLogisticsFilled = infoLogisticsCost.trim() !== '' && Number.isFinite(infoLogisticsNumber) && infoLogisticsNumber >= 0
+
   const advanceChecks: ReadinessCheck[] = [
     {
       ok: (doc?.lines.length ?? 0) > 0,
@@ -287,13 +285,33 @@ export function InventoryShipmentDetailPage() {
     ...(isPlanned
       ? [
           {
+            ok: !!infoDestinationName?.trim(),
+            label: 'Назначение указано',
+            error: 'Укажите назначение',
+          },
+          {
+            ok: !!infoShipDate,
+            label: 'Дата отгрузки указана',
+            error: 'Укажите дату отгрузки',
+          },
+          {
+            ok: !!infoCarrierName?.trim(),
+            label: 'Перевозчик указан',
+            error: 'Укажите перевозчика',
+          },
+          {
+            ok: infoLogisticsFilled,
+            label: 'Стоимость логистики указана',
+            error: 'Укажите стоимость логистики',
+          },
+          {
             ok: doc?.lines.every((line) => getDraft(line).shippedQty > 0) ?? false,
             label: 'Указано отгруженное количество',
             error: 'Укажите отгруженное количество больше 0 по каждой строке',
           },
         ]
       : []),
-    ...(isPlanned && shipmentCargoType === 'good'
+    ...(isPlanned
       ? [
           {
             ok: doc?.lines.every((line) => !!getDraft(line).zoneId) ?? false,
@@ -303,7 +321,7 @@ export function InventoryShipmentDetailPage() {
           {
             ok: doc?.lines.every((line) => getDraft(line).shippedQty <= getDraftAvailable(line)) ?? false,
             label: 'Достаточно остатка',
-            error: 'В выбранной зоне недостаточно товара для отгрузки',
+            error: 'В выбранном месте недостаточно товара для отгрузки',
           },
         ]
       : []),
@@ -402,6 +420,10 @@ export function InventoryShipmentDetailPage() {
     }
     setShowBlockReasons(false)
     void act(async () => {
+      if (infoDirty) {
+        const saved = await handleInfoSave()
+        if (!saved) return
+      }
       if (hasUnsavedLineChanges) await handleSaveAllLines()
       const res = await advanceShipment(docId!)
       const nextStatus = res.message as ShipmentStatus
@@ -532,8 +554,27 @@ export function InventoryShipmentDetailPage() {
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
                   <Field label="Клиент" style={{ marginBottom: 0 }}>
-                    <div className="input" style={{ background: 'var(--c-bg-sunken)', color: 'var(--c-text-muted)', cursor: 'default' }}>
-                      {doc.client_name ?? '—'}
+                    <div style={{ position: 'relative' }}>
+                      <Input
+                        value={doc.client_name ?? '—'}
+                        readOnly
+                        style={{ paddingRight: 34, cursor: 'default' }}
+                      />
+                      <div style={{
+                        position: 'absolute',
+                        right: 9,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        color: 'var(--c-text-subtle)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}>
+                        <Tooltip content="Клиент нельзя изменить после добавления товаров">
+                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <Icon name="lock" size={13} />
+                          </span>
+                        </Tooltip>
+                      </div>
                     </div>
                   </Field>
                   <Field label="Назначение" required style={{ marginBottom: 0 }}>
@@ -573,21 +614,16 @@ export function InventoryShipmentDetailPage() {
             ) : (
               <div style={{ padding: '12px 16px' }}>
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 16, fontSize: 13, marginTop: 14 }}>
-                  <span style={{ color: 'var(--c-text-muted)' }}>Клиент</span>
-                  <span>{doc.client_name ?? '—'}</span>
-                  <span style={{ color: 'var(--c-text-muted)' }}>Назначение</span>
-                  <span>{doc.destination ?? '—'}</span>
-                  <span style={{ color: 'var(--c-text-muted)' }}>Перевозчик</span>
-                  <span>{doc.carrier ?? '—'}</span>
-                  {doc.logistics_cost != null && (
-                    <>
-                      <span style={{ color: 'var(--c-text-muted)' }}>Стоимость логистики</span>
-                      <span className="mono">{doc.logistics_cost.toLocaleString()}</span>
-                    </>
-                  )}
-                  <span style={{ color: 'var(--c-text-muted)' }}>Дата отгрузки</span>
-                  <span>{fmtDateLong(doc.ship_date)}</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+                  <ReadOnlyField label="Клиент" value={doc.client_name} />
+                  <ReadOnlyField label="Назначение" value={doc.destination} />
+                  <ReadOnlyField label="Дата отгрузки" value={fmtDateLong(doc.ship_date)} />
+                  <ReadOnlyField label="Перевозчик" value={doc.carrier} />
+                  <ReadOnlyField
+                    label="Стоимость логистики"
+                    value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
+                    mono
+                  />
                 </div>
               </div>
             )}
@@ -746,6 +782,17 @@ export function InventoryShipmentDetailPage() {
   )
 }
 
+function ReadOnlyField({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+  return (
+    <div>
+      <div className="field-label"><span>{label}</span></div>
+      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>
+        <span className={mono ? 'mono' : undefined}>{value || '—'}</span>
+      </div>
+    </div>
+  )
+}
+
 // --- ShipmentLinesTable ---
 
 const groupBorder = '1px solid var(--c-border)'
@@ -775,7 +822,7 @@ function ShipmentLinesTable({
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
-  const showZone = cargoType === 'good'
+  const showZone = cargoType === 'good' || cargoType === 'defect'
   // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Действие
   const colCount = 2 + (showZone ? 2 : 1) + (canDelete ? 1 : 0)
 

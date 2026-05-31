@@ -143,7 +143,6 @@ export function ReceiptCreateFeature() {
                     value={clientId}
                     placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    prefix="user"
                     onChange={(v) => setClientId(String(v ?? ''))}
                     disabled={lines.length > 0}
                   />
@@ -156,17 +155,17 @@ export function ReceiptCreateFeature() {
                 <div>
                   <label className="field-label">
                     <span>Поставщик</span>
+                    <span className="text-xs faint">не обязательно</span>
                   </label>
                   <Combobox
                     value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Выберите поставщика"
+                    placeholder="Поиск поставщика…"
                     options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
                     onChange={(v) => {
                       const found = suppliers.find((s) => s.id === String(v ?? ''))
                       setSupplierName(found?.name ?? '')
                     }}
                     clearable
-                    prefix="user"
                   />
                 </div>
                 <div>
@@ -219,44 +218,51 @@ export function ReceiptCreateFeature() {
               <Table>
                 <thead>
                   <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · SKU</th>
-                    <th style={{ width: 110 }}>Цвет</th>
-                    <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 148 }}>План, шт</th>
-                    <th style={{ width: 32 }} />
+                    <th>Товар</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>План</th>
+                    <th style={{ width: 56 }}>Действие</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, i) => (
+                  {lines.map((l) => (
                     <tr key={l._id}>
-                      <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
                       <Td>
                         <div style={{ fontWeight: 450 }}>{l.product_name}</div>
-                        <div className="t-sub mono">{l.product_sku}</div>
+                        <div className="t-sub mono">
+                          {[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}
+                        </div>
                       </Td>
-                      <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                      <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                      <Td>
+                      <Td className="num" style={{ color: 'var(--c-text-muted)' }}>
                         <NumberStep
                           value={l.planned_qty}
                           onChange={(v) => handleUpdateQty(l._id, Math.max(1, v))}
-                          width={120}
+                          width={100}
                         />
                       </Td>
                       <Td>
-                        <button className="btn ghost icon sm" onClick={() => handleRemoveLine(l._id)}>
-                          <Icon name="trash" size={13} />
-                        </button>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                          <button className="btn ghost icon sm" onClick={() => handleRemoveLine(l._id)}>
+                            <Icon name="trash" size={13} />
+                          </button>
+                        </div>
                       </Td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr className="sum">
-                    <td colSpan={4}>Итого: {totalSku} SKU</td>
-                    <td className="num">{totalQty}</td>
-                    <td />
+                  <tr>
+                    <td colSpan={3} style={{ padding: 0 }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 24, padding: '10px 14px',
+                        background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5,
+                      }}>
+                        <span style={{ fontWeight: 700 }}>Итого</span>
+                        <span style={{ color: 'var(--c-text-subtle)' }}>{totalSku} SKU</span>
+                        <span style={{ color: 'var(--c-text-subtle)' }}>
+                          План <b className="mono" style={{ color: 'var(--c-text)' }}>{totalQty}</b>
+                        </span>
+                      </div>
+                    </td>
                   </tr>
                 </tfoot>
               </Table>

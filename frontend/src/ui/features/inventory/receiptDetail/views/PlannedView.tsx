@@ -17,6 +17,7 @@ import { Badge } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
+import { localTodayYmd } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
@@ -60,18 +61,18 @@ export function PlannedView({
   const [showAddLine, setShowAddLine] = useState(false)
 
   // «Принят» вводится при фиксации прибытия. Предзаполняем планом как наиболее частым значением.
-  function acceptedBaseline(line: { accepted_qty?: number | null; planned_qty: number }): number {
-    return line.accepted_qty ?? line.planned_qty
+  function plannedQtyFor(lineId: string): number {
+    const line = lines.find((l) => l.id === lineId)
+    return pendingQty[lineId] ?? line?.planned_qty ?? 0
+  }
+
+  function acceptedBaseline(line: { id: string; accepted_qty?: number | null; planned_qty: number }): number {
+    return line.accepted_qty ?? plannedQtyFor(line.id)
   }
 
   function acceptedFor(lineId: string): number {
     const line = lines.find((l) => l.id === lineId)
     return accepted[lineId] ?? (line ? acceptedBaseline(line) : 0)
-  }
-
-  function plannedQtyFor(lineId: string): number {
-    const line = lines.find((l) => l.id === lineId)
-    return pendingQty[lineId] ?? line?.planned_qty ?? 0
   }
 
   function storageZoneFor(lineId: string): string {
@@ -152,7 +153,7 @@ export function PlannedView({
     (id) => pendingStorage[id] !== (lines.find((l) => l.id === id)?.storage_zone_id ?? ''),
   )
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localTodayYmd()
   const readyChecks = [
     { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
     { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
@@ -179,11 +180,12 @@ export function PlannedView({
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
   async function handleArrive() {
+    const arrivalLines = lines.map((l) => ({ line_id: l.id, accepted_qty: acceptedFor(l.id) }))
     if (hasUnsavedChanges) {
       const ok = await handleSaveChanges()
       if (!ok) return
     }
-    onArrive(lines.map((l) => ({ line_id: l.id, accepted_qty: acceptedFor(l.id) })))
+    onArrive(arrivalLines)
   }
 
   return (
@@ -254,13 +256,16 @@ export function PlannedView({
               <div className="form-grid-2">
                 <div>
                   <label className="field-label"><span>Клиент</span></label>
-                  <input className="input" value={doc.client_name ?? ''} disabled />
+                  <input className="input" value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
                 </div>
                 <div>
-                  <label className="field-label"><span>Поставщик</span></label>
+                  <label className="field-label">
+                    <span>Поставщик</span>
+                    <span className="text-xs faint">не обязательно</span>
+                  </label>
                   <Combobox
                     value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Выберите поставщика"
+                    placeholder="Поиск поставщика…"
                     options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
                     onChange={(v) => {
                       const found = suppliers.find((s) => s.id === String(v ?? ''))
@@ -268,7 +273,6 @@ export function PlannedView({
                       markDirty()
                     }}
                     clearable
-                    prefix="user"
                   />
                 </div>
                 <div>

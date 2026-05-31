@@ -3,8 +3,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from dbconn import get_connection
-from modules.balances.schemas import BalanceListResponse, BalanceZonesResponse
-from modules.balances.service import get_balances, get_balances_by_zone
+from modules.auth.service import get_current_manager
+from modules.balances.schemas import (
+    BalanceListResponse,
+    BalanceZonesResponse,
+    ZoneRelocationCreate,
+    ZoneRelocationListResponse,
+)
+from modules.balances.service import (
+    create_zone_relocation,
+    get_balances,
+    get_balances_by_zone,
+    list_zone_relocations,
+)
 
 router = APIRouter(tags=["balances"])
 
@@ -45,3 +56,22 @@ def list_balances_by_zone(
             search=search,
             only_positive=only_positive,
         )
+
+
+@router.post("/balances/relocations")
+def create_relocation(payload: ZoneRelocationCreate, user=Depends(get_current_manager)):
+    with get_connection() as conn:
+        create_zone_relocation(conn, payload, str(user["id"]))
+    return {"message": "ok"}
+
+
+@router.get("/balances/relocations", response_model=ZoneRelocationListResponse)
+def list_relocations(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    user=Depends(get_current_manager),
+):
+    with get_connection() as conn:
+        return list_zone_relocations(conn, page=page, limit=limit, client_id=client_id, search=search)

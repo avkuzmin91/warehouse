@@ -40,12 +40,13 @@ def normalize_cargo_type(raw: str | None) -> str:
 
 
 def _check_stock_for_shipment(connection, doc_id: str) -> None:
-    """Проверяет доступность остатков для всех строк документа.
+    """Проверяет доступность остатков по месту для всех строк документа (good и defect).
 
-    Вызывается перед переходом packing → shipped.
-    Бросает HTTPException(409) если какой-то позиции не хватает.
+    Вызывается перед переходом packing → shipped. Требует указанное место и
+    бросает HTTPException(400) без места / HTTPException(409) при нехватке остатка —
+    чтобы отгрузка не уводила остаток места в минус.
     """
-    from modules.balances.service import get_available_good_qty_by_zone
+    from modules.balances.service import get_available_in_zone
 
     lines = connection.execute(
         "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0",
@@ -73,11 +74,6 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
                 detail=f"Отгруженное количество не должно превышать план для «{line['product_name']}»",
             )
 
-    # Проверка остатков только для отгрузки годного товара.
-    # Для брака остатки считаются отдельно — пока не блокируем.
-    if cargo_type != SHIPMENT_CARGO_GOOD:
-        return
-
     client_id = doc_row["client_id"] if doc_row else None
 
     for line in lines:
@@ -87,20 +83,21 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
                 status_code=400,
                 detail=f"Выберите место хранения для «{line['product_name']}»",
             )
-        available = get_available_good_qty_by_zone(
+        available = get_available_in_zone(
             connection,
             product_id=str(line["product_id"]),
             color_id=line["color_id"],
             size_id=line["size_id"],
             client_id=client_id,
-            storage_zone_id=line["storage_zone_id"],
+            zone_id=line["storage_zone_id"],
+            status=cargo_type,
         )
         if available < shipped_qty:
-            zone_label = line["storage_zone_name"] or "Без зоны"
+            zone_label = line["storage_zone_name"] or "Без места"
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Недостаточно товара в зоне «{zone_label}» для «{line['product_name']}» "
+                    f"Недостаточно товара в месте «{zone_label}» для «{line['product_name']}» "
                     f"(нужно {shipped_qty}, доступно {available})"
                 ),
             )

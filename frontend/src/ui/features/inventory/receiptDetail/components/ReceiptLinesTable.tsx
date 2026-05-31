@@ -63,6 +63,7 @@ export function ReceiptLinesTable(props: Props) {
   const showAccepted = stage === 'planned' || stage === 'review'
   const showQc = stage === 'review'
   const hasGroups = showAccepted || showQc
+  const showAction = !(stage === 'review' && props.readonly)
   const actionWidth = stage === 'review' ? 96 : 56
 
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
@@ -96,7 +97,7 @@ export function ReceiptLinesTable(props: Props) {
     }
   }
 
-  const colCount = 2 + (showAccepted ? 2 : 0) + (showQc ? 5 : 0) + 1
+  const colCount = 2 + (showAccepted ? 2 : 0) + (showQc ? 5 : 0) + (showAction ? 1 : 0)
 
   return (
     <Table>
@@ -120,12 +121,14 @@ export function ReceiptLinesTable(props: Props) {
               <th rowSpan={2} style={{ width: 130, borderLeft: groupBorder }}>Статус</th>
             </>
           )}
-          <th
-            rowSpan={hasGroups ? 2 : 1}
-            style={{ width: actionWidth, borderLeft: showAccepted && !showQc ? groupBorder : undefined }}
-          >
-            Действие
-          </th>
+          {showAction && (
+            <th
+              rowSpan={hasGroups ? 2 : 1}
+              style={{ width: actionWidth, borderLeft: showAccepted && !showQc ? groupBorder : undefined }}
+            >
+              Действие
+            </th>
+          )}
         </tr>
         {hasGroups && (
           <tr>
@@ -230,17 +233,19 @@ function Row(props: Props & { line: ReceiptLine }) {
 
       {props.stage === 'review' && <ReviewCells {...props} line={line} />}
 
-      <Td style={{ borderLeft: props.stage === 'planned' ? groupBorder : undefined }}>
-        {props.stage === 'review'
-          ? <ReviewAction {...props} line={line} />
-          : (
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <button className="btn ghost icon sm" onClick={() => props.onDelete(line)}>
-                <Icon name="trash" size={13} />
-              </button>
-            </div>
-          )}
-      </Td>
+      {!(props.stage === 'review' && props.readonly) && (
+        <Td style={{ borderLeft: props.stage === 'planned' ? groupBorder : undefined }}>
+          {props.stage === 'review'
+            ? <ReviewAction {...props} line={line} />
+            : (
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <button className="btn ghost icon sm" onClick={() => props.onDelete(line)}>
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+            )}
+        </Td>
+      )}
     </tr>
   )
 }

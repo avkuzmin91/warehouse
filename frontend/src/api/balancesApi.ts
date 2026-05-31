@@ -81,3 +81,67 @@ export function getBalancesByZone(params: BalanceZonesParams = {}, signal?: Abor
   const q = sp.toString()
   return request<BalanceZonesResponse>(`/balances/zones${q ? `?${q}` : ''}`, { signal })
 }
+
+export type ZoneRelocationPayload = {
+  product_id:    string
+  product_name:  string | null
+  product_sku:   string | null
+  color_id:      string | null
+  color_name:    string | null
+  size_id:       string | null
+  size_name:     string | null
+  client_id:     string | null
+  client_name:   string | null
+  status:        'good' | 'defect'
+  from_zone_id:  string | null
+  to_zone_id:    string | null
+  qty:           number
+  comment?:      string | null
+}
+
+export function createZoneRelocation(payload: ZoneRelocationPayload) {
+  return request<{ message: string }>('/balances/relocations', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export type ZoneRelocationItem = {
+  id:               string
+  created_at:       string
+  created_by_email: string | null
+  status:           BalanceZoneStatus
+  product_name:     string | null
+  product_sku:      string | null
+  color_name:       string | null
+  size_name:        string | null
+  client_name:      string | null
+  from_zone_name:   string | null
+  to_zone_name:     string | null
+  qty:              number
+  comment:          string | null
+}
+
+export type ZoneRelocationListParams = {
+  page?:      number
+  limit?:     number
+  client_id?: string
+  search?:    string
+}
+
+export type ZoneRelocationListResponse = {
+  items: ZoneRelocationItem[]
+  total: number
+  page:  number
+  limit: number
+}
+
+export function getZoneRelocations(params: ZoneRelocationListParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  const q = sp.toString()
+  return request<ZoneRelocationListResponse>(`/balances/relocations${q ? `?${q}` : ''}`, { signal })
+}

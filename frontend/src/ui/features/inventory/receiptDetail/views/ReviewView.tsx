@@ -267,23 +267,11 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
             <span className="card-head-title">Основная информация</span>
           </CardHead>
           <CardBody>
-            <div className="form-grid-2">
-              <div>
-                <label className="field-label"><span>Клиент</span></label>
-                <input className="input" value={doc.client_name ?? '—'} disabled />
-              </div>
-              <div>
-                <label className="field-label"><span>Поставщик</span></label>
-                <input className="input" value={doc.supplier_name || '—'} disabled />
-              </div>
-              <div>
-                <label className="field-label"><span>Дата прибытия</span></label>
-                <input className="input" value={fmtDate(doc.arrival_date)} disabled />
-              </div>
-              <div>
-                <label className="field-label"><span>Стоимость логистики, ₽</span></label>
-                <input className="input" value={doc.logistics_cost.toLocaleString('ru-RU')} disabled />
-              </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <ReadOnlyField label="Клиент" value={doc.client_name} />
+              <ReadOnlyField label="Поставщик" value={doc.supplier_name} />
+              <ReadOnlyField label="Дата прибытия" value={fmtDate(doc.arrival_date)} />
+              <ReadOnlyField label="Стоимость логистики, ₽" value={doc.logistics_cost.toLocaleString('ru-RU')} mono />
             </div>
           </CardBody>
         </Card>
@@ -407,6 +395,17 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
         )}
       </Drawer>
 
+    </div>
+  )
+}
+
+function ReadOnlyField({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+  return (
+    <div>
+      <div className="field-label"><span>{label}</span></div>
+      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>
+        <span className={mono ? 'mono' : undefined}>{value || '—'}</span>
+      </div>
     </div>
   )
 }

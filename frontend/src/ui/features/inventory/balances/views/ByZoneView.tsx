@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { getBalancesByZone } from '../../../../../api/balancesApi'
+import { getBalancesByZone, createZoneRelocation } from '../../../../../api/balancesApi'
 import type { BalanceZoneItem, BalanceZoneStatus } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
+import { Combobox } from '../../../../data/Combobox'
 import { FiltersBar, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
+import { Drawer } from '../../../../feedback/Drawer'
+import { useToast } from '../../../../feedback/Toast'
 import { Card, CardHead } from '../../../../primitives/Card'
 import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
@@ -11,6 +14,7 @@ import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
+import { NumberStep } from '../../shared/NumberStep'
 
 type LocationGroup = {
   locationId: string | null
@@ -37,7 +41,61 @@ export function ByZoneView() {
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const { clients } = useLookups()
+  const { clients, unloadingZones } = useLookups()
+  const toast = useToast()
+
+  // Перемещение между местами (вариант B). reloc = строка, которую двигаем.
+  const [reloc, setReloc] = useState<BalanceZoneItem | null>(null)
+  const [toZoneId, setToZoneId] = useState('')
+  const [relocQty, setRelocQty] = useState(1)
+  const [relocComment, setRelocComment] = useState('')
+  const [relocSaving, setRelocSaving] = useState(false)
+  const [relocError, setRelocError] = useState('')
+
+  const activeZones = useMemo(
+    () => unloadingZones.filter((z) => z.is_active && !z.is_deleted),
+    [unloadingZones],
+  )
+
+  function openReloc(item: BalanceZoneItem) {
+    setReloc(item)
+    setToZoneId('')
+    setRelocQty(item.qty)
+    setRelocComment('')
+    setRelocError('')
+  }
+
+  async function submitReloc() {
+    if (!reloc) return
+    setRelocError('')
+    if (!toZoneId) { setRelocError('Выберите место назначения'); return }
+    setRelocSaving(true)
+    try {
+      await createZoneRelocation({
+        product_id:   reloc.product_id,
+        product_name: reloc.product_name,
+        product_sku:  reloc.product_sku,
+        color_id:     reloc.color_id,
+        color_name:   reloc.color_name,
+        size_id:      reloc.size_id,
+        size_name:    reloc.size_name,
+        client_id:    reloc.client_id,
+        client_name:  reloc.client_name,
+        status:       reloc.status as 'good' | 'defect',
+        from_zone_id: reloc.location_id,
+        to_zone_id:   toZoneId,
+        qty:          relocQty,
+        comment:      relocComment.trim() || null,
+      })
+      toast('Товар перемещён', 'success')
+      setReloc(null)
+      await load()
+    } catch (e) {
+      setRelocError(e instanceof Error ? e.message : 'Ошибка перемещения')
+    } finally {
+      setRelocSaving(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -166,6 +224,7 @@ export function ByZoneView() {
                     <th>Клиент</th>
                     <th style={{ width: 130 }}>Статус</th>
                     <th style={{ textAlign: 'right', width: 110 }}>Количество</th>
+                    <th style={{ width: 44 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -186,6 +245,17 @@ export function ByZoneView() {
                       <Td className="num" style={{ fontWeight: 600 }}>
                         {item.qty.toLocaleString('ru-RU')}
                       </Td>
+                      <Td>
+                        {(item.status === 'good' || item.status === 'defect') && (
+                          <button
+                            className="btn ghost icon sm"
+                            title="Переместить в другое место"
+                            onClick={() => openReloc(item)}
+                          >
+                            <Icon name="arrowRight" size={14} />
+                          </button>
+                        )}
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
@@ -194,6 +264,66 @@ export function ByZoneView() {
           ))}
         </div>
       )}
+
+      <Drawer
+        open={reloc !== null}
+        onClose={() => setReloc(null)}
+        title="Перемещение товара"
+        subtitle={reloc ? `${reloc.product_name} · ${[reloc.product_sku, reloc.color_name, reloc.size_name].filter(Boolean).join(' · ')}` : undefined}
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn ghost" onClick={() => setReloc(null)} disabled={relocSaving}>Отмена</button>
+            <button className="btn primary" onClick={() => void submitReloc()} disabled={relocSaving}>
+              <Icon name="check" size={14} />Переместить
+            </button>
+          </div>
+        }
+      >
+        {reloc && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 8, columnGap: 14, fontSize: 13 }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>Статус</span>
+              <span><Badge tone={STATUS_TONE[reloc.status]}>{STATUS_LABELS[reloc.status]}</Badge></span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Клиент</span>
+              <span>{reloc.client_name ?? '—'}</span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Текущее место</span>
+              <span>{reloc.location_name ?? 'Без места'}</span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Доступно</span>
+              <span className="mono" style={{ fontWeight: 600 }}>{reloc.qty.toLocaleString('ru-RU')} шт</span>
+            </div>
+
+            <div>
+              <label className="field-label"><span>Место назначения <span style={{ color: 'var(--c-danger)' }}>*</span></span></label>
+              <Combobox
+                value={toZoneId}
+                placeholder="Выберите место"
+                options={activeZones.filter((z) => z.id !== reloc.location_id).map((z) => ({ value: z.id, label: z.name }))}
+                onChange={(v) => setToZoneId(String(v ?? ''))}
+                clearable
+              />
+            </div>
+
+            <div>
+              <label className="field-label"><span>Количество</span></label>
+              <NumberStep value={relocQty} onChange={(v) => setRelocQty(Math.min(reloc.qty, Math.max(1, v)))} />
+              <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>Максимум: {reloc.qty}</div>
+            </div>
+
+            <div>
+              <label className="field-label"><span>Комментарий</span></label>
+              <textarea
+                className="input"
+                style={{ height: 60, paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
+                value={relocComment}
+                onChange={(e) => setRelocComment(e.target.value)}
+                placeholder="Необязательно"
+              />
+            </div>
+
+            {relocError && <div style={{ fontSize: 12.5, color: 'var(--c-danger)' }}>{relocError}</div>}
+          </div>
+        )}
+      </Drawer>
     </>
   )
 }

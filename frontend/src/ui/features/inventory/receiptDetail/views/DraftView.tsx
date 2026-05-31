@@ -193,7 +193,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                     value={clientId}
                     placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    prefix="user"
                     onChange={(v) => { setClientId(String(v ?? '')); markDirty() }}
                     disabled={lines.length > 0}
                   />
@@ -218,7 +217,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                       markDirty()
                     }}
                     clearable
-                    prefix="user"
                   />
                 </div>
                 <div>

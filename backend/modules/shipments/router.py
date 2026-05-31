@@ -26,8 +26,6 @@ from modules.shipments.schemas import (
     ShipmentDocUpdate,
     ShipmentLineIn,
     ShipmentLineItem,
-    ShipmentLineZoneItem,
-    ShipmentLineZonesSet,
     ShipmentListItem,
     ShipmentListResponse,
     ShipmentOpItem,
@@ -250,7 +248,6 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             shipped_qty=int(l["shipped_qty"] or 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
-            zones=[],
         )
         for l in lines_rows
     ]
@@ -361,46 +358,6 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
     return {"message": "ok"}
 
 
-@router.put("/shipments/{doc_id}/lines/{line_id}/zones")
-def set_shipment_line_zones(doc_id: str, line_id: str, body: ShipmentLineZonesSet, user=Depends(_get_manager)):
-    uid = str(user["id"])
-    now = _now()
-    with get_connection() as conn:
-        doc_row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc_row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) == SHIPMENT_STATUS_SHIPPED:
-            raise HTTPException(status_code=400, detail="Распределение по зонам нельзя менять после отправки")
-        line_row = conn.execute(
-            "SELECT * FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-            (line_id, doc_id),
-        ).fetchone()
-        if not line_row:
-            raise HTTPException(status_code=404, detail="Строка не найдена")
-        if any(z.qty > int(line_row["qty"]) for z in body.zones):
-            raise HTTPException(status_code=400, detail="Количество по зоне превышает количество строки")
-        if sum(z.qty for z in body.zones) > int(line_row["qty"]):
-            raise HTTPException(status_code=400, detail="Сумма по зонам превышает количество строки")
-
-        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
-        for z in body.zones:
-            conn.execute(
-                """INSERT INTO shipment_line_zones
-                   (id,doc_id,line_id,storage_zone_id,storage_zone_name,qty,created_at)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (str(uuid4()), doc_id, line_id, z.storage_zone_id, z.storage_zone_name, z.qty, now),
-            )
-        conn.execute(
-            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, "line_zones_set",
-             f"Распределение по зонам: «{line_row['product_name']}»", now, uid),
-        )
-        conn.commit()
-    return {"message": "ok"}
-
-
 @router.delete("/shipments/{doc_id}/lines/{line_id}")
 def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
@@ -415,7 +372,6 @@ def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
             "UPDATE shipment_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),
         )
-        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
         conn.commit()
     return {"message": "ok"}
 

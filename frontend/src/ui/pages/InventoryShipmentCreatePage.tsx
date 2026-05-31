@@ -260,7 +260,7 @@ export function InventoryShipmentCreatePage() {
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ textAlign: 'right', width: 90 }}>Доступно</th>
-                    <th style={{ textAlign: 'right', width: 160 }}>К отгрузке</th>
+                    <th style={{ textAlign: 'right', width: 160 }}>План отгрузки</th>
                     <th style={{ width: 32 }} />
                   </tr>
                 </thead>
