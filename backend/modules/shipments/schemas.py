@@ -84,6 +84,9 @@ class ShipmentListItem(BaseModel):
     status_label: str
     sku_count:    int
     total_qty:    int
+    total_shipped_qty: int = 0
+    lines_with_shipped_qty: int = 0
+    lines_with_zone: int = 0
     created_at:   str
 
 

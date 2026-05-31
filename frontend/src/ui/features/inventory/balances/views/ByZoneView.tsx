@@ -3,7 +3,7 @@ import { getBalancesByZone } from '../../../../../api/balancesApi'
 import type { BalanceZoneItem, BalanceZoneStatus } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
-import { FiltersBar, FilterCombobox } from '../../../../data/FiltersBar'
+import { FiltersBar, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
 import { Card, CardHead } from '../../../../primitives/Card'
 import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
@@ -36,6 +36,7 @@ export function ByZoneView() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const { clients } = useLookups()
 
   const load = useCallback(async () => {
@@ -53,9 +54,16 @@ export function ByZoneView() {
 
   useEffect(() => { load() }, [load])
 
+  const filteredItems = useMemo(
+    () => statusFilter
+      ? items.filter((item) => item.status === statusFilter)
+      : items,
+    [items, statusFilter],
+  )
+
   const groups = useMemo<LocationGroup[]>(() => {
     const map = new Map<string, LocationGroup>()
-    for (const item of items) {
+    for (const item of filteredItems) {
       const key = item.location_id ?? '__none__'
       let group = map.get(key)
       if (!group) {
@@ -71,14 +79,14 @@ export function ByZoneView() {
       group.totalQty += item.qty
     }
     return [...map.values()]
-  }, [items])
+  }, [filteredItems])
 
   const kpi = useMemo(() => {
-    const goodQty = items.reduce((sum, item) => sum + (item.status === 'good' ? item.qty : 0), 0)
-    const defectQty = items.reduce((sum, item) => sum + (item.status === 'defect' ? item.qty : 0), 0)
-    const onReviewQty = items.reduce((sum, item) => sum + (item.status === 'on_review' ? item.qty : 0), 0)
+    const goodQty = filteredItems.reduce((sum, item) => sum + (item.status === 'good' ? item.qty : 0), 0)
+    const defectQty = filteredItems.reduce((sum, item) => sum + (item.status === 'defect' ? item.qty : 0), 0)
+    const onReviewQty = filteredItems.reduce((sum, item) => sum + (item.status === 'on_review' ? item.qty : 0), 0)
     return { totalQty: goodQty + defectQty + onReviewQty, goodQty, defectQty, onReviewQty }
-  }, [items])
+  }, [filteredItems])
 
   return (
     <>
@@ -101,8 +109,19 @@ export function ByZoneView() {
             onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
-          {clientId && (
-            <button className="btn ghost sm" onClick={() => setClientId('')}>
+          <FilterSelect
+            label="Статус"
+            value={statusFilter}
+            options={[
+              { value: '', label: 'Все статусы' },
+              { value: 'on_review', label: STATUS_LABELS.on_review },
+              { value: 'good', label: STATUS_LABELS.good },
+              { value: 'defect', label: STATUS_LABELS.defect },
+            ]}
+            onChange={setStatusFilter}
+          />
+          {(clientId || statusFilter) && (
+            <button className="btn ghost sm" onClick={() => { setClientId(''); setStatusFilter('') }}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

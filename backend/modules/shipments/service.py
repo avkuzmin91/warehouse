@@ -59,6 +59,20 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
 
     cargo_type = normalize_cargo_type(doc_row["cargo_type"] if doc_row else None)
 
+    for line in lines:
+        shipped_qty = int(line["shipped_qty"] or 0)
+        plan_qty = int(line["qty"] or 0)
+        if shipped_qty <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Укажите отгруженное количество больше 0 для «{line['product_name']}»",
+            )
+        if shipped_qty > plan_qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Отгруженное количество не должно превышать план для «{line['product_name']}»",
+            )
+
     # Проверка остатков только для отгрузки годного товара.
     # Для брака остатки считаются отдельно — пока не блокируем.
     if cargo_type != SHIPMENT_CARGO_GOOD:
@@ -67,7 +81,12 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
     client_id = doc_row["client_id"] if doc_row else None
 
     for line in lines:
-        shipped_qty = int(line["shipped_qty"] or line["qty"] or 0)
+        shipped_qty = int(line["shipped_qty"] or 0)
+        if not line["storage_zone_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Выберите место хранения для «{line['product_name']}»",
+            )
         available = get_available_good_qty_by_zone(
             connection,
             product_id=str(line["product_id"]),
@@ -126,10 +145,6 @@ def advance_shipment(connection, doc_id: str, user_id: str) -> str:
     _check_duplicate_lines(connection, doc_id)
     if next_status == SHIPMENT_STATUS_SHIPPED:
         _check_stock_for_shipment(connection, doc_id)
-        connection.execute(
-            "UPDATE shipment_lines SET shipped_qty = qty WHERE doc_id = ? AND is_deleted = 0 AND COALESCE(shipped_qty, 0) = 0",
-            (doc_id,),
-        )
 
     now = _now()
     connection.execute(

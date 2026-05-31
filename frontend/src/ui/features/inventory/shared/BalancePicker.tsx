@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
-import { getBalances, getBalancesByZone } from '../../../../api/balancesApi'
-import type { BalanceItem, BalanceZoneItem } from '../../../../api/balancesApi'
+import { getBalances } from '../../../../api/balancesApi'
+import type { BalanceItem } from '../../../../api/balancesApi'
 import type { ShipmentCargoType } from '../../../../api/shipmentsApi'
-import { balanceKey } from '../../../../utils/balanceKey'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { Icon } from '../../../primitives/Icon'
-import { Combobox } from '../../../data/Combobox'
 import { NumberStep } from './NumberStep'
 
 type Props = {
@@ -18,33 +16,22 @@ type Props = {
 export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<BalanceItem[]>([])
-  const [zoneItems, setZoneItems] = useState<BalanceZoneItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [pending, setPending] = useState<{ item: BalanceItem; qty: number; zoneId: string; zoneName: string | null } | null>(null)
+  const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
 
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
-    Promise.all([
-      getBalances({
+    getBalances({
         limit: 200,
         search: search || undefined,
         only_positive: true,
         client_id: clientId || undefined,
         has_defect: cargoType === 'defect' ? true : undefined,
-      }, ctrl.signal),
-      cargoType === 'good'
-        ? getBalancesByZone({
-            search: search || undefined,
-            only_positive: true,
-            client_id: clientId || undefined,
-          }, ctrl.signal)
-        : Promise.resolve({ items: [] as BalanceZoneItem[] }),
-    ])
-      .then(([res, zonesRes]) => {
+      }, ctrl.signal)
+      .then((res) => {
         if (ctrl.signal.aborted) return
         setItems(res.items.filter((b) => cargoType === 'defect' ? b.defect > 0 : b.good > 0))
-        setZoneItems(zonesRes.items.filter((item) => item.status === 'good' && item.location_id && item.qty > 0))
       })
       .catch(() => { /* aborted or error */ })
       .finally(() => {
@@ -54,32 +41,13 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
     return () => ctrl.abort()
   }, [search, clientId, cargoType])
 
-  const zoneOptions = pending
-    ? zoneItems
-        .filter((item) => balanceKey(item) === balanceKey(pending.item) && item.client_id === pending.item.client_id)
-        .map((item) => ({
-          value: item.location_id!,
-          label: item.location_name ?? item.location_id!,
-          sub: `доступно ${item.qty.toLocaleString('ru-RU')} шт`,
-          qty: item.qty,
-        }))
-    : []
-
-  const selectedZone = pending
-    ? zoneOptions.find((z) => z.value === pending.zoneId)
-    : undefined
-
   const available = pending
-    ? cargoType === 'good'
-      ? (selectedZone?.qty ?? 0)
-      : pending.item.defect
+    ? cargoType === 'defect' ? pending.item.defect : pending.item.good
     : 0
 
   const aggregateAvailable = pending
     ? (cargoType === 'defect' ? pending.item.defect : pending.item.good)
     : 0
-
-  const showZones = cargoType === 'good'
 
   return (
     <>
@@ -141,31 +109,8 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {showZones && (
-                <div>
-                  <label className="field-label"><span>Из места</span></label>
-                  <Combobox
-                    value={pending.zoneId}
-                    placeholder="Выберите место"
-                    options={zoneOptions}
-                    onChange={(v, opt) => setPending((p) => p && {
-                      ...p,
-                      zoneId: String(v ?? ''),
-                      zoneName: opt?.label ?? null,
-                    })}
-                    disabled={zoneOptions.length === 0}
-                    clearable
-                  />
-                  {selectedZone && (
-                    <div style={{ fontSize: 12, color: 'var(--c-success)', marginTop: 6 }}>
-                      Доступно в месте: <span className="mono">{selectedZone.qty}</span> шт
-                    </div>
-                  )}
-                </div>
-              )}
-
               <div>
-                <label className="field-label"><span>К отгрузке</span></label>
+                <label className="field-label"><span>План отгрузки</span></label>
                 <NumberStep
                   value={pending.qty}
                   onChange={(v) => setPending((p) => p && { ...p, qty: v })}
@@ -197,7 +142,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                     borderRadius: 8, border: '1px solid var(--c-border)',
                     cursor: 'pointer',
                   }}
-                  onClick={() => setPending({ item, qty: 0, zoneId: '', zoneName: null })}
+                  onClick={() => setPending({ item, qty: 0 })}
                 >
                   <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                     <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
@@ -226,12 +171,12 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
               <button
                 className="btn primary"
                 style={{ flex: 1 }}
-                disabled={pending.qty <= 0 || pending.qty > available || (showZones && !pending.zoneId)}
+                disabled={pending.qty <= 0 || pending.qty > available}
                 onClick={() => onAdd(
                   pending.item,
                   pending.qty,
-                  pending.zoneId || null,
-                  pending.zoneName,
+                  null,
+                  null,
                 )}
               >
                 <Icon name="plus" size={13} />Добавить

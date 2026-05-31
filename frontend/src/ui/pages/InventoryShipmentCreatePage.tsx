@@ -189,8 +189,8 @@ export function InventoryShipmentCreatePage() {
             </div>
             <div className="card-body">
               <CargoTypeToggle value={cargoType} onChange={(v) => { setCargoType(v); setLines([]) }} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
-                <Field label="Клиент" required>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+                <Field label="Клиент" required style={{ marginBottom: 0 }}>
                   <Combobox
                     value={clientId}
                     onChange={handleClientChange}
@@ -199,7 +199,7 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Назначение">
+                <Field label="Назначение" style={{ marginBottom: 0 }}>
                   <Combobox
                     value={destinationId}
                     onChange={handleDestinationChange}
@@ -208,10 +208,10 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки" required>
+                <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
-                <Field label="Перевозчик">
+                <Field label="Перевозчик" style={{ marginBottom: 0 }}>
                   <Combobox
                     value={carrierId}
                     onChange={handleCarrierChange}
@@ -220,7 +220,7 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Стоимость логистики">
+                <Field label="Стоимость логистики" style={{ marginBottom: 0 }}>
                   <input
                     className="input"
                     type="number"

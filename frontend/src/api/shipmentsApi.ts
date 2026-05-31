@@ -83,6 +83,9 @@ export type ShipmentListItem = {
   status_label:   string
   sku_count:      number
   total_qty:      number
+  total_shipped_qty?: number
+  lines_with_shipped_qty?: number
+  lines_with_zone?: number
   created_at:     string
 }
 

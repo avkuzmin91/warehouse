@@ -41,6 +41,7 @@ import { ZoneCell } from '../../features/inventory/receiptDetail/components/Zone
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
 type LineDraft = { qty: number; shippedQty: number; zoneId: string; zoneName: string | null }
 type ZoneChoice = { id: string; name: string; sub?: string }
+type ReadinessCheck = { ok: boolean; label: string; error: string }
 
 export function InventoryShipmentDetailPage() {
   const { docId } = useParams<{ docId: string }>()
@@ -123,6 +124,7 @@ export function InventoryShipmentDetailPage() {
   const isPlanned = status === 'packing'
   const isDraft = status === 'draft'
   const canDelete = isDraft || isPlanned
+  const canEditPlan = isDraft || isPlanned
   const canEditShipped = isPlanned
 
   const shipmentClientId = doc?.client_id ?? null
@@ -162,16 +164,18 @@ export function InventoryShipmentDetailPage() {
       setDrafts({})
       return
     }
-    const next: Record<string, LineDraft> = {}
-    for (const line of doc.lines) {
-      next[line.id] = {
-        qty:        line.qty,
-        shippedQty: line.shipped_qty,
-        zoneId:     line.storage_zone_id ?? '',
-        zoneName:   line.storage_zone_name ?? null,
+    setDrafts((prev) => {
+      const next: Record<string, LineDraft> = {}
+      for (const line of doc.lines) {
+        next[line.id] = prev[line.id] ?? {
+          qty:        line.qty,
+          shippedQty: line.shipped_qty,
+          zoneId:     line.storage_zone_id ?? '',
+          zoneName:   line.storage_zone_name ?? null,
+        }
       }
-    }
-    setDrafts(next)
+      return next
+    })
   }, [doc])
 
   async function act(fn: () => Promise<unknown>, redirectAfter?: string) {
@@ -264,31 +268,54 @@ export function InventoryShipmentDetailPage() {
       || d.zoneName !== (line.storage_zone_name ?? null)
   })
 
-  const advanceChecks = [
+  const advanceChecks: ReadinessCheck[] = [
     {
       ok: (doc?.lines.length ?? 0) > 0,
+      label: 'Добавлены строки',
       error: 'Добавьте хотя бы одну строку в отгрузку',
     },
     {
       ok: doc?.lines.every((line) => getDraft(line).qty >= 1) ?? false,
+      label: 'План заполнен',
       error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
     },
     {
       ok: doc?.lines.every((line) => getDraft(line).shippedQty <= getDraft(line).qty) ?? false,
+      label: 'Отгружено не больше плана',
       error: 'Отгруженное количество не должно превышать план',
     },
-    {
-      ok: shipmentCargoType !== 'good' || (doc?.lines.every((line) => !getDraft(line).shippedQty || getDraft(line).zoneId) ?? false),
-      error: 'Выберите место хранения для каждой отгружаемой строки',
-    },
-    {
-      ok: shipmentCargoType !== 'good' || (doc?.lines.every((line) => getDraft(line).shippedQty <= getDraftAvailable(line)) ?? false),
-      error: 'В выбранной зоне недостаточно товара для отгрузки',
-    },
+    ...(isPlanned
+      ? [
+          {
+            ok: doc?.lines.every((line) => getDraft(line).shippedQty > 0) ?? false,
+            label: 'Указано отгруженное количество',
+            error: 'Укажите отгруженное количество больше 0 по каждой строке',
+          },
+        ]
+      : []),
+    ...(isPlanned && shipmentCargoType === 'good'
+      ? [
+          {
+            ok: doc?.lines.every((line) => !!getDraft(line).zoneId) ?? false,
+            label: 'Выбрано место отгрузки',
+            error: 'Выберите место хранения для каждой отгружаемой строки',
+          },
+          {
+            ok: doc?.lines.every((line) => getDraft(line).shippedQty <= getDraftAvailable(line)) ?? false,
+            label: 'Достаточно остатка',
+            error: 'В выбранной зоне недостаточно товара для отгрузки',
+          },
+        ]
+      : []),
   ]
   const advanceBlockReasons = status === 'draft' || status === 'packing'
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
+  const showReadiness = status === 'draft' || status === 'packing'
+  const readinessOk = advanceChecks.every((check) => check.ok)
+  const plannedUnits = editableLines.reduce((sum, line) => sum + getDraft(line).qty, 0)
+  const shippedUnits = editableLines.reduce((sum, line) => sum + getDraft(line).shippedQty, 0)
+  const shippedPct = plannedUnits > 0 ? Math.floor((shippedUnits / plannedUnits) * 100) : 0
 
   async function refreshAfterLineChange() {
     await load()
@@ -461,7 +488,7 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="x" size={14} />Аннулировать
               </button>
             )}
-            {isPlanned && canEditShipped && hasUnsavedLineChanges && (
+            {canEditPlan && hasUnsavedLineChanges && (
               <button className="btn" disabled={acting} onClick={() => { void handleSaveAllLines() }}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
@@ -503,13 +530,13 @@ export function InventoryShipmentDetailPage() {
             {canEditShipped ? (
               <div className="card-body">
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
-                  <Field label="Клиент">
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+                  <Field label="Клиент" style={{ marginBottom: 0 }}>
                     <div className="input" style={{ background: 'var(--c-bg-sunken)', color: 'var(--c-text-muted)', cursor: 'default' }}>
                       {doc.client_name ?? '—'}
                     </div>
                   </Field>
-                  <Field label="Назначение" required>
+                  <Field label="Назначение" required style={{ marginBottom: 0 }}>
                     <Combobox
                       value={infoDestinationName}
                       onChange={(val, opt) => { setInfoDestinationName(opt?.label ?? (val ? String(val) : null)); setInfoDirty(true) }}
@@ -518,10 +545,10 @@ export function InventoryShipmentDetailPage() {
                       clearable
                     />
                   </Field>
-                  <Field label="Дата отгрузки" required>
+                  <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
-                  <Field label="Перевозчик" required>
+                  <Field label="Перевозчик" required style={{ marginBottom: 0 }}>
                     <Combobox
                       value={infoCarrierName}
                       onChange={(val, opt) => { setInfoCarrierName(opt?.label ?? (val ? String(val) : null)); setInfoDirty(true) }}
@@ -530,7 +557,7 @@ export function InventoryShipmentDetailPage() {
                       clearable
                     />
                   </Field>
-                  <Field label="Стоимость логистики" required>
+                  <Field label="Стоимость логистики" required style={{ marginBottom: 0 }}>
                     <input
                       className="input"
                       type="number"
@@ -592,6 +619,7 @@ export function InventoryShipmentDetailPage() {
               <ShipmentLinesTable
                 lines={editableLines}
                 cargoType={doc.cargo_type as ShipmentCargoType}
+                canEditPlan={canEditPlan}
                 canEditShipped={canEditShipped}
                 canDelete={canDelete}
                 acting={acting}
@@ -610,6 +638,60 @@ export function InventoryShipmentDetailPage() {
         </div>
 
         <div className="col gap-16">
+          {showReadiness && (
+            <div className="card">
+              <div className="card-head">
+                <Icon name="check" size={15} className="ic-success" />
+                <div className="card-head-title">Готовность</div>
+                <span
+                  className="right"
+                  style={{
+                    fontSize: 12,
+                    color: readinessOk ? 'var(--c-success)' : 'var(--c-warning)',
+                    fontWeight: 600,
+                  }}
+                >
+                  {readinessOk ? 'Готово' : 'Не готово'}
+                </span>
+              </div>
+              <div style={{ padding: '12px 14px 8px', borderBottom: '1px solid var(--c-border)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
+                  <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Отгружено, ед.</span>
+                  <span style={{ fontSize: 13 }}>
+                    <b className="mono">{shippedUnits}</b>
+                    <span style={{ color: 'var(--c-text-subtle)' }}> / {plannedUnits}</span>
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontWeight: 600,
+                        color: shippedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)',
+                      }}
+                    >
+                      {shippedPct}%
+                    </span>
+                  </span>
+                </div>
+                <div className="prog">
+                  <div className="prog-fill" style={{ width: `${Math.min(100, shippedPct)}%` }} />
+                </div>
+              </div>
+              <div className="readiness-list">
+                {advanceChecks.map((check, index) => (
+                  <div key={index} className="readiness-row">
+                    {check.ok ? (
+                      <div className="readiness-dot ok">
+                        <Icon name="check" size={10} />
+                      </div>
+                    ) : (
+                      <div className="readiness-dot pending" />
+                    )}
+                    <span className={`readiness-label ${check.ok ? 'ok' : 'pending'}`}>{check.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <div className="card-head">
               <Icon name="chart" size={15} className="ic-accent" />
@@ -672,6 +754,7 @@ const tintShipped = 'var(--c-bg-sunken)'
 type ShipmentLinesTableProps = {
   lines:          EditableShipmentLine[]
   cargoType:      ShipmentCargoType
+  canEditPlan:    boolean
   canEditShipped: boolean
   canDelete:      boolean
   acting:         boolean
@@ -686,11 +769,11 @@ type ShipmentLinesTableProps = {
 }
 
 function ShipmentLinesTable({
-  lines, cargoType, canEditShipped, canDelete,
+  lines, cargoType, canEditPlan, canEditShipped, canDelete,
   acting, saving, getDraft, getAvailable, getZoneOptions, onQty, onShippedQty, onZone, onDelete,
 }: ShipmentLinesTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
-  const planTotal = lines.reduce((s, l) => s + l.qty, 0)
+  const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
   const showZone = cargoType === 'good'
   // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Действие
@@ -723,6 +806,7 @@ function ShipmentLinesTable({
         {lines.map((line) => {
           const draft = getDraft(line)
           const available = getAvailable(line)
+          const visibleAvailable = canEditShipped ? available : line.available
           const zoneOptions = getZoneOptions(line)
           const overAvailable = canEditShipped && draft.shippedQty > available
           const isSaving = saving[line.id] ?? false
@@ -736,14 +820,14 @@ function ShipmentLinesTable({
                   color={line.color_name}
                   size={line.size_name}
                 />
-                {canEditShipped && (
+                {canEditPlan && (
                   <div className="t-sub" style={{ marginTop: 2, color: overAvailable ? 'var(--c-warning)' : 'var(--c-success)' }}>
-                    доступно {available}
+                    доступно {visibleAvailable}
                   </div>
                 )}
               </Td>
               <Td className="num">
-                {canEditShipped ? (
+                {canEditPlan ? (
                   <NumberStep
                     value={draft.qty}
                     onChange={(v) => onQty(line.id, v)}
@@ -755,13 +839,13 @@ function ShipmentLinesTable({
                 )}
               </Td>
               <Td className="num" style={{ background: tintShipped, borderLeft: groupBorder }}>
-                {canEditShipped ? (
+                {canEditPlan ? (
                   <NumberStep
                     value={draft.shippedQty}
                     onChange={(v) => onShippedQty(line.id, v)}
                     min={0}
                     warning={overAvailable}
-                    disabled={acting || isSaving}
+                    disabled={acting || isSaving || !canEditShipped}
                     width={100}
                   />
                 ) : (
@@ -778,7 +862,8 @@ function ShipmentLinesTable({
                       onZone(line.id, zoneId, z?.name ?? null)
                     }}
                     disabled={acting || isSaving || !canEditShipped}
-                    readonly={!canEditShipped}
+                    emptyHint="Нет доступных мест хранения для этого товара"
+                    readonly={!canEditPlan}
                     readonlyLabel={line.storage_zone_name}
                   />
                 </Td>

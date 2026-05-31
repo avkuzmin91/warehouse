@@ -51,6 +51,18 @@ const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
   packing: 'Отгрузить',
 }
 
+function shipmentProgress(item: ShipmentListItem) {
+  const totalQty = item.total_qty || 0
+  const shippedQty = item.total_shipped_qty ?? 0
+  const pct = totalQty > 0
+    ? Math.min(100, Math.floor(shippedQty / totalQty * 100))
+    : 0
+  const linesCount = item.sku_count || 0
+  const qtyReady = linesCount > 0 && (item.lines_with_shipped_qty ?? 0) === linesCount
+  const zoneReady = item.cargo_type !== 'good' || (linesCount > 0 && (item.lines_with_zone ?? 0) === linesCount)
+  return { pct, shippedQty, totalQty, qtyReady, zoneReady }
+}
+
 export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
 
@@ -275,7 +287,7 @@ export function InventoryShipmentsListPage() {
                 <th style={{ textAlign: 'right', width: 80 }}>Кол-во</th>
                 <th style={{ width: 130 }}>Перевозчик</th>
                 <th style={{ width: 130 }}>Статус</th>
-                <th style={{ width: 28 }} />
+                <th style={{ width: 150 }}>Выполнение</th>
               </tr>
             </thead>
             <tbody>
@@ -325,21 +337,46 @@ export function InventoryShipmentsListPage() {
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td>{item.carrier ?? '—'}</Td>
                       <Td>
-                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
-                          {item.status_label}
-                        </Badge>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
+                            {item.status_label}
+                          </Badge>
+                          {ADVANCE_LABELS[item.status] && (
+                            <button
+                              className="btn ghost sm"
+                              disabled={advancingId === item.id}
+                              onClick={(e) => handleAdvance(e, item)}
+                              title={ADVANCE_LABELS[item.status]}
+                            >
+                              <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
+                            </button>
+                          )}
+                        </div>
                       </Td>
                       <Td>
-                        {ADVANCE_LABELS[item.status] && (
-                          <button
-                            className="btn ghost sm"
-                            disabled={advancingId === item.id}
-                            onClick={(e) => handleAdvance(e, item)}
-                            title={ADVANCE_LABELS[item.status]}
-                          >
-                            <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
-                          </button>
-                        )}
+                        {(() => {
+                          const isActive = item.status === 'packing' || item.status === 'shipped'
+                          if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                          const progress = shipmentProgress(item)
+                          const complete = progress.pct >= 100
+                          return (
+                            <div style={{ minWidth: 120 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                                  <div style={{
+                                    height: '100%', borderRadius: 3,
+                                    width: `${progress.pct}%`,
+                                    background: complete ? 'var(--c-success)' : 'var(--c-accent)',
+                                    transition: 'width 0.3s',
+                                  }} />
+                                </div>
+                                <span style={{ fontSize: 11.5, fontWeight: 600, color: complete ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                                  {progress.pct}%
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })()}
                       </Td>
                     </tr>
                   )

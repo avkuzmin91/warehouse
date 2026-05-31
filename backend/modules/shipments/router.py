@@ -176,7 +176,14 @@ def list_shipments(
         rows = conn.execute(
             f"""SELECT d.*,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
-                    COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty
+                    COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
+                    COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
+                    COUNT(l.id) FILTER (
+                        WHERE l.is_deleted=0 AND COALESCE(l.shipped_qty, 0) > 0
+                    ) AS lines_with_shipped_qty,
+                    COUNT(l.id) FILTER (
+                        WHERE l.is_deleted=0 AND l.storage_zone_id IS NOT NULL
+                    ) AS lines_with_zone
                 FROM shipment_docs d
                 LEFT JOIN shipment_lines l ON l.doc_id = d.id
                 WHERE {where}
@@ -200,6 +207,9 @@ def list_shipments(
             status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
             sku_count=int(r["sku_count"] or 0),
             total_qty=int(r["total_qty"] or 0),
+            total_shipped_qty=int(r["total_shipped_qty"] or 0),
+            lines_with_shipped_qty=int(r["lines_with_shipped_qty"] or 0),
+            lines_with_zone=int(r["lines_with_zone"] or 0),
             created_at=str(r["created_at"]),
         )
         for r in rows

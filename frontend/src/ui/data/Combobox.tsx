@@ -54,17 +54,39 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
     return () => document.removeEventListener('mousedown', h)
   }, [open])
 
-  const handleOpen = () => {
-    if (disabled) return
+  const updateDropdownPosition = () => {
     const rect = containerRef.current?.getBoundingClientRect()
-    if (rect) {
+    if (!rect) return
+
+    const gap = 4
+    const viewportGap = 8
+    const desiredHeight = 260
+    const spaceBelow = window.innerHeight - rect.bottom - viewportGap
+    const spaceAbove = rect.top - viewportGap
+
+    if (spaceBelow < 140 && spaceAbove > spaceBelow) {
       setDropdownStyle({
         position: 'fixed',
-        top: rect.bottom + 4,
+        bottom: window.innerHeight - rect.top + gap,
         left: rect.left,
         width: rect.width,
+        maxHeight: Math.min(desiredHeight, Math.max(120, spaceAbove - gap)),
       })
+      return
     }
+
+    setDropdownStyle({
+      position: 'fixed',
+      top: rect.bottom + gap,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: Math.min(desiredHeight, Math.max(120, spaceBelow - gap)),
+    })
+  }
+
+  const handleOpen = () => {
+    if (disabled) return
+    updateDropdownPosition()
     setOpen(true)
     setQuery('')
     setHighlighted(0)
@@ -76,6 +98,17 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
     setOpen(false)
     setQuery('')
   }
+
+  useEffect(() => {
+    if (!open) return
+    updateDropdownPosition()
+    window.addEventListener('resize', updateDropdownPosition)
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateDropdownPosition)
+      window.removeEventListener('scroll', updateDropdownPosition, true)
+    }
+  }, [open])
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setHighlighted((h) => Math.min(filtered.length - 1, h + 1)) }
@@ -143,7 +176,6 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
             border: '1px solid var(--c-border)',
             borderRadius: 'var(--r-lg)',
             boxShadow: 'var(--sh-2)',
-            maxHeight: 260,
             overflowY: 'auto',
             zIndex: 9999,
             padding: 4,
