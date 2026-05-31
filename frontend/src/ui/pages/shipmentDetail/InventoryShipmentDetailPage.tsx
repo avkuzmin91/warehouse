@@ -23,6 +23,7 @@ import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useConfirm } from '../../feedback/ConfirmDialog'
+import { Drawer } from '../../feedback/Drawer'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Field } from '../../primitives/Input'
@@ -48,6 +49,7 @@ export function InventoryShipmentDetailPage() {
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [balances, setBalances] = useState<BalanceItem[]>([])
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
@@ -69,7 +71,6 @@ export function InventoryShipmentDetailPage() {
   const [infoCarrierName, setInfoCarrierName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
   const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
-  const [infoComment, setInfoComment] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
@@ -83,7 +84,6 @@ export function InventoryShipmentDetailPage() {
     setInfoCarrierName(doc.carrier ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
-    setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
   }, [doc])
 
@@ -113,7 +113,6 @@ export function InventoryShipmentDetailPage() {
         carrier:        infoCarrierName || null,
         ship_date:      infoShipDate || null,
         logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null,
-        comment:        infoComment || null,
       })
       await load()
       setInfoDirty(false)
@@ -402,6 +401,10 @@ export function InventoryShipmentDetailPage() {
 
         <div className="detail-actions">
           <div className="detail-actions-row">
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
+            </button>
             {isEditable && infoDirty && (
               <button className="btn" disabled={infoSaving || acting} onClick={() => { void handleInfoSave() }}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -509,15 +512,6 @@ export function InventoryShipmentDetailPage() {
                     />
                   </Field>
                 </div>
-                <Field label="Инструкции для сборки" style={{ marginTop: 14 }}>
-                  <textarea
-                    className="input"
-                    style={{ height: 60, paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
-                    value={infoComment}
-                    onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
-                    placeholder="Необязательно"
-                  />
-                </Field>
               </div>
             ) : (
               <div style={{ padding: '12px 16px' }}>
@@ -537,12 +531,6 @@ export function InventoryShipmentDetailPage() {
                   )}
                   <span style={{ color: 'var(--c-text-muted)' }}>Дата отгрузки</span>
                   <span>{fmtDateLong(doc.ship_date)}</span>
-                  {doc.comment && (
-                    <>
-                      <span style={{ color: 'var(--c-text-muted)' }}>Инструкции</span>
-                      <span style={{ whiteSpace: 'pre-wrap' }}>{doc.comment}</span>
-                    </>
-                  )}
                 </div>
               </div>
             )}
@@ -691,32 +679,34 @@ export function InventoryShipmentDetailPage() {
             </div>
           </div>
 
-          <div className="card ops-card" style={{ maxHeight: 'calc(100vh - 220px)' }}>
-            <div className="card-head">
-              <Icon name="layers" size={15} className="ic-accent" />
-              <span className="card-head-title">Журнал операций</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{doc.ops.length}</Badge>
-            </div>
-
-            <div className="ops-card-body">
-              {doc.ops.length === 0 ? (
-                <div className="ops-card-empty">Нет операций</div>
-              ) : (
-                <div className="ops-timeline">
-                  {doc.ops.map((op) => (
-                    <OpEntry key={op.id} op={op} />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="ops-card-foot">
-              <Icon name="shield" size={11} />
-              <span>Журнал операций не редактируется.</span>
-            </div>
-          </div>
         </div>
       </div>
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${doc.ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {doc.ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {doc.ops.map((op) => (
+              <OpEntry key={op.id} op={op} />
+            ))}
+          </div>
+        )}
+      </Drawer>
 
       {showPicker && (
         <BalancePicker

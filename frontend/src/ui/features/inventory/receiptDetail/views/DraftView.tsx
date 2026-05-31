@@ -11,6 +11,7 @@ import type { ReceiptDetail } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
+import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
@@ -20,6 +21,7 @@ import { fmtDate } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
+import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 
 type Props = {
@@ -44,6 +46,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [metaSaving, setMetaSaving] = useState(false)
   const [metaError, setMetaError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
 
@@ -138,6 +141,10 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         </div>
         <div className="detail-actions">
           <div className="detail-actions-row">
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
+            </button>
             {hasUnsavedChanges && (
               <button className="btn" onClick={handleSaveChanges} disabled={metaSaving || !clientId}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -326,6 +333,32 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
       />
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${detail.ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {detail.ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {detail.ops.map((op) => (
+              <OpEntry key={op.id} op={op} onFilterLine={() => {}} />
+            ))}
+          </div>
+        )}
+      </Drawer>
     </div>
   )
 }

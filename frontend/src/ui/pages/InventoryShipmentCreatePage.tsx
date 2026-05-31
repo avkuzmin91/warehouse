@@ -31,7 +31,6 @@ export function InventoryShipmentCreatePage() {
   const [carrier, setCarrier] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
-  const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -108,7 +107,6 @@ export function InventoryShipmentCreatePage() {
         carrier:        carrier || null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         ship_date:      shipDate || null,
-        comment:        comment || null,
         lines:          lines.map((line) => ({
           product_id: line.product_id,
           product_name: line.product_name,
@@ -231,15 +229,6 @@ export function InventoryShipmentCreatePage() {
                   />
                 </Field>
               </div>
-              <Field label="Инструкции для сборки" style={{ marginTop: 16 }}>
-                <textarea
-                  className="input"
-                  style={{ height: 60, paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Необязательно"
-                />
-              </Field>
             </div>
           </div>
 

@@ -89,6 +89,13 @@ export function ByProductView() {
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
+          <button
+            className="btn ghost sm icon"
+            title="Обновить"
+            onClick={() => load()}
+          >
+            <Icon name="refresh" size={14} style={loading ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+          </button>
         </FiltersBar>
       </div>
 

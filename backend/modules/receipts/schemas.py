@@ -72,8 +72,8 @@ class ReceiptArrivePayload(BaseModel):
 
 class ReceiptOpRecord(BaseModel):
     line_id: str
-    op_type: str  # receiving | defect_fix
-    qty: int = Field(ge=1)
+    op_type: str  # receiving | defect_fix | receiving_correction | defect_correction
+    qty: int = Field(ge=0)
     reason: str | None = None
     comment: str | None = None
 

@@ -11,6 +11,7 @@ import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from 
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
+import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
@@ -51,6 +52,7 @@ export function PlannedView({
   const [metaSaving, setMetaSaving] = useState(false)
   const [metaError, setMetaError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
   const [pendingStorage, setPendingStorage] = useState<Record<string, string>>({})
@@ -201,6 +203,10 @@ export function PlannedView({
         </div>
         <div className="detail-actions">
           <div className="detail-actions-row">
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
+            </button>
             <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
               <Icon name="x" size={14} />Аннулировать
             </button>
@@ -356,31 +362,34 @@ export function PlannedView({
             </div>
           </Card>
 
-          {/* Журнал операций */}
-          <div className="card ops-card">
-            <div className="card-head">
-              <Icon name="layers" size={15} className="ic-accent" />
-              <span className="card-head-title">Журнал операций</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{detail.ops.length}</Badge>
-            </div>
-            <div className="ops-card-body">
-              {detail.ops.length === 0 ? (
-                <div className="ops-card-empty">Нет операций</div>
-              ) : (
-                <div className="ops-timeline">
-                  {detail.ops.map((op) => (
-                    <OpEntry key={op.id} op={op} onFilterLine={() => {}} />
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="ops-card-foot">
-              <Icon name="shield" size={11} />
-              <span>Операции не редактируются. Удаление запрещено.</span>
-            </div>
-          </div>
         </div>
       </div>
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${detail.ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {detail.ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {detail.ops.map((op) => (
+              <OpEntry key={op.id} op={op} onFilterLine={() => {}} />
+            ))}
+          </div>
+        )}
+      </Drawer>
 
       <AddLineDrawer
         key={showAddLine ? 'open' : 'closed'}

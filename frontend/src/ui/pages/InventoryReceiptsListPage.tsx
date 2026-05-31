@@ -79,7 +79,7 @@ export function InventoryReceiptsListPage() {
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }, signal),
-    [clientId, search, skuFilter, dateFrom, dateTo],
+    [clientId, search, skuFilter, dateFrom, dateTo, retryTick],
   )
   const summary: ReceiptsSummary = summaryData ?? { all: 0, active: 0, done: 0, drafts: 0, overdue: 0 }
 
@@ -222,6 +222,13 @@ export function InventoryReceiptsListPage() {
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
+          <button
+            className="btn ghost sm icon"
+            title="Обновить"
+            onClick={() => setRetryTick((t) => t + 1)}
+          >
+            <Icon name="refresh" size={14} style={loading ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+          </button>
         </FiltersBar>
       }
     >

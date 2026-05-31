@@ -35,16 +35,21 @@ def get_balances(
 
     line_where = " AND ".join(line_conds)
 
-    # ops_agg: один проход по receipt_ops вместо 6 коррелированных подзапросов на строку.
-    # recv_corr/def_corr — последнее значение correction (MAX по qty при одной записи на линию).
+    # ops_agg: recv_corr/def_corr — последнее значение correction по created_at (не MAX qty).
+    # Используем коррелированный подзапрос ORDER BY created_at DESC LIMIT 1 — SQLite
+    # не поддерживает LAST_VALUE/FILTER с упорядочением в оконной агрегации.
     # on_review: строка ещё на QC, если qc_done_at IS NULL или reopen случился позже.
     agg_query = f"""
         WITH ops_agg AS (
             SELECT
                 o.line_id,
-                MAX(CASE WHEN o.op_type = 'receiving_correction' THEN o.qty      END) AS recv_corr,
+                (SELECT o2.qty FROM receipt_ops o2
+                 WHERE o2.line_id = o.line_id AND o2.op_type = 'receiving_correction'
+                 ORDER BY o2.created_at DESC LIMIT 1) AS recv_corr,
                 SUM(CASE WHEN o.op_type = 'receiving'            THEN o.qty ELSE 0 END) AS recv_sum,
-                MAX(CASE WHEN o.op_type = 'defect_correction'    THEN o.qty      END) AS def_corr,
+                (SELECT o2.qty FROM receipt_ops o2
+                 WHERE o2.line_id = o.line_id AND o2.op_type = 'defect_correction'
+                 ORDER BY o2.created_at DESC LIMIT 1) AS def_corr,
                 SUM(CASE WHEN o.op_type = 'defect_fix'           THEN o.qty ELSE 0 END) AS def_sum,
                 MAX(CASE WHEN o.op_type = 'line_qc_complete'     THEN o.created_at END) AS qc_done_at,
                 MAX(CASE WHEN o.op_type = 'line_qc_reopen'       THEN o.created_at END) AS qc_reopen_at
@@ -205,13 +210,18 @@ def get_balances_by_zone(
     line_where = " AND ".join(line_conds)
 
     # Три параметрических набора одинаковы → line_params повторяется 3 раза (good/defect/on_review).
+    # recv_corr/def_corr — последнее значение correction по created_at (не MAX qty).
     agg_query = f"""
         WITH ops_agg AS (
             SELECT
                 o.line_id,
-                MAX(CASE WHEN o.op_type = 'receiving_correction' THEN o.qty      END) AS recv_corr,
+                (SELECT o2.qty FROM receipt_ops o2
+                 WHERE o2.line_id = o.line_id AND o2.op_type = 'receiving_correction'
+                 ORDER BY o2.created_at DESC LIMIT 1) AS recv_corr,
                 SUM(CASE WHEN o.op_type = 'receiving'            THEN o.qty ELSE 0 END) AS recv_sum,
-                MAX(CASE WHEN o.op_type = 'defect_correction'    THEN o.qty      END) AS def_corr,
+                (SELECT o2.qty FROM receipt_ops o2
+                 WHERE o2.line_id = o.line_id AND o2.op_type = 'defect_correction'
+                 ORDER BY o2.created_at DESC LIMIT 1) AS def_corr,
                 SUM(CASE WHEN o.op_type = 'defect_fix'           THEN o.qty ELSE 0 END) AS def_sum,
                 MAX(CASE WHEN o.op_type = 'line_qc_complete'     THEN o.created_at END) AS qc_done_at,
                 MAX(CASE WHEN o.op_type = 'line_qc_reopen'       THEN o.created_at END) AS qc_reopen_at

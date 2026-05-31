@@ -18,6 +18,7 @@ import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { Icon } from '../../../../primitives/Icon'
+import { Drawer } from '../../../../feedback/Drawer'
 import { fmtDate } from '../../../../../utils/format'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
@@ -53,6 +54,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
   const [filterLine, setFilterLine] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string | null>(null)
   const [showBlockHint, setShowBlockHint] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
 
   const { unloadingZones: zonesAll } = useLookups()
   const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
@@ -216,6 +218,10 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
           </div>
         </div>
         <div className="row gap-8">
+          <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+            <Icon name="layers" size={14} />Журнал
+            {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
+          </button>
           {isReadonly && (
             <button className="btn ghost" onClick={onReopen} disabled={advancing}>
               <Icon name="arrowLeft" size={14} />Вернуть на проверку
@@ -253,158 +259,153 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{saveError}</Alert>
       )}
 
-      <div className="split-380">
-        <div className="col gap-16">
-          {/* Основная информация (только просмотр) */}
-          <Card>
-            <CardHead>
-              <Icon name="file" size={15} className="ic-accent" />
-              <span className="card-head-title">Основная информация</span>
-            </CardHead>
-            <CardBody>
-              <div className="form-grid-2">
-                <div>
-                  <label className="field-label"><span>Клиент</span></label>
-                  <input className="input" value={doc.client_name ?? '—'} disabled />
-                </div>
-                <div>
-                  <label className="field-label"><span>Поставщик</span></label>
-                  <input className="input" value={doc.supplier_name || '—'} disabled />
-                </div>
-                <div>
-                  <label className="field-label"><span>Дата прибытия</span></label>
-                  <input className="input" value={fmtDate(doc.arrival_date)} disabled />
-                </div>
-                <div>
-                  <label className="field-label"><span>Стоимость логистики, ₽</span></label>
-                  <input className="input" value={doc.logistics_cost.toLocaleString('ru-RU')} disabled />
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-
-          {/* Таблица строк */}
-          <Card>
-            <CardHead>
-              <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары к приемке</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              {!isReadonly && allDone && (
-                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--c-success)', fontWeight: 500 }}>
-                  <Icon name="check" size={12} /> Все строки проверены
-                </span>
-              )}
-            </CardHead>
-            <ReceiptLinesTable
-              stage="review"
-              lines={lines}
-              zones={storageZones}
-              readonly={isReadonly}
-              getDraft={(l) => getDraft(l)}
-              onDraftField={(l, field, v) => setDraftField(l.id, field, v, l.accepted, l.defect)}
-              zoneValue={(l, kind) => effectiveZoneId(l, kind)}
-              zoneName={(l, kind) => lineZoneName(l, kind)}
-              zoneSaving={() => savingChanges}
-              onZone={(l, kind, v) => setPendingZone(l.id, kind, v)}
-              completing={(l) => (completing[l.id] ?? false) || savingChanges}
-              reopening={(l) => reopening[l.id] ?? false}
-              lineError={(l) => lineError[l.id]}
-              onComplete={(l) => void handleCompleteClick(l)}
-              onReopen={(l) => void handleReopen(l.id)}
-            />
-          </Card>
-        </div>
-
-        {/* Правая колонка: Готовность + Журнал */}
-        <div className="col gap-16">
-          <Card>
-            <CardHead>
-              <Icon name="check" size={15} className="ic-success" />
-              <span className="card-head-title">Готовность</span>
-            </CardHead>
-            <div style={{ padding: '12px 14px 8px', borderBottom: '1px solid var(--c-border)' }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
-                <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Проверено, ед.</span>
-                <span style={{ fontSize: 13 }}>
-                  <b className="mono">{checkedUnits}</b>
-                  <span style={{ color: 'var(--c-text-subtle)' }}> / {arrivedUnits}</span>
-                  <span style={{ marginLeft: 8, fontWeight: 600, color: checkedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)' }}>{checkedPct}%</span>
-                </span>
-              </div>
-              <div className="prog">
-                <div className="prog-fill" style={{ width: `${Math.min(100, checkedPct)}%` }} />
-              </div>
-            </div>
-            <div className="readiness-list">
-              {[
-                {
-                  ok: lines.length > 0,
-                  label: `Строк: ${doneLinesCount} / ${lines.length}`,
-                  error: 'Нет строк в документе',
-                },
-                {
-                  ok: lines.length > 0 && doneLinesCount === lines.length,
-                  label: 'Все строки проверены',
-                  error: `Осталось проверить: ${lines.length - doneLinesCount}`,
-                },
-              ].map((c, i) => (
-                <div key={i} className="readiness-row">
-                  {c.ok ? (
-                    <div className="readiness-dot ok">
-                      <Icon name="check" size={10} />
-                    </div>
-                  ) : (
-                    <div className="readiness-dot pending" />
-                  )}
-                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.ok ? c.label : c.error}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-        {/* Журнал операций */}
-        <div className="card ops-card" style={{ top: 0, maxHeight: 'calc(100vh - 80px)' }}>
+      {/* Верхняя строка: Основная информация + Готовность */}
+      <div className="split-380" style={{ alignItems: 'stretch', marginBottom: 16 }}>
+        <Card>
           <CardHead>
-            <Icon name="layers" size={15} className="ic-accent" />
-            <span className="card-head-title">Журнал операций</span>
-            <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{ops.length}</Badge>
+            <Icon name="file" size={15} className="ic-accent" />
+            <span className="card-head-title">Основная информация</span>
           </CardHead>
-          <div style={{ padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: 6, borderBottom: '1px solid var(--c-border)', flexShrink: 0 }}>
-            <FilterChip
-              label="Тип"
-              value={filterType ? (RECEIPT_OP_LABELS[filterType as keyof typeof RECEIPT_OP_LABELS] ?? filterType) : undefined}
-              active={!!filterType}
-              onClick={() => setFilterType(null)}
-              onClear={() => setFilterType(null)}
-            />
-            <FilterChip
-              label="Строка"
-              value={filterLine ?? undefined}
-              active={!!filterLine}
-              onClick={() => setFilterLine(null)}
-              onClear={() => setFilterLine(null)}
-            />
-          </div>
-          <div className="ops-card-body">
-            {visibleOps.length === 0 ? (
-              <div className="ops-card-empty">
-                {filterLine || filterType ? 'Под фильтр ничего не попало' : 'Нет операций'}
+          <CardBody>
+            <div className="form-grid-2">
+              <div>
+                <label className="field-label"><span>Клиент</span></label>
+                <input className="input" value={doc.client_name ?? '—'} disabled />
               </div>
-            ) : (
-              <div className="ops-timeline">
-                {visibleOps.map((op) => (
-                  <OpEntry key={op.id} op={op} onFilterLine={(lid) => setFilterLine(lid)} />
-                ))}
+              <div>
+                <label className="field-label"><span>Поставщик</span></label>
+                <input className="input" value={doc.supplier_name || '—'} disabled />
               </div>
-            )}
+              <div>
+                <label className="field-label"><span>Дата прибытия</span></label>
+                <input className="input" value={fmtDate(doc.arrival_date)} disabled />
+              </div>
+              <div>
+                <label className="field-label"><span>Стоимость логистики, ₽</span></label>
+                <input className="input" value={doc.logistics_cost.toLocaleString('ru-RU')} disabled />
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHead>
+            <Icon name="check" size={15} className="ic-success" />
+            <span className="card-head-title">Готовность</span>
+          </CardHead>
+          <div style={{ padding: '12px 14px 8px', borderBottom: '1px solid var(--c-border)' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
+              <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Проверено, ед.</span>
+              <span style={{ fontSize: 13 }}>
+                <b className="mono">{checkedUnits}</b>
+                <span style={{ color: 'var(--c-text-subtle)' }}> / {arrivedUnits}</span>
+                <span style={{ marginLeft: 8, fontWeight: 600, color: checkedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)' }}>{checkedPct}%</span>
+              </span>
+            </div>
+            <div className="prog">
+              <div className="prog-fill" style={{ width: `${Math.min(100, checkedPct)}%` }} />
+            </div>
           </div>
-          <div className="ops-card-foot">
+          <div className="readiness-list">
+            {[
+              {
+                ok: lines.length > 0,
+                label: `Строк: ${doneLinesCount} / ${lines.length}`,
+                error: 'Нет строк в документе',
+              },
+              {
+                ok: lines.length > 0 && doneLinesCount === lines.length,
+                label: 'Все строки проверены',
+                error: `Осталось проверить: ${lines.length - doneLinesCount}`,
+              },
+            ].map((c, i) => (
+              <div key={i} className="readiness-row">
+                {c.ok ? (
+                  <div className="readiness-dot ok">
+                    <Icon name="check" size={10} />
+                  </div>
+                ) : (
+                  <div className="readiness-dot pending" />
+                )}
+                <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.ok ? c.label : c.error}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* Таблица строк — вся ширина */}
+      <Card style={{ marginBottom: 16 }}>
+        <CardHead>
+          <Icon name="boxes" size={15} className="ic-accent" />
+          <span className="card-head-title">Товары к приемке</span>
+          <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
+          {!isReadonly && allDone && (
+            <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--c-success)', fontWeight: 500 }}>
+              <Icon name="check" size={12} /> Все строки проверены
+            </span>
+          )}
+        </CardHead>
+        <ReceiptLinesTable
+          stage="review"
+          lines={lines}
+          zones={storageZones}
+          readonly={isReadonly}
+          getDraft={(l) => getDraft(l)}
+          onDraftField={(l, field, v) => setDraftField(l.id, field, v, l.accepted, l.defect)}
+          zoneValue={(l, kind) => effectiveZoneId(l, kind)}
+          zoneName={(l, kind) => lineZoneName(l, kind)}
+          zoneSaving={() => savingChanges}
+          onZone={(l, kind, v) => setPendingZone(l.id, kind, v)}
+          completing={(l) => (completing[l.id] ?? false) || savingChanges}
+          reopening={(l) => reopening[l.id] ?? false}
+          lineError={(l) => lineError[l.id]}
+          onComplete={(l) => void handleCompleteClick(l)}
+          onReopen={(l) => void handleReopen(l.id)}
+        />
+      </Card>
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
             <Icon name="shield" size={11} />
             <span>Операции не редактируются. Удаление запрещено.</span>
           </div>
+        }
+      >
+        <div style={{ padding: '4px 0 0', display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          <FilterChip
+            label="Тип"
+            value={filterType ? (RECEIPT_OP_LABELS[filterType as keyof typeof RECEIPT_OP_LABELS] ?? filterType) : undefined}
+            active={!!filterType}
+            onClick={() => setFilterType(null)}
+            onClear={() => setFilterType(null)}
+          />
+          <FilterChip
+            label="Строка"
+            value={filterLine ?? undefined}
+            active={!!filterLine}
+            onClick={() => setFilterLine(null)}
+            onClear={() => setFilterLine(null)}
+          />
         </div>
-        </div>{/* конец правой колонки */}
-      </div>
+        {visibleOps.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            {filterLine || filterType ? 'Под фильтр ничего не попало' : 'Нет операций'}
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {visibleOps.map((op) => (
+              <OpEntry key={op.id} op={op} onFilterLine={(lid) => setFilterLine(lid)} />
+            ))}
+          </div>
+        )}
+      </Drawer>
 
     </div>
   )

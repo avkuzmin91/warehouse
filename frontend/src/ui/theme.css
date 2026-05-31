@@ -1309,7 +1309,7 @@ a { color: inherit; text-decoration: none; }
 /* Page-level columns: main + sticky-side. */
 .split-300 { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
 .split-360 { display: grid; grid-template-columns: 1fr 360px; gap: 20px; align-items: start; }
-.split-380 { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+.split-380 { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
 
 /* tfoot строки с суммой. */
 .t tfoot tr.sum { background: var(--c-bg-sunken); }
