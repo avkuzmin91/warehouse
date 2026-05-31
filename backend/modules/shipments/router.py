@@ -11,7 +11,9 @@ from config import (
     SHIPMENT_EDITABLE_LINE_STATUSES,
     SHIPMENT_REVERT_TRANSITIONS,
     SHIPMENT_STATUS_CANCELLED,
+    SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
+    SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUSES_ALL,
     SHIPMENT_TRANSITIONS,
@@ -56,7 +58,7 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
              body.destination, body.carrier, body.ship_date, body.comment,
-             "draft", now, uid),
+             SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
             conn.execute(
@@ -109,13 +111,11 @@ def shipments_summary(
     today = date.today().isoformat()
     return {
         "all":     len(rows),
-        "active":  sum(1 for r in rows if r["status"] == "ready"),
-        "done":    sum(1 for r in rows if r["status"] in ("shipped", "cancelled")),
-        "packing": sum(1 for r in rows if r["status"] == "packing"),
-        "ready":   sum(1 for r in rows if r["status"] == "ready"),
+        "done":    sum(1 for r in rows if r["status"] in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED)),
+        "packing": sum(1 for r in rows if r["status"] == SHIPMENT_STATUS_PACKING),
         "overdue": sum(
             1 for r in rows
-            if r["status"] in ("ready", "packing")
+            if r["status"] == SHIPMENT_STATUS_PACKING
             and r["ship_date"] and str(r["ship_date"]) < today
         ),
     }
@@ -148,7 +148,8 @@ def list_shipments(
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
         if overdue:
             today = date.today().isoformat()
-            conds.append("d.status IN ('ready', 'packing')")
+            conds.append("d.status = ?")
+            params.append(SHIPMENT_STATUS_PACKING)
             conds.append("d.ship_date IS NOT NULL")
             conds.append("d.ship_date < ?"); params.append(today)
         if client_id:
@@ -218,27 +219,12 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
         ).fetchall()
-        zone_rows = conn.execute(
-            "SELECT * FROM shipment_line_zones WHERE doc_id = ? ORDER BY created_at",
-            (doc_id,),
-        ).fetchall()
         ops_rows = conn.execute(
             """SELECT o.*, u.email AS user_email
                FROM shipment_ops o LEFT JOIN users u ON u.id = o.created_by
                WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
             (doc_id,),
         ).fetchall()
-
-    zones_by_line: dict[str, list[ShipmentLineZoneItem]] = {}
-    for z in zone_rows:
-        zones_by_line.setdefault(str(z["line_id"]), []).append(
-            ShipmentLineZoneItem(
-                id=str(z["id"]),
-                storage_zone_id=z["storage_zone_id"],
-                storage_zone_name=z["storage_zone_name"],
-                qty=int(z["qty"]),
-            )
-        )
 
     lines = [
         ShipmentLineItem(
@@ -251,7 +237,10 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             size_id=l["size_id"],
             size_name=l["size_name"],
             qty=int(l["qty"]),
-            zones=zones_by_line.get(str(l["id"]), []),
+            shipped_qty=int(l["shipped_qty"] or 0),
+            storage_zone_id=l["storage_zone_id"],
+            storage_zone_name=l["storage_zone_name"],
+            zones=[],
         )
         for l in lines_rows
     ]
@@ -327,10 +316,12 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
         line_id = str(uuid4())
         conn.execute(
             """INSERT INTO shipment_lines
-               (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               (id,doc_id,product_id,product_name,product_sku,color_id,color_name,
+                size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
-             body.color_id, body.color_name, body.size_id, body.size_name, body.qty, now),
+             body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
+             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, now),
         )
         conn.commit()
     return {"message": line_id}
@@ -349,14 +340,13 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         conn.execute(
             """UPDATE shipment_lines SET
                product_id=?,product_name=?,product_sku=?,color_id=?,color_name=?,
-               size_id=?,size_name=?,qty=?
+               size_id=?,size_name=?,qty=?,shipped_qty=?,storage_zone_id=?,storage_zone_name=?
                WHERE id=? AND doc_id=? AND is_deleted=0""",
             (body.product_id, body.product_name, body.product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
+             body.shipped_qty, body.storage_zone_id, body.storage_zone_name,
              line_id, doc_id),
         )
-        # Изменение количества обнуляет распределение по зонам — иначе сумма зон разойдётся с qty.
-        conn.execute("DELETE FROM shipment_line_zones WHERE line_id = ?", (line_id,))
         conn.commit()
     return {"message": "ok"}
 

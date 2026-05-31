@@ -5,6 +5,7 @@ import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
 import { FiltersBar, FilterCombobox } from '../../../../data/FiltersBar'
 import { Card, CardHead } from '../../../../primitives/Card'
+import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
@@ -72,6 +73,13 @@ export function ByZoneView() {
     return [...map.values()]
   }, [items])
 
+  const kpi = useMemo(() => {
+    const goodQty = items.reduce((sum, item) => sum + (item.status === 'good' ? item.qty : 0), 0)
+    const defectQty = items.reduce((sum, item) => sum + (item.status === 'defect' ? item.qty : 0), 0)
+    const onReviewQty = items.reduce((sum, item) => sum + (item.status === 'on_review' ? item.qty : 0), 0)
+    return { totalQty: goodQty + defectQty + onReviewQty, goodQty, defectQty, onReviewQty }
+  }, [items])
+
   return (
     <>
       <div style={{ marginBottom: 14 }}>
@@ -106,6 +114,13 @@ export function ByZoneView() {
             <Icon name="refresh" size={14} style={loading ? { animation: 'spin 0.7s linear infinite' } : undefined} />
           </button>
         </FiltersBar>
+      </div>
+
+      <div className="kpi-grid" style={{ marginBottom: 20 }}>
+        <KPI label="Всего единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
+        <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
+        <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
+        <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
       </div>
 
       {loading ? (

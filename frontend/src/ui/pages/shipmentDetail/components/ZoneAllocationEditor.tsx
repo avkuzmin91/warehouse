@@ -36,7 +36,15 @@ export function ZoneAllocationEditor({ docId, line, zoneOptions, available, disa
   const draftKey = JSON.stringify([...drafts].sort((a, b) => a.zoneId.localeCompare(b.zoneId)))
   const dirty = savedKey !== draftKey
   const duplicateZone = new Set(drafts.map((d) => d.zoneId)).size !== drafts.length
-  const overByZone = drafts.some((d) => d.qty > (available[d.zoneId] ?? 0))
+  const totalAvailable = Object.values(available).reduce((s, v) => s + v, 0)
+
+  function getAvailForDraft(d: Draft): number {
+    if (d.zoneId !== '') return available[d.zoneId] ?? 0
+    // Зона ещё не выбрана — показываем суммарный доступный остаток по всем зонам
+    return totalAvailable
+  }
+
+  const overByZone = drafts.some((d) => d.zoneId !== '' && d.qty > (available[d.zoneId] ?? 0))
 
   const canSave = dirty && remaining === 0 && !duplicateZone && !overByZone && !saving && !disabled
 
@@ -77,8 +85,8 @@ export function ZoneAllocationEditor({ docId, line, zoneOptions, available, disa
   return (
     <div style={{ padding: '8px 0 4px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
       {drafts.map((d, i) => {
-        const avail = available[d.zoneId] ?? 0
-        const over = d.qty > avail
+        const avail = getAvailForDraft(d)
+        const over = d.zoneId !== '' && d.qty > avail
         return (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 200 }}>

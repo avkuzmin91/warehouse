@@ -1,19 +1,17 @@
 import { request } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'ready' | 'shipped' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'shipped' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создание',
   packing:   'В плане',
-  ready:     'На сборке',
   shipped:   'Завершён',
   cancelled: 'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создан',
-  packing:   'Сборка начата',
-  ready:     'На сборке',
+  packing:   'Отгружен',
   shipped:   'Завершён',
   cancelled: 'Аннулирован',
 }
@@ -21,13 +19,12 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   draft:     '',
   packing:   'info',
-  ready:     'accent',
   shipped:   'success',
   cancelled: 'danger',
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'ready', 'shipped',
+  'draft', 'packing', 'shipped',
 ]
 
 export type ShipmentCargoType = 'good' | 'defect'
@@ -51,16 +48,19 @@ export type ShipmentLineZone = {
 }
 
 export type ShipmentLine = {
-  id:           string
-  product_id:   string
-  product_name: string
-  product_sku:  string
-  color_id:     string | null
-  color_name:   string | null
-  size_id:      string | null
-  size_name:    string | null
-  qty:          number
-  zones:        ShipmentLineZone[]
+  id:                string
+  product_id:        string
+  product_name:      string
+  product_sku:       string
+  color_id:          string | null
+  color_name:        string | null
+  size_id:           string | null
+  size_name:         string | null
+  qty:               number
+  shipped_qty:       number
+  storage_zone_id:   string | null
+  storage_zone_name: string | null
+  zones:             ShipmentLineZone[]
 }
 
 export type ShipmentLineZoneIn = {
@@ -117,28 +117,29 @@ export type ShipmentListParams = {
 
 export type ShipmentsSummary = {
   all:     number
-  active:  number
   done:    number
   packing: number
-  ready:   number
   overdue: number
 }
 
 export function isShipmentOverdue(item: ShipmentListItem): boolean {
   if (!item.ship_date) return false
-  if (item.status !== 'ready' && item.status !== 'packing') return false
+  if (item.status !== 'packing') return false
   return item.ship_date < new Date().toISOString().slice(0, 10)
 }
 
 export type ShipmentLineIn = {
-  product_id:   string
-  product_name: string
-  product_sku:  string
-  color_id?:    string | null
-  color_name?:  string | null
-  size_id?:     string | null
-  size_name?:   string | null
-  qty:          number
+  product_id:         string
+  product_name:       string
+  product_sku:        string
+  color_id?:          string | null
+  color_name?:        string | null
+  size_id?:           string | null
+  size_name?:         string | null
+  qty:                number
+  shipped_qty?:       number
+  storage_zone_id?:   string | null
+  storage_zone_name?: string | null
 }
 
 export type ShipmentDocCreate = {

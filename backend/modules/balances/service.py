@@ -39,6 +39,8 @@ def get_balances(
     # Используем коррелированный подзапрос ORDER BY created_at DESC LIMIT 1 — SQLite
     # не поддерживает LAST_VALUE/FILTER с упорядочением в оконной агрегации.
     # on_review: строка ещё на QC, если qc_done_at IS NULL или reopen случился позже.
+    shipped_qty_expr = "COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)"
+
     agg_query = f"""
         WITH ops_agg AS (
             SELECT
@@ -90,7 +92,7 @@ def get_balances(
         ),
         shipped_good AS (
             SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
-                   SUM(sl.qty) AS shipped_good
+                   SUM({shipped_qty_expr}) AS shipped_good
             FROM shipment_lines sl
             JOIN shipment_docs sd ON sd.id = sl.doc_id
             WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
@@ -99,7 +101,7 @@ def get_balances(
         ),
         shipped_defect AS (
             SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id,
-                   SUM(sl.qty) AS shipped_defect
+                   SUM({shipped_qty_expr}) AS shipped_defect
             FROM shipment_lines sl
             JOIN shipment_docs sd ON sd.id = sl.doc_id
             WHERE sl.is_deleted = 0 AND sd.is_deleted = 0
@@ -147,7 +149,7 @@ def get_balances(
         SELECT *, COUNT(*) OVER() AS _total_count
         FROM ({agg_query}) a
         {where_clause}
-        ORDER BY product_name, color_name, size_name
+        ORDER BY (good + defect + on_review) DESC, product_name, color_name, size_name
         LIMIT ? OFFSET ?
         """,
         line_params + [limit, offset],
@@ -211,6 +213,8 @@ def get_balances_by_zone(
 
     # Три параметрических набора одинаковы → line_params повторяется 3 раза (good/defect/on_review).
     # recv_corr/def_corr — последнее значение correction по created_at (не MAX qty).
+    shipped_qty_expr = "COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)"
+
     agg_query = f"""
         WITH ops_agg AS (
             SELECT
@@ -286,13 +290,12 @@ def get_balances_by_zone(
             GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id, l.storage_zone_id
         ),
         shipped AS (
-            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id, slz.storage_zone_id,
-                   sd.cargo_type, SUM(slz.qty) AS shipped_qty
-            FROM shipment_line_zones slz
-            JOIN shipment_lines sl ON sl.id = slz.line_id
-            JOIN shipment_docs sd  ON sd.id = slz.doc_id
+            SELECT sl.product_id, sd.client_id, sl.color_id, sl.size_id, sl.storage_zone_id,
+                   sd.cargo_type, SUM({shipped_qty_expr}) AS shipped_qty
+            FROM shipment_lines sl
+            JOIN shipment_docs sd ON sd.id = sl.doc_id
             WHERE sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = 'shipped'
-            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id, slz.storage_zone_id, sd.cargo_type
+            GROUP BY sl.product_id, sd.client_id, sl.color_id, sl.size_id, sl.storage_zone_id, sd.cargo_type
         )
         SELECT g.loc_id AS location_id, g.loc_name AS location_name, 'good' AS status,
                g.product_id, g.product_sku, g.client_id, g.color_id, g.size_id,
@@ -333,9 +336,23 @@ def get_balances_by_zone(
 
     rows = connection.execute(
         f"""
-        SELECT * FROM ({agg_query}) a
-        WHERE qty > 0
-        ORDER BY location_name IS NULL, location_name, status, product_name, color_name, size_name
+        SELECT *
+        FROM (
+            SELECT
+                a.*,
+                COALESCE(uz.name, a.location_name) AS actual_location_name
+            FROM ({agg_query}) a
+            LEFT JOIN unloading_zones uz ON uz.id = a.location_id
+        ) b
+        WHERE b.qty > 0
+        ORDER BY
+            b.actual_location_name IS NULL,
+            b.actual_location_name,
+            b.qty DESC,
+            b.status,
+            b.product_name,
+            b.color_name,
+            b.size_name
         LIMIT 2000
         """,
         line_params * 3,
@@ -344,7 +361,7 @@ def get_balances_by_zone(
     items = [
         BalanceZoneItem(
             location_id=row["location_id"],
-            location_name=row["location_name"],
+            location_name=row["actual_location_name"],
             status=str(row["status"]),
             product_id=str(row["product_id"]),
             product_name=str(row["product_name"]),
@@ -372,7 +389,7 @@ def get_available_good_qty_by_zone(
 ) -> int:
     """Доступное годное по конкретной зоне: приход в зону минус отгрузка из зоны.
 
-    Используется при проверке отгрузки (ready → shipped) для строк с распределением по зонам.
+    Используется при проверке отгрузки (packing → shipped) для строк с распределением по зонам.
     """
     in_conds = [
         "l.is_deleted = 0", "d.is_deleted = 0",
@@ -431,7 +448,7 @@ def get_available_good_qty_by_zone(
     ]
     out_params: list = [product_id]
 
-    for col, val in (("sl.color_id", color_id), ("sl.size_id", size_id), ("slz.storage_zone_id", storage_zone_id)):
+    for col, val in (("sl.color_id", color_id), ("sl.size_id", size_id), ("sl.storage_zone_id", storage_zone_id)):
         if val is not None:
             out_conds.append(f"{col} = ?")
             out_params.append(val)
@@ -442,10 +459,9 @@ def get_available_good_qty_by_zone(
 
     out_row = connection.execute(
         f"""
-        SELECT COALESCE(SUM(slz.qty), 0) AS shipped
-        FROM shipment_line_zones slz
-        JOIN shipment_lines sl ON sl.id = slz.line_id
-        JOIN shipment_docs sd  ON sd.id = slz.doc_id
+        SELECT COALESCE(SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)), 0) AS shipped
+        FROM shipment_lines sl
+        JOIN shipment_docs sd ON sd.id = sl.doc_id
         WHERE {out_where}
         """,
         out_params,
@@ -539,7 +555,7 @@ def get_available_good_qty(
 
     out_row = connection.execute(
         f"""
-        SELECT COALESCE(SUM(sl.qty), 0) AS shipped
+        SELECT COALESCE(SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)), 0) AS shipped
         FROM shipment_lines sl
         JOIN shipment_docs sd ON sd.id = sl.doc_id
         WHERE {out_where}

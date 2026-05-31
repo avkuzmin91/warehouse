@@ -4,14 +4,17 @@ from pydantic import BaseModel, Field
 
 
 class ShipmentLineIn(BaseModel):
-    product_id:   str
-    product_name: str
-    product_sku:  str
-    color_id:     str | None = None
-    color_name:   str | None = None
-    size_id:      str | None = None
-    size_name:    str | None = None
-    qty:          int = Field(ge=1)
+    product_id:        str
+    product_name:      str
+    product_sku:       str
+    color_id:          str | None = None
+    color_name:        str | None = None
+    size_id:           str | None = None
+    size_name:         str | None = None
+    qty:               int = Field(ge=1)
+    shipped_qty:       int = Field(ge=0, default=0)
+    storage_zone_id:   str | None = None
+    storage_zone_name: str | None = None
 
 
 class ShipmentLineZoneIn(BaseModel):
@@ -53,16 +56,19 @@ class ShipmentDocUpdate(BaseModel):
 
 
 class ShipmentLineItem(BaseModel):
-    id:           str
-    product_id:   str
-    product_name: str
-    product_sku:  str
-    color_id:     str | None
-    color_name:   str | None
-    size_id:      str | None
-    size_name:    str | None
-    qty:          int
-    zones:        list[ShipmentLineZoneItem] = []
+    id:                str
+    product_id:        str
+    product_name:      str
+    product_sku:       str
+    color_id:          str | None
+    color_name:        str | None
+    size_id:           str | None
+    size_name:         str | None
+    qty:               int
+    shipped_qty:       int
+    storage_zone_id:   str | None
+    storage_zone_name: str | None
+    zones:             list[ShipmentLineZoneItem] = []
 
 
 class ShipmentListItem(BaseModel):

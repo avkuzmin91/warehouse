@@ -8,8 +8,6 @@ from fastapi import HTTPException
 from config import (
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_CANCELLED,
-    SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_TRANSITIONS,
 )
@@ -44,7 +42,7 @@ def normalize_cargo_type(raw: str | None) -> str:
 def _check_stock_for_shipment(connection, doc_id: str) -> None:
     """Проверяет доступность остатков для всех строк документа.
 
-    Вызывается перед переходом ready → shipped.
+    Вызывается перед переходом packing → shipped.
     Бросает HTTPException(409) если какой-то позиции не хватает.
     """
     from modules.balances.service import get_available_good_qty_by_zone
@@ -69,43 +67,50 @@ def _check_stock_for_shipment(connection, doc_id: str) -> None:
     client_id = doc_row["client_id"] if doc_row else None
 
     for line in lines:
-        zones = connection.execute(
-            "SELECT storage_zone_id, storage_zone_name, qty FROM shipment_line_zones WHERE line_id = ?",
-            (str(line["id"]),),
-        ).fetchall()
-
-        allocated = sum(int(z["qty"]) for z in zones)
-        if allocated != int(line["qty"]):
+        shipped_qty = int(line["shipped_qty"] or line["qty"] or 0)
+        available = get_available_good_qty_by_zone(
+            connection,
+            product_id=str(line["product_id"]),
+            color_id=line["color_id"],
+            size_id=line["size_id"],
+            client_id=client_id,
+            storage_zone_id=line["storage_zone_id"],
+        )
+        if available < shipped_qty:
+            zone_label = line["storage_zone_name"] or "Без зоны"
             raise HTTPException(
-                status_code=400,
+                status_code=409,
                 detail=(
-                    f"Распределите строку «{line['product_name']}» по зонам: "
-                    f"распределено {allocated} из {line['qty']}"
+                    f"Недостаточно товара в зоне «{zone_label}» для «{line['product_name']}» "
+                    f"(нужно {shipped_qty}, доступно {available})"
                 ),
             )
 
-        for z in zones:
-            available = get_available_good_qty_by_zone(
-                connection,
-                product_id=str(line["product_id"]),
-                color_id=line["color_id"],
-                size_id=line["size_id"],
-                client_id=client_id,
-                storage_zone_id=z["storage_zone_id"],
-            )
-            if available < int(z["qty"]):
-                zone_label = z["storage_zone_name"] or "Без зоны"
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"Недостаточно товара в зоне «{zone_label}» для «{line['product_name']}» "
-                        f"(нужно {z['qty']}, доступно {available})"
-                    ),
-                )
+
+def _check_duplicate_lines(connection, doc_id: str) -> None:
+    """Проверяет отсутствие дублей товар+зона перед переходом статуса."""
+    rows = connection.execute(
+        """SELECT MIN(product_name) AS product_name,
+                  MIN(storage_zone_name) AS storage_zone_name,
+                  storage_zone_id,
+                  COUNT(*) AS cnt
+           FROM shipment_lines
+           WHERE doc_id = ? AND is_deleted = 0
+           GROUP BY product_id, color_id, size_id, storage_zone_id
+           HAVING COUNT(*) > 1
+           LIMIT 1""",
+        (doc_id,),
+    ).fetchone()
+    if rows:
+        zone_label = rows["storage_zone_name"] or ("без зоны" if rows["storage_zone_id"] is None else rows["storage_zone_id"])
+        raise HTTPException(
+            status_code=400,
+            detail=f"Товар «{rows['product_name']}» добавлен дважды в зону «{zone_label}» — удалите дубль перед сохранением",
+        )
 
 
 def advance_shipment(connection, doc_id: str, user_id: str) -> str:
-    """Переводит документ на следующий статус. При переходе ready → shipped проверяет остатки."""
+    """Переводит документ на следующий статус. При переходе packing → shipped проверяет остатки."""
     row = connection.execute(
         "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
@@ -118,8 +123,13 @@ def advance_shipment(connection, doc_id: str, user_id: str) -> str:
     if not next_status:
         raise HTTPException(status_code=400, detail=f"Нельзя продвинуть из статуса «{current}»")
 
+    _check_duplicate_lines(connection, doc_id)
     if next_status == SHIPMENT_STATUS_SHIPPED:
         _check_stock_for_shipment(connection, doc_id)
+        connection.execute(
+            "UPDATE shipment_lines SET shipped_qty = qty WHERE doc_id = ? AND is_deleted = 0 AND COALESCE(shipped_qty, 0) = 0",
+            (doc_id,),
+        )
 
     now = _now()
     connection.execute(

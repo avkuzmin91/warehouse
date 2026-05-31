@@ -230,8 +230,8 @@ def test_balance_decreases_after_shipment_shipped(admin_client, client_id, produ
         _cleanup_test_docs(client_id)
 
 
-def test_balance_unchanged_for_ready_shipment(admin_client, client_id, product_ids):
-    """Отгрузка в статусе ready (не shipped) не уменьшает баланс."""
+def test_balance_unchanged_for_packing_shipment(admin_client, client_id, product_ids):
+    """Отгрузка в статусе packing (не shipped) не уменьшает баланс."""
     pid, color_id, size_id = product_ids
     received_qty = 15
     reserved_qty = 10  # в отгрузке, но ещё не отправлена
@@ -240,8 +240,8 @@ def test_balance_unchanged_for_ready_shipment(admin_client, client_id, product_i
         r_doc = _insert_receipt(conn, client_id, "done")
         r_line = _insert_receipt_line(conn, r_doc, pid, color_id, size_id, received_qty)
         _insert_receiving_op(conn, r_doc, r_line, received_qty)
-        # Отгрузка в статусе ready — не должна влиять на баланс
-        s_doc = _insert_shipment(conn, client_id, "good", "ready")
+        # Отгрузка в статусе packing — не должна влиять на баланс
+        s_doc = _insert_shipment(conn, client_id, "good", "packing")
         _insert_shipment_line(conn, s_doc, pid, color_id, size_id, reserved_qty)
         conn.commit()
 
@@ -251,7 +251,7 @@ def test_balance_unchanged_for_ready_shipment(admin_client, client_id, product_i
         items = r.json()["items"]
         matched = [i for i in items if i["product_id"] == pid]
         assert matched, f"Товар {pid} не найден в балансах"
-        # Балансы должны остаться полными — ready не вычитается
+        # Балансы должны остаться полными — packing не вычитается
         assert matched[0]["good"] == received_qty
     finally:
         _cleanup_test_docs(client_id)

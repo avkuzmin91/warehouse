@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback, Fragment } from 'react'
-import type React from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getShipment,
@@ -15,7 +14,7 @@ import {
 } from '../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../api/shipmentsApi'
 import { getBalances, getBalancesByZone } from '../../../api/balancesApi'
-import type { BalanceItem } from '../../../api/balancesApi'
+import type { BalanceItem, BalanceZoneItem } from '../../../api/balancesApi'
 import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
@@ -34,11 +33,14 @@ import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
 import { CargoTypeDisplay } from './components/CargoTypeDisplay'
 import { OpEntry } from './components/OpEntry'
-import { ZoneAllocationEditor } from './components/ZoneAllocationEditor'
 import { lineAvailable } from './shared/opLabels'
+import { Table, Td } from '../../data/Table'
+import { LineIdentityCell } from '../../features/inventory/receiptDetail/components/LineIdentityCell'
+import { ZoneCell } from '../../features/inventory/receiptDetail/components/ZoneCell'
 
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
-type LineDraft = { qty: number }
+type LineDraft = { qty: number; shippedQty: number; zoneId: string; zoneName: string | null }
+type ZoneChoice = { id: string; name: string; sub?: string }
 
 export function InventoryShipmentDetailPage() {
   const { docId } = useParams<{ docId: string }>()
@@ -52,19 +54,12 @@ export function InventoryShipmentDetailPage() {
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [balances, setBalances] = useState<BalanceItem[]>([])
+  const [zoneBalances, setZoneBalances] = useState<BalanceZoneItem[]>([])
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
 
-  const today = new Date().toISOString().slice(0, 10)
+  const { warehouses: infoWarehouses, carriers: infoCarriers } = useLookups()
 
-  const { warehouses: infoWarehouses, carriers: infoCarriers, unloadingZones } = useLookups()
-  const storageZones = unloadingZones.filter((z) => z.is_active && !z.is_deleted)
-
-  // Доступный годный остаток по зонам: balanceKey(line) → { zoneId: qty }. '' = без зоны.
-  const [zoneAvail, setZoneAvail] = useState<Record<string, Record<string, number>>>({})
-  const [expandedZones, setExpandedZones] = useState<Record<string, boolean>>({})
-
-  // Info form state (used when status === 'packing')
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
   const [infoDestinationName, setInfoDestinationName] = useState<string | null>(null)
@@ -75,7 +70,6 @@ export function InventoryShipmentDetailPage() {
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
 
-  // Sync form when doc loads
   useEffect(() => {
     if (!doc) return
     setInfoClientId(doc.client_id ?? null)
@@ -127,49 +121,41 @@ export function InventoryShipmentDetailPage() {
 
   const status = doc?.status as ShipmentStatus | undefined
   const isPlanned = status === 'packing'
-  const isReady = status === 'ready'
-  const isEditable = isPlanned || isReady
+  const isDraft = status === 'draft'
+  const canDelete = isDraft || isPlanned
+  const canEditShipped = isPlanned
 
   const shipmentClientId = doc?.client_id ?? null
   const shipmentCargoType = doc?.cargo_type
 
   const loadBalances = useCallback(async () => {
-    if (!shipmentClientId || !isEditable) {
+    if (!shipmentClientId || !canDelete) {
       setBalances([])
+      setZoneBalances([])
       return
     }
-    const res = await getBalances({
+    const balanceParams = {
       limit: 200,
       only_positive: true,
       client_id: shipmentClientId,
       has_defect: shipmentCargoType === 'defect' ? true : undefined,
-    })
+    }
+    const res = await getBalances(balanceParams)
     setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good > 0))
-  }, [shipmentClientId, shipmentCargoType, isEditable])
+    if (shipmentCargoType === 'good') {
+      const zonesRes = await getBalancesByZone({
+        client_id: shipmentClientId,
+        only_positive: true,
+      })
+      setZoneBalances(zonesRes.items.filter((item) => item.status === 'good'))
+    } else {
+      setZoneBalances([])
+    }
+  }, [shipmentClientId, shipmentCargoType, canDelete])
 
   useEffect(() => {
     loadBalances().catch(() => {})
   }, [loadBalances])
-
-  const loadZoneBalances = useCallback(async () => {
-    if (!shipmentClientId || !isEditable || shipmentCargoType !== 'good') {
-      setZoneAvail({})
-      return
-    }
-    const res = await getBalancesByZone({ client_id: shipmentClientId })
-    const map: Record<string, Record<string, number>> = {}
-    for (const item of res.items) {
-      if (item.status !== 'good' || item.qty <= 0) continue
-      const key = balanceKey(item)
-      const zoneId = item.location_id ?? ''
-      ;(map[key] ??= {})[zoneId] = item.qty
-    }
-    setZoneAvail(map)
-  }, [shipmentClientId, shipmentCargoType, isEditable])
-
-  useEffect(() => {
-    loadZoneBalances().catch(() => {})
-  }, [loadZoneBalances])
 
   useEffect(() => {
     if (!doc) {
@@ -178,7 +164,12 @@ export function InventoryShipmentDetailPage() {
     }
     const next: Record<string, LineDraft> = {}
     for (const line of doc.lines) {
-      next[line.id] = { qty: line.qty }
+      next[line.id] = {
+        qty:        line.qty,
+        shippedQty: line.shipped_qty,
+        zoneId:     line.storage_zone_id ?? '',
+        zoneName:   line.storage_zone_name ?? null,
+      }
     }
     setDrafts(next)
   }, [doc])
@@ -206,18 +197,72 @@ export function InventoryShipmentDetailPage() {
     : []
 
   function getDraft(line: ShipmentLine): LineDraft {
-    return drafts[line.id] ?? { qty: line.qty }
+    return drafts[line.id] ?? {
+      qty:        line.qty,
+      shippedQty: line.shipped_qty,
+      zoneId:     line.storage_zone_id ?? '',
+      zoneName:   line.storage_zone_name ?? null,
+    }
+  }
+
+  function getDraftAvailable(line: ShipmentLine): number {
+    if (shipmentCargoType !== 'good') {
+      return lineAvailable(line, balances, doc?.cargo_type as ShipmentCargoType)
+    }
+    const draft = getDraft(line)
+    const zoneId = draft.zoneId || null
+    const matched = zoneBalances.find((item) =>
+      balanceKey(item) === balanceKey(line)
+      && item.location_id === zoneId
+      && item.client_id === shipmentClientId
+    )
+    return matched?.qty ?? 0
+  }
+
+  function getLineZoneOptions(line: ShipmentLine): ZoneChoice[] {
+    if (shipmentCargoType !== 'good') return []
+    return zoneBalances
+      .filter((item) =>
+        item.location_id
+        && item.qty > 0
+        && balanceKey(item) === balanceKey(line)
+        && item.client_id === shipmentClientId
+      )
+      .map((item) => ({
+        id: item.location_id!,
+        name: item.location_name ?? item.location_id!,
+        sub: `доступно ${item.qty.toLocaleString('ru-RU')} шт`,
+      }))
   }
 
   function setDraftQty(lineId: string, value: number) {
     setDrafts((prev) => ({
       ...prev,
-      [lineId]: { qty: Math.max(1, Number.isFinite(value) ? value : 1) },
+      [lineId]: { ...prev[lineId], qty: Math.max(1, Number.isFinite(value) ? value : 1) },
     }))
   }
 
-  const hasOverflow = editableLines.some((line) => getDraft(line).qty > line.available)
-  const hasUnsavedLineChanges = editableLines.some((line) => getDraft(line).qty !== line.qty)
+  function setDraftShippedQty(lineId: string, value: number) {
+    setDrafts((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], shippedQty: Math.max(0, Number.isFinite(value) ? value : 0) },
+    }))
+  }
+
+  function setDraftZone(lineId: string, zoneId: string, zoneName: string | null) {
+    setDrafts((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], zoneId, zoneName },
+    }))
+  }
+
+  const hasUnsavedLineChanges = editableLines.some((line) => {
+    const d = getDraft(line)
+    return d.qty !== line.qty
+      || d.shippedQty !== line.shipped_qty
+      || d.zoneId !== (line.storage_zone_id ?? '')
+      || d.zoneName !== (line.storage_zone_name ?? null)
+  })
 
   const advanceChecks = [
     {
@@ -229,12 +274,16 @@ export function InventoryShipmentDetailPage() {
       error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
     },
     {
-      ok: !hasOverflow,
-      error: 'Уменьшите количество в строках, где запрошено больше доступного остатка',
+      ok: doc?.lines.every((line) => getDraft(line).shippedQty <= getDraft(line).qty) ?? false,
+      error: 'Отгруженное количество не должно превышать план',
     },
     {
-      ok: !hasUnsavedLineChanges,
-      error: 'Сохраните изменения в строках отгрузки перед началом сборки',
+      ok: shipmentCargoType !== 'good' || (doc?.lines.every((line) => !getDraft(line).shippedQty || getDraft(line).zoneId) ?? false),
+      error: 'Выберите место хранения для каждой отгружаемой строки',
+    },
+    {
+      ok: shipmentCargoType !== 'good' || (doc?.lines.every((line) => getDraft(line).shippedQty <= getDraftAvailable(line)) ?? false),
+      error: 'В выбранной зоне недостаточно товара для отгрузки',
     },
   ]
   const advanceBlockReasons = status === 'draft' || status === 'packing'
@@ -244,21 +293,22 @@ export function InventoryShipmentDetailPage() {
   async function refreshAfterLineChange() {
     await load()
     await loadBalances()
-    await loadZoneBalances()
   }
 
-  async function handleAddLine(item: BalanceItem, qty: number) {
+  async function handleAddLine(item: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
     if (!docId) return
     await act(async () => {
       await addShipmentLine(docId, {
-        product_id: item.product_id,
-        product_name: item.product_name,
-        product_sku: item.product_sku,
-        color_id: item.color_id,
-        color_name: item.color_name,
-        size_id: item.size_id,
-        size_name: item.size_name,
+        product_id:        item.product_id,
+        product_name:      item.product_name,
+        product_sku:       item.product_sku,
+        color_id:          item.color_id,
+        color_name:        item.color_name,
+        size_id:           item.size_id,
+        size_name:         item.size_name,
         qty,
+        storage_zone_id:   zoneId,
+        storage_zone_name: zoneName,
       })
       await refreshAfterLineChange()
       setShowPicker(false)
@@ -271,20 +321,35 @@ export function InventoryShipmentDetailPage() {
     setSaving((prev) => ({ ...prev, [line.id]: true }))
     try {
       await updateShipmentLine(docId, line.id, {
-        product_id: line.product_id,
-        product_name: line.product_name,
-        product_sku: line.product_sku,
-        color_id: line.color_id,
-        color_name: line.color_name,
-        size_id: line.size_id,
-        size_name: line.size_name,
-        qty: draft.qty,
+        product_id:        line.product_id,
+        product_name:      line.product_name,
+        product_sku:       line.product_sku,
+        color_id:          line.color_id,
+        color_name:        line.color_name,
+        size_id:           line.size_id,
+        size_name:         line.size_name,
+        qty:               draft.qty,
+        shipped_qty:       draft.shippedQty,
+        storage_zone_id:   draft.zoneId || null,
+        storage_zone_name: draft.zoneName,
       })
       await refreshAfterLineChange()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка')
     } finally {
       setSaving((prev) => ({ ...prev, [line.id]: false }))
+    }
+  }
+
+  async function handleSaveAllLines() {
+    if (!docId) return
+    const changed = editableLines.filter((line) => {
+      const d = getDraft(line)
+      return d.qty !== line.qty || d.shippedQty !== line.shipped_qty
+        || d.zoneId !== (line.storage_zone_id ?? '') || d.zoneName !== (line.storage_zone_name ?? null)
+    })
+    for (const line of changed) {
+      await handleSaveQty(line)
     }
   }
 
@@ -309,7 +374,18 @@ export function InventoryShipmentDetailPage() {
       return
     }
     setShowBlockReasons(false)
-    void act(() => advanceShipment(docId!))
+    void act(async () => {
+      if (hasUnsavedLineChanges) await handleSaveAllLines()
+      const res = await advanceShipment(docId!)
+      const nextStatus = res.message as ShipmentStatus
+      setDoc((prev) => prev
+        ? {
+            ...prev,
+            status: nextStatus,
+            status_label: SHIPMENT_STATUS_LABELS[nextStatus],
+          }
+        : prev)
+    })
   }
 
   async function handleCancel() {
@@ -321,46 +397,6 @@ export function InventoryShipmentDetailPage() {
     })
     if (!ok) return
     await act(() => cancelShipment(docId!), '/inventory/shipments')
-  }
-
-  const allLinesAllocated =
-    doc?.cargo_type !== 'good' ||
-    (doc?.lines ?? []).every((line) => line.zones.reduce((s, z) => s + z.qty, 0) === line.qty)
-
-  const shipChecks = [
-    { ok: !!infoClientId,        error: 'Укажите клиента' },
-    { ok: !!infoDestinationName, error: 'Укажите назначение' },
-    { ok: !!infoShipDate,        error: 'Укажите дату отгрузки' },
-    { ok: !(infoShipDate && infoShipDate > today), error: 'Дата отгрузки не может быть в будущем' },
-    { ok: !!infoCarrierName,     error: 'Укажите перевозчика' },
-    { ok: !!infoLogisticsCost,   error: 'Укажите стоимость логистики' },
-    { ok: !hasOverflow,          error: 'Количество товара в некоторых строках превышает доступный остаток' },
-    { ok: allLinesAllocated,     error: 'Распределите все строки по зонам хранения' },
-  ]
-  const shipBlockReasons = shipChecks.filter((c) => !c.ok).map((c) => c.error)
-
-  async function handleShipClick() {
-    if (shipBlockReasons.length > 0) {
-      setShowBlockReasons(true)
-      return
-    }
-    setShowBlockReasons(false)
-    await act(async () => {
-      const changed =
-        infoCarrierName !== (doc?.carrier ?? '') ||
-        infoShipDate    !== (doc?.ship_date ?? '') ||
-        infoDestinationName !== (doc?.destination ?? '') ||
-        (infoLogisticsCost ? parseFloat(infoLogisticsCost) : null) !== doc?.logistics_cost
-      if (changed) {
-        await updateShipment(docId!, {
-          carrier:        infoCarrierName || null,
-          ship_date:      infoShipDate || null,
-          destination:    infoDestinationName || null,
-          logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null,
-        })
-      }
-      await advanceShipment(docId!)
-    })
   }
 
   if (loading) {
@@ -405,9 +441,9 @@ export function InventoryShipmentDetailPage() {
               <Icon name="layers" size={14} />Журнал
               {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
             </button>
-            {isEditable && infoDirty && (
-              <button className="btn" disabled={infoSaving || acting} onClick={() => { void handleInfoSave() }}>
-                <Icon name="save" size={14} />Сохранить изменения
+            {canEditShipped && infoDirty && (
+              <button className="btn ghost" disabled={infoSaving || acting} onClick={() => { void handleInfoSave() }}>
+                <Icon name="save" size={14} />Сохранить реквизиты
               </button>
             )}
             {status === 'draft' && (
@@ -420,25 +456,25 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="arrowRight" size={14} />Запланировать
               </button>
             )}
-            {status === 'packing' && (
+            {isPlanned && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
             )}
-            {status === 'packing' && (
-              <button className="btn primary" disabled={acting} onClick={handleAdvanceClick}>
-                <Icon name="check" size={14} />Начать сборку
+            {isPlanned && canEditShipped && hasUnsavedLineChanges && (
+              <button className="btn" disabled={acting} onClick={() => { void handleSaveAllLines() }}>
+                <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            {status === 'ready' && (
-              <button className="btn primary" disabled={acting} onClick={handleShipClick}>
-                <Icon name="arrowRight" size={14} />Отправить
+            {isPlanned && (
+              <button className="btn primary" disabled={acting} onClick={handleAdvanceClick}>
+                <Icon name="arrowRight" size={14} />Отгрузить
               </button>
             )}
           </div>
-          {showBlockReasons && (advanceBlockReasons.length > 0 || shipBlockReasons.length > 0) && (
+          {showBlockReasons && advanceBlockReasons.length > 0 && (
             <div className="block-reasons">
-              {(isReady ? shipBlockReasons : advanceBlockReasons).map((reason, index) => (
+              {advanceBlockReasons.map((reason, index) => (
                 <div key={index}>— {reason}</div>
               ))}
             </div>
@@ -447,12 +483,6 @@ export function InventoryShipmentDetailPage() {
       </div>
 
       <ShipmentStepper status={status!} ops={doc.ops} style={{ marginTop: -10 }} />
-
-      {hasOverflow && isEditable && (
-        <Alert tone="warning" style={{ marginBottom: 14 }}>
-          <span style={{ fontWeight: 500 }}>В некоторых строках указано больше, чем доступно по остатку.</span>
-        </Alert>
-      )}
 
       {error && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
@@ -464,13 +494,13 @@ export function InventoryShipmentDetailPage() {
             <div className="card-head">
               <Icon name="file" size={15} className="ic-accent" />
               <div className="card-head-title">Основная информация</div>
-              {isEditable && infoSaved && (
+              {canEditShipped && infoSaved && (
                 <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <Icon name="check" size={12} />Сохранено
                 </span>
               )}
             </div>
-            {isEditable ? (
+            {canEditShipped ? (
               <div className="card-body">
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
@@ -543,7 +573,7 @@ export function InventoryShipmentDetailPage() {
               {doc.lines.length > 0 && (
                 <span className="badge accent" style={{ marginLeft: 6 }}>{doc.lines.length}</span>
               )}
-              {isEditable && (
+              {canDelete && (
                 <div className="right">
                   <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={acting || !doc.client_id}>
                     <Icon name="plus" size={12} />Добавить товар
@@ -555,111 +585,25 @@ export function InventoryShipmentDetailPage() {
               <div style={{ padding: '32px 0' }}>
                 <EmptyState
                   title="Состав пуст"
-                  sub={isEditable ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
+                  sub={canDelete ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
                 />
               </div>
             ) : (
-              <table className="t">
-                <thead>
-                  <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · вариант</th>
-                    {isEditable && <th style={{ textAlign: 'right', width: 90 }}>Доступно</th>}
-                    <th style={{ textAlign: 'right', width: isEditable ? 160 : 90 }}>К отгрузке</th>
-                    {isEditable && <th style={{ width: 68 }} />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {editableLines.map((line, i) => {
-                    const draft = getDraft(line)
-                    const isSaving = saving[line.id] ?? false
-                    const hasDraftChange = draft.qty !== line.qty
-                    const over = isEditable && draft.qty > line.available
-                    const isGood = doc.cargo_type === 'good'
-                    const allocated = line.zones.reduce((s, z) => s + z.qty, 0)
-                    const zoneOk = line.zones.length > 0 && allocated === line.qty
-                    const expanded = expandedZones[line.id] ?? false
-                    return (
-                      <Fragment key={line.id}>
-                      <tr style={over ? { background: 'var(--c-warning-bg)' } : {}}>
-                        <td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></td>
-                        <td>
-                          <div style={{ fontWeight: 450 }}>{line.product_name}</div>
-                          <div className="t-sub mono">{[line.product_sku, line.color_name, line.size_name].filter(Boolean).join(' · ')}</div>
-                        </td>
-                        {isEditable && (
-                          <td className="num" style={{ color: 'var(--c-success)', fontWeight: 500 }}>{line.available}</td>
-                        )}
-                        <td className="num">
-                          {isEditable ? (
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
-                              <NumberStep value={draft.qty} onChange={(qty) => setDraftQty(line.id, qty)} disabled={acting || isSaving} />
-                              {over && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
-                            </div>
-                          ) : (
-                            <span className="mono" style={{ fontWeight: 600, fontSize: 14 }}>{line.qty}</span>
-                          )}
-                        </td>
-                        {isEditable && (
-                          <td>
-                            <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ width: 28, height: 28, visibility: hasDraftChange ? 'visible' : 'hidden', pointerEvents: hasDraftChange ? undefined : 'none' }}
-                                title="Сохранить количество"
-                                disabled={!hasDraftChange || acting || isSaving || over}
-                                onClick={() => { if (hasDraftChange) void handleSaveQty(line) }}
-                                aria-hidden={!hasDraftChange}
-                                tabIndex={hasDraftChange ? 0 : -1}
-                              >
-                                <Icon name="save" size={13} />
-                              </button>
-                              <button className="btn ghost icon sm" disabled={acting || isSaving} onClick={() => { void handleDeleteLine(line.id) }}>
-                                <Icon name="trash" size={13} />
-                              </button>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                      {isEditable && isGood && (
-                        <tr>
-                          <td colSpan={5} style={{ paddingTop: 0, paddingBottom: 0, background: 'var(--c-bg-sunken)' }}>
-                            <button
-                              className="btn ghost sm"
-                              style={{ color: zoneOk ? 'var(--c-success)' : 'var(--c-warning)' }}
-                              onClick={() => setExpandedZones((prev) => ({ ...prev, [line.id]: !expanded }))}
-                            >
-                              <Icon name={zoneOk ? 'check' : 'alert'} size={12} />
-                              {zoneOk
-                                ? `Зоны распределены (${line.zones.map((z) => `${z.storage_zone_name ?? 'без зоны'} · ${z.qty}`).join(', ')})`
-                                : `Распределите по зонам (${allocated} из ${line.qty})`}
-                              <Icon name="chev" size={12} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
-                            </button>
-                            {expanded && (
-                              <ZoneAllocationEditor
-                                docId={docId!}
-                                line={line}
-                                zoneOptions={storageZones.map((z) => ({ id: z.id, name: z.name }))}
-                                available={zoneAvail[balanceKey(line)] ?? {}}
-                                disabled={acting}
-                                onSaved={refreshAfterLineChange}
-                              />
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                      </Fragment>
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="sum">
-                    <td colSpan={isEditable ? 3 : 2}>Итого: {doc.lines.length} SKU</td>
-                    <td className="num">{doc.total_qty}</td>
-                    {isEditable && <td />}
-                  </tr>
-                </tfoot>
-              </table>
+              <ShipmentLinesTable
+                lines={editableLines}
+                cargoType={doc.cargo_type as ShipmentCargoType}
+                canEditShipped={canEditShipped}
+                canDelete={canDelete}
+                acting={acting}
+                saving={saving}
+                getDraft={getDraft}
+                getAvailable={getDraftAvailable}
+                getZoneOptions={getLineZoneOptions}
+                onQty={setDraftQty}
+                onShippedQty={setDraftShippedQty}
+                onZone={setDraftZone}
+                onDelete={handleDeleteLine}
+              />
             )}
           </div>
 
@@ -678,7 +622,6 @@ export function InventoryShipmentDetailPage() {
               <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{doc.total_qty}</span>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -712,12 +655,170 @@ export function InventoryShipmentDetailPage() {
         <BalancePicker
           clientId={doc.client_id}
           cargoType={doc.cargo_type as ShipmentCargoType}
-          selectedKeys={editableLines.map((line) => line._key)}
-          onAdd={(item, qty) => { void handleAddLine(item, qty) }}
+          onAdd={(item, qty, zoneId, zoneName) => { void handleAddLine(item, qty, zoneId, zoneName) }}
           onClose={() => setShowPicker(false)}
         />
       )}
 
     </div>
+  )
+}
+
+// --- ShipmentLinesTable ---
+
+const groupBorder = '1px solid var(--c-border)'
+const tintShipped = 'var(--c-bg-sunken)'
+
+type ShipmentLinesTableProps = {
+  lines:          EditableShipmentLine[]
+  cargoType:      ShipmentCargoType
+  canEditShipped: boolean
+  canDelete:      boolean
+  acting:         boolean
+  saving:         Record<string, boolean>
+  getDraft:       (line: ShipmentLine) => LineDraft
+  getAvailable:   (line: ShipmentLine) => number
+  getZoneOptions: (line: ShipmentLine) => ZoneChoice[]
+  onQty:          (lineId: string, v: number) => void
+  onShippedQty:   (lineId: string, v: number) => void
+  onZone:         (lineId: string, zoneId: string, zoneName: string | null) => void
+  onDelete:       (lineId: string) => void
+}
+
+function ShipmentLinesTable({
+  lines, cargoType, canEditShipped, canDelete,
+  acting, saving, getDraft, getAvailable, getZoneOptions, onQty, onShippedQty, onZone, onDelete,
+}: ShipmentLinesTableProps) {
+  const skuCount = new Set(lines.map((l) => l.product_sku)).size
+  const planTotal = lines.reduce((s, l) => s + l.qty, 0)
+  const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
+  const showZone = cargoType === 'good'
+  // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Действие
+  const colCount = 2 + (showZone ? 2 : 1) + (canDelete ? 1 : 0)
+
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <th rowSpan={2}>Товар</th>
+          <th rowSpan={2} style={{ width: 110, textAlign: 'right' }}>План</th>
+          <th
+            colSpan={showZone ? 2 : 1}
+            style={{ background: tintShipped, textAlign: 'center', borderLeft: groupBorder }}
+          >
+            Отгружено
+          </th>
+          {canDelete && <th rowSpan={2} style={{ width: 44 }}>Действия</th>}
+        </tr>
+        <tr>
+          <th style={{ width: 110, textAlign: 'right', background: tintShipped, borderLeft: groupBorder }}>
+            Кол-во
+          </th>
+          {showZone && (
+            <th style={{ width: 112, background: tintShipped }}>Из места</th>
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line) => {
+          const draft = getDraft(line)
+          const available = getAvailable(line)
+          const zoneOptions = getZoneOptions(line)
+          const overAvailable = canEditShipped && draft.shippedQty > available
+          const isSaving = saving[line.id] ?? false
+
+          return (
+            <tr key={line.id}>
+              <Td>
+                <LineIdentityCell
+                  name={line.product_name}
+                  sku={line.product_sku}
+                  color={line.color_name}
+                  size={line.size_name}
+                />
+                {canEditShipped && (
+                  <div className="t-sub" style={{ marginTop: 2, color: overAvailable ? 'var(--c-warning)' : 'var(--c-success)' }}>
+                    доступно {available}
+                  </div>
+                )}
+              </Td>
+              <Td className="num">
+                {canEditShipped ? (
+                  <NumberStep
+                    value={draft.qty}
+                    onChange={(v) => onQty(line.id, v)}
+                    disabled={acting || isSaving}
+                    width={100}
+                  />
+                ) : (
+                  <span className="mono" style={{ fontWeight: 500 }}>{line.qty}</span>
+                )}
+              </Td>
+              <Td className="num" style={{ background: tintShipped, borderLeft: groupBorder }}>
+                {canEditShipped ? (
+                  <NumberStep
+                    value={draft.shippedQty}
+                    onChange={(v) => onShippedQty(line.id, v)}
+                    min={0}
+                    warning={overAvailable}
+                    disabled={acting || isSaving}
+                    width={100}
+                  />
+                ) : (
+                  <span className="mono" style={{ fontWeight: 500 }}>{line.shipped_qty}</span>
+                )}
+              </Td>
+              {showZone && (
+                <Td style={{ background: tintShipped }}>
+                  <ZoneCell
+                    value={draft.zoneId}
+                    zones={zoneOptions}
+                    onChange={(zoneId) => {
+                      const z = zoneOptions.find((z) => z.id === zoneId)
+                      onZone(line.id, zoneId, z?.name ?? null)
+                    }}
+                    disabled={acting || isSaving || !canEditShipped}
+                    readonly={!canEditShipped}
+                    readonlyLabel={line.storage_zone_name}
+                  />
+                </Td>
+              )}
+              {canDelete && (
+                <Td>
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <button
+                      className="btn ghost icon sm"
+                      disabled={acting || isSaving}
+                      onClick={() => onDelete(line.id)}
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </div>
+                </Td>
+              )}
+            </tr>
+          )
+        })}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={colCount} style={{ padding: 0 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 24, padding: '10px 14px',
+              background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5,
+            }}>
+              <span style={{ fontWeight: 700 }}>Итого</span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>{skuCount} SKU</span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>
+                План <b className="mono" style={{ color: 'var(--c-text)' }}>{planTotal}</b>
+              </span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>
+                Отгружено <b className="mono" style={{ color: 'var(--c-text)' }}>{shippedTotal}</b>
+              </span>
+            </div>
+          </td>
+        </tr>
+      </tfoot>
+    </Table>
   )
 }

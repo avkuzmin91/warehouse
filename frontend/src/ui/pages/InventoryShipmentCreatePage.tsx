@@ -78,20 +78,21 @@ export function InventoryShipmentCreatePage() {
     setLines((ls) => ls.filter((l) => l._key !== key))
   }
 
-  function addFromBalance(b: BalanceItem, qty: number) {
+  function addFromBalance(b: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
     const key = balanceKey(b)
-    if (lines.find((l) => l._key === key)) return
     setLines((ls) => [...ls, {
-      _key:         key,
-      product_id:   b.product_id,
-      product_name: b.product_name,
-      product_sku:  b.product_sku,
-      color_id:     b.color_id,
-      color_name:   b.color_name,
-      size_id:      b.size_id,
-      size_name:    b.size_name,
+      _key:              key,
+      product_id:        b.product_id,
+      product_name:      b.product_name,
+      product_sku:       b.product_sku,
+      color_id:          b.color_id,
+      color_name:        b.color_name,
+      size_id:           b.size_id,
+      size_name:         b.size_name,
       qty,
-      available:    cargoType === 'defect' ? b.defect : b.good,
+      available:         cargoType === 'defect' ? b.defect : b.good,
+      storage_zone_id:   zoneId,
+      storage_zone_name: zoneName,
     }])
   }
 
@@ -108,14 +109,16 @@ export function InventoryShipmentCreatePage() {
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         ship_date:      shipDate || null,
         lines:          lines.map((line) => ({
-          product_id: line.product_id,
-          product_name: line.product_name,
-          product_sku: line.product_sku,
-          color_id: line.color_id,
-          color_name: line.color_name,
-          size_id: line.size_id,
-          size_name: line.size_name,
-          qty: line.qty,
+          product_id:        line.product_id,
+          product_name:      line.product_name,
+          product_sku:       line.product_sku,
+          color_id:          line.color_id,
+          color_name:        line.color_name,
+          size_id:           line.size_id,
+          size_name:         line.size_name,
+          qty:               line.qty,
+          storage_zone_id:   line.storage_zone_id ?? null,
+          storage_zone_name: line.storage_zone_name ?? null,
         })),
       })
       const docId = res.message
@@ -337,8 +340,7 @@ export function InventoryShipmentCreatePage() {
         <BalancePicker
           clientId={clientId}
           cargoType={cargoType}
-          selectedKeys={lines.map((l) => l._key)}
-          onAdd={(b, qty) => { addFromBalance(b, qty); setShowPicker(false) }}
+          onAdd={(b, qty, zoneId, zoneName) => { addFromBalance(b, qty, zoneId, zoneName); setShowPicker(false) }}
           onClose={() => setShowPicker(false)}
         />
       )}

@@ -13,10 +13,19 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
 
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
-    if (op.op_type === 'advance') advances.push(op.created_at)
+    if (op.op_type !== 'advance') continue
+
+    const comment = op.comment ?? ''
+    if (comment.includes('→ shipped') || comment.includes('-> shipped')) {
+      ts.shipped = op.created_at
+    } else if (comment.includes('→ packing') || comment.includes('-> packing')) {
+      ts.packing = op.created_at
+    } else {
+      advances.push(op.created_at)
+    }
   }
 
-  const advanceTargets: ShipmentStatus[] = ['packing', 'ready', 'shipped']
+  const advanceTargets: ShipmentStatus[] = ['packing', 'shipped']
   advances.forEach((at, i) => {
     const key = advanceTargets[i]
     if (key && !ts[key]) ts[key] = at
@@ -40,12 +49,13 @@ interface Props {
 export function ShipmentStepper({ status, ops = [], style }: Props) {
   const statusIdx = status === 'cancelled' ? 1 : SHIPMENT_STATUS_ORDER.indexOf(status)
   const timestamps = getStepTimestamps(ops)
+  const isShipped = status === 'shipped'
 
   return (
     <div className="stepper" style={{ marginBottom: 16, ...style }}>
       {SHIPMENT_STATUS_ORDER.map((s, i) => {
         let stepState: 'done' | 'active' | ''
-        if (status === 'shipped') {
+        if (isShipped) {
           stepState = 'done'
         } else {
           stepState = i < statusIdx ? 'done' : i === statusIdx ? 'active' : ''

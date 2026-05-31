@@ -27,31 +27,28 @@ import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hook
 
 const PAGE_SIZE = 25
 
-type TabId = 'all' | 'active' | 'overdue' | 'done' | 'planned'
+type TabId = 'all' | 'overdue' | 'done' | 'planned'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'all',     label: 'Все' },
-  { id: 'active',  label: 'В работе' },
   { id: 'overdue', label: 'Просрочка' },
   { id: 'done',    label: 'Завершённые' },
   { id: 'planned', label: 'В плане' },
 ]
 
 const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
-  active:  'ready',
   planned: 'packing',
 }
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
+  { status: 'draft',   label: 'Создание',  tone: '' },
   { status: 'packing', label: 'В плане',   tone: 'info' },
-  { status: 'ready',   label: 'На сборке', tone: 'accent' },
   { status: 'shipped', label: 'Завершён',  tone: 'success' },
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
   draft:   'В план',
-  packing: 'Начать сборку',
-  ready:   'Завершить',
+  packing: 'Отгрузить',
 }
 
 export function InventoryShipmentsListPage() {
@@ -87,7 +84,7 @@ export function InventoryShipmentsListPage() {
     }, signal),
     [clientId, search, skuFilter, dateFrom, dateTo, reloadTick],
   )
-  const summary: ShipmentsSummary = summaryData ?? { all: 0, active: 0, done: 0, packing: 0, ready: 0, overdue: 0 }
+  const summary: ShipmentsSummary = summaryData ?? { all: 0, done: 0, packing: 0, overdue: 0 }
 
   useEffect(() => {
     if (view !== 'table') return
@@ -144,7 +141,6 @@ export function InventoryShipmentsListPage() {
 
   function tabCount(id: TabId): number {
     if (id === 'all')     return summary.all
-    if (id === 'active')  return summary.active
     if (id === 'overdue') return summary.overdue
     if (id === 'done')    return summary.done
     if (id === 'planned') return summary.packing
@@ -232,7 +228,8 @@ export function InventoryShipmentsListPage() {
             value={statusFilter}
             options={[
               { value: '', label: 'Все статусы' },
-              ...SHIPMENT_STATUS_ORDER.map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
+              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
+                .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}
           />

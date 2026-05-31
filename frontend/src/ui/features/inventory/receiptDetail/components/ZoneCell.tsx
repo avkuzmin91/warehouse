@@ -1,9 +1,9 @@
-import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
+import type { ComboboxOption } from '../../../../data/Combobox'
 
 type Props = {
   value: string
-  zones: DictionaryItem[]
+  zones: { id: string; name: string; sub?: string }[]
   onChange: (zoneId: string) => void
   disabled?: boolean
   /** Только чтение — показываем имя зоны текстом (done). */
@@ -20,7 +20,7 @@ export function ZoneCell({ value, zones, onChange, disabled, readonly, readonlyL
       <Combobox
         value={value}
         placeholder="Выберите"
-        options={zones.map((z) => ({ value: z.id, label: z.name }))}
+        options={zones.map((z): ComboboxOption => ({ value: z.id, label: z.name, sub: z.sub }))}
         onChange={(v) => onChange(String(v ?? ''))}
         disabled={disabled || zones.length === 0}
         clearable

@@ -101,9 +101,9 @@ export function ByProductView() {
 
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <KPI label="Всего единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} unit="шт" />
+        <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
+        <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
+        <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
       </div>
 
       <Table>
