@@ -46,6 +46,10 @@ def _ensure_runtime_schema() -> None:
             ALTER TABLE IF EXISTS receipt_docs
                 ADD COLUMN IF NOT EXISTS comment TEXT
         """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS colors
+                ADD COLUMN IF NOT EXISTS color_hex TEXT
+        """)
         conn.commit()
 
 

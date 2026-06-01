@@ -130,7 +130,7 @@ export function getSimpleDictionaryById(apiPath: string, id: string) {
 
 export function createSimpleDictionaryItem(
   apiPath: string,
-  payload: { name: string; is_active: boolean },
+  payload: { name: string; is_active: boolean; color_hex?: string | null },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(path, {
@@ -142,7 +142,7 @@ export function createSimpleDictionaryItem(
 export function updateSimpleDictionaryItem(
   apiPath: string,
   id: string,
-  payload: { name?: string; is_active?: boolean },
+  payload: { name?: string; is_active?: boolean; color_hex?: string | null },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(`${path}/${id}`, {
