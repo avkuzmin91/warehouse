@@ -6,7 +6,20 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from psycopg.errors import IntegrityConstraintViolation
 
-from config import UPLOADS_DIR, MAX_UPLOAD_BYTES, PRODUCT_LIST_SORT_COLUMNS
+from config import (
+    PRODUCT_LIST_SORT_COLUMNS,
+    RECEIPT_OP_DEFECT_CORRECTION,
+    RECEIPT_OP_DEFECT_FIX,
+    RECEIPT_OP_RECEIVING,
+    RECEIPT_OP_RECEIVING_CORRECTION,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_ON_REVIEW,
+    SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
+    SHIPMENT_STATUS_SHIPPED,
+    UPLOADS_DIR,
+    MAX_UPLOAD_BYTES,
+)
 from dbconn import get_connection
 from modules.auth.service import get_current_admin, get_current_manager
 
@@ -383,38 +396,53 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
                 SELECT l.product_id, l.color_id, l.size_id,
                        SUM(COALESCE((
                            SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction' ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
+                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ? ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ?)
                            )
                        ), 0)) AS good_in,
                        SUM(COALESCE((
                            SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction' ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
+                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ? ORDER BY o2.created_at DESC LIMIT 1),
+                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ?)
                            )
                        ), 0)) AS defect_in
                 FROM receipt_lines l
                 JOIN receipt_docs d ON d.id = l.doc_id
                 WHERE l.product_id = ? AND l.is_deleted = 0
-                  AND d.is_deleted = 0 AND d.status IN ('done', 'on_review')
+                  AND d.is_deleted = 0 AND d.status IN (?, ?)
                 GROUP BY l.product_id, l.color_id, l.size_id
             ) b ON b.product_id = v.product_id AND b.color_id IS NOT DISTINCT FROM v.color_id AND b.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
-                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_good
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_good
                 FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'good'
+                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = ? AND sd.cargo_type = ?
                 GROUP BY sl.product_id, sl.color_id, sl.size_id
             ) sg ON sg.product_id = v.product_id AND sg.color_id IS NOT DISTINCT FROM v.color_id AND sg.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
-                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(sl.qty) AS shipped_defect
+                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_defect
                 FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = 'shipped' AND sd.cargo_type = 'defect'
+                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = ? AND sd.cargo_type = ?
                 GROUP BY sl.product_id, sl.color_id, sl.size_id
             ) sd ON sd.product_id = v.product_id AND sd.color_id IS NOT DISTINCT FROM v.color_id AND sd.size_id IS NOT DISTINCT FROM v.size_id
             WHERE v.product_id = ? AND COALESCE(v.is_deleted, 0) = 0
             ORDER BY LOWER(v.sku) ASC
             """,
-            (item_id, item_id, item_id, item_id),
+            (
+                RECEIPT_OP_RECEIVING_CORRECTION,
+                RECEIPT_OP_RECEIVING,
+                RECEIPT_OP_DEFECT_CORRECTION,
+                RECEIPT_OP_DEFECT_FIX,
+                item_id,
+                RECEIPT_STATUS_DONE,
+                RECEIPT_STATUS_ON_REVIEW,
+                item_id,
+                SHIPMENT_STATUS_SHIPPED,
+                SHIPMENT_CARGO_GOOD,
+                item_id,
+                SHIPMENT_STATUS_SHIPPED,
+                SHIPMENT_CARGO_DEFECT,
+                item_id,
+            ),
         ).fetchall()
     return [
         ProductVariantItem(
