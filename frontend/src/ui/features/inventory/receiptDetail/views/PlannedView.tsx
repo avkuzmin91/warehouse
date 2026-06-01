@@ -172,12 +172,6 @@ export function PlannedView({
     return line !== undefined && accepted[id] !== acceptedBaseline(line)
   })
   const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage || hasPendingAccepted
-  const pendingLinesCount = lines.filter((line) => {
-    const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
-    const storageDirty = pendingStorage[line.id] !== undefined && pendingStorage[line.id] !== (line.storage_zone_id ?? '')
-    const acceptedDirty = accepted[line.id] !== undefined && accepted[line.id] !== acceptedBaseline(line)
-    return qtyDirty || storageDirty || acceptedDirty
-  }).length
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
