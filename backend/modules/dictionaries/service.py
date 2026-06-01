@@ -48,6 +48,18 @@ def _normalize_name(name: str) -> str:
     return normalized
 
 
+def _normalize_color_hex(value: str | None) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    raw = s[1:] if s.startswith("#") else s
+    if len(raw) not in (3, 6) or any(ch not in "0123456789abcdefABCDEF" for ch in raw):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hex цвета должен быть в формате #RGB или #RRGGBB")
+    return f"#{raw.lower()}"
+
+
 def _fold_ci_str(x: object) -> str:
     if x is None:
         return ""
@@ -105,6 +117,7 @@ def _dict_row_to_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
     return DictionaryBaseItem(
         id=row["id"],
         name=row["name"],
+        color_hex=row.get("color_hex"),
         is_active=bool(row["is_active"]),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
@@ -152,10 +165,12 @@ def _product_type_row_to_item(row: Mapping[str, Any]) -> ProductTypeDictionaryIt
 
 def get_dictionary_item(table_name: str, item_id: str, *, include_deleted: bool = False) -> DictionaryBaseItem:
     _ensure_dictionary_table(table_name)
+    color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
     with get_connection() as connection:
         row = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+                   {color_hex_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             FROM {table_name} d
@@ -177,12 +192,19 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
     _ensure_dictionary_table(table_name)
     item_id = str(uuid4())
     name = _normalize_name(payload.name)
+    color_hex = _normalize_color_hex(payload.color_hex) if table_name == "colors" else None
     with get_connection() as connection:
         try:
-            connection.execute(
-                f"INSERT INTO {table_name} (id, name, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?)",
-                (item_id, name, 1 if payload.is_active else 0, _now(), creator_id),
-            )
+            if table_name == "colors":
+                connection.execute(
+                    "INSERT INTO colors (id, name, color_hex, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (item_id, name, color_hex, 1 if payload.is_active else 0, _now(), creator_id),
+                )
+            else:
+                connection.execute(
+                    f"INSERT INTO {table_name} (id, name, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?)",
+                    (item_id, name, 1 if payload.is_active else 0, _now(), creator_id),
+                )
             connection.commit()
         except IntegrityConstraintViolation as exc:
             raise HTTPException(
@@ -224,6 +246,9 @@ def update_dictionary_item(
         if payload.name is not None:
             fields.append("name = ?")
             values.append(_normalize_name(payload.name))
+        if table_name == "colors" and "color_hex" in payload.model_fields_set:
+            fields.append("color_hex = ?")
+            values.append(_normalize_color_hex(payload.color_hex))
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
@@ -270,6 +295,7 @@ def list_dictionary_items_page(
     include_deleted: bool = False,
 ) -> DictionaryListResponse:
     _ensure_dictionary_table(table_name)
+    color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
@@ -301,6 +327,7 @@ def list_dictionary_items_page(
         rows = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+                   {color_hex_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             FROM {table_name} d

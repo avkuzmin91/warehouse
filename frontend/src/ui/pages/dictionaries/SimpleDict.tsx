@@ -28,6 +28,17 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString('ru', { day: 'numeric', month: 'short' })
 }
 
+function normalizeColorHex(value: string | null | undefined): string | null {
+  const s = String(value ?? '').trim()
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) return s
+  if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) return `#${s}`
+  return null
+}
+
+function itemColorHex(item: AnyDictItem): string | null {
+  return 'color_hex' in item ? normalizeColorHex(item.color_hex) : null
+}
+
 export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }: SimpleDictProps) {
   const [items, setItems] = useState<AnyDictItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,7 +149,23 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   {/* TODO: реализовать массовые действия */}
                   <Checkbox checked={false} onChange={() => {}} />
                 </td>
-                <td style={{ fontWeight: 450 }}>{item.name}</td>
+                <td style={{ fontWeight: 450 }}>
+                  {typeId === 'colors' ? (
+                    <div className="row gap-8">
+                      <span
+                        style={{
+                          width: 18,
+                          height: 18,
+                          borderRadius: 5,
+                          background: itemColorHex(item) ?? 'var(--c-bg-sunken)',
+                          border: '1px solid var(--c-border)',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span>{item.name}</span>
+                    </div>
+                  ) : item.name}
+                </td>
                 <td className="text-sm muted">{formatDate(item.created_at)}</td>
                 <td>
                   <div className="row gap-8">

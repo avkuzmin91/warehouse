@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class DictionaryBaseItem(BaseModel):
     id: str
     name: str
+    color_hex: str | None = None
     is_active: bool
     is_deleted: bool = False
     deleted_at: str | None = None
@@ -23,11 +24,13 @@ class ProductTypeDictionaryItem(DictionaryBaseItem):
 
 class DictionaryCreateRequest(BaseModel):
     name: str = Field(min_length=1)
+    color_hex: str | None = None
     is_active: bool = False
 
 
 class DictionaryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
+    color_hex: str | None = None
     is_active: bool | None = None
     is_deleted: bool | None = None
 

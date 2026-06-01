@@ -15,6 +15,15 @@ import { Icon } from '../../primitives/Icon'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
+const DEFAULT_COLOR_HEX = '#1a1a18'
+
+function normalizeColorHex(value: string): string | null {
+  const s = value.trim()
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) return s
+  if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) return `#${s}`
+  return null
+}
+
 const SIMPLE_API_PATHS: Record<string, string> = {
   colors: '/colors',
   suppliers: '/suppliers',
@@ -39,6 +48,7 @@ interface SimpleDictSheetProps {
 
 export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, initial }: SimpleDictSheetProps) {
   const [name, setName] = useState('')
+  const [colorHex, setColorHex] = useState(DEFAULT_COLOR_HEX)
   const [active, setActive] = useState(true)
   const [reqColor, setReqColor] = useState(false)
   const [reqSize, setReqSize] = useState(false)
@@ -48,6 +58,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
   useEffect(() => {
     if (!open) return
     setName(initial?.name ?? '')
+    const initialColorHex = initial && 'color_hex' in initial ? initial.color_hex : null
+    setColorHex(apiType === 'colors' ? normalizeColorHex(initialColorHex ?? initial?.name ?? '') ?? DEFAULT_COLOR_HEX : DEFAULT_COLOR_HEX)
     setActive(initial?.is_active ?? true)
     setError(null)
     if (apiType === 'product-types' && initial) {
@@ -62,6 +74,11 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Введите значение'); return }
+    if (apiType === 'colors' && colorHex.trim() && !normalizeColorHex(colorHex)) {
+      setError('Hex цвета должен быть в формате #RGB или #RRGGBB')
+      return
+    }
+    const colorPayload = apiType === 'colors' ? { color_hex: normalizeColorHex(colorHex) } : {}
     setSaving(true)
     setError(null)
     try {
@@ -72,7 +89,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           await createSize({ name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active })
+          await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active, ...colorPayload })
         }
       } else if (initial) {
         if (apiType === 'product-types') {
@@ -81,7 +98,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           await updateSize(initial.id, { name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active })
+          await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active, ...colorPayload })
         }
       }
       onSaved()
@@ -97,6 +114,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     kind === 'Размер' ? '44' :
     kind === 'Цвет' ? 'Бирюзовый' :
     kind === 'Тип товара' ? 'Футболка' : 'Новое значение'
+
+  const swatchColor = normalizeColorHex(colorHex) ?? DEFAULT_COLOR_HEX
 
   return (
     <Drawer
@@ -136,8 +155,13 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
       {kind === 'Цвет' && (
         <Field label="Hex / визуальное обозначение">
           <div className="row gap-8">
-            <div style={{ width: 30, height: 30, borderRadius: 6, background: '#1a1a18', border: '1px solid var(--c-border)', flexShrink: 0 }} />
-            <Input className="mono" placeholder="#1a1a18" defaultValue="#1a1a18" />
+            <div style={{ width: 30, height: 30, borderRadius: 6, background: swatchColor, border: '1px solid var(--c-border)', flexShrink: 0 }} />
+            <Input
+              className="mono"
+              placeholder="#1a1a18"
+              value={colorHex}
+              onChange={(e) => setColorHex(e.target.value)}
+            />
           </div>
         </Field>
       )}
