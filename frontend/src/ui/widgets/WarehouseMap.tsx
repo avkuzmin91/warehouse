@@ -15,7 +15,7 @@ function buildCells(cols: number, rows: number) {
       const seed = Math.sin((r + 1) * 7 + (c + 1) * 11) * 10000
       const value = seed - Math.floor(seed)
 
-      let fill: 'empty' | 'low' | 'med' | 'high' | 'overflow' = 'empty'
+      let fill: 'empty' | 'low' | 'med' | 'high' | 'overflow'
       if (value < 0.08) fill = 'empty'
       else if (value < 0.35) fill = 'low'
       else if (value < 0.7) fill = 'med'

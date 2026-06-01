@@ -4,17 +4,18 @@ import { Sparkline } from './Sparkline'
 interface KPIProps {
   label: string
   value: string | number
+  valueColor?: string
   delta?: string
   deltaDir?: 'up' | 'down'
   spark?: number[]
   unit?: string
 }
 
-export function KPI({ label, value, delta, deltaDir = 'up', spark, unit }: KPIProps) {
+export function KPI({ label, value, valueColor, delta, deltaDir = 'up', spark, unit }: KPIProps) {
   return (
     <div className="kpi">
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">
+      <div className="kpi-value" style={valueColor ? { color: valueColor } : undefined}>
         {value}
         {unit && (
           <span style={{ fontSize: 13, color: 'var(--c-text-subtle)', fontWeight: 500, marginLeft: 4 }}>

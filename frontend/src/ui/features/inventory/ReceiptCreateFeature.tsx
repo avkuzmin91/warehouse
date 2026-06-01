@@ -3,13 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import {
   createReceipt,
   advanceReceiptStatus,
-  arriveReceipt,
 } from '../../../api/receiptsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
-  getInventoryClients,
-  getInventorySuppliers,
-  getInventoryUnloadingZones,
   getInventoryProducts,
   getInventoryColorsForProductSku,
   getInventorySizesForProductSkuAndColor,
@@ -25,7 +21,8 @@ import { Select } from '../../primitives/Select'
 import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
-import { useApi } from '../../../hooks/useApi'
+import { useLookups } from '../../../hooks/useLookups'
+import { NumberStep } from './shared/NumberStep'
 import { ReceiptStepper } from './ReceiptStepper'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -40,8 +37,6 @@ export function ReceiptCreateFeature() {
   const [clientId, setClientId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
-  const [ttn, setTtn] = useState('')
-  const [zoneId, setZoneId] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [saving, setSaving] = useState(false)
@@ -49,14 +44,9 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = (clientsData ?? []).filter((c) => c.is_active && !c.is_deleted)
-
-  const { data: suppliersData } = useApi((signal) => getInventorySuppliers(signal), [])
-  const suppliers: DictionaryItem[] = (suppliersData ?? []).filter((s) => s.is_active && !s.is_deleted)
-
-  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
-  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
+  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
+  const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
+  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
@@ -70,29 +60,21 @@ export function ReceiptCreateFeature() {
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
-  async function handleSave(mode: 'plan' | 'arrive') {
+  async function handleSave() {
     if (!clientId) { setError('Укажите клиента'); return }
     setError('')
     setSaving(true)
     try {
-      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
       const res = await createReceipt({
         client_id: clientId,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
-        ttn: ttn.trim() || null,
-        zone_id: zoneId || null,
-        zone_name: selectedZone?.name ?? null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message
-      if (mode === 'plan') {
-        await advanceReceiptStatus(docId)
-      } else {
-        await arriveReceipt(docId)
-      }
+      await advanceReceiptStatus(docId)
       navigate(`/inventory/receipts/${docId}`)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -115,21 +97,21 @@ export function ReceiptCreateFeature() {
 
       backTo="/inventory/receipts"
       actions={
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div className="detail-actions">
+          <div className="detail-actions-row">
             <button className="btn" onClick={() => navigate('/inventory/receipts')} disabled={saving}>
               Отмена
             </button>
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave('plan') } }}
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave() } }}
               disabled={saving}
             >
               <Icon name="check" size={14} />Запланировать поступление
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+            <div className="block-reasons">
               {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
             </div>
           )}
@@ -142,17 +124,17 @@ export function ReceiptCreateFeature() {
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+      <div className="split-300">
         {/* Левая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           {/* Основная информация */}
           <Card>
             <CardHead>
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="file" size={15} className="ic-accent" />
               <span className="card-head-title">Основная информация</span>
             </CardHead>
             <CardBody>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
@@ -161,7 +143,6 @@ export function ReceiptCreateFeature() {
                     value={clientId}
                     placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    prefix="user"
                     onChange={(v) => setClientId(String(v ?? ''))}
                     disabled={lines.length > 0}
                   />
@@ -174,17 +155,17 @@ export function ReceiptCreateFeature() {
                 <div>
                   <label className="field-label">
                     <span>Поставщик</span>
+                    <span className="text-xs faint">не обязательно</span>
                   </label>
                   <Combobox
                     value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Выберите поставщика"
+                    placeholder="Поиск поставщика…"
                     options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
                     onChange={(v) => {
                       const found = suppliers.find((s) => s.id === String(v ?? ''))
                       setSupplierName(found?.name ?? '')
                     }}
                     clearable
-                    prefix="user"
                   />
                 </div>
                 <div>
@@ -192,30 +173,6 @@ export function ReceiptCreateFeature() {
                     <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={setArrivalDate} />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Номер ТТН</span>
-                  </label>
-                  <input
-                    className="input"
-                    placeholder="TTN-00001"
-                    value={ttn}
-                    onChange={(e) => setTtn(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Зона разгрузки</span>
-                  </label>
-                  <Combobox
-                    value={zoneId}
-                    placeholder="Выберите зону…"
-                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
-                    prefix="map"
-                    onChange={(v) => setZoneId(String(v ?? ''))}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">
@@ -237,10 +194,10 @@ export function ReceiptCreateFeature() {
           {/* Товары */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="boxes" size={15} className="ic-accent" />
               <span className="card-head-title">Товары</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <button
                 className="btn sm primary"
                 onClick={() => setShowAddLine(true)}
@@ -261,65 +218,51 @@ export function ReceiptCreateFeature() {
               <Table>
                 <thead>
                   <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · SKU</th>
-                    <th style={{ width: 110 }}>Цвет</th>
-                    <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 148 }}>План, шт</th>
-                    <th style={{ width: 32 }} />
+                    <th>Товар</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>План</th>
+                    <th style={{ width: 56 }}>Действие</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, i) => (
+                  {lines.map((l) => (
                     <tr key={l._id}>
-                      <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
                       <Td>
                         <div style={{ fontWeight: 450 }}>{l.product_name}</div>
-                        <div className="t-sub mono">{l.product_sku}</div>
-                      </Td>
-                      <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                      <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                      <Td>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
-                          <button
-                            className="btn ghost icon sm"
-                            style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                            onClick={() => handleUpdateQty(l._id, Math.max(1, l.planned_qty - 1))}
-                          >
-                            <Icon name="minus" size={10} />
-                          </button>
-                          <input
-                            inputMode="numeric"
-                            value={l.planned_qty}
-                            onChange={(e) => handleUpdateQty(l._id, Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
-                            style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
-                          />
-                          <button
-                            className="btn ghost icon sm"
-                            style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                            onClick={() => handleUpdateQty(l._id, l.planned_qty + 1)}
-                          >
-                            <Icon name="plus" size={10} />
-                          </button>
+                        <div className="t-sub mono">
+                          {[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}
                         </div>
                       </Td>
+                      <Td className="num" style={{ color: 'var(--c-text-muted)' }}>
+                        <NumberStep
+                          value={l.planned_qty}
+                          onChange={(v) => handleUpdateQty(l._id, Math.max(1, v))}
+                          width={100}
+                        />
+                      </Td>
                       <Td>
-                        <button className="btn ghost icon sm" onClick={() => handleRemoveLine(l._id)}>
-                          <Icon name="trash" size={13} />
-                        </button>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                          <button className="btn ghost icon sm" onClick={() => handleRemoveLine(l._id)}>
+                            <Icon name="trash" size={13} />
+                          </button>
+                        </div>
                       </Td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
-                      Итого: {totalSku} SKU
+                  <tr>
+                    <td colSpan={3} style={{ padding: 0 }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 24, padding: '10px 14px',
+                        background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5,
+                      }}>
+                        <span style={{ fontWeight: 700 }}>Итого</span>
+                        <span style={{ color: 'var(--c-text-subtle)' }}>{totalSku} SKU</span>
+                        <span style={{ color: 'var(--c-text-subtle)' }}>
+                          План <b className="mono" style={{ color: 'var(--c-text)' }}>{totalQty}</b>
+                        </span>
+                      </div>
                     </td>
-                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>
-                      {totalQty}
-                    </td>
-                    <td />
                   </tr>
                 </tfoot>
               </Table>
@@ -329,33 +272,24 @@ export function ReceiptCreateFeature() {
         </div>
 
         {/* Правая колонка: чеклист + превью операций + итого */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
           {/* Готовность */}
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {readyChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      background: 'var(--c-success-bg)', color: 'var(--c-success)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      flexShrink: 0,
-                    }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      border: '1.5px dashed var(--c-text-faint)',
-                      flexShrink: 0,
-                    }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.label}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
                 </div>
               ))}
             </div>
@@ -364,14 +298,14 @@ export function ReceiptCreateFeature() {
           {/* Предпросмотр операций */}
           <Card>
             <CardHead>
-              <Icon name="layers" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="layers" size={15} className="ic-accent" />
               <span className="card-head-title">Будут зафиксированы</span>
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+              <span className="right text-xs subtle">
                 {1 + lines.length} опер.
               </span>
             </CardHead>
             <div style={{ padding: '4px 0 8px' }}>
-              <OpPreviewItem icon="plus" tone="accent" title="Создание документа" sub="черновик · клиент, дата, ТТН, зона" />
+              <OpPreviewItem icon="plus" tone="accent" title="Создание документа" sub="черновик · клиент, дата" />
               {lines.slice(0, 4).map((l) => (
                 <OpPreviewItem
                   key={l._id}
@@ -382,7 +316,7 @@ export function ReceiptCreateFeature() {
                 />
               ))}
               {lines.length > 4 && (
-                <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', padding: '3px 14px 6px 46px' }}>
+                <div className="text-xs subtle" style={{ padding: '3px 14px 6px 46px' }}>
                   и ещё {lines.length - 4} строк…
                 </div>
               )}
@@ -392,16 +326,16 @@ export function ReceiptCreateFeature() {
           {/* Итого */}
           <Card>
             <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="chart" size={15} className="ic-accent" />
               <span className="card-head-title">Итого</span>
             </CardHead>
-            <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span style={{ textAlign: 'right' }} className="mono">{totalSku}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-              <span style={{ textAlign: 'right' }} className="mono">{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>План, шт</span>
-              <span style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }} className="mono">{totalQty}</span>
+            <div className="totals-grid">
+              <span className="key">SKU</span>
+              <span className="val mono">{totalSku}</span>
+              <span className="key">Строк</span>
+              <span className="val mono">{lines.length}</span>
+              <span className="key">План, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
         </div>
@@ -412,7 +346,6 @@ export function ReceiptCreateFeature() {
         key={showAddLine ? 'open' : 'closed'}
         open={showAddLine}
         clientId={clientId}
-        existingLines={lines}
         onClose={() => setShowAddLine(false)}
         onAdd={(line) => {
           setLines((ls) => [...ls, { ...line, _id: genId() }])
@@ -464,13 +397,11 @@ function OpPreviewItem({ icon, tone, title, sub }: { icon: string; tone: string;
 function AddLineDrawer({
   open,
   clientId,
-  existingLines,
   onClose,
   onAdd,
 }: {
   open: boolean
   clientId: string
-  existingLines: DraftLine[]
   onClose: () => void
   onAdd: (line: ReceiptLineInput) => void
 }) {
@@ -529,15 +460,6 @@ function AddLineDrawer({
   const needsSize = selectedProduct?.requires_size ?? false
   const canPickSize = sizes.length > 0
 
-  const isDuplicate = productId
-    ? existingLines.some(
-        (l) =>
-          l.product_id === productId &&
-          (l.color_id ?? null) === (colorId || null) &&
-          (l.size_id ?? null) === (sizeId || null),
-      )
-    : false
-
   return (
     <Drawer
       open={open}
@@ -550,7 +472,7 @@ function AddLineDrawer({
           <button className="btn" onClick={onClose}>Отмена</button>
           <button
             className="btn primary"
-            disabled={!productId || qty < 1 || (needsSize && !sizeId) || isDuplicate}
+            disabled={!productId || qty < 1 || (needsSize && !sizeId)}
             onClick={handleAdd}
           >
             <Icon name="plus" size={13} />Добавить
@@ -558,18 +480,6 @@ function AddLineDrawer({
         </>
       }
     >
-      {isDuplicate && (
-        <div style={{
-          padding: '8px 12px', marginBottom: 10,
-          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
-          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <Icon name="alert" size={13} />
-          Такой товар уже есть в таблице
-        </div>
-      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>

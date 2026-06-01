@@ -41,10 +41,6 @@ export function getInventoryProducts(clientId?: string | null, signal?: AbortSig
   return request<InventoryProductLookup[]>(`/inventory/lookups/products${q}`, { signal })
 }
 
-export function getInventoryProductSkus(signal?: AbortSignal) {
-  return request<string[]>('/inventory/lookups/skus', { signal })
-}
-
 export function getInventoryWarehouses(signal?: AbortSignal) {
   return request<DictionaryItem[]>('/inventory/lookups/warehouses', { signal })
 }

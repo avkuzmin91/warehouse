@@ -16,6 +16,7 @@ export type ReceiptOpType =
   | 'line_update'
   | 'plan_fix'
   | 'arrival_fix'
+  | 'arrival_accept'
   | 'receiving'
   | 'defect_fix'
   | 'qc_complete'
@@ -55,7 +56,14 @@ export type ReceiptLine = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  storage_zone_id: string | null
+  storage_zone_name: string | null
+  good_zone_id: string | null
+  good_zone_name: string | null
+  defect_zone_id: string | null
+  defect_zone_name: string | null
   planned_qty: number
+  accepted_qty: number | null
   accepted: number
   defect: number
   ops_count: number
@@ -79,6 +87,7 @@ export type ReceiptOp = {
 export type ReceiptState = {
   lines: ReceiptLine[]
   total_planned: number
+  total_accepted_qty: number
   total_accepted: number
   total_defect: number
   sku_count: number
@@ -95,6 +104,7 @@ export type ReceiptDetail = {
 export type ReceiptListItem = ReceiptDoc & {
   sku_count: number
   total_planned: number
+  total_accepted_qty: number
   total_accepted: number
   total_defect: number
 }
@@ -114,6 +124,8 @@ export type ReceiptLineInput = {
   color_name?: string | null
   size_id?: string | null
   size_name?: string | null
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
   planned_qty: number
 }
 
@@ -138,6 +150,17 @@ export type ReceiptUpdatePayload = {
   logistics_cost?: number | null
 }
 
+export type ReceiptLineUpdatePayload = {
+  planned_qty?: number
+  accepted_qty?: number
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
+  good_zone_id?: string | null
+  good_zone_name?: string | null
+  defect_zone_id?: string | null
+  defect_zone_name?: string | null
+}
+
 export type ReceiptListParams = {
   page?: number
   limit?: number
@@ -145,6 +168,7 @@ export type ReceiptListParams = {
   status?: ReceiptStatus
   overdue?: boolean
   search?: string
+  sku?: string
   date_from?: string
   date_to?: string
 }
@@ -159,10 +183,11 @@ export type ReceiptsSummary = {
   overdue: number
 }
 
-export function getReceiptsSummary(params: Pick<ReceiptListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+export function getReceiptsSummary(params: Pick<ReceiptListParams, 'client_id' | 'search' | 'sku' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search) sp.set('search', params.search)
+  if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   const q = sp.toString()
@@ -177,6 +202,7 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.status) sp.set('status', params.status)
   if (params.overdue) sp.set('overdue', 'true')
   if (params.search) sp.set('search', params.search)
+  if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   const q = sp.toString()
@@ -234,10 +260,11 @@ export function deleteReceipt(docId: string) {
   return request<{ message: string }>(`/receipts/${docId}`, { method: 'DELETE' })
 }
 
-export function updateReceiptLine(docId: string, lineId: string, plannedQty: number) {
+export function updateReceiptLine(docId: string, lineId: string, payload: number | ReceiptLineUpdatePayload) {
+  const body = typeof payload === 'number' ? { planned_qty: payload } : payload
   return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ planned_qty: plannedQty }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -286,9 +313,12 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
-export function arriveReceipt(docId: string) {
+export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
+
+export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
   return request<{ message: string }>(`/receipts/${docId}/arrive`, {
     method: 'POST',
+    body: JSON.stringify({ lines }),
   })
 }
 
@@ -316,7 +346,7 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
-  planned: 'Поступил',
+  planned: 'Принят',
   on_review: 'Проверен',
   done: 'Завершен',
   cancelled: 'Аннулирован',
@@ -333,6 +363,7 @@ export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
   line_update: 'Изменение строки',
   plan_fix: 'Запланировано поступление',
   arrival_fix: 'Фиксация прибытия',
+  arrival_accept: 'Принят при прибытии',
   receiving: 'Приёмка товара',
   defect_fix: 'Фиксация брака',
   qc_complete: 'Завершение проверки',

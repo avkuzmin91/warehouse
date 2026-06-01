@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
   getShipmentsSummary,
@@ -10,8 +10,6 @@ import {
   SHIPMENT_STATUS_ORDER,
 } from '../../api/shipmentsApi'
 import type { ShipmentListItem, ShipmentStatus, ShipmentsSummary } from '../../api/shipmentsApi'
-import { getInventoryClients } from '../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../api/domainTypes'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -24,68 +22,81 @@ import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
 import { fmtDateShort as fmtDate } from '../../utils/format'
 import { useApi } from '../../hooks/useApi'
+import { useLookups } from '../../hooks/useLookups'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
-type TabId = 'all' | 'active' | 'overdue' | 'done' | 'planned'
+type TabId = 'all' | 'overdue' | 'done' | 'planned'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'all',     label: 'Все' },
-  { id: 'active',  label: 'В работе' },
   { id: 'overdue', label: 'Просрочка' },
   { id: 'done',    label: 'Завершённые' },
   { id: 'planned', label: 'В плане' },
 ]
 
 const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
-  active:  'ready',
   planned: 'packing',
 }
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
+  { status: 'draft',   label: 'Создание',  tone: '' },
   { status: 'packing', label: 'В плане',   tone: 'info' },
-  { status: 'ready',   label: 'На сборке', tone: 'accent' },
   { status: 'shipped', label: 'Завершён',  tone: 'success' },
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
   draft:   'В план',
-  packing: 'Начать сборку',
-  ready:   'Завершить',
+  packing: 'Отгрузить',
+}
+
+function shipmentProgress(item: ShipmentListItem) {
+  const totalQty = item.total_qty || 0
+  const shippedQty = item.total_shipped_qty ?? 0
+  const pct = totalQty > 0
+    ? Math.min(100, Math.floor(shippedQty / totalQty * 100))
+    : 0
+  const linesCount = item.sku_count || 0
+  const qtyReady = linesCount > 0 && (item.lines_with_shipped_qty ?? 0) === linesCount
+  const zoneReady = item.cargo_type !== 'good' || (linesCount > 0 && (item.lines_with_zone ?? 0) === linesCount)
+  return { pct, shippedQty, totalQty, qtyReady, zoneReady }
 }
 
 export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
-  const { key: locationKey } = useLocation()
-  const [tab, setTab] = useState<TabId>('all')
+
+  const [tab] = useFilterParam('tab', 'all')
+  const [search, setSearch] = useFilterParam('search', '')
+  const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
+  const [statusFilter, setStatusFilter] = useFilterParam('status', '')
+  const [dateFrom, setDateFrom] = useFilterParam('from', '')
+  const [dateTo, setDateTo] = useFilterParam('to', '')
+  const [view, setView] = useFilterParam('view', 'table')
+  const [page, setPage] = usePageParam()
+  const { setMany } = useFilterParamsActions()
+
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [initialLoading, setInitialLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [statusFilter, setStatusFilter] = useState<ShipmentStatus | ''>('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [view, setView] = useState<'table' | 'kanban'>('table')
-  const [kanbanItems, setKanbanItems] = useState<ShipmentListItem[]>([])
   const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = clientsData ?? []
+  const { clients } = useLookups()
 
   const { data: summaryData } = useApi(
     (signal) => getShipmentsSummary({
       client_id: clientId || undefined,
       search: search.trim() || undefined,
+      sku: skuFilter.trim() || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }, signal),
-    [clientId, search, dateFrom, dateTo, locationKey, reloadTick],
+    [clientId, search, skuFilter, dateFrom, dateTo, reloadTick],
   )
-  const summary: ShipmentsSummary = summaryData ?? { all: 0, active: 0, done: 0, packing: 0, ready: 0, overdue: 0 }
+  const summary: ShipmentsSummary = summaryData ?? { all: 0, done: 0, packing: 0, overdue: 0 }
 
   useEffect(() => {
     if (view !== 'table') return
@@ -94,14 +105,15 @@ export function InventoryShipmentsListPage() {
     const isOverdueTab = tab === 'overdue' && !statusFilter
     const isDoneTab = tab === 'done' && !statusFilter
     const statusParam: ShipmentStatus | ShipmentStatus[] | undefined = statusFilter
-      ? statusFilter
+      ? statusFilter as ShipmentStatus
       : isDoneTab
         ? (['shipped', 'cancelled'] as ShipmentStatus[])
-        : TAB_STATUS[tab]
+        : TAB_STATUS[tab as TabId]
 
     listShipments({
       page, limit: PAGE_SIZE,
       search: search.trim() || undefined,
+      sku: skuFilter.trim() || undefined,
       client_id: clientId || undefined,
       status: statusParam,
       date_from: dateFrom || undefined,
@@ -120,25 +132,12 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [view, page, search, clientId, statusFilter, tab, dateFrom, dateTo, locationKey, reloadTick])
+  }, [view, page, search, skuFilter, clientId, statusFilter, tab, dateFrom, dateTo, reloadTick])
 
-  useEffect(() => {
-    if (view !== 'kanban') return
-    const ctrl = new AbortController()
-    listShipments({
-      page: 1, limit: 200,
-      search: search.trim() || undefined,
-      client_id: clientId || undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, ctrl.signal).then((res) => setKanbanItems(res.items)).catch(() => {})
-    return () => ctrl.abort()
-  }, [view, search, clientId, dateFrom, dateTo])
+
 
   function handleTabChange(t: TabId) {
-    setTab(t)
-    setStatusFilter('')
-    setPage(1)
+    setMany({ tab: t, status: '' })
   }
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
@@ -154,7 +153,6 @@ export function InventoryShipmentsListPage() {
 
   function tabCount(id: TabId): number {
     if (id === 'all')     return summary.all
-    if (id === 'active')  return summary.active
     if (id === 'overdue') return summary.overdue
     if (id === 'done')    return summary.done
     if (id === 'planned') return summary.packing
@@ -203,36 +201,62 @@ export function InventoryShipmentsListPage() {
               style={{ paddingLeft: 28, width: 220 }}
               placeholder="Номер, клиент, назначение…"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              onChange={(e) => setSearch(e.target.value)}
             />
+          </div>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Icon name="tag" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
+            <input
+              className="input sm"
+              style={{ paddingLeft: 28, width: 160, paddingRight: skuFilter ? 26 : undefined }}
+              placeholder="SKU товара…"
+              value={skuFilter}
+              onChange={(e) => setSkuFilter(e.target.value)}
+            />
+            {skuFilter && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => setSkuFilter('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
           </div>
           <FilterCombobox
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            onChange={(v) => { setClientId(v); setPage(1) }}
+            onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
           <DateRange
             from={dateFrom} to={dateTo}
-            onFromChange={(v) => { setDateFrom(v); setPage(1) }}
-            onToChange={(v) => { setDateTo(v); setPage(1) }}
-            onClear={() => { setDateFrom(''); setDateTo(''); setPage(1) }}
+            onFromChange={(v) => setDateFrom(v)}
+            onToChange={(v) => setDateTo(v)}
+            onClear={() => setMany({ from: '', to: '' })}
           />
           <FilterSelect
             label="Статус"
             value={statusFilter}
             options={[
               { value: '', label: 'Все статусы' },
-              ...SHIPMENT_STATUS_ORDER.map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
+              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
+                .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
-            onChange={(v) => { setStatusFilter(v as ShipmentStatus | ''); setPage(1) }}
+            onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setDateFrom(''); setDateTo(''); setStatusFilter(''); setPage(1) }}>
+          {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
+          <button
+            className="btn ghost sm icon"
+            title="Обновить"
+            onClick={() => setReloadTick((t) => t + 1)}
+          >
+            <Icon name="refresh" size={14} style={loading ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+          </button>
         </FiltersBar>
       }
     >
@@ -260,17 +284,18 @@ export function InventoryShipmentsListPage() {
                 <th>Назначение</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
                 <th style={{ textAlign: 'right', width: 60 }}>SKU</th>
-                <th style={{ textAlign: 'right', width: 80 }}>Кол-во</th>
+                <th style={{ textAlign: 'right', width: 80 }}>План</th>
+                <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
                 <th style={{ width: 130 }}>Перевозчик</th>
                 <th style={{ width: 130 }}>Статус</th>
-                <th style={{ width: 28 }} />
+                <th style={{ width: 150 }}>Выполнение</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={10} />
+                <SkeletonRows rows={8} cols={11} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={10}>
+                <tr><td colSpan={11}>
                   <EmptyState
                     title={tab === 'overdue' ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
                     sub={tab === 'all' ? 'Создайте первую отгрузку' : undefined}
@@ -311,23 +336,49 @@ export function InventoryShipmentsListPage() {
                       </Td>
                       <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
+                      <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
                       <Td>{item.carrier ?? '—'}</Td>
                       <Td>
-                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
-                          {item.status_label}
-                        </Badge>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
+                            {item.status_label}
+                          </Badge>
+                          {ADVANCE_LABELS[item.status] && (
+                            <button
+                              className="btn ghost sm"
+                              disabled={advancingId === item.id}
+                              onClick={(e) => handleAdvance(e, item)}
+                              title={ADVANCE_LABELS[item.status]}
+                            >
+                              <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
+                            </button>
+                          )}
+                        </div>
                       </Td>
                       <Td>
-                        {ADVANCE_LABELS[item.status] && (
-                          <button
-                            className="btn ghost sm"
-                            disabled={advancingId === item.id}
-                            onClick={(e) => handleAdvance(e, item)}
-                            title={ADVANCE_LABELS[item.status]}
-                          >
-                            <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
-                          </button>
-                        )}
+                        {(() => {
+                          const isActive = item.status === 'packing' || item.status === 'shipped'
+                          if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                          const progress = shipmentProgress(item)
+                          const complete = progress.pct >= 100
+                          return (
+                            <div style={{ minWidth: 120 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                                  <div style={{
+                                    height: '100%', borderRadius: 3,
+                                    width: `${progress.pct}%`,
+                                    background: complete ? 'var(--c-success)' : 'var(--c-accent)',
+                                    transition: 'width 0.3s',
+                                  }} />
+                                </div>
+                                <span style={{ fontSize: 11.5, fontWeight: 600, color: complete ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                                  {progress.pct}%
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })()}
                       </Td>
                     </tr>
                   )
@@ -338,61 +389,143 @@ export function InventoryShipmentsListPage() {
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
       ) : (
-        <KanbanBoard items={kanbanItems} loading={loading} onNavigate={(id) => navigate(`/inventory/shipments/${id}`)} />
+        <KanbanBoard
+          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }}
+          onNavigate={(id) => navigate(`/inventory/shipments/${id}`)}
+          reloadTick={reloadTick}
+        />
       )}
     </ListPage>
   )
 }
 
-function KanbanBoard({ items, loading, onNavigate }: {
-  items: ShipmentListItem[]
-  loading: boolean
+const KANBAN_PAGE = 20
+
+type KanbanFilters = {
+  search?: string
+  sku?: string
+  client_id?: string
+  date_from?: string
+  date_to?: string
+}
+
+function KanbanBoard({ filters, onNavigate, reloadTick }: {
+  filters: KanbanFilters
   onNavigate: (id: string) => void
+  reloadTick?: number
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, alignItems: 'start' }}>
-      {KANBAN_COLS.map((col) => {
-        const colItems = items.filter((i) => i.status === col.status)
-        return (
-          <div key={col.status} style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
-            <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-              <Badge tone={col.tone} dot>{col.label}</Badge>
-              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{loading ? '…' : colItems.length}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {colItems.map((item) => {
-                const overdue = isShipmentOverdue(item)
-                return (
-                  <div
-                    key={item.id}
-                    className="card"
-                    style={{
-                      padding: 10, cursor: 'pointer',
-                      ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
-                    }}
-                    onClick={() => onNavigate(item.id)}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                      {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-                      <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-                        {fmtDate(item.ship_date)}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
-                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                      <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+      {KANBAN_COLS.map((col) => (
+        <KanbanColumn key={col.status} col={col} filters={filters} onNavigate={onNavigate} reloadTick={reloadTick} />
+      ))}
+    </div>
+  )
+}
+
+function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
+  col: typeof KANBAN_COLS[number]
+  filters: KanbanFilters
+  onNavigate: (id: string) => void
+  reloadTick?: number
+}) {
+  const [items, setItems] = useState<ShipmentListItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}|${reloadTick ?? 0}`
+  const prevFilterKey = useRef(filterKey)
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const isReset = prevFilterKey.current !== filterKey
+    prevFilterKey.current = filterKey
+    const activePage = isReset ? 1 : page
+    if (isReset) {
+      setPage(1)
+      setItems([])
+    }
+    if (activePage === 1) setLoading(true); else setLoadingMore(true)
+    listShipments({
+      page: activePage,
+      limit: KANBAN_PAGE,
+      status: col.status,
+      ...filters,
+    }, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return
+        setTotal(res.total)
+        setItems((prev) => activePage === 1 ? res.items : [...prev, ...res.items])
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (ctrl.signal.aborted) return
+        setLoading(false)
+        setLoadingMore(false)
+      })
+    return () => ctrl.abort()
+  }, [page, filterKey, col.status])
+
+  const hasMore = items.length < total
+
+  return (
+    <div style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
+        <Badge tone={col.tone} dot>{col.label}</Badge>
+        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+          {loading ? '…' : total}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
+            <div style={{ width: 20, height: 20, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
           </div>
-        )
-      })}
+        ) : items.length === 0 ? (
+          <div style={{ padding: '16px 6px', fontSize: 12, color: 'var(--c-text-faint)', textAlign: 'center' }}>Нет документов</div>
+        ) : (
+          items.map((item) => {
+            const overdue = isShipmentOverdue(item)
+            return (
+              <div
+                key={item.id}
+                className="card"
+                style={{
+                  padding: 10, cursor: 'pointer',
+                  ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
+                }}
+                onClick={() => onNavigate(item.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+                  {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
+                    {fmtDate(item.ship_date)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
+                <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
+                  <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+                  <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
+                </div>
+              </div>
+            )
+          })
+        )}
+        {hasMore && (
+          <button
+            className="btn ghost sm"
+            style={{ width: '100%', justifyContent: 'center', color: 'var(--c-text-subtle)', fontSize: 12 }}
+            disabled={loadingMore}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            {loadingMore ? '…' : `Ещё ${total - items.length}`}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

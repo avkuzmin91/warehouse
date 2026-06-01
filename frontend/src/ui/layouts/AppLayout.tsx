@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { ensureSessionBootstrapped, getToken, me } from '../../api/sessionAuth'
 import { isSessionExpiredError } from '../../auth/sessionError'
 import { CurrentUserProvider } from '../../hooks/CurrentUserProvider'
+import { LookupsProvider } from '../../hooks/LookupsProvider'
 import { AppShell } from '../shell/AppShell'
 import { ConfirmDialogProvider } from '../feedback/ConfirmDialog'
 import { ToastProvider } from '../feedback/Toast'
@@ -44,11 +45,13 @@ export function AppLayout() {
 
   return (
     <CurrentUserProvider>
-      <ToastProvider>
-        <ConfirmDialogProvider>
-          <AppShell />
-        </ConfirmDialogProvider>
-      </ToastProvider>
+      <LookupsProvider>
+        <ToastProvider>
+          <ConfirmDialogProvider>
+            <AppShell />
+          </ConfirmDialogProvider>
+        </ToastProvider>
+      </LookupsProvider>
     </CurrentUserProvider>
   )
 }

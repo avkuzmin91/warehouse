@@ -4,47 +4,55 @@ from pydantic import BaseModel, Field
 
 
 class ShipmentLineIn(BaseModel):
-    product_id:   str
-    product_name: str
-    product_sku:  str
-    color_id:     str | None = None
-    color_name:   str | None = None
-    size_id:      str | None = None
-    size_name:    str | None = None
-    qty:          int = Field(ge=1)
+    product_id:        str
+    product_name:      str
+    product_sku:       str
+    color_id:          str | None = None
+    color_name:        str | None = None
+    size_id:           str | None = None
+    size_name:         str | None = None
+    qty:               int = Field(ge=1)
+    shipped_qty:       int = Field(ge=0, default=0)
+    storage_zone_id:   str | None = None
+    storage_zone_name: str | None = None
 
 
 class ShipmentDocCreate(BaseModel):
-    cargo_type:  str = "good"
-    client_id:   str | None = None
-    client_name: str | None = None
-    destination: str | None = None
-    carrier:     str | None = None
-    ship_date:   str | None = None
-    comment:     str | None = None
-    lines:       list[ShipmentLineIn] = []
+    cargo_type:      str = "good"
+    client_id:       str | None = None
+    client_name:     str | None = None
+    destination:     str | None = None
+    carrier:         str | None = None
+    logistics_cost:  float | None = None
+    ship_date:       str | None = None
+    comment:         str | None = None
+    lines:           list[ShipmentLineIn] = []
 
 
 class ShipmentDocUpdate(BaseModel):
-    cargo_type:  str | None = None
-    client_id:   str | None = None
-    client_name: str | None = None
-    destination: str | None = None
-    carrier:     str | None = None
-    ship_date:   str | None = None
-    comment:     str | None = None
+    cargo_type:      str | None = None
+    client_id:       str | None = None
+    client_name:     str | None = None
+    destination:     str | None = None
+    carrier:         str | None = None
+    logistics_cost:  float | None = None
+    ship_date:       str | None = None
+    comment:         str | None = None
 
 
 class ShipmentLineItem(BaseModel):
-    id:           str
-    product_id:   str
-    product_name: str
-    product_sku:  str
-    color_id:     str | None
-    color_name:   str | None
-    size_id:      str | None
-    size_name:    str | None
-    qty:          int
+    id:                str
+    product_id:        str
+    product_name:      str
+    product_sku:       str
+    color_id:          str | None
+    color_name:        str | None
+    size_id:           str | None
+    size_name:         str | None
+    qty:               int
+    shipped_qty:       int
+    storage_zone_id:   str | None
+    storage_zone_name: str | None
 
 
 class ShipmentListItem(BaseModel):
@@ -55,11 +63,15 @@ class ShipmentListItem(BaseModel):
     client_name:  str | None
     destination:  str | None
     carrier:      str | None
+    logistics_cost: float | None
     ship_date:    str | None
     status:       str
     status_label: str
     sku_count:    int
     total_qty:    int
+    total_shipped_qty: int = 0
+    lines_with_shipped_qty: int = 0
+    lines_with_zone: int = 0
     created_at:   str
 
 
@@ -87,6 +99,7 @@ class ShipmentDetailResponse(BaseModel):
     client_name:  str | None
     destination:  str | None
     carrier:      str | None
+    logistics_cost: float | None
     ship_date:    str | None
     comment:      str | None
     status:       str

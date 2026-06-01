@@ -19,9 +19,11 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      // Data-loading effects routinely setState from async fetches. Treat as warn so we see
-      // new offenders but legacy hooks don't block CI.
-      'react-hooks/set-state-in-effect': 'warn',
+      // Data-loading effects routinely call setState inside .then() from async fetches —
+      // это намеренный паттерн для list/detail-страниц. Правило ловит и эти legitimate cases,
+      // и form-sync (sync display from props). Включить обратно стоит только после миграции
+      // на TanStack Query / Suspense-based loaders.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
   {

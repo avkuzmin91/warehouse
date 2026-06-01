@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { addReceiptLine } from '../../../../../api/receiptsApi'
-import type { ReceiptLine } from '../../../../../api/receiptsApi'
 import {
   getInventoryColorsForProductSku,
   getInventoryProducts,
@@ -15,7 +14,6 @@ import { Select } from '../../../../primitives/Select'
 type Props = {
   docId: string
   clientId: string
-  existingLines: ReceiptLine[]
   open: boolean
   onClose: () => void
   onAdded: () => void
@@ -24,14 +22,14 @@ type Props = {
 /**
  * Drawer для добавления строки в существующий документ поступления (draft/planned views).
  */
-export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, onAdded }: Props) {
+export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props) {
   const [products, setProducts] = useState<InventoryProductLookup[]>([])
   const [productId, setProductId] = useState('')
   const [colors, setColors] = useState<DictionaryItem[]>([])
   const [colorId, setColorId] = useState('')
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [sizeId, setSizeId] = useState('')
-  const [qty, setQty] = useState(0)
+  const [qty, setQty] = useState(1)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -68,7 +66,7 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
   async function handleAdd() {
     if (!selectedProduct) { setError('Выберите товар'); return }
     if (needsSize && !sizeId) { setError('Выберите размер — он обязателен для этого типа товара'); return }
-    if (qty < 0) { setError('Количество не может быть отрицательным'); return }
+    if (qty < 1) { setError('Количество должно быть не меньше 1'); return }
     setError('')
     setSaving(true)
     try {
@@ -91,15 +89,6 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
     }
   }
 
-  const isDuplicate = productId
-    ? existingLines.some(
-        (l) =>
-          l.product_id === productId &&
-          (l.color_id ?? null) === (colorId || null) &&
-          (l.size_id ?? null) === (sizeId || null),
-      )
-    : false
-
   return (
     <Drawer
       open={open}
@@ -109,25 +98,13 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!productId || qty < 0 || saving || isDuplicate} onClick={handleAdd}>
+          <button className="btn primary" disabled={!productId || qty < 1 || saving} onClick={handleAdd}>
             <Icon name="plus" size={13} />Добавить
           </button>
         </>
       }
     >
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
-      {isDuplicate && (
-        <div style={{
-          padding: '8px 12px', marginBottom: 10,
-          background: 'color-mix(in oklab, var(--c-warning) 12%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--c-warning) 35%, transparent)',
-          borderRadius: 'var(--r-md)', color: 'var(--c-warning)', fontSize: 12.5,
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <Icon name="alert" size={13} />
-          Такой товар уже есть в таблице
-        </div>
-      )}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
@@ -172,20 +149,20 @@ export function AddLineDrawer({ docId, clientId, existingLines, open, onClose, o
       </div>
       <div style={{ marginTop: 14 }}>
         <label className="field-label">
-          <span>Плановое количество</span>
+          <span>Плановое количество <span style={{ color: 'var(--c-danger)' }}>*</span></span>
         </label>
         <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 30, width: 160, background: 'var(--c-bg-elev)' }}>
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => Math.max(0, q - 1))}
+            onClick={() => setQty((q) => Math.max(1, q - 1))}
           >
             <Icon name="minus" size={11} />
           </button>
           <input
             inputMode="numeric"
             value={qty}
-            onChange={(e) => setQty(Math.max(0, parseInt(e.target.value.replace(/\D/g, '')) || 0))}
+            onChange={(e) => setQty(Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
             style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', background: 'transparent', minWidth: 0 }}
           />
           <button

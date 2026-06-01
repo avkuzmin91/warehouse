@@ -8,24 +8,21 @@ import {
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail } from '../../../../../api/receiptsApi'
-import {
-  getInventoryClients,
-  getInventorySuppliers,
-  getInventoryUnloadingZones,
-} from '../../../../../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
-import { Table, Td } from '../../../../data/Table'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
+import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
-import { useApi } from '../../../../../hooks/useApi'
+import { useLookups } from '../../../../../hooks/useLookups'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
+import { OpEntry } from '../components/OpEntry'
+import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 
 type Props = {
   docId: string
@@ -43,49 +40,52 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [clientId, setClientId] = useState(doc.client_id)
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
-  const [ttn, setTtn] = useState(doc.ttn ?? '')
-  const [zoneId, setZoneId] = useState(doc.zone_id ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
   const [metaError, setMetaError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
 
   const [pendingQty, setPendingQty] = useState<Record<string, number>>({})
-  const [savingQty, setSavingQty] = useState<Record<string, boolean>>({})
 
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = (clientsData ?? []).filter((c) => c.is_active && !c.is_deleted)
-
-  const { data: suppliersData } = useApi((signal) => getInventorySuppliers(signal), [])
-  const suppliers: DictionaryItem[] = (suppliersData ?? []).filter((s) => s.is_active && !s.is_deleted)
-
-  const { data: zonesData } = useApi((signal) => getInventoryUnloadingZones(signal), [])
-  const unloadingZones: DictionaryItem[] = (zonesData ?? []).filter((z) => z.is_active && !z.is_deleted)
+  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
+  const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
+  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
 
-  async function handleSaveMeta() {
+  const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
+  const hasUnsavedChanges = metaDirty || hasPendingQty
+
+  async function handleSaveChanges(): Promise<boolean> {
+    if (!hasUnsavedChanges) return true
     setMetaError('')
     setMetaSaving(true)
     try {
-      const selectedZone = unloadingZones.find((z) => z.id === zoneId)
-      await updateReceipt(docId, {
-        client_id: clientId || undefined,
-        supplier_name: supplierName.trim() || null,
-        arrival_date: arrivalDate || null,
-        ttn: ttn.trim() || null,
-        zone_id: zoneId || null,
-        zone_name: selectedZone?.name ?? null,
-        logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
-      })
+      if (metaDirty) {
+        await updateReceipt(docId, {
+          client_id: clientId || undefined,
+          supplier_name: supplierName.trim() || null,
+          arrival_date: arrivalDate || null,
+          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+        })
+      }
+      for (const line of lines) {
+        const qty = pendingQty[line.id]
+        if (qty === undefined || qty === line.planned_qty) continue
+        await updateReceiptLine(docId, line.id, qty)
+      }
       setMetaDirty(false)
+      setPendingQty({})
       await onReload()
+      return true
     } catch (e: unknown) {
       setMetaError(e instanceof Error ? e.message : 'Ошибка')
+      return false
     } finally {
       setMetaSaving(false)
     }
@@ -93,17 +93,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   function setPendingQtyFor(lineId: string, qty: number) {
     setPendingQty((prev) => ({ ...prev, [lineId]: qty }))
-  }
-
-  async function handleSaveLineQty(lineId: string, qty: number) {
-    setSavingQty((prev) => ({ ...prev, [lineId]: true }))
-    try {
-      await updateReceiptLine(docId, lineId, qty)
-      setPendingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-      await onReload()
-    } finally {
-      setSavingQty((prev) => { const next = { ...prev }; delete next[lineId]; return next })
-    }
   }
 
   async function handleDeleteLine(lineId: string, productName: string) {
@@ -129,7 +118,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   ]
 
   const blockReasons = [
-    ...(metaDirty ? ['Есть несохранённые изменения реквизитов'] : []),
+    ...(hasUnsavedChanges ? ['Есть несохранённые изменения'] : []),
     ...readyChecks.filter((c) => !c.ok).map((c) => c.error),
   ]
 
@@ -138,23 +127,27 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
       {/* Заголовок */}
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+          <div className="detail-status-row">
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
             <Badge dot>{RECEIPT_STATUS_LABELS['draft']}</Badge>
-            <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+            <span className="detail-meta">
               {doc.doc_number} · создан {fmtDate(doc.created_at)}
               {doc.created_by && ` · ${doc.created_by}`}
             </span>
           </div>
           <div className="page-title">Создание поступления</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {metaDirty && (
-              <button className="btn" onClick={handleSaveMeta} disabled={metaSaving || !clientId}>
-                <Icon name="check" size={14} />Сохранить изменения
+        <div className="detail-actions">
+          <div className="detail-actions-row">
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
+            </button>
+            {hasUnsavedChanges && (
+              <button className="btn" onClick={handleSaveChanges} disabled={metaSaving || !clientId}>
+                <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
             <button
@@ -166,7 +159,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
+            <div className="block-reasons">
               {blockReasons.map((r, i) => (
                 <div key={i}>· {r}</div>
               ))}
@@ -181,17 +174,17 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+      <div className="split-300">
         {/* Левая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="col gap-16">
           {/* Реквизиты */}
           <Card>
             <CardHead>
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="file" size={15} className="ic-accent" />
               <span className="card-head-title">Основная информация</span>
             </CardHead>
             <CardBody>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="field-label">
                     <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
@@ -200,7 +193,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                     value={clientId}
                     placeholder="Поиск клиента…"
                     options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    prefix="user"
                     onChange={(v) => { setClientId(String(v ?? '')); markDirty() }}
                     disabled={lines.length > 0}
                   />
@@ -225,7 +217,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                       markDirty()
                     }}
                     clearable
-                    prefix="user"
                   />
                 </div>
                 <div>
@@ -233,32 +224,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                     <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Номер ТТН</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <input
-                    className="input"
-                    placeholder="TTN-00001"
-                    value={ttn}
-                    onChange={(e) => { setTtn(e.target.value); markDirty() }}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Зона разгрузки</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={zoneId}
-                    placeholder="Выберите зону…"
-                    options={unloadingZones.map((z) => ({ value: z.id, label: z.name }))}
-                    prefix="map"
-                    onChange={(v) => { setZoneId(String(v ?? '')); markDirty() }}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">
@@ -281,10 +246,10 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           {/* Строки */}
           <Card>
             <CardHead>
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
-              <span className="card-head-title">Товары</span>
+              <Icon name="boxes" size={15} className="ic-accent" />
+              <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <button
                 className="btn sm primary"
                 onClick={() => setShowAddLine(true)}
@@ -302,120 +267,39 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                 </div>
               </div>
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <th style={{ width: 30 }}>#</th>
-                    <th>Товар · SKU</th>
-                    <th style={{ width: 110 }}>Цвет</th>
-                    <th style={{ width: 80 }}>Размер</th>
-                    <th style={{ width: 148 }}>План, шт</th>
-                    <th style={{ width: 32 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, i) => {
-                    const displayQty = pendingQty[l.id] ?? l.planned_qty
-                    const isDirty = pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty
-                    const isSaving = savingQty[l.id] ?? false
-                    return (
-                      <tr key={l.id}>
-                        <Td><span className="mono" style={{ color: 'var(--c-text-faint)', fontSize: 11 }}>{i + 1}</span></Td>
-                        <Td>
-                          <div style={{ fontWeight: 450 }}>{l.product_name}</div>
-                          <div className="t-sub mono">{l.product_sku}</div>
-                        </Td>
-                        <Td>{l.color_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td className="mono">{l.size_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</Td>
-                        <Td>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${isDirty ? 'var(--c-accent)' : 'var(--c-border-strong)'}`, borderRadius: 'var(--r-md)', height: 26, width: 120, background: 'var(--c-bg-elev)' }}>
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ height: 24, width: 24, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, Math.max(1, displayQty - 1))}
-                              >
-                                <Icon name="minus" size={10} />
-                              </button>
-                              <input
-                                inputMode="numeric"
-                                value={displayQty}
-                                onChange={(e) => {
-                                  const v = Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1)
-                                  setPendingQtyFor(l.id, v)
-                                }}
-                                style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0, color: isDirty ? 'var(--c-accent)' : undefined }}
-                              />
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ height: 24, width: 24, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-                                onClick={() => setPendingQtyFor(l.id, displayQty + 1)}
-                              >
-                                <Icon name="plus" size={10} />
-                              </button>
-                            </div>
-                            {isDirty && (
-                              <button
-                                className="btn ghost icon sm"
-                                style={{ color: 'var(--c-accent)', flexShrink: 0 }}
-                                disabled={isSaving}
-                                onClick={() => void handleSaveLineQty(l.id, displayQty)}
-                                title="Сохранить"
-                              >
-                                <Icon name="save" size={14} />
-                              </button>
-                            )}
-                          </div>
-                        </Td>
-                        <Td>
-                          <button className="btn ghost icon sm" onClick={() => void handleDeleteLine(l.id, l.product_name)}>
-                            <Icon name="trash" size={13} />
-                          </button>
-                        </Td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
-                      Итого: {totalSku} SKU
-                    </td>
-                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>
-                      {totalQty}
-                    </td>
-                    <td />
-                  </tr>
-                </tfoot>
-              </Table>
+              <ReceiptLinesTable
+                stage="draft"
+                lines={lines}
+                saving={metaSaving}
+                plannedQty={(l) => pendingQty[l.id] ?? l.planned_qty}
+                plannedDirty={(l) => pendingQty[l.id] !== undefined && pendingQty[l.id] !== l.planned_qty}
+                onPlannedQty={(l, v) => setPendingQtyFor(l.id, v)}
+                onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
+              />
             )}
           </Card>
 
         </div>
 
         {/* Правая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
           {/* Готовность */}
           <Card>
             <CardHead>
-              <Icon name="check" size={15} style={{ color: 'var(--c-success)' }} />
+              <Icon name="check" size={15} className="ic-success" />
               <span className="card-head-title">Готовность</span>
             </CardHead>
-            <div style={{ padding: '4px 0' }}>
+            <div className="readiness-list">
               {readyChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', fontSize: 13 }}>
+                <div key={i} className="readiness-row">
                   {c.ok ? (
-                    <div style={{
-                      width: 16, height: 16, borderRadius: '50%',
-                      background: 'var(--c-success-bg)', color: 'var(--c-success)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>
+                    <div className="readiness-dot ok">
                       <Icon name="check" size={10} />
                     </div>
                   ) : (
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', border: '1.5px dashed var(--c-text-faint)', flexShrink: 0 }} />
+                    <div className="readiness-dot pending" />
                   )}
-                  <span style={{ color: c.ok ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{c.label}</span>
+                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
                 </div>
               ))}
             </div>
@@ -424,16 +308,16 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           {/* Итого */}
           <Card>
             <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
+              <Icon name="chart" size={15} className="ic-accent" />
               <span className="card-head-title">Итого</span>
             </CardHead>
-            <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span style={{ textAlign: 'right' }} className="mono">{totalSku}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Строк</span>
-              <span style={{ textAlign: 'right' }} className="mono">{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>План, шт</span>
-              <span style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }} className="mono">{totalQty}</span>
+            <div className="totals-grid">
+              <span className="key">SKU</span>
+              <span className="val mono">{totalSku}</span>
+              <span className="key">Строк</span>
+              <span className="val mono">{lines.length}</span>
+              <span className="key">План, шт</span>
+              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
         </div>
@@ -443,11 +327,36 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         key={showAddLine ? 'open' : 'closed'}
         docId={docId}
         clientId={clientId}
-        existingLines={lines}
         open={showAddLine}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
       />
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${detail.ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {detail.ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {detail.ops.map((op) => (
+              <OpEntry key={op.id} op={op} onFilterLine={() => {}} />
+            ))}
+          </div>
+        )}
+      </Drawer>
     </div>
   )
 }

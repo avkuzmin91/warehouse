@@ -3,12 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
 import type { BalanceItem } from '../../api/balancesApi'
-import {
-  getInventoryCarriers,
-  getInventoryClients,
-  getInventoryWarehouses,
-} from '../../api/inventoryLookupsApi'
-import type { DictionaryItem } from '../../api/domainTypes'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
 import { Icon } from '../primitives/Icon'
@@ -21,7 +15,7 @@ import { BalancePicker } from '../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../features/inventory/shared/NumberStep'
 import { fmtYmdAsDmy } from '../../utils/format'
 import { balanceKey } from '../../utils/balanceKey'
-import { useApi } from '../../hooks/useApi'
+import { useLookups } from '../../hooks/useLookups'
 
 type DraftLine = ShipmentLineIn & { _key: string; available: number }
 
@@ -37,19 +31,13 @@ export function InventoryShipmentCreatePage() {
   const [carrier, setCarrier] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
-  const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { data: clientsData } = useApi((signal) => getInventoryClients(signal), [])
-  const clients: DictionaryItem[] = clientsData ?? []
-  const { data: destinationsData } = useApi((signal) => getInventoryWarehouses(signal), [])
-  const destinations: DictionaryItem[] = destinationsData ?? []
-  const { data: carriersData } = useApi((signal) => getInventoryCarriers(signal), [])
-  const carriers: DictionaryItem[] = carriersData ?? []
+  const { clients, warehouses: destinations, carriers } = useLookups()
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const destinationOptions: ComboboxOption[] = destinations.map((d) => ({ value: d.id, label: d.name }))
@@ -90,20 +78,21 @@ export function InventoryShipmentCreatePage() {
     setLines((ls) => ls.filter((l) => l._key !== key))
   }
 
-  function addFromBalance(b: BalanceItem, qty: number) {
+  function addFromBalance(b: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
     const key = balanceKey(b)
-    if (lines.find((l) => l._key === key)) return
     setLines((ls) => [...ls, {
-      _key:         key,
-      product_id:   b.product_id,
-      product_name: b.product_name,
-      product_sku:  b.product_sku,
-      color_id:     b.color_id,
-      color_name:   b.color_name,
-      size_id:      b.size_id,
-      size_name:    b.size_name,
+      _key:              key,
+      product_id:        b.product_id,
+      product_name:      b.product_name,
+      product_sku:       b.product_sku,
+      color_id:          b.color_id,
+      color_name:        b.color_name,
+      size_id:           b.size_id,
+      size_name:         b.size_name,
       qty,
-      available:    cargoType === 'defect' ? b.defect : b.good,
+      available:         cargoType === 'defect' ? b.defect : b.good,
+      storage_zone_id:   zoneId,
+      storage_zone_name: zoneName,
     }])
   }
 
@@ -119,16 +108,17 @@ export function InventoryShipmentCreatePage() {
         carrier:        carrier || null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         ship_date:      shipDate || null,
-        comment:        comment || null,
         lines:          lines.map((line) => ({
-          product_id: line.product_id,
-          product_name: line.product_name,
-          product_sku: line.product_sku,
-          color_id: line.color_id,
-          color_name: line.color_name,
-          size_id: line.size_id,
-          size_name: line.size_name,
-          qty: line.qty,
+          product_id:        line.product_id,
+          product_name:      line.product_name,
+          product_sku:       line.product_sku,
+          color_id:          line.color_id,
+          color_name:        line.color_name,
+          size_id:           line.size_id,
+          size_name:         line.size_name,
+          qty:               line.qty,
+          storage_zone_id:   line.storage_zone_id ?? null,
+          storage_zone_name: line.storage_zone_name ?? null,
         })),
       })
       const docId = res.message
@@ -199,8 +189,8 @@ export function InventoryShipmentCreatePage() {
             </div>
             <div className="card-body">
               <CargoTypeToggle value={cargoType} onChange={(v) => { setCargoType(v); setLines([]) }} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
-                <Field label="Клиент" required>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+                <Field label="Клиент" required style={{ marginBottom: 0 }}>
                   <Combobox
                     value={clientId}
                     onChange={handleClientChange}
@@ -209,7 +199,7 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Назначение">
+                <Field label="Назначение" style={{ marginBottom: 0 }}>
                   <Combobox
                     value={destinationId}
                     onChange={handleDestinationChange}
@@ -218,10 +208,10 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки" required>
+                <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
-                <Field label="Перевозчик">
+                <Field label="Перевозчик" style={{ marginBottom: 0 }}>
                   <Combobox
                     value={carrierId}
                     onChange={handleCarrierChange}
@@ -230,7 +220,7 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Стоимость логистики">
+                <Field label="Стоимость логистики" style={{ marginBottom: 0 }}>
                   <input
                     className="input"
                     type="number"
@@ -242,15 +232,6 @@ export function InventoryShipmentCreatePage() {
                   />
                 </Field>
               </div>
-              <Field label="Инструкции для сборки" style={{ marginTop: 16 }}>
-                <textarea
-                  className="input"
-                  style={{ height: 60, paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Необязательно"
-                />
-              </Field>
             </div>
           </div>
 
@@ -279,7 +260,7 @@ export function InventoryShipmentCreatePage() {
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ textAlign: 'right', width: 90 }}>Доступно</th>
-                    <th style={{ textAlign: 'right', width: 160 }}>К отгрузке</th>
+                    <th style={{ textAlign: 'right', width: 160 }}>План отгрузки</th>
                     <th style={{ width: 32 }} />
                   </tr>
                 </thead>
@@ -359,8 +340,7 @@ export function InventoryShipmentCreatePage() {
         <BalancePicker
           clientId={clientId}
           cargoType={cargoType}
-          selectedKeys={lines.map((l) => l._key)}
-          onAdd={(b, qty) => { addFromBalance(b, qty); setShowPicker(false) }}
+          onAdd={(b, qty, zoneId, zoneName) => { addFromBalance(b, qty, zoneId, zoneName); setShowPicker(false) }}
           onClose={() => setShowPicker(false)}
         />
       )}

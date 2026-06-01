@@ -1,19 +1,17 @@
 import { request } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'ready' | 'shipped' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'shipped' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создание',
   packing:   'В плане',
-  ready:     'На сборке',
   shipped:   'Завершён',
   cancelled: 'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:     'Создан',
-  packing:   'Сборка начата',
-  ready:     'На сборке',
+  packing:   'Отгружен',
   shipped:   'Завершён',
   cancelled: 'Аннулирован',
 }
@@ -21,21 +19,15 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   draft:     '',
   packing:   'info',
-  ready:     'accent',
   shipped:   'success',
   cancelled: 'danger',
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'ready', 'shipped',
+  'draft', 'packing', 'shipped',
 ]
 
 export type ShipmentCargoType = 'good' | 'defect'
-
-export const SHIPMENT_CARGO_LABELS: Record<ShipmentCargoType, string> = {
-  good:   'Годный товар',
-  defect: 'Брак',
-}
 
 export type ShipmentOpType = 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update'
 
@@ -49,15 +41,18 @@ export type ShipmentOp = {
 }
 
 export type ShipmentLine = {
-  id:           string
-  product_id:   string
-  product_name: string
-  product_sku:  string
-  color_id:     string | null
-  color_name:   string | null
-  size_id:      string | null
-  size_name:    string | null
-  qty:          number
+  id:                string
+  product_id:        string
+  product_name:      string
+  product_sku:       string
+  color_id:          string | null
+  color_name:        string | null
+  size_id:           string | null
+  size_name:         string | null
+  qty:               number
+  shipped_qty:       number
+  storage_zone_id:   string | null
+  storage_zone_name: string | null
 }
 
 export type ShipmentListItem = {
@@ -74,6 +69,9 @@ export type ShipmentListItem = {
   status_label:   string
   sku_count:      number
   total_qty:      number
+  total_shipped_qty?: number
+  lines_with_shipped_qty?: number
+  lines_with_zone?: number
   created_at:     string
 }
 
@@ -100,6 +98,7 @@ export type ShipmentListParams = {
   status?:    ShipmentStatus | ShipmentStatus[]
   client_id?: string
   search?:    string
+  sku?:       string
   date_from?: string
   date_to?:   string
   overdue?:   boolean
@@ -107,28 +106,29 @@ export type ShipmentListParams = {
 
 export type ShipmentsSummary = {
   all:     number
-  active:  number
   done:    number
   packing: number
-  ready:   number
   overdue: number
 }
 
 export function isShipmentOverdue(item: ShipmentListItem): boolean {
   if (!item.ship_date) return false
-  if (item.status !== 'ready' && item.status !== 'packing') return false
+  if (item.status !== 'packing') return false
   return item.ship_date < new Date().toISOString().slice(0, 10)
 }
 
 export type ShipmentLineIn = {
-  product_id:   string
-  product_name: string
-  product_sku:  string
-  color_id?:    string | null
-  color_name?:  string | null
-  size_id?:     string | null
-  size_name?:   string | null
-  qty:          number
+  product_id:         string
+  product_name:       string
+  product_sku:        string
+  color_id?:          string | null
+  color_name?:        string | null
+  size_id?:           string | null
+  size_name?:         string | null
+  qty:                number
+  shipped_qty?:       number
+  storage_zone_id?:   string | null
+  storage_zone_name?: string | null
 }
 
 export type ShipmentDocCreate = {
@@ -145,10 +145,11 @@ export type ShipmentDocCreate = {
 
 export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'>
 
-export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
+export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'sku' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
+  if (params.sku)       sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   const q = sp.toString()
@@ -164,6 +165,7 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   }
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
+  if (params.sku)       sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')

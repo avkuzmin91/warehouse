@@ -28,3 +28,12 @@ export function fmtYmdAsDmy(value: string | null): string {
   if (!year || !month || !day) return value
   return `${day}-${month}-${year}`
 }
+
+/** Local calendar date as YYYY-MM-DD. */
+export function localTodayYmd(): string {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}

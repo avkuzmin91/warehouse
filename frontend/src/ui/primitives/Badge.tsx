@@ -22,7 +22,7 @@ export function Badge({ tone = '', dot = false, children, style, className = '' 
 export function statusTone(status: string): BadgeTone {
   const map: Record<string, BadgeTone> = {
     draft: '', in_progress: 'info', verified: 'success', done: 'success', cancelled: 'danger',
-    packing: 'info', ready: 'accent', shipped: 'success',
+    packing: 'info', shipped: 'success',
     open: 'warning', reported: 'info', returned: 'success',
     pending: '', in: 'info', reviewed: 'success',
   }
@@ -36,7 +36,6 @@ export const STATUS_LABELS: Record<string, string> = {
   done: 'Завершено',
   cancelled: 'Аннулирован',
   packing: 'В плане',
-  ready: 'На сборке',
   shipped: 'Отгружено',
   open: 'Открыт',
   reported: 'Зафиксирован',

@@ -35,6 +35,15 @@ def client_id():
     cleanup_client(cid)
 
 
+def _arrive(admin_client, doc_id: str):
+    """Фиксация прибытия: «Принят» по каждой строке = её planned_qty."""
+    detail = admin_client.get(f"/receipts/{doc_id}")
+    assert detail.status_code == 200, detail.text
+    lines = detail.json()["lines"]
+    payload = {"lines": [{"line_id": l["id"], "accepted_qty": l["planned_qty"]} for l in lines]}
+    return admin_client.post(f"/receipts/{doc_id}/arrive", json=payload)
+
+
 def test_create_receipt_returns_doc_id(admin_client, client_id):
     payload = _make_receipt_payload(client_id)
     r = admin_client.post("/receipts", json=payload)
@@ -118,8 +127,19 @@ def test_complete_receipt_line_sets_qc_status_done(admin_client, client_id):
     assert detail.status_code == 200, detail.text
     line_id = detail.json()["lines"][0]["id"]
 
-    arrive = admin_client.post(f"/receipts/{doc_id}/arrive")
+    arrive = _arrive(admin_client, doc_id)
     assert arrive.status_code == 200, arrive.text
+
+    # Принят зафиксирован при прибытии.
+    updated_after_arrive = admin_client.get(f"/receipts/{doc_id}")
+    assert updated_after_arrive.json()["lines"][0]["accepted_qty"] == 3
+
+    # Место годного обязательно при accepted > 0.
+    zone = admin_client.patch(
+        f"/receipts/{doc_id}/lines/{line_id}",
+        json={"good_zone_id": str(uuid.uuid4()), "good_zone_name": "Зона А"},
+    )
+    assert zone.status_code == 200, zone.text
 
     complete = admin_client.post(
         f"/receipts/{doc_id}/lines/{line_id}/qc-complete",
@@ -150,7 +170,7 @@ def test_record_receipt_op_sets_line_qc_status_in_progress(admin_client, client_
     assert response.status_code == 200, response.text
     doc_id = response.json()["message"]
 
-    arrive = admin_client.post(f"/receipts/{doc_id}/arrive")
+    arrive = _arrive(admin_client, doc_id)
     assert arrive.status_code == 200, arrive.text
 
     detail = admin_client.get(f"/receipts/{doc_id}")
@@ -171,6 +191,27 @@ def test_record_receipt_op_sets_line_qc_status_in_progress(admin_client, client_
     assert data["state"]["lines"][0]["qc_status"] == "in_progress"
 
 
+def test_arrive_requires_accepted_qty_for_every_line(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [{
+        "product_id": str(uuid.uuid4()),
+        "product_name": "Test Product",
+        "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
+        "color_id": None,
+        "color_name": None,
+        "size_id": None,
+        "size_name": None,
+        "planned_qty": 4,
+    }]
+    response = admin_client.post("/receipts", json=payload)
+    assert response.status_code == 200, response.text
+    doc_id = response.json()["message"]
+
+    # Прибытие без «Принят» по строке — отклоняется.
+    bad = admin_client.post(f"/receipts/{doc_id}/arrive", json={"lines": []})
+    assert bad.status_code == 400, bad.text
+
+
 def test_record_receipt_correction_updates_saved_qty(admin_client, client_id):
     payload = _make_receipt_payload(client_id)
     payload["lines"] = [{
@@ -187,7 +228,7 @@ def test_record_receipt_correction_updates_saved_qty(admin_client, client_id):
     assert response.status_code == 200, response.text
     doc_id = response.json()["message"]
 
-    arrive = admin_client.post(f"/receipts/{doc_id}/arrive")
+    arrive = _arrive(admin_client, doc_id)
     assert arrive.status_code == 200, arrive.text
 
     detail = admin_client.get(f"/receipts/{doc_id}")

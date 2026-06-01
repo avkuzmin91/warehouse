@@ -19,6 +19,3 @@ export function resolvePublicUploadSrc(url: string): string {
   if (s.startsWith('/')) return `${API_BASE_URL}${s}`
   return s
 }
-
-/** ID «Актуален» в системном справочнике актуальности (совпадает с backend `RECORD_ACTUALITY_YES_ID`). */
-export const RECORD_ACTUALITY_YES_ID = '00000000-0000-4000-8000-000000000001'
