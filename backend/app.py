@@ -42,6 +42,10 @@ def _ensure_runtime_schema() -> None:
                 ADD COLUMN IF NOT EXISTS storage_zone_id TEXT,
                 ADD COLUMN IF NOT EXISTS storage_zone_name TEXT
         """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS receipt_docs
+                ADD COLUMN IF NOT EXISTS comment TEXT
+        """)
         conn.commit()
 
 

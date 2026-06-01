@@ -38,7 +38,7 @@ const CLIENT_NAV: NavItem[] = [
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
   manager: 'Менеджер',
-  user: 'Ожидает доступа',
+  user: 'Без доступа',
   warehouse_manager: 'Кладовщик',
   client: 'Клиент',
 }

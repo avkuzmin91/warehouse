@@ -33,11 +33,11 @@ export function PendingAccessPage({ email }: PendingAccessPageProps) {
           <Brand size={42} />
         </div>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: 0 }}>
-          Дождитесь предоставления доступа
+          Доступ отключён
         </h1>
         <p style={{ margin: '10px 0 0', color: 'var(--c-text-muted)', lineHeight: 1.55 }}>
-          Аккаунт создан, но администратор или менеджер еще не назначил вам рабочую роль.
-          После выдачи доступа обновите страницу или войдите заново.
+          Для этого аккаунта не назначена рабочая роль. Обратитесь к администратору или менеджеру,
+          если доступ нужно вернуть.
         </p>
         {email && (
           <div

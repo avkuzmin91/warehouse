@@ -37,12 +37,43 @@ def _require_active_client(connection, raw: str | None) -> str:
     return cid
 
 
-def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> MessageResponse:
-    if user_id == admin["id"] and is_deleted:
+def _revoke_user_sessions(connection, user_id: str) -> None:
+    connection.execute(
+        "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+        (_now(), user_id),
+    )
+
+
+def _disable_user_access(user_id: str, admin: dict) -> MessageResponse:
+    if user_id == admin["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Нельзя удалить самого себя",
+            detail="Нельзя отключить доступ самому себе",
         )
+    with get_connection() as connection:
+        target_user = connection.execute(
+            "SELECT id, role FROM users WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (user_id,),
+        ).fetchone()
+        if not target_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        if target_user["role"] == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нельзя отключить доступ администратора",
+            )
+        connection.execute(
+            "UPDATE users SET role = 'user', client_id = NULL WHERE id = ?",
+            (user_id,),
+        )
+        _revoke_user_sessions(connection, user_id)
+        connection.commit()
+    return MessageResponse(message="Доступ отключён")
+
+
+def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> MessageResponse:
+    if is_deleted:
+        return _disable_user_access(user_id, admin)
     with get_connection() as connection:
         target_user = connection.execute(
             "SELECT id, role, COALESCE(is_deleted, 0) AS del FROM users WHERE id = ?",
@@ -50,28 +81,14 @@ def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> 
         ).fetchone()
         if not target_user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
-        if is_deleted:
-            if target_user["del"]:
-                return MessageResponse(message="Удалено")
-            if target_user["role"] == "admin":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Нельзя удалить администратора",
-                )
-            now = _now()
-            connection.execute(
-                "UPDATE users SET is_deleted = 1, deleted_at = ?, deleted_by_id = ? WHERE id = ?",
-                (now, admin["id"], user_id),
-            )
-        else:
-            if not target_user["del"]:
-                return MessageResponse(message="Восстановлено")
-            connection.execute(
-                "UPDATE users SET is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL WHERE id = ?",
-                (user_id,),
-            )
+        if not target_user["del"]:
+            return MessageResponse(message="Восстановлено")
+        connection.execute(
+            "UPDATE users SET is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL WHERE id = ?",
+            (user_id,),
+        )
         connection.commit()
-    return MessageResponse(message="Удалено" if is_deleted else "Восстановлено")
+    return MessageResponse(message="Восстановлено")
 
 
 @router.get("", response_model=list[UserListItem])
@@ -114,7 +131,7 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get
         )
     with get_connection() as connection:
         target_user = connection.execute(
-            "SELECT id, role FROM users WHERE id = ?",
+            "SELECT id, role FROM users WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (user_id,),
         ).fetchone()
         if not target_user:
@@ -124,9 +141,13 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Нельзя изменить роль администратора",
             )
-        connection.execute("UPDATE users SET role = ? WHERE id = ?", (payload.role, user_id))
+        if payload.role == "client":
+            connection.execute("UPDATE users SET role = ? WHERE id = ?", (payload.role, user_id))
+        else:
+            connection.execute("UPDATE users SET role = ?, client_id = NULL WHERE id = ?", (payload.role, user_id))
+        _revoke_user_sessions(connection, user_id)
         connection.commit()
-    return MessageResponse(message="Role updated")
+    return MessageResponse(message="Роль обновлена")
 
 
 @router.patch("/{user_id}/client", response_model=MessageResponse)
@@ -140,7 +161,7 @@ def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Dep
     new_cid = (str(raw).strip() if raw is not None else "") or None
     with get_connection() as connection:
         target_user = connection.execute(
-            "SELECT id, role FROM users WHERE id = ?",
+            "SELECT id, role FROM users WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (user_id,),
         ).fetchone()
         if not target_user:
@@ -153,6 +174,7 @@ def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Dep
         if new_cid:
             _require_active_client(connection, new_cid)
         connection.execute("UPDATE users SET client_id = ? WHERE id = ?", (new_cid, user_id))
+        _revoke_user_sessions(connection, user_id)
         connection.commit()
     return MessageResponse(message="Привязка обновлена")
 
@@ -164,4 +186,4 @@ def patch_user_deleted_flag(user_id: str, payload: UserDeletePatchRequest, admin
 
 @router.delete("/{user_id}", response_model=MessageResponse)
 def delete_user(user_id: str, admin=Depends(get_current_admin)):
-    return _apply_user_deleted_flag(user_id, admin, is_deleted=True)
+    return _disable_user_access(user_id, admin)

@@ -68,6 +68,7 @@ export function InventoryShipmentDetailPage() {
   const [infoCarrierName, setInfoCarrierName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
   const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
+  const [infoComment, setInfoComment] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
@@ -80,6 +81,7 @@ export function InventoryShipmentDetailPage() {
     setInfoCarrierName(doc.carrier ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+    setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
   }, [doc])
 
@@ -109,6 +111,7 @@ export function InventoryShipmentDetailPage() {
         carrier:        infoCarrierName || null,
         ship_date:      infoShipDate || null,
         logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null,
+        comment:        infoComment.trim() || null,
       })
       await load()
       setInfoDirty(false)
@@ -129,6 +132,7 @@ export function InventoryShipmentDetailPage() {
   const canDelete = isDraft || isPlanned
   const canEditPlan = isDraft || isPlanned
   const canEditShipped = isPlanned
+  const canEditInfo = isDraft || isPlanned
 
   const shipmentClientId = doc?.client_id ?? null
   const shipmentCargoType = doc?.cargo_type
@@ -546,13 +550,13 @@ export function InventoryShipmentDetailPage() {
             <div className="card-head">
               <Icon name="file" size={15} className="ic-accent" />
               <div className="card-head-title">Основная информация</div>
-              {canEditShipped && infoSaved && (
+              {canEditInfo && infoSaved && (
                 <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <Icon name="check" size={12} />Сохранено
                 </span>
               )}
             </div>
-            {canEditShipped ? (
+            {canEditInfo ? (
               <div className="card-body">
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
@@ -612,6 +616,16 @@ export function InventoryShipmentDetailPage() {
                       placeholder="0.00"
                     />
                   </Field>
+                  <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <textarea
+                      className="input"
+                      rows={3}
+                      placeholder="Примечание для команды склада"
+                      value={infoComment}
+                      onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
+                      style={{ resize: 'vertical', minHeight: 76 }}
+                    />
+                  </Field>
                 </div>
               </div>
             ) : (
@@ -627,6 +641,9 @@ export function InventoryShipmentDetailPage() {
                     value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
                     mono
                   />
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <ReadOnlyField label="Комментарий" value={doc.comment} />
+                  </div>
                 </div>
               </div>
             )}

@@ -201,7 +201,7 @@ function Row(props: Props & { line: ReceiptLine }) {
           : (
             <NumberStep
               value={props.plannedQty(line)}
-              onChange={(v) => props.onPlannedQty(line, Math.max(1, v))}
+              onChange={(v) => props.onPlannedQty(line, v)}
               tone={props.plannedDirty(line) ? 'accent' : 'normal'}
               disabled={props.saving}
               width={100}

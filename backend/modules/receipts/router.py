@@ -109,14 +109,15 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
         conn.execute(
             """
             INSERT INTO receipt_docs
-              (id, doc_number, client_id, supplier_name, arrival_date, status,
+              (id, doc_number, client_id, supplier_name, arrival_date, comment, status,
                zone_id, zone_name, ttn, logistics_cost, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 doc_id, doc_num, cid,
                 (payload.supplier_name or "").strip() or None,
                 (payload.arrival_date or "").strip() or None,
+                (payload.comment or "").strip() or None,
                 RECEIPT_STATUS_DRAFT,
                 (payload.zone_id or "").strip() or None,
                 (payload.zone_name or "").strip() or None,
@@ -237,6 +238,7 @@ def list_receipts(
             client_name=r["client_name"],
             supplier_name=r["supplier_name"],
             arrival_date=r["arrival_date"],
+            comment=r["comment"],
             status=str(r["status"]),
             zone_id=r["zone_id"],
             zone_name=r["zone_name"],
@@ -326,6 +328,7 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         client_name=doc_row["client_name"],
         supplier_name=doc_row["supplier_name"],
         arrival_date=doc_row["arrival_date"],
+        comment=doc_row["comment"],
         status=str(doc_row["status"]),
         zone_id=doc_row["zone_id"],
         zone_name=doc_row["zone_name"],
@@ -347,7 +350,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) == RECEIPT_STATUS_DONE:
+        if str(doc_row["status"]) in (RECEIPT_STATUS_DONE, RECEIPT_STATUS_CANCELLED):
             raise HTTPException(status_code=400, detail="Завершённый документ нельзя изменять")
 
         updates: list[str] = []
@@ -384,6 +387,9 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
             v = (payload.arrival_date or "").strip() or None
             updates.append("arrival_date = ?"); params.append(v)
             _diff("Дата прибытия", doc_row["arrival_date"], v, fmt=_fmt_date)
+        if "comment" in payload.model_fields_set:
+            v = (payload.comment or "").strip() or None
+            updates.append("comment = ?"); params.append(v)
         if payload.zone_id is not None:
             v = (payload.zone_id or "").strip() or None
             updates.append("zone_id = ?"); params.append(v)

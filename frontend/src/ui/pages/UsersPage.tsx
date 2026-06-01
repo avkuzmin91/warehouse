@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getUsers, updateUserRole, updateUserClient, deleteUser, getClients } from '../../api/adminApi'
+import { getUsers, updateUserRole, updateUserClient, getClients } from '../../api/adminApi'
 import type { DictionaryItem, UserListItem } from '../../api/domainTypes'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { useToast } from '../feedback/Toast'
@@ -14,7 +14,7 @@ import { SkeletonRows } from '../primitives/Skeleton'
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
   manager: 'Менеджер',
-  user: 'Ожидает доступа',
+  user: 'Без доступа',
   client: 'Клиент',
   warehouse_manager: 'Кладовщик',
 }
@@ -35,7 +35,7 @@ const ROLE_FILTERS = [
   { role: 'admin', label: 'Администраторы', icon: 'shield' },
   { role: 'manager', label: 'Менеджеры', icon: 'star' },
   { role: 'warehouse_manager', label: 'Кладовщики', icon: 'archive' },
-  { role: 'user', label: 'Ожидают доступа', icon: 'user' },
+  { role: 'user', label: 'Без доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const
 
@@ -359,17 +359,6 @@ export function UsersPage() {
     }
   }
 
-  async function handleDelete(userId: string, email: string) {
-    if (!confirm(`Удалить пользователя ${email}?`)) return
-    try {
-      await deleteUser(userId)
-      setUsers((prev) => prev.filter((item) => item.id !== userId))
-      toast('Пользователь удалён', 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
-    }
-  }
-
   return (
     <ListPage
       title="Пользователи"
@@ -449,7 +438,6 @@ export function UsersPage() {
                   <th className="th">Роль</th>
                   <th className="th">Клиент</th>
                   <th className="th">Дата регистрации</th>
-                  <th className="th" style={{ width: 48 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -480,18 +468,6 @@ export function UsersPage() {
                     </td>
                     <td className="td" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>
                       {item.created_at ? new Date(item.created_at).toLocaleDateString('ru-RU') : '—'}
-                    </td>
-                    <td className="td" style={{ textAlign: 'right' }}>
-                      {item.role !== 'admin' && (
-                        <button
-                          className="btn ghost icon sm"
-                          title="Удалить пользователя"
-                          onClick={() => handleDelete(item.id, item.email)}
-                          style={{ color: 'var(--c-danger)' }}
-                        >
-                          <Icon name="trash" size={14} />
-                        </button>
-                      )}
                     </td>
                   </tr>
                 ))}

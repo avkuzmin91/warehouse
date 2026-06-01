@@ -40,13 +40,6 @@ export function updateUserClient(userId: string, clientId: string | null) {
   })
 }
 
-export function deleteUser(userId: string) {
-  return request<{ message: string }>(`/users/${userId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_deleted: true }),
-  })
-}
-
 export function fetchRecordActualityFilterItems() {
   return request<RecordActualityFilterItem[]>('/system/record-actuality')
 }

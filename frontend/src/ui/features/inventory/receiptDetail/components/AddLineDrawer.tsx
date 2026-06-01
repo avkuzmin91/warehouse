@@ -33,7 +33,8 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
   const [colorId, setColorId] = useState('')
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [sizeId, setSizeId] = useState('')
-  const [qty, setQty] = useState(1)
+  const [qty, setQty] = useState(0)
+  const [qtyDraft, setQtyDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -159,20 +160,24 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            onClick={() => { const n = Math.max(1, qty - 1); setQty(n); setQtyDraft(String(n)) }}
           >
             <Icon name="minus" size={11} />
           </button>
           <input
             inputMode="numeric"
-            value={qty}
-            onChange={(e) => setQty(Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
+            value={qtyDraft}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/\D/g, '')
+              setQtyDraft(raw)
+              if (raw !== '') setQty(parseInt(raw, 10))
+            }}
             style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', background: 'transparent', minWidth: 0 }}
           />
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => q + 1)}
+            onClick={() => { const n = qty + 1; setQty(n); setQtyDraft(String(n)) }}
           >
             <Icon name="plus" size={11} />
           </button>

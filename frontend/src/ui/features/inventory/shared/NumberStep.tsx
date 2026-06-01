@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Icon } from '../../../primitives/Icon'
 
 type Tone = 'normal' | 'accent' | 'warning'
@@ -49,6 +50,10 @@ export function NumberStep({
   const btnH = height - 2
   const btnW = Math.max(22, Math.round(height * 0.95))
   const fontSize = height >= 30 ? 13 : 12
+
+  const [draft, setDraft] = useState<string>(value === 0 ? '' : String(value))
+  useEffect(() => { setDraft(value === 0 ? '' : String(value)) }, [value])
+
   return (
     <div
       style={{
@@ -72,11 +77,12 @@ export function NumberStep({
       </button>
       <input
         inputMode="numeric"
-        value={value}
+        value={draft}
         disabled={disabled}
         onChange={(e) => {
-          const next = parseInt(e.target.value.replace(/\D/g, '')) || 0
-          onChange(next)
+          const raw = e.target.value.replace(/\D/g, '')
+          setDraft(raw)
+          if (raw !== '') onChange(parseInt(raw, 10))
         }}
         style={{
           flex: 1,
