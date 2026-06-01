@@ -47,7 +47,7 @@ export function ByZoneView() {
   // Перемещение между местами (вариант B). reloc = строка, которую двигаем.
   const [reloc, setReloc] = useState<BalanceZoneItem | null>(null)
   const [toZoneId, setToZoneId] = useState('')
-  const [relocQty, setRelocQty] = useState(1)
+  const [relocQty, setRelocQty] = useState(0)
   const [relocComment, setRelocComment] = useState('')
   const [relocSaving, setRelocSaving] = useState(false)
   const [relocError, setRelocError] = useState('')
@@ -60,7 +60,7 @@ export function ByZoneView() {
   function openReloc(item: BalanceZoneItem) {
     setReloc(item)
     setToZoneId('')
-    setRelocQty(item.qty)
+    setRelocQty(0)
     setRelocComment('')
     setRelocError('')
   }
@@ -154,11 +154,19 @@ export function ByZoneView() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220 }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Товар, SKU…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            {search && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => setSearch('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
           </div>
           <FilterCombobox
             label="Клиент"
@@ -305,7 +313,7 @@ export function ByZoneView() {
 
             <div>
               <label className="field-label"><span>Количество</span></label>
-              <NumberStep value={relocQty} onChange={(v) => setRelocQty(Math.min(reloc.qty, Math.max(1, v)))} />
+              <NumberStep value={relocQty} min={1} onChange={(v) => setRelocQty(Math.min(reloc.qty, v))} />
               <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>Максимум: {reloc.qty}</div>
             </div>
 

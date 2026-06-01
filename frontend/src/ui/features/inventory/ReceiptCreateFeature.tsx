@@ -41,6 +41,7 @@ export function ReceiptCreateFeature() {
   const [clientId, setClientId] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
+  const [comment, setComment] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [saving, setSaving] = useState(false)
@@ -73,6 +74,7 @@ export function ReceiptCreateFeature() {
         client_id: clientId,
         supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
+        comment: comment.trim() || null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
@@ -191,6 +193,20 @@ export function ReceiptCreateFeature() {
                     onChange={(e) => setLogisticsCost(e.target.value)}
                   />
                 </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label className="field-label">
+                    <span>Комментарий</span>
+                    <span className="text-xs faint">не обязательно</span>
+                  </label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Примечание для команды склада"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    style={{ resize: 'vertical', minHeight: 76 }}
+                  />
+                </div>
               </div>
             </CardBody>
           </Card>
@@ -239,7 +255,7 @@ export function ReceiptCreateFeature() {
                       <Td className="num" style={{ color: 'var(--c-text-muted)' }}>
                         <NumberStep
                           value={l.planned_qty}
-                          onChange={(v) => handleUpdateQty(l._id, Math.max(1, v))}
+                          onChange={(v) => handleUpdateQty(l._id, v)}
                           width={100}
                         />
                       </Td>
@@ -415,7 +431,8 @@ function AddLineDrawer({
   const [colorId, setColorId] = useState('')
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [sizeId, setSizeId] = useState('')
-  const [qty, setQty] = useState(10)
+  const [qty, setQty] = useState(0)
+  const [qtyDraft, setQtyDraft] = useState('')
 
   useEffect(() => {
     if (open && clientId) {
@@ -536,20 +553,24 @@ function AddLineDrawer({
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            onClick={() => { const n = Math.max(1, qty - 1); setQty(n); setQtyDraft(String(n)) }}
           >
             <Icon name="minus" size={11} />
           </button>
           <input
             inputMode="numeric"
-            value={qty}
-            onChange={(e) => setQty(Math.max(1, parseInt(e.target.value.replace(/\D/g, '')) || 1))}
+            value={qtyDraft}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/\D/g, '')
+              setQtyDraft(raw)
+              if (raw !== '') setQty(parseInt(raw, 10))
+            }}
             style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
           />
           <button
             className="btn ghost icon sm"
             style={{ height: 28, width: 26, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => setQty((q) => q + 1)}
+            onClick={() => { const n = qty + 1; setQty(n); setQtyDraft(String(n)) }}
           >
             <Icon name="plus" size={11} />
           </button>

@@ -36,6 +36,7 @@ export type ReceiptDoc = {
   client_name: string | null
   supplier_name: string | null
   arrival_date: string | null
+  comment: string | null
   status: ReceiptStatus
   zone_id: string | null
   zone_name: string | null
@@ -133,6 +134,7 @@ export type ReceiptCreatePayload = {
   client_id: string
   supplier_name?: string | null
   arrival_date?: string | null
+  comment?: string | null
   zone_id?: string | null
   zone_name?: string | null
   ttn?: string | null
@@ -144,6 +146,7 @@ export type ReceiptUpdatePayload = {
   client_id?: string
   supplier_name?: string | null
   arrival_date?: string | null
+  comment?: string | null
   zone_id?: string | null
   zone_name?: string | null
   ttn?: string | null

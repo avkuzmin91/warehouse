@@ -55,7 +55,7 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
                (id,doc_number,cargo_type,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
-             body.destination, body.carrier, body.logistics_cost, body.ship_date, body.comment,
+             body.destination, body.carrier, body.logistics_cost, body.ship_date, (body.comment or "").strip() or None,
              SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
@@ -297,7 +297,9 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
-        fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        fields = body.model_dump(exclude_unset=True)
+        if "comment" in fields:
+            fields["comment"] = (fields["comment"] or "").strip() or None
         if "cargo_type" in fields:
             fields["cargo_type"] = normalize_cargo_type(fields["cargo_type"])
         if not fields:

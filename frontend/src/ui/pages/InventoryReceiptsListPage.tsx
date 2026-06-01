@@ -174,11 +174,19 @@ export function InventoryReceiptsListPage() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220 }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Номер или клиент…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            {search && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => setSearch('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
           </div>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <Icon name="tag" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />

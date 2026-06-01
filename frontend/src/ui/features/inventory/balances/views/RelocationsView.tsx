@@ -56,11 +56,19 @@ export function RelocationsView() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220 }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Товар, SKU…"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             />
+            {search && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => { setSearch(''); setPage(1) }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
           </div>
           <FilterCombobox
             label="Клиент"

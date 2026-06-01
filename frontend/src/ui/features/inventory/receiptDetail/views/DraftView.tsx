@@ -40,6 +40,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [clientId, setClientId] = useState(doc.client_id)
   const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
+  const [comment, setComment] = useState(doc.comment ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -71,6 +72,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
           client_id: clientId || undefined,
           supplier_name: supplierName.trim() || null,
           arrival_date: arrivalDate || null,
+          comment: comment.trim() || null,
           logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         })
       }
@@ -237,6 +239,20 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                     placeholder="0"
                     value={logisticsCost}
                     onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label className="field-label">
+                    <span>Комментарий</span>
+                    <span className="text-xs faint">не обязательно</span>
+                  </label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Примечание для команды склада"
+                    value={comment}
+                    onChange={(e) => { setComment(e.target.value); markDirty() }}
+                    style={{ resize: 'vertical', minHeight: 76 }}
                   />
                 </div>
               </div>

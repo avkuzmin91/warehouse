@@ -7,6 +7,7 @@ class ReceiptDocCreate(BaseModel):
     client_id: str
     supplier_name: str | None = None
     arrival_date: str | None = None
+    comment: str | None = None
     zone_id: str | None = None
     zone_name: str | None = None
     ttn: str | None = None
@@ -31,6 +32,7 @@ class ReceiptDocUpdate(BaseModel):
     client_id: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
+    comment: str | None = None
     zone_id: str | None = None
     zone_name: str | None = None
     ttn: str | None = None
@@ -90,6 +92,7 @@ class ReceiptDocResponse(BaseModel):
     client_name: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
+    comment: str | None = None
     status: str
     zone_id: str | None = None
     zone_name: str | None = None
@@ -152,6 +155,7 @@ class ReceiptListItem(BaseModel):
     client_name: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
+    comment: str | None = None
     status: str
     zone_id: str | None = None
     zone_name: str | None = None

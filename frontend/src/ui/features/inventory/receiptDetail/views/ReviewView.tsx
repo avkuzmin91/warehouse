@@ -8,6 +8,7 @@ import {
   receiptStatusTone,
   recordReceiptOp,
   reopenReceiptLine,
+  updateReceipt,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptDetail, ReceiptLine } from '../../../../../api/receiptsApi'
@@ -49,6 +50,8 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
   const [pendingZones, setPendingZones] = useState<Record<string, string>>({})
   const [savingChanges, setSavingChanges] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [comment, setComment] = useState(doc.comment ?? '')
+  const [commentDirty, setCommentDirty] = useState(false)
   const [reopening, setReopening] = useState<Record<string, boolean>>({})
   const [lineError, setLineError] = useState<Record<string, string>>({})
   const [filterLine, setFilterLine] = useState<string | null>(null)
@@ -142,12 +145,15 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     const line = lines.find((l) => l.id === key.slice(sep + 1))
     return !!line && pendingZones[key] !== (lineZoneId(line, kind) ?? '')
   })
-  const hasUnsavedChanges = hasDirtyQty || hasDirtyZones
+  const hasUnsavedChanges = hasDirtyQty || hasDirtyZones || commentDirty
 
   async function handleSaveChanges(): Promise<boolean> {
     setSaveError('')
     setSavingChanges(true)
     try {
+      if (commentDirty) {
+        await updateReceipt(docId, { comment: comment.trim() || null })
+      }
       for (const line of lines) {
         const d = drafts[line.id]
         if (!d) continue
@@ -169,6 +175,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
       await onReload()
       setDrafts({})
       setPendingZones({})
+      setCommentDirty(false)
       return true
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -196,7 +203,7 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
     return true
   })
 
-  const isReadonly = doc.status === 'done'
+  const isReadonly = doc.status === 'done' || doc.status === 'cancelled'
 
   return (
     <div className="page">
@@ -272,6 +279,23 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
               <ReadOnlyField label="Поставщик" value={doc.supplier_name} />
               <ReadOnlyField label="Дата прибытия" value={fmtDate(doc.arrival_date)} />
               <ReadOnlyField label="Стоимость логистики, ₽" value={doc.logistics_cost.toLocaleString('ru-RU')} mono />
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div className="field-label"><span>Комментарий</span></div>
+                {isReadonly ? (
+                  <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, whiteSpace: 'pre-wrap' }}>
+                    {doc.comment || '—'}
+                  </div>
+                ) : (
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Примечание для команды склада"
+                    value={comment}
+                    onChange={(e) => { setComment(e.target.value); setCommentDirty(true) }}
+                    style={{ resize: 'vertical', minHeight: 76 }}
+                  />
+                )}
+              </div>
             </div>
           </CardBody>
         </Card>

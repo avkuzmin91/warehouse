@@ -31,6 +31,7 @@ export function InventoryShipmentCreatePage() {
   const [carrier, setCarrier] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
+  const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -108,6 +109,7 @@ export function InventoryShipmentCreatePage() {
         carrier:        carrier || null,
         logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
         ship_date:      shipDate || null,
+        comment:        comment.trim() || null,
         lines:          lines.map((line) => ({
           product_id:        line.product_id,
           product_name:      line.product_name,
@@ -229,6 +231,16 @@ export function InventoryShipmentCreatePage() {
                     value={logisticsCost}
                     onChange={(e) => setLogisticsCost(e.target.value)}
                     placeholder="0.00"
+                  />
+                </Field>
+                <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Примечание для команды склада"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    style={{ resize: 'vertical', minHeight: 76 }}
                   />
                 </Field>
               </div>
