@@ -35,7 +35,7 @@ class DictionaryUpdateRequest(BaseModel):
 class ProductTypeCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     is_active: bool = False
-    requires_color: bool = True
+    requires_color: bool = False
     requires_size: bool = False
 
 

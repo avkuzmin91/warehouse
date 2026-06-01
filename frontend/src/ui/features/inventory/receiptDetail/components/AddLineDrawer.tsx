@@ -10,6 +10,10 @@ import { Combobox } from '../../../../data/Combobox'
 import { Drawer } from '../../../../feedback/Drawer'
 import { Icon } from '../../../../primitives/Icon'
 import { Select } from '../../../../primitives/Select'
+import {
+  receiptLineColorRequired,
+  receiptLineSizeRequired,
+} from '../../shared/receiptLineVariantRules'
 
 type Props = {
   docId: string
@@ -59,8 +63,8 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
     }
   }, [colorId, selectedProduct?.sku])
 
-  const needsColor = selectedProduct?.requires_color ?? false
-  const needsSize = selectedProduct?.requires_size ?? false
+  const needsColor = receiptLineColorRequired(selectedProduct)
+  const needsSize = receiptLineSizeRequired(selectedProduct)
   const canPickSize = sizes.length > 0
 
   async function handleAdd() {
