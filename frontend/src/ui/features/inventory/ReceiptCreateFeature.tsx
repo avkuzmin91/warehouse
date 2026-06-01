@@ -23,6 +23,10 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
 import { NumberStep } from './shared/NumberStep'
+import {
+  receiptLineColorRequired,
+  receiptLineSizeRequired,
+} from './shared/receiptLineVariantRules'
 import { ReceiptStepper } from './ReceiptStepper'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -456,8 +460,8 @@ function AddLineDrawer({
     })
   }
 
-  const needsColor = selectedProduct?.requires_color ?? false
-  const needsSize = selectedProduct?.requires_size ?? false
+  const needsColor = receiptLineColorRequired(selectedProduct)
+  const needsSize = receiptLineSizeRequired(selectedProduct)
   const canPickSize = sizes.length > 0
 
   return (
