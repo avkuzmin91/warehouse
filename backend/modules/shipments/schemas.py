@@ -18,24 +18,26 @@ class ShipmentLineIn(BaseModel):
 
 
 class ShipmentDocCreate(BaseModel):
-    cargo_type:  str = "good"
-    client_id:   str | None = None
-    client_name: str | None = None
-    destination: str | None = None
-    carrier:     str | None = None
-    ship_date:   str | None = None
-    comment:     str | None = None
-    lines:       list[ShipmentLineIn] = []
+    cargo_type:      str = "good"
+    client_id:       str | None = None
+    client_name:     str | None = None
+    destination:     str | None = None
+    carrier:         str | None = None
+    logistics_cost:  float | None = None
+    ship_date:       str | None = None
+    comment:         str | None = None
+    lines:           list[ShipmentLineIn] = []
 
 
 class ShipmentDocUpdate(BaseModel):
-    cargo_type:  str | None = None
-    client_id:   str | None = None
-    client_name: str | None = None
-    destination: str | None = None
-    carrier:     str | None = None
-    ship_date:   str | None = None
-    comment:     str | None = None
+    cargo_type:      str | None = None
+    client_id:       str | None = None
+    client_name:     str | None = None
+    destination:     str | None = None
+    carrier:         str | None = None
+    logistics_cost:  float | None = None
+    ship_date:       str | None = None
+    comment:         str | None = None
 
 
 class ShipmentLineItem(BaseModel):
@@ -61,6 +63,7 @@ class ShipmentListItem(BaseModel):
     client_name:  str | None
     destination:  str | None
     carrier:      str | None
+    logistics_cost: float | None
     ship_date:    str | None
     status:       str
     status_label: str
@@ -96,6 +99,7 @@ class ShipmentDetailResponse(BaseModel):
     client_name:  str | None
     destination:  str | None
     carrier:      str | None
+    logistics_cost: float | None
     ship_date:    str | None
     comment:      str | None
     status:       str

@@ -284,7 +284,8 @@ export function InventoryShipmentsListPage() {
                 <th>Назначение</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
                 <th style={{ textAlign: 'right', width: 60 }}>SKU</th>
-                <th style={{ textAlign: 'right', width: 80 }}>Кол-во</th>
+                <th style={{ textAlign: 'right', width: 80 }}>План</th>
+                <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
                 <th style={{ width: 130 }}>Перевозчик</th>
                 <th style={{ width: 130 }}>Статус</th>
                 <th style={{ width: 150 }}>Выполнение</th>
@@ -292,9 +293,9 @@ export function InventoryShipmentsListPage() {
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={10} />
+                <SkeletonRows rows={8} cols={11} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={10}>
+                <tr><td colSpan={11}>
                   <EmptyState
                     title={tab === 'overdue' ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
                     sub={tab === 'all' ? 'Создайте первую отгрузку' : undefined}
@@ -335,6 +336,7 @@ export function InventoryShipmentsListPage() {
                       </Td>
                       <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
+                      <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
                       <Td>{item.carrier ?? '—'}</Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

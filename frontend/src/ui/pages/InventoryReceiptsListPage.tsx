@@ -255,7 +255,8 @@ export function InventoryReceiptsListPage() {
                 <th>Клиент</th>
                 <th style={{ width: 120 }}>Дата прибытия</th>
                 <th style={{ width: 70, textAlign: 'right' }}>SKU</th>
-                <th style={{ width: 100, textAlign: 'right' }}>План, шт</th>
+                <th style={{ width: 100, textAlign: 'right' }}>План</th>
+                <th style={{ width: 100, textAlign: 'right' }}>Факт</th>
                 <th style={{ width: 130 }}>Статус</th>
                 <th style={{ width: 160 }}>Проверка</th>
                 <th style={{ width: 28 }} />
@@ -263,10 +264,10 @@ export function InventoryReceiptsListPage() {
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={9} />
+                <SkeletonRows rows={8} cols={10} />
               ) : loadError ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <EmptyState
                       title="Не удалось загрузить документы"
                       sub={loadError}
@@ -280,7 +281,7 @@ export function InventoryReceiptsListPage() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <EmptyState
                       title="Документов нет"
                       sub={tab === 'overdue' ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
@@ -332,6 +333,7 @@ export function InventoryReceiptsListPage() {
                       </Td>
                       <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_planned.toLocaleString('ru-RU')}</Td>
+                      <Td className="num">{item.total_accepted_qty.toLocaleString('ru-RU')}</Td>
                       <Td>
                         <Badge tone={receiptStatusTone(item.status) as BadgeTone} dot>
                           {RECEIPT_STATUS_LABELS[item.status]}
@@ -497,7 +499,9 @@ function KanbanColumn({ col, filters, onNavigate }: {
                   <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>{item.supplier_name}</div>
                 )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_planned} шт</span>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>План: {item.total_planned}</span>
+                  <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Факт: {item.total_accepted_qty}</span>
                   <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
                   <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
                   {item.total_defect > 0 && (

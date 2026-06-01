@@ -52,10 +52,10 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
         doc_num = next_doc_number(conn)
         conn.execute(
             """INSERT INTO shipment_docs
-               (id,doc_number,cargo_type,client_id,client_name,destination,carrier,ship_date,comment,status,created_at,created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (id,doc_number,cargo_type,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
-             body.destination, body.carrier, body.ship_date, body.comment,
+             body.destination, body.carrier, body.logistics_cost, body.ship_date, body.comment,
              SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
@@ -200,6 +200,7 @@ def list_shipments(
             client_name=r["client_name"],
             destination=r["destination"],
             carrier=r["carrier"],
+            logistics_cost=float(r["logistics_cost"]) if r["logistics_cost"] is not None else None,
             ship_date=r["ship_date"],
             status=str(r["status"]),
             status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
@@ -270,6 +271,7 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
         client_name=row["client_name"],
         destination=row["destination"],
         carrier=row["carrier"],
+        logistics_cost=float(row["logistics_cost"]) if row["logistics_cost"] is not None else None,
         ship_date=row["ship_date"],
         comment=row["comment"],
         status=str(row["status"]),

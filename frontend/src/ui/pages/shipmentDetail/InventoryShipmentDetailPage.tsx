@@ -398,6 +398,14 @@ export function InventoryShipmentDetailPage() {
     }
   }
 
+  async function handleSaveChanges() {
+    if (infoDirty) {
+      const saved = await handleInfoSave()
+      if (!saved) return
+    }
+    if (hasUnsavedLineChanges) await handleSaveAllLines()
+  }
+
   async function handleDeleteLine(lineId: string) {
     if (!docId) return
     const ok = await confirm({
@@ -490,11 +498,6 @@ export function InventoryShipmentDetailPage() {
               <Icon name="layers" size={14} />Журнал
               {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
             </button>
-            {canEditShipped && infoDirty && (
-              <button className="btn ghost" disabled={infoSaving || acting} onClick={() => { void handleInfoSave() }}>
-                <Icon name="save" size={14} />Сохранить реквизиты
-              </button>
-            )}
             {status === 'draft' && (
               <button className="btn ghost" disabled={acting} onClick={() => act(() => deleteShipment(docId!), '/inventory/shipments')}>
                 <Icon name="trash" size={14} />Удалить
@@ -510,8 +513,8 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="x" size={14} />Аннулировать
               </button>
             )}
-            {canEditPlan && hasUnsavedLineChanges && (
-              <button className="btn" disabled={acting} onClick={() => { void handleSaveAllLines() }}>
+            {canEditPlan && (infoDirty || hasUnsavedLineChanges) && (
+              <button className="btn" disabled={acting || infoSaving} onClick={() => { void handleSaveChanges() }}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
