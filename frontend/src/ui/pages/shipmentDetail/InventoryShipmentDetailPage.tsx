@@ -24,11 +24,9 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Tooltip } from '../../primitives/Tooltip'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Drawer } from '../../feedback/Drawer'
-import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
-import { useLookups } from '../../../hooks/useLookups'
 import { balanceKey } from '../../../utils/balanceKey'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
@@ -60,12 +58,8 @@ export function InventoryShipmentDetailPage() {
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
 
-  const { warehouses: infoWarehouses, carriers: infoCarriers } = useLookups()
-
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
-  const [infoDestinationName, setInfoDestinationName] = useState<string | null>(null)
-  const [infoCarrierName, setInfoCarrierName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
   const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
   const [infoComment, setInfoComment] = useState('')
@@ -77,8 +71,6 @@ export function InventoryShipmentDetailPage() {
     if (!doc) return
     setInfoClientId(doc.client_id ?? null)
     setInfoClientName(doc.client_name ?? null)
-    setInfoDestinationName(doc.destination ?? null)
-    setInfoCarrierName(doc.carrier ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setInfoComment(doc.comment ?? '')
@@ -107,8 +99,6 @@ export function InventoryShipmentDetailPage() {
       await updateShipment(docId, {
         client_id:      infoClientId,
         client_name:    infoClientName,
-        destination:    infoDestinationName || null,
-        carrier:        infoCarrierName || null,
         ship_date:      infoShipDate || null,
         logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null,
         comment:        infoComment.trim() || null,
@@ -289,19 +279,9 @@ export function InventoryShipmentDetailPage() {
     ...(isPlanned
       ? [
           {
-            ok: !!infoDestinationName?.trim(),
-            label: 'Назначение указано',
-            error: 'Укажите назначение',
-          },
-          {
             ok: !!infoShipDate,
             label: 'Дата отгрузки указана',
             error: 'Укажите дату отгрузки',
-          },
-          {
-            ok: !!infoCarrierName?.trim(),
-            label: 'Перевозчик указан',
-            error: 'Укажите перевозчика',
           },
           {
             ok: infoLogisticsFilled,
@@ -584,28 +564,10 @@ export function InventoryShipmentDetailPage() {
                       </div>
                     </div>
                   </Field>
-                  <Field label="Назначение" required style={{ marginBottom: 0 }}>
-                    <Combobox
-                      value={infoDestinationName}
-                      onChange={(val, opt) => { setInfoDestinationName(opt?.label ?? (val ? String(val) : null)); setInfoDirty(true) }}
-                      options={infoWarehouses.map((w) => ({ value: w.name, label: w.name }))}
-                      placeholder="Выберите назначение…"
-                      clearable
-                    />
-                  </Field>
                   <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
-                  <Field label="Перевозчик" required style={{ marginBottom: 0 }}>
-                    <Combobox
-                      value={infoCarrierName}
-                      onChange={(val, opt) => { setInfoCarrierName(opt?.label ?? (val ? String(val) : null)); setInfoDirty(true) }}
-                      options={infoCarriers.map((c) => ({ value: c.name, label: c.name }))}
-                      placeholder="Выберите перевозчика…"
-                      clearable
-                    />
-                  </Field>
-                  <Field label="Стоимость логистики" required style={{ marginBottom: 0 }}>
+                  <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
                     <input
                       className="input"
                       type="number"
@@ -633,11 +595,9 @@ export function InventoryShipmentDetailPage() {
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <ReadOnlyField label="Назначение" value={doc.destination} />
                   <ReadOnlyField label="Дата отгрузки" value={fmtDateLong(doc.ship_date)} />
-                  <ReadOnlyField label="Перевозчик" value={doc.carrier} />
                   <ReadOnlyField
-                    label="Стоимость логистики"
+                    label="Стоимость логистики, ₽"
                     value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
                     mono
                   />

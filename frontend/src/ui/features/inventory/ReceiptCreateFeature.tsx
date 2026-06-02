@@ -39,7 +39,6 @@ export function ReceiptCreateFeature() {
   const navigate = useNavigate()
 
   const [clientId, setClientId] = useState('')
-  const [supplierName, setSupplierName] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
   const [comment, setComment] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
@@ -49,16 +48,18 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
+  const { clients: clientsAll } = useLookups()
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
-  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
   const totalSku = new Set(lines.map((l) => l.product_sku)).size
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент указан', error: 'Не выбран клиент' },
     { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
+    { ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
     { ok: lines.length > 0, label: `Строк добавлено: ${lines.length}`, error: 'Не добавлено ни одной строки' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
@@ -72,10 +73,9 @@ export function ReceiptCreateFeature() {
     try {
       const res = await createReceipt({
         client_id: clientId,
-        supplier_name: supplierName.trim() || null,
         arrival_date: arrivalDate || null,
         comment: comment.trim() || null,
-        logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+        logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
       })
@@ -160,35 +160,18 @@ export function ReceiptCreateFeature() {
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Поставщик</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Поиск поставщика…"
-                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                    onChange={(v) => {
-                      const found = suppliers.find((s) => s.id === String(v ?? ''))
-                      setSupplierName(found?.name ?? '')
-                    }}
-                    clearable
-                  />
-                </div>
-                <div>
-                  <label className="field-label">
                     <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={setArrivalDate} />
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Стоимость логистики, ₽</span>
+                    <span>Стоимость логистики, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <input
                     className="input"
                     type="number"
                     min={0}
-                    placeholder="0"
                     value={logisticsCost}
                     onChange={(e) => setLogisticsCost(e.target.value)}
                   />

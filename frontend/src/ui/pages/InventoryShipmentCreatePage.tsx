@@ -25,10 +25,6 @@ export function InventoryShipmentCreatePage() {
   const [cargoType, setCargoType] = useState<ShipmentCargoType>('good')
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
-  const [destinationId, setDestinationId] = useState<string | null>(null)
-  const [destinationName, setDestinationName] = useState<string | null>(null)
-  const [carrierId, setCarrierId] = useState<string | null>(null)
-  const [carrier, setCarrier] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
   const [comment, setComment] = useState('')
@@ -38,17 +34,18 @@ export function InventoryShipmentCreatePage() {
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
-  const { clients, warehouses: destinations, carriers } = useLookups()
+  const { clients } = useLookups()
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
-  const destinationOptions: ComboboxOption[] = destinations.map((d) => ({ value: d.id, label: d.name }))
-  const carrierOptions: ComboboxOption[] = carriers.map((c) => ({ value: c.id, label: c.name }))
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const hasOverflow = lines.some((l) => l.qty > l.available)
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
   const readyChecks = [
     { ok: !!clientId, error: 'Выберите клиента' },
     { ok: !!shipDate, error: 'Укажите дату отгрузки' },
+    { ok: logisticsCostFilled, error: 'Укажите стоимость логистики' },
     { ok: lines.length > 0, error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: !hasOverflow, error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
   ]
@@ -59,16 +56,6 @@ export function InventoryShipmentCreatePage() {
     setClientName(opt?.label ?? null)
     // clear lines that may not belong to this client
     setLines([])
-  }
-
-  function handleDestinationChange(val: string | number | null, opt?: ComboboxOption) {
-    setDestinationId(val ? String(val) : null)
-    setDestinationName(opt?.label ?? null)
-  }
-
-  function handleCarrierChange(val: string | number | null, opt?: ComboboxOption) {
-    setCarrierId(val ? String(val) : null)
-    setCarrier(opt?.label ?? '')
   }
 
   function updateQty(key: string, qty: number) {
@@ -105,9 +92,7 @@ export function InventoryShipmentCreatePage() {
         cargo_type:     cargoType,
         client_id:      clientId || null,
         client_name:    clientName || null,
-        destination:    destinationName || null,
-        carrier:        carrier || null,
-        logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+        logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
         ship_date:      shipDate || null,
         comment:        comment.trim() || null,
         lines:          lines.map((line) => ({
@@ -201,28 +186,10 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Назначение" style={{ marginBottom: 0 }}>
-                  <Combobox
-                    value={destinationId}
-                    onChange={handleDestinationChange}
-                    options={destinationOptions}
-                    placeholder="Выберите назначение…"
-                    clearable
-                  />
-                </Field>
                 <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
-                <Field label="Перевозчик" style={{ marginBottom: 0 }}>
-                  <Combobox
-                    value={carrierId}
-                    onChange={handleCarrierChange}
-                    options={carrierOptions}
-                    placeholder="Выберите перевозчика…"
-                    clearable
-                  />
-                </Field>
-                <Field label="Стоимость логистики" style={{ marginBottom: 0 }}>
+                <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
                   <input
                     className="input"
                     type="number"
@@ -230,7 +197,6 @@ export function InventoryShipmentCreatePage() {
                     step={0.01}
                     value={logisticsCost}
                     onChange={(e) => setLogisticsCost(e.target.value)}
-                    placeholder="0.00"
                   />
                 </Field>
                 <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
@@ -335,12 +301,10 @@ export function InventoryShipmentCreatePage() {
               <span className="mono" style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Дата</span>
               <span className="mono" style={{ textAlign: 'right' }}>{fmtYmdAsDmy(shipDate)}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Перевозчик</span>
-              <span style={{ textAlign: 'right', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{carrier || '—'}</span>
-              {logisticsCost && (
+              {logisticsCostFilled && (
                 <>
                   <span style={{ color: 'var(--c-text-muted)' }}>Логистика</span>
-                  <span className="mono" style={{ textAlign: 'right' }}>{parseFloat(logisticsCost).toLocaleString()}</span>
+                  <span className="mono" style={{ textAlign: 'right' }}>{logisticsCostNumber.toLocaleString()}</span>
                 </>
               )}
             </div>

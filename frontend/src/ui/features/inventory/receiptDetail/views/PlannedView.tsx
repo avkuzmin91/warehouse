@@ -9,7 +9,6 @@ import {
 } from '../../../../../api/receiptsApi'
 import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
-import { Combobox } from '../../../../data/Combobox'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
@@ -45,10 +44,9 @@ export function PlannedView({
   const confirm = useConfirm()
   const { doc, lines } = detail
 
-  const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
-  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
+  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
@@ -81,11 +79,13 @@ export function PlannedView({
     return pendingStorage[lineId] ?? line?.storage_zone_id ?? ''
   }
 
-  const { suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
-  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
+  const { unloadingZones: zonesAll } = useLookups()
   const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
+
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
   async function handleSaveChanges(): Promise<boolean> {
     if (!hasUnsavedChanges) return true
@@ -94,10 +94,9 @@ export function PlannedView({
     try {
       if (metaDirty) {
         await updateReceipt(docId, {
-          supplier_name: supplierName.trim() || null,
           arrival_date: arrivalDate || null,
           comment: comment.trim() || null,
-          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+          logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
         })
       }
       for (const line of lines) {
@@ -163,7 +162,7 @@ export function PlannedView({
     { ok: lines.length > 0 && lines.every((l) => plannedQtyFor(l.id) >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
     { ok: lines.length > 0 && missingStorageCount === 0, label: 'Место (на проверке) указано по всем строкам', error: `Не указано место (на проверке): ${missingStorageCount}` },
     { ok: lines.length > 0 && lines.every((l) => acceptedFor(l.id) >= 0), label: 'Принят указан по всем строкам', error: 'Укажите принятое количество по всем строкам' },
-    { ok: !!logisticsCost && parseFloat(logisticsCost) >= 0, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
+    { ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
   ]
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
@@ -248,23 +247,6 @@ export function PlannedView({
                 <div>
                   <label className="field-label"><span>Клиент</span></label>
                   <input className="input" value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Поставщик</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Поиск поставщика…"
-                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                    onChange={(v) => {
-                      const found = suppliers.find((s) => s.id === String(v ?? ''))
-                      setSupplierName(found?.name ?? '')
-                      markDirty()
-                    }}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">

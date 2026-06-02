@@ -38,10 +38,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const { doc, lines } = detail
 
   const [clientId, setClientId] = useState(doc.client_id)
-  const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
-  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
+  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
@@ -53,11 +52,13 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
+  const { clients: clientsAll } = useLookups()
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
-  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
+
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
   const hasUnsavedChanges = metaDirty || hasPendingQty
@@ -70,10 +71,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
       if (metaDirty) {
         await updateReceipt(docId, {
           client_id: clientId || undefined,
-          supplier_name: supplierName.trim() || null,
           arrival_date: arrivalDate || null,
           comment: comment.trim() || null,
-          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+          logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
         })
       }
       for (const line of lines) {
@@ -203,23 +203,6 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                       Удалите все строки, чтобы сменить клиента
                     </div>
                   )}
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Поставщик</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Поиск поставщика…"
-                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                    onChange={(v) => {
-                      const found = suppliers.find((s) => s.id === String(v ?? ''))
-                      setSupplierName(found?.name ?? '')
-                      markDirty()
-                    }}
-                    clearable
-                  />
                 </div>
                 <div>
                   <label className="field-label">
