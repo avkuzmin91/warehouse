@@ -26,7 +26,7 @@ const STATUS_SUB: Record<string, string> = {
   awaiting_arrival: 'Ожидает прибытия',
   unloading: 'Идёт разгрузка',
   costing: 'Уточнение стоимости',
-  on_intake: 'На приёмке',
+  on_intake: 'Принят',
   on_review: 'На проверке',
 }
 

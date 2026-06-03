@@ -151,7 +151,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             <Icon name={unloadStartReady && unloadEndReady ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
             <span>
               {unloadStartReady && unloadEndReady
-                ? <>После завершения {receipts.length} поступления уйдут в статус <b>«На приёмке»</b>, а рейс — менеджеру на уточнение стоимости.</>
+                ? <>После завершения {receipts.length} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на уточнение стоимости.</>
                 : <>Укажите начало и окончание разгрузки — без времени завершить разгрузку нельзя.</>}
             </span>
           </div>

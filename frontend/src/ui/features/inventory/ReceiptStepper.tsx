@@ -23,6 +23,7 @@ function getStatusTimestamps(ops: ReceiptOp[]): Partial<Record<ReceiptStatus | '
   for (const op of ops) {
     if (op.op_type === 'doc_create' && !ts['draft']) ts['draft'] = op.created_at
     else if (op.op_type === 'plan_fix' && !ts['planned']) ts['planned'] = op.created_at
+    else if (op.op_type === 'intake_start' && !ts['on_intake']) ts['on_intake'] = op.created_at
     else if (op.op_type === 'arrival_fix' && !ts['on_review']) ts['on_review'] = op.created_at
     else if (op.op_type === 'qc_complete') {
       // qc_complete всегда перебивает arrival_fix для шага "Проверен"
@@ -70,7 +71,7 @@ export function ReceiptStepper({ status, ops = [], style }: Props) {
         if (stepState === 'done') {
           label = ts ? fmtStepDate(ts) : ''
         } else if (stepState === 'active') {
-          label = 'в процессе'
+          label = ts ? fmtStepDate(ts) : 'в процессе'
         } else if (isCancelledStep && isLastStep && cancelledAt) {
           label = fmtStepDate(cancelledAt)
         }

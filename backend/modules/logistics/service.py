@@ -162,7 +162,7 @@ def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: 
         connection.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), rid, RECEIPT_OP_INTAKE_START,
-             f"В плане → На приёмке (разгрузка рейса {trip_number})", now, uid),
+             f"В плане → Принят (разгрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved

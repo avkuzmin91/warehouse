@@ -88,7 +88,7 @@ RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
 RECEIPT_STATUS_RU: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     "Создание",
     RECEIPT_STATUS_PLANNED:   "В плане",
-    RECEIPT_STATUS_ON_INTAKE: "На приёмке",
+    RECEIPT_STATUS_ON_INTAKE: "Принят",
     RECEIPT_STATUS_ON_REVIEW: "На проверке",
     RECEIPT_STATUS_DONE:      "Завершён",
     RECEIPT_STATUS_CANCELLED: "Аннулирован",

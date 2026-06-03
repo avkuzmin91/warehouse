@@ -16,9 +16,9 @@ interface NavItem {
 
 const OPS_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
-  { to: '/inventory/receipts', icon: 'truckIn', label: 'Поступления' },
-  { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
-  { to: '/inventory/shipments', icon: 'truckOut', label: 'Отгрузки' },
+  { to: '/logistics/trips', icon: 'truckRoute', label: 'Логистика' },
+  { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
+  { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]
 
@@ -31,8 +31,8 @@ const ADMIN_NAV: NavItem[] = [
 const CLIENT_NAV: NavItem[] = [
   { to: '/cabinet', icon: 'home', label: 'Обзор' },
   { to: '/cabinet/balances', icon: 'boxes', label: 'Мои остатки' },
-  { to: '/cabinet/receipts', icon: 'truckIn', label: 'Поступления' },
-  { to: '/cabinet/shipments', icon: 'truckOut', label: 'Отгрузки' },
+  { to: '/cabinet/receipts', icon: 'dolly', label: 'Поступления' },
+  { to: '/cabinet/shipments', icon: 'boxOut', label: 'Отгрузки' },
   { to: '/cabinet/products', icon: 'box', label: 'Товары' },
 ]
 

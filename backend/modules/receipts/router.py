@@ -476,14 +476,14 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
         if payload.planned_qty is not None and status not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
         if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
+            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'Принят' или 'На проверке'")
         _zone_fields = {
             "storage_zone_id", "storage_zone_name",
             "good_zone_id", "good_zone_name",
             "defect_zone_id", "defect_zone_name",
         }
         if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
+            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'Принят' или 'На проверке'")
         line_row = conn.execute(
             "SELECT id, planned_qty, accepted_qty, storage_zone_name, good_zone_name, defect_zone_name "
             "FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
@@ -722,7 +722,7 @@ def advance_receipt_status(doc_id: str, user=Depends(_get_manager)):
 
 @router.post("/receipts/{doc_id}/intake")
 def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
-    """В плане → На приёмке: товар прибыл, начинается подсчёт количества.
+    """В плане → Принят: товар прибыл, начинается подсчёт количества.
 
     Ручной триггер для поступлений без рейса; для рейсовых тот же переход делает
     разгрузка рейса (см. modules/logistics).
@@ -744,7 +744,7 @@ def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
         conn.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_INTAKE_START,
-             "В плане → На приёмке (начало приёмки)", now, uid),
+             "В плане → Принят (начало приёмки)", now, uid),
         )
         conn.commit()
     return {"message": RECEIPT_STATUS_ON_INTAKE}
@@ -752,7 +752,7 @@ def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
 
 @router.post("/receipts/{doc_id}/arrive")
 def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_warehouse)):
-    """На приёмке → На проверке: «Принять товары» — фиксирует принятое количество."""
+    """Принят → На проверке: «Принять товары» — фиксирует принятое количество."""
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
@@ -763,7 +763,7 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
         if str(doc_row["status"]) != RECEIPT_STATUS_ON_INTAKE:
             raise HTTPException(
                 status_code=400,
-                detail="Принять товары можно только из статуса 'На приёмке'",
+                detail="Принять товары можно только из статуса 'Принят'",
             )
         _validate_receipt_lines_have_storage(conn, doc_id)
 
@@ -802,7 +802,7 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
         conn.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
-             "На приёмке → На проверке (товары приняты)", now, uid),
+             "Принят → На проверке (товары приняты)", now, uid),
         )
         conn.commit()
     return {"message": RECEIPT_STATUS_ON_REVIEW}
