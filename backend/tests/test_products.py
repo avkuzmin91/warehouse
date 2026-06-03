@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from dbconn import get_connection
@@ -60,6 +61,114 @@ def test_products_search_filters_by_name_and_sku(admin_client):
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM products WHERE id IN (?, ?)", (product_name_id, product_sku_id))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_product_sku_can_repeat_for_different_clients(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-sku-client-{suffix}"
+    client_a = f"client-a-{suffix}"
+    client_b = f"client-b-{suffix}"
+    sku = f"CLIENT-SKU-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type SKU Client {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_a, f"Client A {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_b, f"Client B {suffix}"),
+        )
+        conn.commit()
+
+    def create_payload(client_id: str, name: str) -> dict[str, str]:
+        return {
+            "meta": json.dumps({
+                "product": {
+                    "name": name,
+                    "type_id": type_id,
+                    "sku_base": sku,
+                    "client_id": client_id,
+                    "is_active": True,
+                },
+                "colors": [],
+                "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+            }),
+        }
+
+    try:
+        first = admin_client.post("/products", data=create_payload(client_a, f"Product A {suffix}"))
+        assert first.status_code == 200, first.text
+
+        second = admin_client.post("/products", data=create_payload(client_b, f"Product B {suffix}"))
+        assert second.status_code == 200, second.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE sku = ?)", (sku,))
+            conn.execute("DELETE FROM products WHERE sku = ?", (sku,))
+            conn.execute("DELETE FROM clients WHERE id IN (?, ?)", (client_a, client_b))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_product_sku_stays_unique_inside_client_on_update(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-sku-update-{suffix}"
+    client_id = f"client-sku-update-{suffix}"
+    product_a = f"product-a-{suffix}"
+    product_b = f"product-b-{suffix}"
+    sku_a = f"SKU-A-{suffix}"
+    sku_b = f"SKU-B-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type SKU Update {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client SKU Update {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_a, f"Product A {suffix}", type_id, client_id, sku_a),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_b, f"Product B {suffix}", type_id, client_id, sku_b),
+        )
+        conn.commit()
+
+    try:
+        res = admin_client.patch(f"/products/{product_b}", json={"sku_base": sku_a})
+        assert res.status_code == 400, res.text
+        assert "клиента" in res.json()["detail"]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM products WHERE id IN (?, ?)", (product_a, product_b))
             conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
             conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
             conn.commit()
