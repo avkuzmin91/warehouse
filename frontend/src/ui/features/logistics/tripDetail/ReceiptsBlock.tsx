@@ -17,7 +17,7 @@ export type ReceiptLink = {
   tripNumber: string
   tripOrigin: string | null
   onLink: (receiptIds: string[]) => Promise<void>
-  onCreate: (form: CreateReceiptFormValue) => Promise<void>
+  onCreate?: (form: CreateReceiptFormValue) => Promise<void>
   onUnlink: (receiptDocId: string) => void
   busy?: boolean
 }
@@ -77,7 +77,8 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
           onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent' }}
         >
           <Icon name="plus" size={13} />
-          Привязать поступление · <span style={{ color: 'var(--c-text-subtle)' }}>или создать новое прямо в рейсе</span>
+          Привязать поступление
+          {link.onCreate && <span style={{ color: 'var(--c-text-subtle)' }}>· или создать новое прямо в рейсе</span>}
         </button>
       )}
 

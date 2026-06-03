@@ -53,6 +53,8 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
 
     assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
     assert admin_client.post(f"/trips/{trip_id}/arrival", json={}).json()["message"] == "unloading"
+    after_arrival = admin_client.get(f"/trips/{trip_id}").json()
+    assert after_arrival["doc"]["unload_started_at"] == after_arrival["doc"]["arrived_at"]
 
     unload = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
     assert unload.status_code == 200, unload.text
@@ -77,6 +79,45 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
     assert final["doc"]["load_factor"] == "full"
 
 
+def test_trip_unload_start_copied_from_arrival_and_can_be_adjusted(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
+    admin_client.post(f"/trips/{trip_id}/handoff")
+
+    arrived_at = "2026-06-03T10:00"
+    arrival = admin_client.post(f"/trips/{trip_id}/arrival", json={"arrived_at": arrived_at})
+    assert arrival.status_code == 200, arrival.text
+
+    detail = admin_client.get(f"/trips/{trip_id}").json()
+    assert detail["doc"]["arrived_at"] == arrived_at
+    assert detail["doc"]["unload_started_at"] == arrived_at
+
+    unload = admin_client.post(f"/trips/{trip_id}/unload", json={
+        "unload_started_at": "2026-06-03T10:05",
+        "unload_finished_at": "2026-06-03T11:10",
+        "load_factor": "partial",
+    })
+    assert unload.status_code == 200, unload.text
+
+    done = admin_client.get(f"/trips/{trip_id}").json()
+    assert done["doc"]["unload_started_at"] == "2026-06-03T10:05"
+    assert done["doc"]["unload_finished_at"] == "2026-06-03T11:10"
+
+    execution = admin_client.patch(f"/trips/{trip_id}/execution", json={
+        "arrived_at": "2026-06-03T10:02",
+        "unload_started_at": "2026-06-03T10:07",
+        "unload_finished_at": "2026-06-03T11:15",
+        "load_factor": "full",
+    })
+    assert execution.status_code == 200, execution.text
+
+    adjusted = admin_client.get(f"/trips/{trip_id}").json()
+    assert adjusted["doc"]["arrived_at"] == "2026-06-03T10:02"
+    assert adjusted["doc"]["unload_started_at"] == "2026-06-03T10:07"
+    assert adjusted["doc"]["unload_finished_at"] == "2026-06-03T11:15"
+    assert adjusted["doc"]["load_factor"] == "full"
+
+
 def test_handoff_requires_linked_receipt(admin_client):
     create = admin_client.post("/trips", json={"origin_name": "СПб"})
     assert create.status_code == 200, create.text
@@ -93,6 +134,29 @@ def test_receipt_cannot_be_linked_to_two_trips(admin_client, client_id):
     trip2 = t2.json()["message"]
     dup = admin_client.post(f"/trips/{trip2}/receipts", json={"receipt_doc_ids": [receipt_id]})
     assert dup.status_code == 400, dup.text
+
+
+def test_receipt_candidates_exclude_receipts_linked_to_other_trips(admin_client, client_id):
+    own_receipt = _planned_receipt(admin_client, client_id)
+    other_receipt = _planned_receipt(admin_client, client_id)
+    free_receipt = _planned_receipt(admin_client, client_id)
+    own_trip = admin_client.post("/trips", json={"receipt_doc_ids": [own_receipt]}).json()["message"]
+    other_trip = admin_client.post("/trips", json={"receipt_doc_ids": [other_receipt]}).json()["message"]
+    assert own_trip and other_trip
+
+    current = admin_client.get(f"/receipts?status=planned&available_for_trip_id={own_trip}&limit=100")
+    assert current.status_code == 200, current.text
+    current_ids = {item["id"] for item in current.json()["items"]}
+    assert own_receipt in current_ids
+    assert free_receipt in current_ids
+    assert other_receipt not in current_ids
+
+    new_trip = admin_client.get("/receipts?status=planned&unlinked_to_trip=true&limit=100")
+    assert new_trip.status_code == 200, new_trip.text
+    new_trip_ids = {item["id"] for item in new_trip.json()["items"]}
+    assert free_receipt in new_trip_ids
+    assert own_receipt not in new_trip_ids
+    assert other_receipt not in new_trip_ids
 
 
 def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):

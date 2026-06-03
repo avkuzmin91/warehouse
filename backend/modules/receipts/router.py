@@ -223,6 +223,8 @@ def list_receipts(
     sku: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    unlinked_to_trip: bool = Query(False),
+    available_for_trip_id: str | None = Query(None),
     user=Depends(_get_manager),
 ):
     with get_connection() as conn:
@@ -230,6 +232,7 @@ def list_receipts(
             conn,
             page=page, limit=limit, client_id=client_id, status=status,
             overdue=overdue, search=search, sku=sku, date_from=date_from, date_to=date_to,
+            unlinked_to_trip=unlinked_to_trip, available_for_trip_id=available_for_trip_id,
             statuses_all=RECEIPT_STATUSES_ALL,
         )
     items = [

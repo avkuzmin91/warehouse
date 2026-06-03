@@ -176,6 +176,8 @@ export type ReceiptListParams = {
   sku?: string
   date_from?: string
   date_to?: string
+  unlinked_to_trip?: boolean
+  available_for_trip_id?: string
 }
 
 // --- API functions ---
@@ -210,6 +212,8 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
+  if (params.unlinked_to_trip) sp.set('unlinked_to_trip', 'true')
+  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
 }

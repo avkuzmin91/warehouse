@@ -5,6 +5,7 @@ import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
 import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptEnrich } from '../ReceiptsBlock'
+import { DateTimeField, FieldLabel, timePart } from '../../components/fields'
 
 function Chip({ icon, children }: { icon: IconName; children: React.ReactNode }) {
   return (
@@ -31,12 +32,18 @@ function minutesSince(v: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
-export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, onBack, onArrival, onUnload, onOpenReceipt }: {
+export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt }: {
   detail: TripDetail
   loadFactor: TripLoadFactor
   onLoadFactor: (v: TripLoadFactor) => void
   busy: boolean
   enrich?: ReceiptEnrich
+  arrival: string
+  onArrivalChange: (v: string) => void
+  unloadStart: string
+  onUnloadStartChange: (v: string) => void
+  unloadEnd: string
+  onUnloadEndChange: (v: string) => void
   onBack: () => void
   onArrival: () => void
   onUnload: () => void
@@ -44,7 +51,12 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, o
 }) {
   const { doc, receipts } = detail
   const unloading = doc.status === 'unloading'
-  const inWork = minutesSince(doc.arrived_at)
+  const unloadingStartedAt = doc.unload_started_at ?? doc.arrived_at
+  const inWork = minutesSince(unloadingStartedAt)
+  const arrivalReady = timePart(arrival).length === 5
+  const unloadStartReady = timePart(unloadStart).length === 5
+  const unloadEndReady = timePart(unloadEnd).length === 5
+  const actionDisabled = busy || (unloading ? (!unloadStartReady || !unloadEndReady) : !arrivalReady)
 
   return (
     <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
@@ -74,13 +86,31 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, o
             <div style={{ fontSize: 18, fontWeight: 600 }}>{unloading ? 'Идёт разгрузка' : 'Ожидает прибытия машины'}</div>
             <div style={{ fontSize: 13, color: 'var(--c-text-muted)', marginTop: 2 }}>
               {unloading
-                ? <>Прибыла в <b>{fmtTime(doc.arrived_at)}</b>{inWork != null ? <> · в работе <b>{inWork} мин</b></> : null}</>
+                ? <>Начало разгрузки <b>{fmtTime(unloadingStartedAt)}</b>{inWork != null ? <> · в работе <b>{inWork} мин</b></> : null}</>
                 : <>Транспорт заказан <b>{doc.transport_ordered_at ? fmtTime(doc.transport_ordered_at) : '—'}</b></>}
             </div>
           </div>
         </div>
 
         <div style={{ borderTop: '1px solid var(--c-border)', padding: 18, display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+          {!unloading && (
+            <div style={{ minWidth: 240 }}>
+              <FieldLabel required>Прибытие</FieldLabel>
+              <DateTimeField value={arrival} onChange={onArrivalChange} />
+            </div>
+          )}
+          {unloading && (
+            <>
+              <div style={{ minWidth: 240 }}>
+                <FieldLabel required>Начало разгрузки</FieldLabel>
+                <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
+              </div>
+              <div style={{ minWidth: 240 }}>
+                <FieldLabel required>Окончание разгрузки</FieldLabel>
+                <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
+              </div>
+            </>
+          )}
           {unloading && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--c-text-muted)', marginBottom: 7 }}>Загруженность</div>
@@ -107,7 +137,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, o
           )}
           <button
             onClick={unloading ? onUnload : onArrival}
-            disabled={busy}
+            disabled={actionDisabled}
             className="btn primary"
             style={{ marginLeft: 'auto', height: 52, padding: '0 28px', fontSize: 15.5, borderRadius: 12 }}
           >
@@ -118,8 +148,19 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, o
 
         {unloading && (
           <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
-            <Icon name="arrowRight" size={13} style={{ color: 'var(--c-text-faint)', flexShrink: 0, marginTop: 2 }} />
-            <span>После завершения {receipts.length} поступления уйдут в статус <b>«На приёмке»</b>, а рейс — менеджеру на уточнение стоимости.</span>
+            <Icon name={unloadStartReady && unloadEndReady ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
+            <span>
+              {unloadStartReady && unloadEndReady
+                ? <>После завершения {receipts.length} поступления уйдут в статус <b>«На приёмке»</b>, а рейс — менеджеру на уточнение стоимости.</>
+                : <>Укажите начало и окончание разгрузки — без времени завершить разгрузку нельзя.</>}
+            </span>
+          </div>
+        )}
+
+        {!unloading && !arrivalReady && (
+          <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
+            <Icon name="alert" size={13} style={{ color: 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
+            <span>Укажите время прибытия — без него рейс нельзя отправить на разгрузку.</span>
           </div>
         )}
       </div>

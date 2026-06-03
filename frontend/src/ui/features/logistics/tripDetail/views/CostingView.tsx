@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { Icon } from '../../../../primitives/Icon'
-import type { TripDetail } from '../../../../../api/tripsApi'
 import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
+import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
 import { TripHeader, PrimaryAction } from '../TripHeader'
 import { PlanningForm } from '../PlanningForm'
 import type { PlanningFormValue } from '../PlanningForm'
 import { PhaseBlock } from '../../components/PhaseBlock'
-import { MoneyField, ReadRow, FieldLabel } from '../../components/fields'
+import { DateTimeField, MoneyField, ReadRow, FieldLabel, Segmented } from '../../components/fields'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import { ProcessPanel, CostPanel, JournalPanel } from '../panels'
 import { fmtDateTime } from '../format'
@@ -24,7 +24,7 @@ function durationMin(from: string | null, to: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
-export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, busy, onBack, onCancel, onClose, onOpenReceipt }: {
+export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, onBack, onCancel, onClose, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -33,6 +33,15 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
   dirtyCost: boolean
   onSaveCost: () => void
   onSaveFields: () => void
+  arrival: string
+  onArrivalChange: (v: string) => void
+  unloadStart: string
+  onUnloadStartChange: (v: string) => void
+  unloadEnd: string
+  onUnloadEndChange: (v: string) => void
+  loadFactor: TripLoadFactor
+  onLoadFactor: (v: TripLoadFactor) => void
+  onSaveExecution: () => void
   busy: boolean
   onBack: () => void
   onCancel: () => void
@@ -41,8 +50,9 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
 }) {
   const { doc, ops, receipts } = detail
   const [editTransport, setEditTransport] = useState(false)
+  const [editExecution, setEditExecution] = useState(false)
   const total = (Number(cost.logistics_cost_actual) || 0) + (Number(cost.waiting_cost) || 0)
-  const dur = durationMin(doc.arrived_at, doc.unload_finished_at)
+  const dur = durationMin(doc.unload_started_at ?? doc.arrived_at, doc.unload_finished_at)
 
   return (
     <div className="page">
@@ -80,18 +90,69 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                   <Icon name="edit" size={13} />Изменить транспорт
                 </button>
               }>
-              <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
-              <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
-              <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
-              <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
+              <div className="form-grid-2">
+                <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
+                <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
+                <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
+                <ReadRow label="Стоимость логистики (план)" mono>{doc.cost_estimate != null ? money(doc.cost_estimate) : '—'}</ReadRow>
+                <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
+                <ReadRow label="Плановое прибытие" mono>{fmtDateTime(doc.eta)}</ReadRow>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <ReadRow label="Комментарий">{doc.comment ?? '—'}</ReadRow>
+                </div>
+              </div>
             </PhaseBlock>
           )}
 
-          <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="done">
-            <ReadRow label="Прибытие" mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
-            <ReadRow label="Окончание разгрузки" mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
-            <ReadRow label="Загруженность">{doc.load_factor ? TRIP_LOAD_LABELS[doc.load_factor] : '—'}</ReadRow>
-            {dur != null && <ReadRow label="Длительность разгрузки"><span style={{ color: 'var(--c-info)' }}>{dur} мин</span></ReadRow>}
+          <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="done"
+            action={!editExecution && (
+              <button className="btn sm ghost" onClick={() => setEditExecution(true)}>
+                <Icon name="edit" size={13} />Изменить
+              </button>
+            )}>
+            {editExecution ? (
+              <div>
+                <div className="form-grid-2">
+                  <div>
+                    <FieldLabel>Прибытие</FieldLabel>
+                    <DateTimeField value={arrival} onChange={onArrivalChange} />
+                  </div>
+                  <div>
+                    <FieldLabel>Начало разгрузки</FieldLabel>
+                    <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
+                  </div>
+                  <div>
+                    <FieldLabel>Окончание разгрузки</FieldLabel>
+                    <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
+                  </div>
+                  <div>
+                    <FieldLabel>Загруженность</FieldLabel>
+                    <Segmented
+                      value={loadFactor}
+                      options={[
+                        { value: 'full', label: TRIP_LOAD_LABELS.full, icon: 'check' },
+                        { value: 'partial', label: TRIP_LOAD_LABELS.partial, icon: 'alert' },
+                      ]}
+                      onChange={onLoadFactor}
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button className="btn sm primary" onClick={() => { onSaveExecution(); setEditExecution(false) }} disabled={busy}>
+                    <Icon name="save" size={13} />Сохранить исполнение
+                  </button>
+                  <button className="btn sm ghost" onClick={() => setEditExecution(false)}>Отмена</button>
+                </div>
+              </div>
+            ) : (
+              <div className="form-grid-2">
+                <ReadRow label="Прибытие" mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
+                <ReadRow label="Начало разгрузки" mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
+                <ReadRow label="Окончание разгрузки" mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
+                <ReadRow label="Загруженность">{doc.load_factor ? TRIP_LOAD_LABELS[doc.load_factor] : '—'}</ReadRow>
+                {dur != null && <ReadRow label="Длительность разгрузки"><span style={{ color: 'var(--c-info)' }}>{dur} мин</span></ReadRow>}
+              </div>
+            )}
           </PhaseBlock>
 
           <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="active">

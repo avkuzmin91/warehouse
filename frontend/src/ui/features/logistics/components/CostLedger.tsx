@@ -12,7 +12,7 @@ export function CostLedger({ estimate, actual, waiting, showActual }: {
   showActual?: boolean
 }) {
   const total = (actual ?? 0) + (waiting ?? 0)
-  const delta = actual != null && estimate != null ? actual - estimate : null
+  const delta = actual != null && estimate != null ? total - estimate : null
   return (
     <div style={{ padding: '4px 2px' }}>
       <ReadRow label="Логистика (план)" mono>{money(estimate)}</ReadRow>

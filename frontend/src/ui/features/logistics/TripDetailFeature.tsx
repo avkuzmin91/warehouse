@@ -10,6 +10,7 @@ import {
   tripCost,
   tripUnload,
   unlinkTripReceipt,
+  updateTripExecution,
   updateTrip,
 } from '../../../api/tripsApi'
 import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
@@ -42,6 +43,11 @@ const EMPTY_FORM: PlanningFormValue = {
   transport_ordered_at: '', eta: '', cost_estimate: '', comment: '',
 }
 
+function todayYmd(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export function TripDetailFeature({ tripId }: { tripId: string }) {
   const navigate = useNavigate()
   const confirm = useConfirm()
@@ -55,6 +61,9 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
   const [cost, setCost] = useState<CostForm>({ logistics_cost_actual: '', waiting_cost: '', waiting_minutes: '' })
   const [loadFactor, setLoadFactor] = useState<TripLoadFactor>('full')
+  const [arrival, setArrival] = useState<string>(todayYmd())
+  const [unloadStart, setUnloadStart] = useState<string>('')
+  const [unloadEnd, setUnloadEnd] = useState<string>('')
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
 
   const load = useCallback(async () => {
@@ -75,7 +84,10 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         waiting_cost: d.doc.waiting_cost != null ? String(d.doc.waiting_cost) : '',
         waiting_minutes: d.doc.waiting_minutes != null ? String(d.doc.waiting_minutes) : '',
       })
-      if (d.doc.load_factor) setLoadFactor(d.doc.load_factor)
+      setLoadFactor(d.doc.load_factor ?? 'full')
+      setArrival(d.doc.arrived_at ?? d.doc.eta ?? todayYmd())
+      setUnloadStart(d.doc.unload_started_at ?? d.doc.arrived_at ?? '')
+      setUnloadEnd(d.doc.unload_finished_at ?? '')
     } catch {
       setError('Рейс не найден')
     } finally {
@@ -88,7 +100,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   useEffect(() => {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
-    getReceipts({ status: 'planned', limit: 100 }, ctrl.signal)
+    getReceipts({ status: 'planned', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
       .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
       .catch(() => {})
     return () => ctrl.abort()
@@ -130,15 +142,26 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     waiting_cost: cost.waiting_cost.trim() ? Number(cost.waiting_cost) : null,
     waiting_minutes: cost.waiting_minutes.trim() ? Number(cost.waiting_minutes) : null,
   })
+  const saveExecution = () => updateTripExecution(tripId, {
+    arrived_at: arrival || null,
+    unload_started_at: unloadStart || null,
+    unload_finished_at: unloadEnd || null,
+    load_factor: loadFactor,
+  })
 
   const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
   const onCostField = (patch: Partial<CostForm>) => setCost((c) => ({ ...c, ...patch }))
 
   const handleSaveFields = () => run(saveFields)
   const handleSaveCost = () => run(saveCost)
+  const handleSaveExecution = () => run(saveExecution)
   const handleHandoff = () => run(async () => { await saveFields(); await handoffTrip(tripId) })
-  const handleArrival = () => run(() => tripArrival(tripId, new Date().toISOString()))
-  const handleUnload = () => run(() => tripUnload(tripId, { unload_finished_at: new Date().toISOString(), load_factor: loadFactor }))
+  const handleArrival = () => run(() => tripArrival(tripId, arrival))
+  const handleUnload = () => run(() => tripUnload(tripId, {
+    unload_started_at: unloadStart || null,
+    unload_finished_at: unloadEnd || null,
+    load_factor: loadFactor,
+  }))
 
   async function handleClose() {
     const ok = await confirm({ title: 'Закрыть рейс?', body: 'Стоимость будет сохранена, рейс перейдёт в статус «Закрыт».', confirmLabel: 'Закрыть рейс' })
@@ -242,6 +265,9 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     view = (
       <AwaitingView
         detail={detail} loadFactor={loadFactor} onLoadFactor={setLoadFactor} busy={busy} enrich={enrich}
+        arrival={arrival} onArrivalChange={setArrival}
+        unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
+        unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
         onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
       />
     )
@@ -250,6 +276,10 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       <CostingView
         detail={detail} form={form} onField={onField} cost={cost} onCost={onCostField}
         dirtyCost={dirtyCost} onSaveCost={handleSaveCost} onSaveFields={handleSaveFields}
+        arrival={arrival} onArrivalChange={setArrival}
+        unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
+        unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
+        loadFactor={loadFactor} onLoadFactor={setLoadFactor} onSaveExecution={handleSaveExecution}
         busy={busy} onBack={onBack} onCancel={handleCancel} onClose={handleClose} onOpenReceipt={onOpenReceipt}
       />
     )

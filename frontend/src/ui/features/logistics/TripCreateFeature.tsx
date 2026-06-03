@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createTrip } from '../../../api/tripsApi'
+import { createTrip, handoffTrip } from '../../../api/tripsApi'
 import type { TripReceiptItem } from '../../../api/tripsApi'
 import { getReceipts } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
-import { PrimaryAction } from './tripDetail/TripHeader'
 import { PlanningForm } from './tripDetail/PlanningForm'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import { ProcessPanel, ReadyChecklist } from './tripDetail/panels'
@@ -39,7 +38,7 @@ export function TripCreateFeature() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    getReceipts({ status: 'planned', limit: 100 }, ctrl.signal)
+    getReceipts({ status: 'planned', limit: 100, unlinked_to_trip: true }, ctrl.signal)
       .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
       .catch(() => {})
     return () => ctrl.abort()
@@ -84,32 +83,40 @@ export function TripCreateFeature() {
     busy: false,
   }
 
-  async function handleCreate() {
+  function tripPayload() {
+    const origin = warehouses.find((w) => w.id === form.origin_id)
+    const carrier = carriers.find((c) => c.id === form.carrier_id)
+    const vehicle = vehicleTypes.find((v) => v.id === form.vehicle_type_id)
+    return {
+      origin_id: form.origin_id || null,
+      origin_name: origin?.name ?? null,
+      carrier_id: form.carrier_id || null,
+      carrier_name: carrier?.name ?? null,
+      vehicle_type_id: form.vehicle_type_id || null,
+      vehicle_type_name: vehicle?.name ?? null,
+      transport_ordered_at: form.transport_ordered_at || null,
+      eta: form.eta || null,
+      cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null,
+      comment: form.comment.trim() || null,
+      receipt_doc_ids: [...selected],
+    }
+  }
+
+  async function saveTrip({ handoff }: { handoff: boolean }) {
     setSaving(true)
     setError('')
     try {
-      const origin = warehouses.find((w) => w.id === form.origin_id)
-      const carrier = carriers.find((c) => c.id === form.carrier_id)
-      const vehicle = vehicleTypes.find((v) => v.id === form.vehicle_type_id)
-      const res = await createTrip({
-        origin_id: form.origin_id || null,
-        origin_name: origin?.name ?? null,
-        carrier_id: form.carrier_id || null,
-        carrier_name: carrier?.name ?? null,
-        vehicle_type_id: form.vehicle_type_id || null,
-        vehicle_type_name: vehicle?.name ?? null,
-        transport_ordered_at: form.transport_ordered_at || null,
-        eta: form.eta || null,
-        cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null,
-        comment: form.comment.trim() || null,
-        receipt_doc_ids: [...selected],
-      })
+      const res = await createTrip(tripPayload())
+      if (handoff) await handoffTrip(res.message)
       navigate(`/logistics/trips/${res.message}`)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
       setSaving(false)
     }
   }
+
+  const handleSaveDraft = () => saveTrip({ handoff: false })
+  const handleHandoff = () => saveTrip({ handoff: true })
 
   return (
     <div className="page">
@@ -124,7 +131,14 @@ export function TripCreateFeature() {
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>Новый рейс</div>
         </div>
-        <PrimaryAction icon="save" label="Создать рейс" hint="Рейс создаётся в статусе «Черновик»" onClick={handleCreate} disabled={saving} />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <button className="btn lg" onClick={handleSaveDraft} disabled={saving}>
+            <Icon name="save" size={15} />Сохранить черновик
+          </button>
+          <button className="btn lg primary" onClick={handleHandoff} disabled={saving || selected.size === 0}>
+            <Icon name="arrowRight" size={15} />Передать на склад
+          </button>
+        </div>
       </div>
 
       {error && <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>}

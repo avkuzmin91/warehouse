@@ -29,6 +29,7 @@ export type TripDoc = {
   cost_estimate: number | null
   comment: string | null
   arrived_at: string | null
+  unload_started_at: string | null
   unload_finished_at: string | null
   load_factor: TripLoadFactor | null
   logistics_cost_actual: number | null
@@ -109,6 +110,13 @@ export type TripCostPayload = {
   waiting_minutes?: number | null
 }
 
+export type TripExecutionPayload = {
+  arrived_at?: string | null
+  unload_started_at?: string | null
+  unload_finished_at?: string | null
+  load_factor?: TripLoadFactor | null
+}
+
 export type TripListParams = {
   page?: number
   limit?: number
@@ -172,7 +180,7 @@ export function tripArrival(tripId: string, arrivedAt?: string) {
   })
 }
 
-export function tripUnload(tripId: string, payload: { unload_finished_at?: string | null; load_factor?: TripLoadFactor | null }) {
+export function tripUnload(tripId: string, payload: { unload_started_at?: string | null; unload_finished_at?: string | null; load_factor?: TripLoadFactor | null }) {
   return request<{ message: string }>(`/trips/${tripId}/unload`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -182,6 +190,13 @@ export function tripUnload(tripId: string, payload: { unload_finished_at?: strin
 export function tripCost(tripId: string, payload: TripCostPayload) {
   return request<{ message: string }>(`/trips/${tripId}/cost`, {
     method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateTripExecution(tripId: string, payload: TripExecutionPayload) {
+  return request<{ message: string }>(`/trips/${tripId}/execution`, {
+    method: 'PATCH',
     body: JSON.stringify(payload),
   })
 }

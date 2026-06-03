@@ -39,6 +39,7 @@ class TripArrivalPayload(BaseModel):
 
 
 class TripUnloadPayload(BaseModel):
+    unload_started_at: str | None = None
     unload_finished_at: str | None = None
     load_factor: str | None = None  # full | partial
 
@@ -47,6 +48,13 @@ class TripCostPayload(BaseModel):
     logistics_cost_actual: float | None = Field(default=None, ge=0)
     waiting_cost: float | None = Field(default=None, ge=0)
     waiting_minutes: int | None = Field(default=None, ge=0)
+
+
+class TripExecutionPayload(BaseModel):
+    arrived_at: str | None = None
+    unload_started_at: str | None = None
+    unload_finished_at: str | None = None
+    load_factor: str | None = None
 
 
 class TripDocResponse(BaseModel):
@@ -66,6 +74,7 @@ class TripDocResponse(BaseModel):
     cost_estimate: float | None = None
     comment: str | None = None
     arrived_at: str | None = None
+    unload_started_at: str | None = None
     unload_finished_at: str | None = None
     load_factor: str | None = None
     logistics_cost_actual: float | None = None

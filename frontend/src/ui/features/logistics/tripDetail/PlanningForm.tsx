@@ -1,8 +1,7 @@
-import type { CSSProperties } from 'react'
 import { useLookups } from '../../../../hooks/useLookups'
 import { PhaseBlock } from '../components/PhaseBlock'
 import type { PhaseState } from '../components/PhaseBlock'
-import { SelectField, MoneyField, FieldLabel } from '../components/fields'
+import { SelectField, MoneyField, FieldLabel, DateTimeField } from '../components/fields'
 import type { SelectOption } from '../components/fields'
 
 export type PlanningFormValue = {
@@ -13,12 +12,6 @@ export type PlanningFormValue = {
   eta: string
   cost_estimate: string
   comment: string
-}
-
-const dtStyle: CSSProperties = {
-  width: '100%', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)',
-  border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)',
-  fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--c-text)',
 }
 
 /** Фазовый блок «Планирование транспорта» с полями. Общий для create и draft-detail. */
@@ -54,13 +47,11 @@ export function PlanningForm({ value, onChange, state = 'active' }: {
         </div>
         <div>
           <FieldLabel>Транспорт заказан</FieldLabel>
-          <input type="datetime-local" style={dtStyle} value={value.transport_ordered_at.slice(0, 16)}
-            onChange={(e) => onChange({ transport_ordered_at: e.target.value })} />
+          <DateTimeField value={value.transport_ordered_at} onChange={(v) => onChange({ transport_ordered_at: v })} />
         </div>
         <div>
           <FieldLabel>Плановое прибытие</FieldLabel>
-          <input type="datetime-local" style={dtStyle} value={value.eta.slice(0, 16)}
-            onChange={(e) => onChange({ eta: e.target.value })} />
+          <DateTimeField value={value.eta} onChange={(v) => onChange({ eta: v })} />
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel>Комментарий</FieldLabel>

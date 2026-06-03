@@ -38,7 +38,7 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
   const { doc, ops, receipts } = detail
   const closed = doc.status === 'closed'
   const total = (doc.logistics_cost_actual ?? 0) + (doc.waiting_cost ?? 0)
-  const unloadMin = durationMin(doc.arrived_at, doc.unload_finished_at)
+  const unloadMin = durationMin(doc.unload_started_at ?? doc.arrived_at, doc.unload_finished_at)
 
   return (
     <div className="page">
@@ -64,14 +64,27 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
 
       <div className="split-360">
         <div className="col gap-16">
-          <Panel icon="map" title="Маршрут и транспорт">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 24 }}>
+          <Panel icon="map" title="Планирование транспорта">
+            <div className="form-grid-2">
               <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
               <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
               <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
+              <ReadRow label="Стоимость логистики (план)" mono>{money(doc.cost_estimate)}</ReadRow>
               <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
+              <ReadRow label="Плановое прибытие" mono>{fmtDateTime(doc.eta)}</ReadRow>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <ReadRow label="Комментарий">{doc.comment ?? '—'}</ReadRow>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel icon="forklift" title="Исполнение на складе">
+            <div className="form-grid-2">
               <ReadRow label="Прибытие" mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
+              <ReadRow label="Начало разгрузки" mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
               <ReadRow label="Окончание разгрузки" mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
+              <ReadRow label="Загруженность">{doc.load_factor ? TRIP_LOAD_LABELS[doc.load_factor] : '—'}</ReadRow>
+              {unloadMin != null && <ReadRow label="Длительность разгрузки"><span style={{ color: 'var(--c-info)' }}>{unloadMin} мин</span></ReadRow>}
             </div>
           </Panel>
 

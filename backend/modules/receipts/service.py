@@ -140,6 +140,8 @@ def list_receipts_aggregated(
     sku: str | None,
     date_from: str | None,
     date_to: str | None,
+    unlinked_to_trip: bool,
+    available_for_trip_id: str | None,
     statuses_all: frozenset[str],
 ) -> tuple[int, list[dict]]:
     """Агрегирующий запрос для списка поступлений — без N+1.
@@ -179,6 +181,17 @@ def list_receipts_aggregated(
     if date_to:
         conds.append("d.arrival_date <= ?")
         params.append(date_to)
+    if available_for_trip_id and str(available_for_trip_id).strip():
+        conds.append(
+            "NOT EXISTS (SELECT 1 FROM trip_lines tl"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id != ?)"
+        )
+        params.append(str(available_for_trip_id).strip())
+    elif unlinked_to_trip:
+        conds.append(
+            "NOT EXISTS (SELECT 1 FROM trip_lines tl"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0)"
+        )
 
     where = " AND ".join(conds)
 

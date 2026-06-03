@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
+import { DatePicker } from '../../../primitives/DatePicker'
 
 function ctrlStyle(empty: boolean): CSSProperties {
   return {
@@ -89,6 +90,54 @@ export function TimeField({ value, placeholder = 'Выбрать дату', onCl
       <Icon name="calendar" size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
       <span className={value ? 'mono' : ''} style={{ flex: 1, fontSize: value ? 12.5 : 13 }}>{value || placeholder}</span>
     </button>
+  )
+}
+
+export function datePart(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : ''
+}
+
+export function timePart(value: string): string {
+  const match = value.match(/^\d{4}-\d{2}-\d{2}T([\d:]{0,5})/)
+  return match ? match[1] : ''
+}
+
+export function combineDateTime(date: string, time: string): string {
+  if (!date) return ''
+  return time ? `${date}T${time}` : date
+}
+
+/** Поле «дата + время»: DatePicker + ручной ввод чч:мм. Значение — `YYYY-MM-DD[THH:mm]`. */
+export function DateTimeField({ value, onChange }: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  const date = datePart(value)
+  const time = timePart(value)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 88px', gap: 8 }}>
+      <DatePicker value={date} onChange={(v) => onChange(combineDateTime(v, time))} />
+      <input
+        className="input sm mono"
+        value={time}
+        placeholder="чч:мм"
+        inputMode="numeric"
+        maxLength={5}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^\d:]/g, '').slice(0, 5)
+          const normalized = raw.length === 2 && !raw.includes(':') ? `${raw}:` : raw
+          onChange(combineDateTime(date, normalized))
+        }}
+        onBlur={(e) => {
+          const m = e.target.value.match(/^(\d{1,2}):?(\d{2})$/)
+          if (!m || !date) return
+          const hh = Math.min(23, Number(m[1]))
+          const mm = Math.min(59, Number(m[2]))
+          onChange(combineDateTime(date, `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`))
+        }}
+        style={{ width: '100%', textAlign: 'center' }}
+      />
+    </div>
   )
 }
 

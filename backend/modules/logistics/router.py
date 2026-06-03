@@ -37,6 +37,7 @@ from modules.logistics.schemas import (
     TripDocCreate,
     TripDocResponse,
     TripDocUpdate,
+    TripExecutionPayload,
     TripLinkPayload,
     TripListItem,
     TripListResponse,
@@ -76,6 +77,7 @@ def _doc_response(row) -> TripDocResponse:
         cost_estimate=float(row["cost_estimate"]) if row["cost_estimate"] is not None else None,
         comment=row["comment"],
         arrived_at=row["arrived_at"],
+        unload_started_at=row["unload_started_at"],
         unload_finished_at=row["unload_finished_at"],
         load_factor=row["load_factor"],
         logistics_cost_actual=float(row["logistics_cost_actual"]) if row["logistics_cost_actual"] is not None else None,
@@ -339,7 +341,8 @@ def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_cur
         arrived_at = (payload.arrived_at or "").strip() or _now()
         _advance(conn, trip_id, to_status=TRIP_STATUS_UNLOADING,
                  op_type=TRIP_OP_ARRIVAL, comment="Ожидает прибытия → Разгрузка (прибытие отмечено)", uid=uid,
-                 extra_sql="arrived_at = ?", extra_params=(arrived_at,))
+                 extra_sql="arrived_at = ?, unload_started_at = ?",
+                 extra_params=(arrived_at, arrived_at))
         conn.commit()
     return {"message": TRIP_STATUS_UNLOADING}
 
@@ -353,11 +356,17 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_UNLOADING:
             raise HTTPException(status_code=400, detail="Завершить разгрузку можно только из статуса 'Разгрузка'")
+        unload_started_at = (
+            (payload.unload_started_at or "").strip()
+            or doc_row["unload_started_at"]
+            or doc_row["arrived_at"]
+            or _now()
+        )
         unload_at = (payload.unload_finished_at or "").strip() or _now()
         _advance(conn, trip_id, to_status=TRIP_STATUS_COSTING,
                  op_type=TRIP_OP_UNLOAD_DONE, comment="Разгрузка → Уточнение стоимости (разгрузка завершена)", uid=uid,
-                 extra_sql="unload_finished_at = ?, load_factor = ?",
-                 extra_params=(unload_at, payload.load_factor))
+                 extra_sql="unload_started_at = ?, unload_finished_at = ?, load_factor = ?",
+                 extra_params=(unload_started_at, unload_at, payload.load_factor))
         cascade_receipts_to_intake(conn, trip_id, str(doc_row["trip_number"]), uid)
         conn.commit()
     return {"message": TRIP_STATUS_COSTING}
@@ -391,6 +400,40 @@ def trip_cost(trip_id: str, payload: TripCostPayload, user=Depends(get_current_m
         conn.execute(
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_COST_ACTUAL, "Внесена фактическая стоимость логистики", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.patch("/trips/{trip_id}/execution")
+def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depends(get_current_manager)):
+    uid = str(user["id"])
+    if payload.load_factor is not None and payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
+        raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
+    with get_connection() as conn:
+        doc_row = _fetch_doc(conn, trip_id)
+        if str(doc_row["status"]) != TRIP_STATUS_COSTING:
+            raise HTTPException(status_code=400, detail="Исполнение на складе можно редактировать только в статусе 'Уточнение стоимости'")
+        now = _now()
+        conn.execute(
+            """
+            UPDATE trip_docs
+            SET arrived_at = ?, unload_started_at = ?, unload_finished_at = ?,
+                load_factor = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                (payload.arrived_at or "").strip() or None,
+                (payload.unload_started_at or "").strip() or None,
+                (payload.unload_finished_at or "").strip() or None,
+                payload.load_factor,
+                now,
+                trip_id,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), trip_id, TRIP_OP_DOC_UPDATE, "Исполнение на складе изменено", now, uid),
         )
         conn.commit()
     return {"message": "ok"}
