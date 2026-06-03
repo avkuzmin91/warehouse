@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from psycopg.errors import IntegrityConstraintViolation
+from psycopg import IntegrityError
 
 from config import (
     PRODUCT_LIST_SORT_COLUMNS,
@@ -274,7 +274,7 @@ async def create_product(
                     (str(uuid4()), pid, cid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], vr["images_json"], now),
                 )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=400, detail="Базовый штрих-код или SKU варианта уже существует") from exc
     return MessageResponse(message="Создано")
@@ -358,7 +358,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
             if payload.is_deleted is True:
                 _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=400, detail="Базовый штрих-код или SKU варианта уже существует") from exc
     msg = "Обновлено"
@@ -495,7 +495,7 @@ def patch_product_variants(item_id: str, payload: ProductVariantsPatchRequest, a
                 (_now(), admin["id"], item_id),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят") from exc
     return MessageResponse(message="Варианты сохранены")

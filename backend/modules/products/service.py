@@ -7,8 +7,6 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from psycopg.errors import IntegrityConstraintViolation
-
 from config import PRODUCT_LIST_SORT_COLUMNS, UPLOADS_DIR, MAX_UPLOAD_BYTES
 from dbconn import get_connection
 

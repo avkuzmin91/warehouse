@@ -5,7 +5,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from psycopg.errors import IntegrityConstraintViolation
+from psycopg import IntegrityError
 
 from config import (
     DICTIONARY_TABLES,
@@ -206,7 +206,7 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                     (item_id, name, 1 if payload.is_active else 0, _now(), creator_id),
                 )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -263,7 +263,7 @@ def update_dictionary_item(
                 tuple(values),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -430,7 +430,7 @@ def create_size(payload: SizeCreateRequest, creator_id: str) -> MessageResponse:
                 (item_id, name, 1 if payload.is_active else 0, _now(), creator_id),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -480,7 +480,7 @@ def update_size(item_id: str, payload: SizeUpdateRequest, editor_id: str) -> Mes
                 tuple(values),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -596,7 +596,7 @@ def create_product_type(payload: ProductTypeCreateRequest, creator_id: str) -> M
                 (item_id, name, 1 if payload.is_active else 0, 1, 1 if payload.requires_size else 0, _now(), creator_id),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
@@ -652,7 +652,7 @@ def update_product_type(item_id: str, payload: ProductTypeUpdateRequest, editor_
                 tuple(values),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Запись с таким названием уже существует",
