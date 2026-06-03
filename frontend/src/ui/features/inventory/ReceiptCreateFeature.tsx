@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   createReceipt,
   advanceReceiptStatus,
 } from '../../../api/receiptsApi'
+import { linkTripReceipts } from '../../../api/tripsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
 import {
   getInventoryProducts,
@@ -37,6 +38,10 @@ function genId() {
 
 export function ReceiptCreateFeature() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const tripParam = searchParams.get('trip')
+  const returnToParam = searchParams.get('returnTo')
+  const backTarget = tripParam ? `/logistics/trips/${tripParam}` : (returnToParam || '/inventory/receipts')
 
   const [clientId, setClientId] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
@@ -81,7 +86,15 @@ export function ReceiptCreateFeature() {
       })
       const docId = res.message
       await advanceReceiptStatus(docId)
-      navigate(`/inventory/receipts/${docId}`)
+      if (tripParam) {
+        // Создано из рейса — привязываем и возвращаемся к рейсу.
+        try { await linkTripReceipts(tripParam, [docId]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
+        navigate(`/logistics/trips/${tripParam}`)
+      } else if (returnToParam) {
+        navigate(returnToParam)
+      } else {
+        navigate(`/inventory/receipts/${docId}`)
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -101,11 +114,11 @@ export function ReceiptCreateFeature() {
     <FormPage
       title="Новое поступление"
 
-      backTo="/inventory/receipts"
+      backTo={backTarget}
       actions={
         <div className="detail-actions">
           <div className="detail-actions-row">
-            <button className="btn" onClick={() => navigate('/inventory/receipts')} disabled={saving}>
+            <button className="btn" onClick={() => navigate(backTarget)} disabled={saving}>
               Отмена
             </button>
             <button

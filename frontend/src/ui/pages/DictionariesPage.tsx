@@ -13,10 +13,10 @@ import { ClientSheet } from './dictionaries/ClientSheet'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../api/domainTypes'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
-type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'>
+type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'reasons'>
 
 type SheetState =
-  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
+  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
   | { type: 'client'; isNew: boolean; initial: DictionaryItem | null }
   | null
 
@@ -28,6 +28,7 @@ function isSimpleDictionaryType(id: DictionaryTypeId): id is SimpleDictionaryTyp
     || id === 'unloading-zones'
     || id === 'warehouses'
     || id === 'carriers'
+    || id === 'vehicle-types'
     || id === 'reasons'
 }
 
@@ -69,9 +70,11 @@ export function DictionariesPage() {
     } else if (active === 'unloading-zones') {
       setSheet({ type: 'simple', apiType: 'unloading-zones', kind: 'Зона хранения', isNew: true, initial: null })
     } else if (active === 'warehouses') {
-      setSheet({ type: 'simple', apiType: 'warehouses', kind: 'Склад', isNew: true, initial: null })
+      setSheet({ type: 'simple', apiType: 'warehouses', kind: 'Точка логистики', isNew: true, initial: null })
     } else if (active === 'carriers') {
       setSheet({ type: 'simple', apiType: 'carriers', kind: 'Перевозчик', isNew: true, initial: null })
+    } else if (active === 'vehicle-types') {
+      setSheet({ type: 'simple', apiType: 'vehicle-types', kind: 'Тип кузова', isNew: true, initial: null })
     } else if (active === 'reasons') {
       setSheet({ type: 'simple', apiType: 'reasons', kind: 'Причина брака', isNew: true, initial: null })
     }
@@ -85,6 +88,7 @@ export function DictionariesPage() {
       active === 'unloading-zones' ? 'unloading-zones' :
       active === 'warehouses' ? 'warehouses' :
       active === 'carriers' ? 'carriers' :
+      active === 'vehicle-types' ? 'vehicle-types' :
       active === 'reasons' ? 'reasons' :
       'colors'
     const kind = dictDef?.sheetKind ?? 'Значение'

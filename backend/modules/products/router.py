@@ -69,6 +69,7 @@ def list_products(
     admin=Depends(get_current_admin),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
     name: str | None = Query(None),
     sku: str | None = Query(None),
     type_id: str | None = Query(None),
@@ -81,6 +82,10 @@ def list_products(
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
+    if search is not None and str(search).strip():
+        like = _ci_substring_like_param(str(search))
+        conds.append("(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?)")
+        params.extend([like, like])
     if name is not None and str(name).strip():
         conds.append("fold_ci(p.name) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))

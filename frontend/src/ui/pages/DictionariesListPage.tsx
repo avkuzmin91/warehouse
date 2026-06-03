@@ -8,7 +8,6 @@ const SECTIONS = [
   { path: '/dictionaries/product-types', icon: 'boxes' as const, title: 'Типы товаров', desc: 'Классификация товаров' },
   { path: '/dictionaries/colors', icon: 'chart' as const, title: 'Цвета', desc: 'Цветовые варианты' },
   { path: '/dictionaries/sizes', icon: 'archive' as const, title: 'Размеры', desc: 'Размерная сетка' },
-  { path: '/dictionaries/suppliers', icon: 'truckIn' as const, title: 'Поставщики', desc: 'Поставщики товаров' },
   { path: '/dictionaries/users', icon: 'users' as const, title: 'Пользователи', desc: 'Учётные записи' },
 ]
 

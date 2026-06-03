@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   RECEIPT_STATUS_LABELS,
   deleteReceiptLine,
+  receiptStatusTone,
   updateReceipt,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
@@ -13,6 +14,7 @@ import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
+import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
@@ -28,6 +30,7 @@ type Props = {
   detail: ReceiptDetail
   onReload: () => Promise<void>
   onArrive: (lines: ReceiptArriveLine[]) => void
+  onStartIntake: () => void
   onCancel: () => void
   advancing: boolean
 }
@@ -37,12 +40,14 @@ export function PlannedView({
   detail,
   onReload,
   onArrive,
+  onStartIntake,
   onCancel,
   advancing,
 }: Props) {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const { doc, lines } = detail
+  const status = doc.status
 
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
@@ -183,6 +188,21 @@ export function PlannedView({
     onArrive(arrivalLines)
   }
 
+  async function handleStartIntake() {
+    if (hasUnsavedChanges) {
+      const ok = await handleSaveChanges()
+      if (!ok) return
+    }
+    onStartIntake()
+  }
+
+  const primaryLabel = status === 'planned' ? 'Начать приёмку' : 'Принять товары'
+  function runPrimary() {
+    if (blockReasons.length > 0) { setShowBlockReasons(true); return }
+    if (status === 'planned') void handleStartIntake()
+    else void handleArrive()
+  }
+
   return (
     <div className="page">
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
@@ -191,7 +211,7 @@ export function PlannedView({
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
-            <Badge tone="info" dot>{RECEIPT_STATUS_LABELS['planned']}</Badge>
+            <Badge tone={receiptStatusTone(status) as BadgeTone} dot>{RECEIPT_STATUS_LABELS[status]}</Badge>
             <span className="detail-meta">
               {doc.doc_number} · {doc.client_name ?? '—'}
             </span>
@@ -204,9 +224,11 @@ export function PlannedView({
               <Icon name="layers" size={14} />Журнал
               {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
             </button>
-            <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
-              <Icon name="x" size={14} />Аннулировать
-            </button>
+            {status === 'planned' && (
+              <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
+                <Icon name="x" size={14} />Аннулировать
+              </button>
+            )}
             {hasUnsavedChanges && (
               <button className="btn" onClick={handleSaveChanges} disabled={metaSaving}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -214,10 +236,10 @@ export function PlannedView({
             )}
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleArrive() } }}
+              onClick={runPrimary}
               disabled={advancing}
             >
-              <Icon name="arrowRight" size={14} />Зафиксировать прибытие
+              <Icon name={status === 'planned' ? 'arrowRight' : 'check'} size={14} />{primaryLabel}
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
@@ -228,7 +250,7 @@ export function PlannedView({
         </div>
       </div>
 
-      <ReceiptStepper status="planned" ops={detail.ops} style={{ marginTop: -10 }} />
+      <ReceiptStepper status={status} ops={detail.ops} style={{ marginTop: -10 }} />
 
       {metaError && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
@@ -286,9 +308,11 @@ export function PlannedView({
               <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               <div className="flex-1" />
-              <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
-                <Icon name="plus" size={12} />Добавить строку
-              </button>
+              {status === 'planned' && (
+                <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
+                  <Icon name="plus" size={12} />Добавить строку
+                </button>
+              )}
             </CardHead>
             {lines.length === 0 ? (
               <div className="empty">

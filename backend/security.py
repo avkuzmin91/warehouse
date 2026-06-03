@@ -36,3 +36,12 @@ def ensure_manager_staff(user: Mapping[str, Any]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
         )
+
+
+def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
+    """Складские действия (приёмка, разгрузка рейса): кладовщик и менеджерский состав."""
+    if user["role"] not in ("warehouse_manager", "manager", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )

@@ -35,11 +35,23 @@ def client_id():
     cleanup_client(cid)
 
 
+def _to_intake(admin_client, doc_id: str):
+    """draft → planned → on_intake, проставив зону хранения по каждой строке."""
+    admin_client.post(f"/receipts/{doc_id}/advance")  # draft → planned
+    detail = admin_client.get(f"/receipts/{doc_id}").json()
+    for l in detail["lines"]:
+        admin_client.patch(
+            f"/receipts/{doc_id}/lines/{l['id']}",
+            json={"storage_zone_id": str(uuid.uuid4()), "storage_zone_name": "Зона П"},
+        )
+    return admin_client.post(f"/receipts/{doc_id}/intake")  # planned → on_intake
+
+
 def _arrive(admin_client, doc_id: str):
-    """Фиксация прибытия: «Принят» по каждой строке = её planned_qty."""
-    detail = admin_client.get(f"/receipts/{doc_id}")
-    assert detail.status_code == 200, detail.text
-    lines = detail.json()["lines"]
+    """Принять товары: on_intake → on_review, «Принят» по каждой строке = planned_qty."""
+    intake = _to_intake(admin_client, doc_id)
+    assert intake.status_code == 200, intake.text
+    lines = admin_client.get(f"/receipts/{doc_id}").json()["lines"]
     payload = {"lines": [{"line_id": l["id"], "accepted_qty": l["planned_qty"]} for l in lines]}
     return admin_client.post(f"/receipts/{doc_id}/arrive", json=payload)
 
@@ -71,15 +83,20 @@ def test_receipt_advance_state_machine(admin_client, client_id):
     assert r2.status_code == 200, r2.text
     assert r2.json()["message"] == "planned"
 
-    # planned → on_review
+    # planned → on_intake
     r3 = admin_client.post(f"/receipts/{doc_id}/advance")
     assert r3.status_code == 200, r3.text
-    assert r3.json()["message"] == "on_review"
+    assert r3.json()["message"] == "on_intake"
 
-    # on_review → done
+    # on_intake → on_review
     r4 = admin_client.post(f"/receipts/{doc_id}/advance")
     assert r4.status_code == 200, r4.text
-    assert r4.json()["message"] == "done"
+    assert r4.json()["message"] == "on_review"
+
+    # on_review → done
+    r5 = admin_client.post(f"/receipts/{doc_id}/advance")
+    assert r5.status_code == 200, r5.text
+    assert r5.json()["message"] == "done"
 
 
 def test_receipt_advance_final_status_returns_400(admin_client, client_id):
@@ -89,6 +106,7 @@ def test_receipt_advance_final_status_returns_400(admin_client, client_id):
     doc_id = r.json()["message"]
 
     admin_client.post(f"/receipts/{doc_id}/advance")  # → planned
+    admin_client.post(f"/receipts/{doc_id}/advance")  # → on_intake
     admin_client.post(f"/receipts/{doc_id}/advance")  # → on_review
     admin_client.post(f"/receipts/{doc_id}/advance")  # → done
 
@@ -207,7 +225,10 @@ def test_arrive_requires_accepted_qty_for_every_line(admin_client, client_id):
     assert response.status_code == 200, response.text
     doc_id = response.json()["message"]
 
-    # Прибытие без «Принят» по строке — отклоняется.
+    intake = _to_intake(admin_client, doc_id)
+    assert intake.status_code == 200, intake.text
+
+    # Принять товары без «Принят» по строке — отклоняется.
     bad = admin_client.post(f"/receipts/{doc_id}/arrive", json={"lines": []})
     assert bad.status_code == 400, bad.text
 

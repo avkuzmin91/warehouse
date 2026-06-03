@@ -17,13 +17,14 @@ from config import (
     RECEIPT_OP_LINE_DELETE,
     RECEIPT_OP_LINE_QC_COMPLETE,
     RECEIPT_OP_LINE_QC_REOPEN,
+    RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_LINE_UPDATE,
-    RECEIPT_OP_PLAN_FIX,
     RECEIPT_OP_RECEIVING,
     RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_DRAFT,
+    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
@@ -31,7 +32,7 @@ from config import (
     RECEIPT_STATUSES_ALL,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_manager
+from modules.auth.service import get_current_manager, get_current_warehouse
 from modules.receipts.schemas import (
     ReceiptArrivePayload,
     ReceiptDetailResponse,
@@ -57,6 +58,7 @@ from modules.receipts.service import (
 router = APIRouter(tags=["receipts"])
 
 _get_manager = get_current_manager
+_get_warehouse = get_current_warehouse
 
 
 def _now() -> str:
@@ -199,12 +201,12 @@ def receipts_summary(
             params,
         ).fetchall()
     total = len(rows)
-    active = sum(1 for r in rows if r["status"] == "on_review")
+    active = sum(1 for r in rows if r["status"] in ("on_intake", "on_review"))
     done = sum(1 for r in rows if r["status"] in ("done", "cancelled"))
     drafts = sum(1 for r in rows if r["status"] == "planned")
     overdue = sum(
         1 for r in rows
-        if r["status"] in ("planned", "on_review")
+        if r["status"] in ("planned", "on_intake", "on_review")
         and r["arrival_date"] and str(r["arrival_date"]) < today
     )
     return {"all": total, "active": active, "done": done, "drafts": drafts, "overdue": overdue}
@@ -470,15 +472,15 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
         status = str(doc_row["status"])
         if payload.planned_qty is not None and status not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
-        if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане' или 'На проверке'")
+        if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
+            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
         _zone_fields = {
             "storage_zone_id", "storage_zone_name",
             "good_zone_id", "good_zone_name",
             "defect_zone_id", "defect_zone_name",
         }
-        if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане' или 'На проверке'")
+        if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
+            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
         line_row = conn.execute(
             "SELECT id, planned_qty, accepted_qty, storage_zone_name, good_zone_name, defect_zone_name "
             "FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
@@ -715,8 +717,13 @@ def advance_receipt_status(doc_id: str, user=Depends(_get_manager)):
     return {"message": next_status}
 
 
-@router.post("/receipts/{doc_id}/arrive")
-def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_manager)):
+@router.post("/receipts/{doc_id}/intake")
+def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
+    """В плане → На приёмке: товар прибыл, начинается подсчёт количества.
+
+    Ручной триггер для поступлений без рейса; для рейсовых тот же переход делает
+    разгрузка рейса (см. modules/logistics).
+    """
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
@@ -724,14 +731,38 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        current = str(doc_row["status"])
-        if current not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
+        if str(doc_row["status"]) != RECEIPT_STATUS_PLANNED:
+            raise HTTPException(status_code=400, detail="Начать приёмку можно только из статуса 'В плане'")
+        now = _now()
+        conn.execute(
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (RECEIPT_STATUS_ON_INTAKE, now, doc_id),
+        )
+        conn.execute(
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, RECEIPT_OP_INTAKE_START,
+             "В плане → На приёмке (начало приёмки)", now, uid),
+        )
+        conn.commit()
+    return {"message": RECEIPT_STATUS_ON_INTAKE}
+
+
+@router.post("/receipts/{doc_id}/arrive")
+def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_warehouse)):
+    """На приёмке → На проверке: «Принять товары» — фиксирует принятое количество."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        doc_row = conn.execute(
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc_row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(doc_row["status"]) != RECEIPT_STATUS_ON_INTAKE:
             raise HTTPException(
                 status_code=400,
-                detail="Зафиксировать прибытие можно только из статуса 'Создание' или 'В плане'",
+                detail="Принять товары можно только из статуса 'На приёмке'",
             )
-        if current == RECEIPT_STATUS_PLANNED:
-            _validate_receipt_lines_have_storage(conn, doc_id)
+        _validate_receipt_lines_have_storage(conn, doc_id)
 
         line_rows = conn.execute(
             "SELECT id, product_sku, color_name, size_name FROM receipt_lines "
@@ -765,16 +796,10 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
             (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
-        if current == RECEIPT_STATUS_DRAFT:
-            conn.execute(
-                "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, RECEIPT_OP_PLAN_FIX,
-                 "Создание → В плане (авто при фиксации прибытия)", now, uid),
-            )
         conn.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
-             "В плане → На проверке (фиксация прибытия)", now, uid),
+             "На приёмке → На проверке (товары приняты)", now, uid),
         )
         conn.commit()
     return {"message": RECEIPT_STATUS_ON_REVIEW}

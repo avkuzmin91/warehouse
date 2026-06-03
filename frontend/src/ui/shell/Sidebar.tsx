@@ -17,6 +17,7 @@ interface NavItem {
 const OPS_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
   { to: '/inventory/receipts', icon: 'truckIn', label: 'Поступления' },
+  { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/shipments', icon: 'truckOut', label: 'Отгрузки' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]

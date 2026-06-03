@@ -1,0 +1,169 @@
+import { useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import { Icon } from '../../../primitives/Icon'
+import type { IconName } from '../../../primitives/Icon'
+
+function ctrlStyle(empty: boolean): CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', gap: 8, width: '100%', height: 34,
+    padding: '0 10px', borderRadius: 'var(--r-md)', cursor: 'pointer',
+    border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)',
+    fontSize: 13, color: empty ? 'var(--c-text-subtle)' : 'var(--c-text)', textAlign: 'left',
+  }
+}
+
+export function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+      <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--c-text-muted)' }}>{children}</span>
+      {required && (
+        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--c-text-faint)' }}>
+          обяз.
+        </span>
+      )}
+    </div>
+  )
+}
+
+export type SelectOption = { id: string; name: string; icon?: IconName }
+
+/** Селект-кнопка с поповером (опции + иконки). Заменяет голый <select>. */
+export function SelectField({ value, options, placeholder = 'Выбрать', leadIcon, onChange }: {
+  value: string
+  options: SelectOption[]
+  placeholder?: string
+  leadIcon?: IconName
+  onChange?: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const sel = options.find((o) => o.id === value)
+  const label = sel?.name ?? null
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" style={ctrlStyle(!label)} onClick={() => setOpen((o) => !o)}>
+        {leadIcon && <Icon name={sel?.icon ?? leadIcon} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />}
+        <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label ?? placeholder}</span>
+        <Icon name="chevDown" size={13} style={{ color: 'var(--c-text-faint)', flexShrink: 0 }} />
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 50, minWidth: 200,
+            background: 'var(--c-bg-elev)', border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)',
+            boxShadow: 'var(--sh-3)', padding: 4, maxHeight: 240, overflowY: 'auto',
+          }}>
+            {options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => { onChange?.(o.id); setOpen(false) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 8px', border: 0,
+                  borderRadius: 'var(--r-sm)', background: o.id === value ? 'var(--c-bg-hover)' : 'transparent',
+                  fontSize: 12.5, color: 'var(--c-text)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-bg-hover)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = o.id === value ? 'var(--c-bg-hover)' : 'transparent' }}
+              >
+                {o.icon && <Icon name={o.icon} size={14} style={{ color: 'var(--c-text-subtle)' }} />}
+                <span style={{ flex: 1 }}>{o.name}</span>
+                {o.id === value && <Icon name="check" size={13} style={{ color: 'var(--c-accent)' }} />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Поле даты/времени — стилизованный контрол с иконкой календаря. */
+export function TimeField({ value, placeholder = 'Выбрать дату', onClick }: {
+  value?: string | null
+  placeholder?: string
+  onClick?: () => void
+}) {
+  return (
+    <button type="button" style={ctrlStyle(!value)} onClick={onClick}>
+      <Icon name="calendar" size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+      <span className={value ? 'mono' : ''} style={{ flex: 1, fontSize: value ? 12.5 : 13 }}>{value || placeholder}</span>
+    </button>
+  )
+}
+
+/** Денежное поле — ввод с ₽-суффиксом, моноширинный, по правому краю. */
+export function MoneyField({ value, onChange, placeholder = '0' }: {
+  value: string
+  onChange?: (v: string) => void
+  placeholder?: string
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)',
+      border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)',
+    }}>
+      <input
+        value={value}
+        placeholder={placeholder}
+        inputMode="numeric"
+        onChange={(e) => onChange?.(e.target.value.replace(/[^\d]/g, ''))}
+        style={{
+          flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)',
+          fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', minWidth: 0,
+          color: 'var(--c-text)',
+        }}
+      />
+      <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 13 }}>₽</span>
+    </div>
+  )
+}
+
+/** Read-only пара «ключ → значение» для завершённых фаз и леджера. */
+export function ReadRow({ label, children, mono, strong }: {
+  label: ReactNode
+  children: ReactNode
+  mono?: boolean
+  strong?: boolean
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, padding: '5px 0' }}>
+      <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{label}</span>
+      <span className={mono ? 'mono' : ''} style={{ fontSize: mono ? 12.5 : 13, fontWeight: strong ? 600 : 500, color: 'var(--c-text)', textAlign: 'right' }}>
+        {children}
+      </span>
+    </div>
+  )
+}
+
+export type SegmentOption<T extends string> = { value: T; label: string; icon?: IconName }
+
+/** Сегментированный переключатель (загруженность, состояния). */
+export function Segmented<T extends string>({ value, options, onChange }: {
+  value: T
+  options: SegmentOption<T>[]
+  onChange?: (v: T) => void
+}) {
+  return (
+    <div style={{ display: 'inline-flex', gap: 3, padding: 3, background: 'var(--c-bg-sunken)', borderRadius: 8 }}>
+      {options.map((o) => {
+        const on = o.value === value
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange?.(o.value)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', border: 0, cursor: 'pointer',
+              borderRadius: 6, fontSize: 12.5, fontWeight: 500, fontFamily: 'inherit',
+              background: on ? 'var(--c-bg-elev)' : 'transparent', color: on ? 'var(--c-text)' : 'var(--c-text-muted)',
+              boxShadow: on ? 'var(--sh-1)' : 'none',
+            }}
+          >
+            {o.icon && <Icon name={o.icon} size={13} />}{o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}

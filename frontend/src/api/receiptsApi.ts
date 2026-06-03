@@ -5,6 +5,7 @@ import { request } from './http'
 export type ReceiptStatus =
   | 'draft'
   | 'planned'
+  | 'on_intake'
   | 'on_review'
   | 'done'
   | 'cancelled'
@@ -15,6 +16,7 @@ export type ReceiptOpType =
   | 'line_add'
   | 'line_update'
   | 'plan_fix'
+  | 'intake_start'
   | 'arrival_fix'
   | 'arrival_accept'
   | 'receiving'
@@ -316,6 +318,12 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
+export function startReceiptIntake(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/intake`, {
+    method: 'POST',
+  })
+}
+
 export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
 
 export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
@@ -342,6 +350,7 @@ export function reopenReceipt(docId: string) {
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
+  on_intake: 'На приёмке',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
@@ -350,13 +359,14 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
   planned: 'Принят',
+  on_intake: 'На приёмке',
   on_review: 'Проверен',
   done: 'Завершен',
   cancelled: 'Аннулирован',
 }
 
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_review', 'done',
+  'draft', 'planned', 'on_intake', 'on_review', 'done',
 ]
 
 export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
@@ -365,6 +375,7 @@ export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
   line_add: 'Добавление строки',
   line_update: 'Изменение строки',
   plan_fix: 'Запланировано поступление',
+  intake_start: 'Начало приёмки',
   arrival_fix: 'Фиксация прибытия',
   arrival_accept: 'Принят при прибытии',
   receiving: 'Приёмка товара',
@@ -382,6 +393,7 @@ export function receiptStatusTone(status: ReceiptStatus) {
   const map: Record<ReceiptStatus, string> = {
     draft: '',
     planned: 'info',
+    on_intake: 'warning',
     on_review: 'warning',
     done: 'success',
     cancelled: 'danger',

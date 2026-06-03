@@ -4,6 +4,7 @@ import {
   getInventoryClients,
   getInventorySuppliers,
   getInventoryUnloadingZones,
+  getInventoryVehicleTypes,
   getInventoryWarehouses,
 } from '../api/inventoryLookupsApi'
 import type { DictionaryItem } from '../api/domainTypes'
@@ -21,6 +22,7 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
   const [carriers,       setCarriers]       = useState<DictionaryItem[]>([])
   const [warehouses,     setWarehouses]     = useState<DictionaryItem[]>([])
   const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
+  const [vehicleTypes,   setVehicleTypes]   = useState<DictionaryItem[]>([])
   const [loading,        setLoading]        = useState(true)
   const [reloadTick,     setReloadTick]     = useState(0)
 
@@ -35,14 +37,16 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
       getInventoryCarriers(ctrl.signal).catch(() => [] as DictionaryItem[]),
       getInventoryWarehouses(ctrl.signal).catch(() => [] as DictionaryItem[]),
       getInventoryUnloadingZones(ctrl.signal).catch(() => [] as DictionaryItem[]),
+      getInventoryVehicleTypes(ctrl.signal).catch(() => [] as DictionaryItem[]),
     ])
-      .then(([cl, su, ca, wh, zo]) => {
+      .then(([cl, su, ca, wh, zo, vt]) => {
         if (ctrl.signal.aborted) return
         setClients(cl)
         setSuppliers(su)
         setCarriers(ca)
         setWarehouses(wh)
         setUnloadingZones(zo)
+        setVehicleTypes(vt)
         setLoading(false)
       })
       .catch(() => { if (!ctrl.signal.aborted) setLoading(false) })
@@ -50,7 +54,7 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
   }, [reloadTick])
 
   return (
-    <LookupsContext.Provider value={{ clients, suppliers, carriers, warehouses, unloadingZones, loading, reload }}>
+    <LookupsContext.Provider value={{ clients, suppliers, carriers, warehouses, unloadingZones, vehicleTypes, loading, reload }}>
       {children}
     </LookupsContext.Provider>
   )

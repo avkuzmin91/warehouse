@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from config import (
     RECEIPT_OP_ARRIVAL_FIX,
+    RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_LINE_QC_COMPLETE,
     RECEIPT_OP_LINE_QC_REOPEN,
     RECEIPT_OP_PLAN_FIX,
@@ -156,7 +157,7 @@ def list_receipts_aggregated(
         conds.append("d.client_id = ?")
         params.append(client_id.strip())
     if overdue:
-        conds.append("d.status IN ('planned', 'on_review')")
+        conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
         conds.append("d.arrival_date < ?")
         params.append(today)
     elif status and status in statuses_all:
@@ -250,7 +251,7 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
-    if current == "planned" and next_status == "on_review":
+    if next_status == "on_review":
         missing = connection.execute(
             """
             SELECT COUNT(*) AS cnt
@@ -267,6 +268,7 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
 
     op_type = (
         RECEIPT_OP_PLAN_FIX if next_status == "planned" else
+        RECEIPT_OP_INTAKE_START if next_status == "on_intake" else
         RECEIPT_OP_ARRIVAL_FIX if next_status == "on_review" else
         RECEIPT_OP_QC_COMPLETE
     )

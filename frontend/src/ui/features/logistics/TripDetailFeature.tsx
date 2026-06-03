@@ -1,0 +1,270 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  cancelTrip,
+  closeTrip,
+  getTrip,
+  handoffTrip,
+  linkTripReceipts,
+  tripArrival,
+  tripCost,
+  tripUnload,
+  unlinkTripReceipt,
+  updateTrip,
+} from '../../../api/tripsApi'
+import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
+import { getReceipts, createReceipt, advanceReceiptStatus } from '../../../api/receiptsApi'
+import type { ReceiptListItem } from '../../../api/receiptsApi'
+import type { CreateReceiptFormValue } from './tripDetail/components/CreateReceiptForm'
+import { useConfirm } from '../../feedback/ConfirmDialog'
+import { Alert } from '../../primitives/Alert'
+import { useLookups } from '../../../hooks/useLookups'
+import type { PlanningFormValue } from './tripDetail/PlanningForm'
+import type { CostForm } from './tripDetail/views/CostingView'
+import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
+import type { Check } from './tripDetail/panels'
+import { PlanningView } from './tripDetail/views/PlanningView'
+import { AwaitingView } from './tripDetail/views/AwaitingView'
+import { CostingView } from './tripDetail/views/CostingView'
+import { ClosedView } from './tripDetail/views/ClosedView'
+
+const CAN_LINK = new Set(['draft', 'awaiting_arrival'])
+
+function fmtDay(d: string | null): string | undefined {
+  if (!d) return undefined
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return d
+  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+}
+
+const EMPTY_FORM: PlanningFormValue = {
+  origin_id: '', carrier_id: '', vehicle_type_id: '',
+  transport_ordered_at: '', eta: '', cost_estimate: '', comment: '',
+}
+
+export function TripDetailFeature({ tripId }: { tripId: string }) {
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const { warehouses, carriers, vehicleTypes } = useLookups()
+
+  const [detail, setDetail] = useState<TripDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
+  const [cost, setCost] = useState<CostForm>({ logistics_cost_actual: '', waiting_cost: '', waiting_minutes: '' })
+  const [loadFactor, setLoadFactor] = useState<TripLoadFactor>('full')
+  const [available, setAvailable] = useState<ReceiptListItem[]>([])
+
+  const load = useCallback(async () => {
+    try {
+      const d = await getTrip(tripId)
+      setDetail(d)
+      setForm({
+        origin_id: d.doc.origin_id ?? '',
+        carrier_id: d.doc.carrier_id ?? '',
+        vehicle_type_id: d.doc.vehicle_type_id ?? '',
+        transport_ordered_at: d.doc.transport_ordered_at ?? '',
+        eta: d.doc.eta ?? '',
+        cost_estimate: d.doc.cost_estimate != null ? String(d.doc.cost_estimate) : '',
+        comment: d.doc.comment ?? '',
+      })
+      setCost({
+        logistics_cost_actual: d.doc.logistics_cost_actual != null ? String(d.doc.logistics_cost_actual) : '',
+        waiting_cost: d.doc.waiting_cost != null ? String(d.doc.waiting_cost) : '',
+        waiting_minutes: d.doc.waiting_minutes != null ? String(d.doc.waiting_minutes) : '',
+      })
+      if (d.doc.load_factor) setLoadFactor(d.doc.load_factor)
+    } catch {
+      setError('Рейс не найден')
+    } finally {
+      setLoading(false)
+    }
+  }, [tripId])
+
+  useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (!detail || !CAN_LINK.has(detail.doc.status)) return
+    const ctrl = new AbortController()
+    getReceipts({ status: 'planned', limit: 100 }, ctrl.signal)
+      .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
+      .catch(() => {})
+    return () => ctrl.abort()
+  }, [detail])
+
+  async function run(fn: () => Promise<unknown>) {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+      await load()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveFields = () => {
+    const origin = warehouses.find((w) => w.id === form.origin_id)
+    const carrier = carriers.find((c) => c.id === form.carrier_id)
+    const vehicle = vehicleTypes.find((v) => v.id === form.vehicle_type_id)
+    return updateTrip(tripId, {
+      origin_id: form.origin_id || null,
+      origin_name: origin?.name ?? null,
+      carrier_id: form.carrier_id || null,
+      carrier_name: carrier?.name ?? null,
+      vehicle_type_id: form.vehicle_type_id || null,
+      vehicle_type_name: vehicle?.name ?? null,
+      transport_ordered_at: form.transport_ordered_at || null,
+      eta: form.eta || null,
+      cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null,
+      comment: form.comment.trim() || null,
+    })
+  }
+
+  const saveCost = () => tripCost(tripId, {
+    logistics_cost_actual: cost.logistics_cost_actual.trim() ? Number(cost.logistics_cost_actual) : null,
+    waiting_cost: cost.waiting_cost.trim() ? Number(cost.waiting_cost) : null,
+    waiting_minutes: cost.waiting_minutes.trim() ? Number(cost.waiting_minutes) : null,
+  })
+
+  const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
+  const onCostField = (patch: Partial<CostForm>) => setCost((c) => ({ ...c, ...patch }))
+
+  const handleSaveFields = () => run(saveFields)
+  const handleSaveCost = () => run(saveCost)
+  const handleHandoff = () => run(async () => { await saveFields(); await handoffTrip(tripId) })
+  const handleArrival = () => run(() => tripArrival(tripId, new Date().toISOString()))
+  const handleUnload = () => run(() => tripUnload(tripId, { unload_finished_at: new Date().toISOString(), load_factor: loadFactor }))
+
+  async function handleClose() {
+    const ok = await confirm({ title: 'Закрыть рейс?', body: 'Стоимость будет сохранена, рейс перейдёт в статус «Закрыт».', confirmLabel: 'Закрыть рейс' })
+    if (!ok) return
+    await run(async () => { await saveCost(); await closeTrip(tripId) })
+  }
+
+  async function handleCancel() {
+    const ok = await confirm({ title: 'Аннулировать рейс?', body: 'Это действие нельзя отменить.', danger: true, confirmLabel: 'Аннулировать' })
+    if (!ok) return
+    await run(() => cancelTrip(tripId))
+  }
+
+  async function runThrowing(fn: () => Promise<unknown>) {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+      await load()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка')
+      throw e
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleLink = (receiptIds: string[]) =>
+    runThrowing(() => linkTripReceipts(tripId, receiptIds))
+
+  const handleCreate = (f: CreateReceiptFormValue) =>
+    runThrowing(async () => {
+      const res = await createReceipt({
+        client_id: f.client_id,
+        supplier_name: f.supplier_name.trim() || null,
+        arrival_date: f.arrival_date || null,
+        ttn: f.ttn.trim() || null,
+        zone_id: f.zone_id || null,
+        zone_name: f.zone_name || null,
+        comment: f.comment.trim() || null,
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        lines: f.lines.map(({ _id, ...l }) => l),
+      })
+      const docId = res.message
+      await advanceReceiptStatus(docId)
+      await linkTripReceipts(tripId, [docId])
+    })
+
+  const handleUnlink = (receiptDocId: string) => run(() => unlinkTripReceipt(tripId, receiptDocId))
+
+  if (loading) {
+    return <div className="page"><div style={{ padding: '80px 0', textAlign: 'center', color: 'var(--c-text-subtle)' }}>Загрузка…</div></div>
+  }
+  if (!detail) {
+    return <div className="page"><div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--c-danger)' }}>{error || 'Рейс не найден'}</div></div>
+  }
+
+  const { doc, receipts } = detail
+  const status = doc.status
+  const onBack = () => navigate('/logistics/trips')
+  const onOpenReceipt = (id: string) => navigate(`/inventory/receipts/${id}`)
+
+  const linkedIds = new Set(receipts.map((r) => r.receipt_doc_id))
+  const link: ReceiptLink = {
+    options: available.filter((r) => !linkedIds.has(r.id)),
+    tripNumber: doc.trip_number,
+    tripOrigin: doc.origin_name,
+    onLink: handleLink,
+    onCreate: handleCreate,
+    onUnlink: handleUnlink,
+    busy,
+  }
+
+  // SKU/шт/прибытие для уже привязанных поступлений берём из кандидатов «В плане»
+  // (после разгрузки они уходят в on_intake и в кандидатах их нет — сабтайтл сократится).
+  const enrich: ReceiptEnrich = {}
+  for (const a of available) enrich[a.id] = { sku: a.sku_count, qty: a.total_planned, eta: fmtDay(a.arrival_date) }
+
+  const checks: Check[] = [
+    { ok: !!form.origin_id, label: 'Откуда указано' },
+    { ok: !!form.carrier_id, label: 'Перевозчик указан' },
+    { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
+    { ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' },
+    { ok: receipts.length > 0, label: `Поступлений: ${receipts.length}` },
+  ]
+
+  const dirtyCost =
+    cost.logistics_cost_actual !== (doc.logistics_cost_actual != null ? String(doc.logistics_cost_actual) : '') ||
+    cost.waiting_cost !== (doc.waiting_cost != null ? String(doc.waiting_cost) : '') ||
+    cost.waiting_minutes !== (doc.waiting_minutes != null ? String(doc.waiting_minutes) : '')
+
+  let view
+  if (status === 'draft') {
+    view = (
+      <PlanningView
+        detail={detail} form={form} onField={onField} link={link} enrich={enrich} busy={busy} checks={checks}
+        onBack={onBack} onCancel={handleCancel} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
+      />
+    )
+  } else if (status === 'awaiting_arrival' || status === 'unloading') {
+    view = (
+      <AwaitingView
+        detail={detail} loadFactor={loadFactor} onLoadFactor={setLoadFactor} busy={busy} enrich={enrich}
+        onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
+      />
+    )
+  } else if (status === 'costing') {
+    view = (
+      <CostingView
+        detail={detail} form={form} onField={onField} cost={cost} onCost={onCostField}
+        dirtyCost={dirtyCost} onSaveCost={handleSaveCost} onSaveFields={handleSaveFields}
+        busy={busy} onBack={onBack} onCancel={handleCancel} onClose={handleClose} onOpenReceipt={onOpenReceipt}
+      />
+    )
+  } else {
+    view = <ClosedView detail={detail} onBack={onBack} onOpenReceipt={onOpenReceipt} />
+  }
+
+  return (
+    <>
+      {error && (
+        <div style={{ position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, maxWidth: 520 }}>
+          <Alert tone="danger" icon={false}>{error}</Alert>
+        </div>
+      )}
+      {view}
+    </>
+  )
+}

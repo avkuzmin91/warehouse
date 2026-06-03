@@ -108,6 +108,12 @@ def lookup_carriers(user=Depends(get_current_manager)):
     return _active_dictionary_rows("carriers")
 
 
+@router.get("/lookups/vehicle-types", response_model=list[DictionaryBaseItem])
+def lookup_vehicle_types(user=Depends(get_current_manager)):
+    _ = user
+    return _active_dictionary_rows("vehicle_types")
+
+
 @router.get("/lookups/unloading-zones", response_model=list[DictionaryBaseItem])
 def lookup_unloading_zones(user=Depends(get_current_manager)):
     _ = user

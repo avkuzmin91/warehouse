@@ -63,6 +63,7 @@ export const adminRoutes = [
   <Route key="dictionaries-products-list" path="/dictionaries/products" element={<Navigate to="/dictionaries?type=products" replace />} />,
   <Route key="dictionaries-warehouses-list" path="/dictionaries/warehouses" element={<Navigate to="/dictionaries?type=warehouses" replace />} />,
   <Route key="dictionaries-carriers-list" path="/dictionaries/carriers" element={<Navigate to="/dictionaries?type=carriers" replace />} />,
+  <Route key="dictionaries-vehicle-types-list" path="/dictionaries/vehicle-types" element={<Navigate to="/dictionaries?type=vehicle-types" replace />} />,
   <Route key="dictionaries-reasons-list" path="/dictionaries/reasons" element={<Navigate to="/dictionaries?type=reasons" replace />} />,
 
   // Create / edit routes for products and clients (full-page forms, kept intact)

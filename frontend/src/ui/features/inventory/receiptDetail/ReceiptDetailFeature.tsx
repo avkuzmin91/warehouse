@@ -5,6 +5,7 @@ import {
   cancelReceipt,
   getReceipt,
   reopenReceipt,
+  startReceiptIntake,
 } from '../../../../api/receiptsApi'
 import type { ReceiptArriveLine, ReceiptDetail } from '../../../../api/receiptsApi'
 import { useConfirm } from '../../../feedback/ConfirmDialog'
@@ -58,6 +59,18 @@ export function ReceiptDetailFeature({ docId }: Props) {
     setAdvancing(true)
     try {
       await arriveReceipt(docId, lines)
+      await load()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setAdvancing(false)
+    }
+  }
+
+  async function handleStartIntake() {
+    setAdvancing(true)
+    try {
+      await startReceiptIntake(docId)
       await load()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
@@ -132,14 +145,16 @@ export function ReceiptDetailFeature({ docId }: Props) {
     )
   }
 
-  // Planned — редактирование плана, фиксация прибытия или аннулирование
-  if (detail.doc.status === 'planned') {
+  // Planned — план поступления + «Начать приёмку».
+  // On_intake — подсчёт «Принято» + «Принять товары». Та же вью, разные действия.
+  if (detail.doc.status === 'planned' || detail.doc.status === 'on_intake') {
     return (
       <PlannedView
         docId={docId}
         detail={detail}
         onReload={load}
         onArrive={handleArrive}
+        onStartIntake={handleStartIntake}
         onCancel={handleCancel}
         advancing={advancing}
       />
