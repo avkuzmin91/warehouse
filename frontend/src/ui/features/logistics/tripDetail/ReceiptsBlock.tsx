@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TripReceiptItem } from '../../../../api/tripsApi'
 import type { ReceiptListItem } from '../../../../api/receiptsApi'
@@ -23,7 +23,7 @@ export type ReceiptLink = {
 }
 
 /** Блок «Поступления в рейсе» (или «В машине»): ReceiptCard-список + привязка через Drawer. */
-export function ReceiptsBlock({ title = 'Поступления в рейсе', right, receipts, enrich, onOpen, link, footerNote }: {
+export function ReceiptsBlock({ title = 'Поступления в рейсе', right, receipts, enrich, onOpen, link, footerNote, expandable, resetKey }: {
   title?: string
   right?: ReactNode
   receipts: TripReceiptItem[]
@@ -31,11 +31,44 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
   onOpen?: (receiptDocId: string) => void
   link?: ReceiptLink
   footerNote?: ReactNode
+  /** Раскрытие строк вниз с inline-составом (требует onOpen для перехода в карточку). */
+  expandable?: boolean
+  /** Смена значения (id рейса) сбрасывает набор раскрытых строк. */
+  resetKey?: string
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [open, setOpen] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => { setOpen(new Set()) }, [resetKey])
+
+  const canExpand = !!expandable && !!onOpen
+  const totalQty = receipts.reduce((s, r) => s + (enrich?.[r.receipt_doc_id]?.qty ?? 0), 0)
+  const allOpen = receipts.length > 0 && open.size === receipts.length
+
+  const toggleOne = (id: string) => setOpen((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  const toggleAll = () => setOpen(allOpen ? new Set() : new Set(receipts.map((r) => r.receipt_doc_id)))
+
+  const headerRight = right ?? (
+    canExpand ? (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span className="t-sub">{receipts.length} поступления{totalQty > 0 ? ` · ${totalQty} шт` : ''}</span>
+        {receipts.length > 0 && (
+          <button type="button" className="btn ghost sm" onClick={toggleAll}>
+            <Icon name={allOpen ? 'chevUp' : 'chevDown'} size={13} />
+            {allOpen ? 'Свернуть все' : 'Развернуть все'}
+          </button>
+        )}
+      </span>
+    ) : <Badge tone="accent">{receipts.length}</Badge>
+  )
 
   return (
-    <Panel icon="inbox" title={title} right={right ?? <Badge tone="accent">{receipts.length}</Badge>}>
+    <Panel icon="inbox" title={title} right={headerRight}>
       {receipts.length === 0 ? (
         <div className="t-sub" style={{ padding: '2px 0 4px' }}>Поступления ещё не привязаны</div>
       ) : (
@@ -54,12 +87,23 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
                   qty: e?.qty,
                   eta: e?.eta,
                 }}
+                expandable={canExpand}
+                expanded={open.has(r.receipt_doc_id)}
+                onToggle={() => toggleOne(r.receipt_doc_id)}
+                onOpen={onOpen ? () => onOpen(r.receipt_doc_id) : undefined}
                 onClick={onOpen ? () => onOpen(r.receipt_doc_id) : undefined}
                 removable={!!link}
                 onRemove={link ? () => link.onUnlink(r.receipt_doc_id) : undefined}
               />
             )
           })}
+        </div>
+      )}
+
+      {canExpand && receipts.length > 0 && (
+        <div className="row gap-8" style={{ alignItems: 'center', marginTop: 10, fontSize: 11.5, color: 'var(--c-text-faint)' }}>
+          <Icon name="alert" size={13} style={{ flexShrink: 0 }} />
+          <span>Стрелка → открывает полную карточку поступления</span>
         </div>
       )}
 

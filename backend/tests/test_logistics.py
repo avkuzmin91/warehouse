@@ -22,6 +22,21 @@ def client_id():
     cleanup_client(cid)
 
 
+def _handoff_ready_trip(admin_client, receipt_id: str) -> str:
+    """Создаёт черновик рейса со всеми обязательными для передачи на склад полями."""
+    create = admin_client.post("/trips", json={
+        "origin_id": "wh-1", "origin_name": "Москва",
+        "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
+        "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "cost_estimate": 10000,
+        "transport_ordered_at": "2026-06-01T10:00",
+        "eta": "2026-06-02T08:00",
+        "receipt_doc_ids": [receipt_id],
+    })
+    assert create.status_code == 200, create.text
+    return create.json()["message"]
+
+
 def _planned_receipt(admin_client, client_id: str) -> str:
     r = admin_client.post("/receipts", json={"client_id": client_id, "lines": []})
     assert r.status_code == 200, r.text
@@ -35,14 +50,7 @@ def _planned_receipt(admin_client, client_id: str) -> str:
 def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
 
-    create = admin_client.post("/trips", json={
-        "origin_name": "Москва",
-        "carrier_name": "ООО Перевозчик",
-        "cost_estimate": 10000,
-        "receipt_doc_ids": [receipt_id],
-    })
-    assert create.status_code == 200, create.text
-    trip_id = create.json()["message"]
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
 
     detail = admin_client.get(f"/trips/{trip_id}")
     assert detail.status_code == 200, detail.text
@@ -81,7 +89,7 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
 
 def test_trip_unload_start_copied_from_arrival_and_can_be_adjusted(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
-    trip_id = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
     admin_client.post(f"/trips/{trip_id}/handoff")
 
     arrived_at = "2026-06-03T10:00"
@@ -161,7 +169,7 @@ def test_receipt_candidates_exclude_receipts_linked_to_other_trips(admin_client,
 
 def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
-    trip_id = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
     admin_client.post(f"/trips/{trip_id}/handoff")
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})

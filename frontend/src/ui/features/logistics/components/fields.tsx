@@ -4,11 +4,12 @@ import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { DatePicker } from '../../../primitives/DatePicker'
 
-function ctrlStyle(empty: boolean): CSSProperties {
+function ctrlStyle(empty: boolean, invalid?: boolean): CSSProperties {
   return {
     display: 'flex', alignItems: 'center', gap: 8, width: '100%', height: 34,
     padding: '0 10px', borderRadius: 'var(--r-md)', cursor: 'pointer',
-    border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)',
+    border: `1px solid ${invalid ? 'var(--c-danger)' : 'var(--c-border-strong)'}`,
+    background: invalid ? 'var(--c-danger-bg)' : 'var(--c-bg-elev)',
     fontSize: 13, color: empty ? 'var(--c-text-subtle)' : 'var(--c-text)', textAlign: 'left',
   }
 }
@@ -29,11 +30,12 @@ export function FieldLabel({ children, required }: { children: ReactNode; requir
 export type SelectOption = { id: string; name: string; icon?: IconName }
 
 /** Селект-кнопка с поповером (опции + иконки). Заменяет голый <select>. */
-export function SelectField({ value, options, placeholder = 'Выбрать', leadIcon, onChange }: {
+export function SelectField({ value, options, placeholder = 'Выбрать', leadIcon, invalid, onChange }: {
   value: string
   options: SelectOption[]
   placeholder?: string
   leadIcon?: IconName
+  invalid?: boolean
   onChange?: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -41,7 +43,7 @@ export function SelectField({ value, options, placeholder = 'Выбрать', le
   const label = sel?.name ?? null
   return (
     <div style={{ position: 'relative' }}>
-      <button type="button" style={ctrlStyle(!label)} onClick={() => setOpen((o) => !o)}>
+      <button type="button" style={ctrlStyle(!label, invalid)} onClick={() => setOpen((o) => !o)}>
         {leadIcon && <Icon name={sel?.icon ?? leadIcon} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />}
         <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label ?? placeholder}</span>
         <Icon name="chevDown" size={13} style={{ color: 'var(--c-text-faint)', flexShrink: 0 }} />
@@ -108,14 +110,18 @@ export function combineDateTime(date: string, time: string): string {
 }
 
 /** Поле «дата + время»: DatePicker + ручной ввод чч:мм. Значение — `YYYY-MM-DD[THH:mm]`. */
-export function DateTimeField({ value, onChange }: {
+export function DateTimeField({ value, invalid, onChange }: {
   value: string
+  invalid?: boolean
   onChange: (value: string) => void
 }) {
   const date = datePart(value)
   const time = timePart(value)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 88px', gap: 8 }}>
+    <div style={{
+      display: 'grid', gridTemplateColumns: '1fr 88px', gap: 8,
+      ...(invalid ? { padding: 2, margin: -2, borderRadius: 'var(--r-md)', border: '1px solid var(--c-danger)', background: 'var(--c-danger-bg)' } : null),
+    }}>
       <DatePicker value={date} onChange={(v) => onChange(combineDateTime(v, time))} />
       <input
         className="input sm mono"
@@ -142,15 +148,17 @@ export function DateTimeField({ value, onChange }: {
 }
 
 /** Денежное поле — ввод с ₽-суффиксом, моноширинный, по правому краю. */
-export function MoneyField({ value, onChange, placeholder = '0' }: {
+export function MoneyField({ value, onChange, placeholder = '0', invalid }: {
   value: string
   onChange?: (v: string) => void
   placeholder?: string
+  invalid?: boolean
 }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)',
-      border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)',
+      border: `1px solid ${invalid ? 'var(--c-danger)' : 'var(--c-border-strong)'}`,
+      background: invalid ? 'var(--c-danger-bg)' : 'var(--c-bg-elev)',
     }}>
       <input
         value={value}

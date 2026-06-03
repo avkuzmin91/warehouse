@@ -186,7 +186,7 @@ def list_shipments(
                 LEFT JOIN shipment_lines l ON l.doc_id = d.id
                 WHERE {where}
                 GROUP BY d.id
-                ORDER BY d.created_at DESC
+                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()

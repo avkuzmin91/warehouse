@@ -377,6 +377,31 @@ a { color: inherit; text-decoration: none; }
   display: flex; align-items: center; justify-content: center; color: white;
 }
 
+/* === Expandable receipt row (карточка рейса → раскрытие поступления) === */
+.exp-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 240ms cubic-bezier(.32, .72, 0, 1);
+}
+.exp-wrap.open { grid-template-rows: 1fr; }
+.exp-inner { overflow: hidden; min-height: 0; }
+.exp-open-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.exp-row:hover .exp-open-btn,
+.exp-open-btn:focus-visible { opacity: 1; }
+@media (hover: none) {
+  .exp-open-btn { opacity: 1; }
+}
+.exp-chev { transition: transform 200ms; }
+.exp-chev.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .exp-wrap { transition: none; }
+  .exp-chev { transition: none; }
+}
+
 /* === Badges === */
 .badge {
   display: inline-flex; align-items: center; gap: 4px;

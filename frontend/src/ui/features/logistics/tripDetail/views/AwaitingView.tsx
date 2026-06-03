@@ -32,6 +32,12 @@ function minutesSince(v: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
+function isBefore(left: string, right: string): boolean {
+  const leftTs = new Date(left).getTime()
+  const rightTs = new Date(right).getTime()
+  return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
+}
+
 export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt }: {
   detail: TripDetail
   loadFactor: TripLoadFactor
@@ -56,7 +62,8 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
   const arrivalReady = timePart(arrival).length === 5
   const unloadStartReady = timePart(unloadStart).length === 5
   const unloadEndReady = timePart(unloadEnd).length === 5
-  const actionDisabled = busy || (unloading ? (!unloadStartReady || !unloadEndReady) : !arrivalReady)
+  const unloadPeriodInvalid = unloading && unloadStartReady && unloadEndReady && isBefore(unloadEnd, unloadStart)
+  const actionDisabled = busy || (unloading ? (!unloadStartReady || !unloadEndReady || unloadPeriodInvalid) : !arrivalReady)
 
   return (
     <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
@@ -148,9 +155,11 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
 
         {unloading && (
           <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
-            <Icon name={unloadStartReady && unloadEndReady ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
+            <Icon name={unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
             <span>
-              {unloadStartReady && unloadEndReady
+              {unloadPeriodInvalid
+                ? <>Окончание разгрузки не может быть раньше начала разгрузки.</>
+                : unloadStartReady && unloadEndReady
                 ? <>После завершения {receipts.length} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на уточнение стоимости.</>
                 : <>Укажите начало и окончание разгрузки — без времени завершить разгрузку нельзя.</>}
             </span>
@@ -167,10 +176,11 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
 
       <ReceiptsBlock
         title="В машине"
-        right={<span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{receipts.length} поступления</span>}
         receipts={receipts}
         enrich={enrich}
         onOpen={onOpenReceipt}
+        expandable
+        resetKey={doc.id}
       />
     </div>
   )

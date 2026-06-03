@@ -91,6 +91,8 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
           <ReceiptsBlock
             receipts={receipts}
             onOpen={onOpenReceipt}
+            expandable
+            resetKey={doc.id}
             footerNote={
               <div style={{ display: 'flex', gap: 6, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                 <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />

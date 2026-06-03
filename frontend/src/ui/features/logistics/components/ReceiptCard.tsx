@@ -1,6 +1,7 @@
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import type { BadgeTone } from '../../../primitives/Badge'
+import { ExpandableReceiptRow } from './ExpandableReceiptRow'
 
 export type ReceiptCardData = {
   receipt_doc_id?: string
@@ -21,12 +22,29 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 }
 
 /** Карточка привязанного поступления: клиент, номер (mono), SKU/шт, бейдж статуса. */
-export function ReceiptCard({ r, removable, onRemove, onClick }: {
+export function ReceiptCard({ r, removable, onRemove, onClick, expandable, expanded, onToggle, onOpen }: {
   r: ReceiptCardData
   removable?: boolean
   onRemove?: () => void
   onClick?: () => void
+  /** Раскрытие строки вниз с inline-составом поступления (в карточке рейса). */
+  expandable?: boolean
+  expanded?: boolean
+  onToggle?: () => void
+  onOpen?: () => void
 }) {
+  if (expandable && r.receipt_doc_id) {
+    return (
+      <ExpandableReceiptRow
+        r={{ receipt_doc_id: r.receipt_doc_id, number: r.number, client: r.client, status: r.status }}
+        open={!!expanded}
+        onToggle={onToggle ?? (() => {})}
+        onOpen={onOpen ?? onClick ?? (() => {})}
+        onRemove={removable ? onRemove : undefined}
+      />
+    )
+  }
+
   return (
     <div
       className="card"

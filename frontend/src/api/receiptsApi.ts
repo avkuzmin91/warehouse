@@ -362,7 +362,7 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
-  planned: 'Принят',
+  planned: 'Поступил',
   on_intake: 'Принят',
   on_review: 'Проверен',
   done: 'Завершен',

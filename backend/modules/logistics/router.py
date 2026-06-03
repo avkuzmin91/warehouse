@@ -59,6 +59,25 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _dt_value(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
+
+
+def _ensure_unload_period(unload_started_at: str | None, unload_finished_at: str | None) -> None:
+    start = _dt_value(unload_started_at)
+    finish = _dt_value(unload_finished_at)
+    if start is not None and finish is not None and finish < start:
+        raise HTTPException(status_code=400, detail="Окончание разгрузки не может быть раньше начала разгрузки")
+
+
 def _doc_response(row) -> TripDocResponse:
     return TripDocResponse(
         id=str(row["id"]),
@@ -225,7 +244,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
 @router.patch("/trips/{trip_id}")
 def update_trip(trip_id: str, payload: TripDocUpdate, user=Depends(get_current_manager)):
     uid = str(user["id"])
-    editable = {TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_COSTING}
+    editable = {TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING, TRIP_STATUS_COSTING}
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) not in editable:
@@ -325,6 +344,17 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
         ).fetchone()
         if int(cnt["c"] if cnt else 0) == 0:
             raise HTTPException(status_code=400, detail="Привяжите хотя бы одно поступление")
+        required = [
+            ("origin_id", "Откуда"),
+            ("carrier_id", "Перевозчик"),
+            ("vehicle_type_id", "Тип кузова"),
+            ("cost_estimate", "Стоимость логистики (план)"),
+            ("transport_ordered_at", "Транспорт заказан"),
+            ("eta", "Плановое прибытие"),
+        ]
+        missing = [label for col, label in required if doc_row[col] in (None, "")]
+        if missing:
+            raise HTTPException(status_code=400, detail="Заполните обязательные поля: " + ", ".join(missing))
         _advance(conn, trip_id, to_status=TRIP_STATUS_AWAITING_ARRIVAL,
                  op_type=TRIP_OP_HANDOFF, comment="Черновик → Ожидает прибытия (передан на склад)", uid=uid)
         conn.commit()
@@ -363,6 +393,7 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
             or _now()
         )
         unload_at = (payload.unload_finished_at or "").strip() or _now()
+        _ensure_unload_period(unload_started_at, unload_at)
         _advance(conn, trip_id, to_status=TRIP_STATUS_COSTING,
                  op_type=TRIP_OP_UNLOAD_DONE, comment="Разгрузка → Уточнение стоимости (разгрузка завершена)", uid=uid,
                  extra_sql="unload_started_at = ?, unload_finished_at = ?, load_factor = ?",
@@ -414,6 +445,10 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_COSTING:
             raise HTTPException(status_code=400, detail="Исполнение на складе можно редактировать только в статусе 'Уточнение стоимости'")
+        arrived_at = (payload.arrived_at or "").strip() or None
+        unload_started_at = (payload.unload_started_at or "").strip() or None
+        unload_finished_at = (payload.unload_finished_at or "").strip() or None
+        _ensure_unload_period(unload_started_at, unload_finished_at)
         now = _now()
         conn.execute(
             """
@@ -423,9 +458,9 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
             WHERE id = ?
             """,
             (
-                (payload.arrived_at or "").strip() or None,
-                (payload.unload_started_at or "").strip() or None,
-                (payload.unload_finished_at or "").strip() or None,
+                arrived_at,
+                unload_started_at,
+                unload_finished_at,
                 payload.load_factor,
                 now,
                 trip_id,

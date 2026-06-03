@@ -23,7 +23,7 @@ function LockedGrid({ labels }: { labels: string[] }) {
   )
 }
 
-export function PlanningView({ detail, form, onField, link, enrich, busy, checks, onBack, onCancel, onHandoff, onOpenReceipt }: {
+export function PlanningView({ detail, form, onField, link, enrich, busy, checks, invalid, blockReasons, onBack, onCancel, onHandoff, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -31,6 +31,8 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
   enrich?: ReceiptEnrich
   busy: boolean
   checks: Check[]
+  invalid?: Partial<Record<keyof PlanningFormValue, boolean>>
+  blockReasons: string[]
   onBack: () => void
   onCancel: () => void
   onHandoff: () => void
@@ -44,30 +46,41 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
         status="draft"
         onBack={onBack}
         action={
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
-              <Icon name="x" size={14} />Аннулировать
-            </button>
-            <PrimaryAction
-              icon="arrowRight"
-              label="Передать на склад"
-              hint="Рейс уйдёт кладовщику в очередь «Мои задачи»"
-              onClick={onHandoff}
-              disabled={busy}
-            />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
+                <Icon name="x" size={14} />Аннулировать
+              </button>
+              <PrimaryAction
+                icon="arrowRight"
+                label="Передать на склад"
+                hint="Рейс уйдёт кладовщику в очередь «Мои задачи»"
+                onClick={onHandoff}
+                disabled={busy}
+              />
+            </div>
+            {blockReasons.length > 0 && (
+              <div className="block-reasons">
+                {blockReasons.map((r, i) => (
+                  <div key={i}>· {r}</div>
+                ))}
+              </div>
+            )}
           </div>
         }
       />
 
       <div className="split-360">
         <div className="col gap-16">
-          <PlanningForm value={form} onChange={onField} state="active" />
+          <PlanningForm value={form} onChange={onField} state="active" invalid={invalid} />
 
           <ReceiptsBlock
             receipts={receipts}
             enrich={enrich}
             onOpen={onOpenReceipt}
             link={link}
+            expandable
+            resetKey={doc.id}
           />
 
           <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="locked"

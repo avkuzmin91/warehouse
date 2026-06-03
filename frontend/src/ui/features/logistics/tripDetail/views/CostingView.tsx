@@ -90,7 +90,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                   <Icon name="edit" size={13} />Изменить транспорт
                 </button>
               }>
-              <div className="form-grid-2">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
                 <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
                 <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
                 <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
@@ -145,7 +145,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                 </div>
               </div>
             ) : (
-              <div className="form-grid-2">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
                 <ReadRow label="Прибытие" mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
                 <ReadRow label="Начало разгрузки" mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
                 <ReadRow label="Окончание разгрузки" mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
@@ -156,7 +156,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
           </PhaseBlock>
 
           <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="active">
-            <div className="form-grid-2">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, alignItems: 'end' }}>
               <div>
                 <FieldLabel required>Логистика (факт)</FieldLabel>
                 <MoneyField value={cost.logistics_cost_actual} onChange={(v) => onCost({ logistics_cost_actual: v })} />
@@ -176,13 +176,14 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
               </div>
             </div>
             <div style={{
-              marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 12px', borderRadius: 'var(--r-md)', background: 'var(--c-accent-bg)',
+              marginTop: 14, display: 'flex', alignItems: 'center', gap: 8,
+              padding: '10px 14px', borderRadius: 'var(--r-md)',
+              background: 'color-mix(in oklab, var(--c-accent) 6%, var(--c-bg-elev))',
+              border: '1px solid var(--c-accent-border)',
             }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 500, color: 'var(--c-accent-text)' }}>
-                <Icon name="ruble" size={14} />Итого по рейсу
-              </span>
-              <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-accent-text)' }}>{money(total)}</span>
+              <Icon name="ruble" size={15} style={{ color: 'var(--c-accent)' }} />
+              <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>Итого по рейсу</span>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 600 }}>{money(total)}</span>
             </div>
             {dirtyCost && (
               <button className="btn sm" style={{ marginTop: 10 }} onClick={onSaveCost} disabled={busy}>
@@ -191,7 +192,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
             )}
           </PhaseBlock>
 
-          <ReceiptsBlock receipts={receipts} onOpen={onOpenReceipt} />
+          <ReceiptsBlock receipts={receipts} onOpen={onOpenReceipt} expandable resetKey={doc.id} />
         </div>
 
         <div className="col gap-16">

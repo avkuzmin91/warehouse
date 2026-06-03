@@ -20,12 +20,14 @@ import type { CreateReceiptFormValue } from './tripDetail/components/CreateRecei
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
 import type { Check } from './tripDetail/panels'
 import { PlanningView } from './tripDetail/views/PlanningView'
 import { AwaitingView } from './tripDetail/views/AwaitingView'
+import { InWarehouseView } from './tripDetail/views/InWarehouseView'
 import { CostingView } from './tripDetail/views/CostingView'
 import { ClosedView } from './tripDetail/views/ClosedView'
 
@@ -52,6 +54,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const { warehouses, carriers, vehicleTypes } = useLookups()
+  const { user } = useCurrentUser()
 
   const [detail, setDetail] = useState<TripDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -65,6 +68,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [unloadStart, setUnloadStart] = useState<string>('')
   const [unloadEnd, setUnloadEnd] = useState<string>('')
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
+  const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -149,13 +153,38 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     load_factor: loadFactor,
   })
 
-  const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
+  const onField = (patch: Partial<PlanningFormValue>) => {
+    setForm((f) => ({ ...f, ...patch }))
+    setShowBlockReasons(false)
+  }
   const onCostField = (patch: Partial<CostForm>) => setCost((c) => ({ ...c, ...patch }))
+
+  const requiredErrors: Partial<Record<keyof PlanningFormValue, boolean>> = {
+    origin_id: !form.origin_id,
+    carrier_id: !form.carrier_id,
+    vehicle_type_id: !form.vehicle_type_id,
+    cost_estimate: form.cost_estimate.trim() === '',
+    transport_ordered_at: !form.transport_ordered_at,
+    eta: !form.eta,
+  }
+  const handoffBlockReasons: string[] = [
+    ...(requiredErrors.origin_id ? ['Не указано «Откуда»'] : []),
+    ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
+    ...(requiredErrors.vehicle_type_id ? ['Не выбран тип кузова'] : []),
+    ...(requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
+    ...(requiredErrors.transport_ordered_at ? ['Не указано «Транспорт заказан»'] : []),
+    ...(requiredErrors.eta ? ['Не указано плановое прибытие'] : []),
+    ...((detail?.receipts.length ?? 0) === 0 ? ['Не привязано ни одного поступления'] : []),
+  ]
 
   const handleSaveFields = () => run(saveFields)
   const handleSaveCost = () => run(saveCost)
   const handleSaveExecution = () => run(saveExecution)
-  const handleHandoff = () => run(async () => { await saveFields(); await handoffTrip(tripId) })
+  const handleHandoff = () => {
+    if (handoffBlockReasons.length > 0) { setShowBlockReasons(true); return }
+    setShowBlockReasons(false)
+    return run(async () => { await saveFields(); await handoffTrip(tripId) })
+  }
   const handleArrival = () => run(() => tripArrival(tripId, arrival))
   const handleUnload = () => run(() => tripUnload(tripId, {
     unload_started_at: unloadStart || null,
@@ -245,6 +274,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
     { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
     { ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' },
+    { ok: !!form.transport_ordered_at, label: 'Транспорт заказан' },
+    { ok: !!form.eta, label: 'Плановое прибытие указано' },
     { ok: receipts.length > 0, label: `Поступлений: ${receipts.length}` },
   ]
 
@@ -258,18 +289,36 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     view = (
       <PlanningView
         detail={detail} form={form} onField={onField} link={link} enrich={enrich} busy={busy} checks={checks}
+        invalid={showBlockReasons ? requiredErrors : undefined}
+        blockReasons={showBlockReasons ? handoffBlockReasons : []}
         onBack={onBack} onCancel={handleCancel} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
       />
     )
   } else if (status === 'awaiting_arrival' || status === 'unloading') {
+    const isWarehouseTaskView = user?.role === 'warehouse_manager'
     view = (
-      <AwaitingView
-        detail={detail} loadFactor={loadFactor} onLoadFactor={setLoadFactor} busy={busy} enrich={enrich}
-        arrival={arrival} onArrivalChange={setArrival}
-        unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
-        unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
-        onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
-      />
+      isWarehouseTaskView ? (
+        <AwaitingView
+          detail={detail} loadFactor={loadFactor} onLoadFactor={setLoadFactor} busy={busy} enrich={enrich}
+          arrival={arrival} onArrivalChange={setArrival}
+          unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
+          unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
+          onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
+        />
+      ) : (
+        <InWarehouseView
+          detail={detail} form={form} onField={onField}
+          link={status === 'awaiting_arrival' ? link : undefined}
+          enrich={enrich}
+          loadFactor={loadFactor} onLoadFactor={setLoadFactor}
+          arrival={arrival} onArrivalChange={setArrival}
+          unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
+          unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
+          busy={busy} onBack={onBack} onCancel={handleCancel}
+          onSaveFields={handleSaveFields} onArrival={handleArrival} onUnload={handleUnload}
+          onOpenReceipt={onOpenReceipt}
+        />
+      )
     )
   } else if (status === 'costing') {
     view = (
