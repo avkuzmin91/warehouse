@@ -289,6 +289,15 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     cost.waiting_cost !== (doc.waiting_cost != null ? String(doc.waiting_cost) : '') ||
     cost.waiting_minutes !== (doc.waiting_minutes != null ? String(doc.waiting_minutes) : '')
 
+  const dirtyFields =
+    form.origin_id !== (doc.origin_id ?? '') ||
+    form.carrier_id !== (doc.carrier_id ?? '') ||
+    form.vehicle_type_id !== (doc.vehicle_type_id ?? '') ||
+    form.transport_ordered_at !== (doc.transport_ordered_at ?? '') ||
+    form.eta !== (doc.eta ?? '') ||
+    (showCosts && form.cost_estimate !== (doc.cost_estimate != null ? String(doc.cost_estimate) : '')) ||
+    form.comment !== (doc.comment ?? '')
+
   let view
   if (status === 'draft') {
     view = (
@@ -298,6 +307,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         canEditTransportPlanning={canEditTransportPlanning}
         invalid={showBlockReasons ? requiredErrors : undefined}
         blockReasons={showBlockReasons ? handoffBlockReasons : []}
+        dirtyFields={dirtyFields}
         onBack={onBack} onCancel={handleCancel} onSaveFields={handleSaveFields} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
       />
     )
