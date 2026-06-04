@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
@@ -39,22 +40,66 @@ export function SelectField({ value, options, placeholder = 'Выбрать', le
   onChange?: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>({})
+  const containerRef = useRef<HTMLDivElement>(null)
   const sel = options.find((o) => o.id === value)
   const label = sel?.name ?? null
+
+  const updateDropdownPosition = () => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    const gap = 4
+    const viewportGap = 8
+    const desiredHeight = 240
+    const spaceBelow = window.innerHeight - rect.bottom - viewportGap
+    const spaceAbove = rect.top - viewportGap
+
+    if (spaceBelow < 140 && spaceAbove > spaceBelow) {
+      setDropdownStyle({
+        position: 'fixed',
+        bottom: window.innerHeight - rect.top + gap,
+        left: rect.left,
+        width: Math.max(rect.width, 200),
+        maxHeight: Math.min(desiredHeight, Math.max(120, spaceAbove - gap)),
+      })
+      return
+    }
+
+    setDropdownStyle({
+      position: 'fixed',
+      top: rect.bottom + gap,
+      left: rect.left,
+      width: Math.max(rect.width, 200),
+      maxHeight: Math.min(desiredHeight, Math.max(120, spaceBelow - gap)),
+    })
+  }
+
+  useEffect(() => {
+    if (!open) return
+    updateDropdownPosition()
+    window.addEventListener('resize', updateDropdownPosition)
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateDropdownPosition)
+      window.removeEventListener('scroll', updateDropdownPosition, true)
+    }
+  }, [open])
+
   return (
-    <div style={{ position: 'relative' }}>
-      <button type="button" style={ctrlStyle(!label, invalid)} onClick={() => setOpen((o) => !o)}>
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button type="button" style={ctrlStyle(!label, invalid)} onClick={() => { updateDropdownPosition(); setOpen((o) => !o) }}>
         {leadIcon && <Icon name={sel?.icon ?? leadIcon} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />}
         <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label ?? placeholder}</span>
         <Icon name="chevDown" size={13} style={{ color: 'var(--c-text-faint)', flexShrink: 0 }} />
       </button>
-      {open && (
+      {open && createPortal(
         <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setOpen(false)} />
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setOpen(false)} />
           <div style={{
-            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 50, minWidth: 200,
+            ...dropdownStyle, zIndex: 9999,
             background: 'var(--c-bg-elev)', border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)',
-            boxShadow: 'var(--sh-3)', padding: 4, maxHeight: 240, overflowY: 'auto',
+            boxShadow: 'var(--sh-3)', padding: 4, overflowY: 'auto',
           }}>
             {options.map((o) => (
               <button
@@ -75,7 +120,8 @@ export function SelectField({ value, options, placeholder = 'Выбрать', le
               </button>
             ))}
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   )

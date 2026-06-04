@@ -5,6 +5,7 @@ import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { FilterSelect } from '../../data/FiltersBar'
 import { DateRange } from '../../data/DateRange'
+import { Pagination } from '../../data/Pagination'
 import { KPI } from '../../primitives/KPI'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
@@ -15,8 +16,10 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { useApi } from '../../../hooks/useApi'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
 import { canViewCosts } from '../../../utils/access'
+
+const PAGE_SIZE = 25
 
 const ACTIVE: TripStatus[] = ['draft', 'awaiting_arrival', 'unloading', 'costing']
 const IN_QUEUE: TripStatus[] = ['awaiting_arrival', 'unloading']
@@ -81,24 +84,29 @@ export function TripsListFeature() {
   const [carrier, setCarrier] = useFilterParam('carrier', '')
   const [from, setFrom] = useFilterParam('from', '')
   const [to, setTo] = useFilterParam('to', '')
+  const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
-  const { data, loading } = useApi((signal) => getTrips({ limit: 200 }, signal), [])
-  const trips: TripListItem[] = data?.items ?? []
-  const colCount = showCosts ? 9 : 7
-
-  const kpiActive = trips.filter((t) => ACTIVE.includes(t.status)).length
-  const kpiQueue = trips.filter((t) => IN_QUEUE.includes(t.status)).length
-
   const groupDef = GROUPS.find((g) => g.id === group) ?? GROUPS[0]
-  const filtered = trips.filter((t) => {
-    if (groupDef.statuses.length && !groupDef.statuses.includes(t.status)) return false
-    if (carrier && (t.carrier_name ?? '') !== carrier) return false
-    const etaDay = t.eta ? t.eta.slice(0, 10) : ''
-    if (from && (!etaDay || etaDay < from)) return false
-    if (to && (!etaDay || etaDay > to)) return false
-    return true
-  })
+  const statuses = groupDef.statuses.length ? groupDef.statuses : undefined
+
+  const { data, loading } = useApi(
+    (signal) => getTrips({
+      page,
+      limit: PAGE_SIZE,
+      statuses,
+      carrier_id: carrier || undefined,
+      eta_from: from || undefined,
+      eta_to: to || undefined,
+    }, signal),
+    [group, carrier, from, to, page],
+  )
+  const trips: TripListItem[] = data?.items ?? []
+  const total = data?.total ?? 0
+  const colCount = showCosts ? 8 : 6
+
+  const { data: activeData } = useApi((signal) => getTrips({ statuses: ACTIVE, limit: 1 }, signal), [])
+  const { data: queueData } = useApi((signal) => getTrips({ statuses: IN_QUEUE, limit: 1 }, signal), [])
 
   return (
     <ListPage
@@ -112,8 +120,8 @@ export function TripsListFeature() {
     >
       {/* KPI-полоса */}
       <div className="kpi-grid" style={{ marginBottom: 16 }}>
-        <KPI label="Активных рейсов" value={loading ? '…' : kpiActive} />
-        <KPI label="В очереди склада" value={loading ? '…' : kpiQueue} />
+        <KPI label="Активных рейсов" value={activeData ? activeData.total : '…'} />
+        <KPI label="В очереди склада" value={queueData ? queueData.total : '…'} />
         <KPI label="Простой за период" value="—" />
         <KPI label="Ср. разгрузка" value="—" />
       </div>
@@ -127,7 +135,7 @@ export function TripsListFeature() {
           <FilterSelect
             label="Перевозчик"
             value={carrier}
-            options={[{ value: '', label: 'Все перевозчики' }, ...carriers.map((c) => ({ value: c.name, label: c.name }))]}
+            options={[{ value: '', label: 'Все перевозчики' }, ...carriers.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={(v) => setCarrier(v)}
           />
           <DateRange
@@ -146,8 +154,7 @@ export function TripsListFeature() {
             <th style={{ width: 170 }}>Статус</th>
             <th>Откуда</th>
             <th style={{ width: 160 }}>Перевозчик</th>
-            <th style={{ textAlign: 'right', width: 64 }}>Кли.</th>
-            <th style={{ textAlign: 'right', width: 70 }}>Пост.</th>
+            <th style={{ textAlign: 'right', width: 110 }}>Поступления</th>
             <th style={{ width: 130 }}>План. прибытие</th>
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>}
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>Факт ₽</th>}
@@ -156,10 +163,10 @@ export function TripsListFeature() {
         <tbody>
           {loading ? (
             <SkeletonRows rows={8} cols={colCount} />
-          ) : filtered.length === 0 ? (
+          ) : trips.length === 0 ? (
             <tr><td colSpan={colCount}><EmptyState title="Рейсов нет" sub={group === 'all' ? 'Создайте первый рейс' : undefined} /></td></tr>
           ) : (
-            filtered.map((t) => (
+            trips.map((t) => (
               <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
                 <Td className="mono" style={{ fontWeight: 500 }}>{t.trip_number}</Td>
                 <Td>
@@ -172,7 +179,6 @@ export function TripsListFeature() {
                   </span>
                 </Td>
                 <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
-                <Td className="num">—</Td>
                 <Td className="num">{t.receipts_count}</Td>
                 <Td><EtaCell eta={t.eta} /></Td>
                 {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
@@ -182,6 +188,8 @@ export function TripsListFeature() {
           )}
         </tbody>
       </Table>
+
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
     </ListPage>
   )
 }

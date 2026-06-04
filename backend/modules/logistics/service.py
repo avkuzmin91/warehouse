@@ -36,8 +36,11 @@ def list_trips_aggregated(
     page: int,
     limit: int,
     status: str | None,
+    statuses: list[str] | None,
     carrier_id: str | None,
     search: str | None,
+    eta_from: str | None,
+    eta_to: str | None,
     statuses_all: frozenset[str],
 ) -> tuple[int, list[dict]]:
     conds = ["d.is_deleted = 0"]
@@ -46,9 +49,21 @@ def list_trips_aggregated(
     if status and status in statuses_all:
         conds.append("d.status = ?")
         params.append(status)
+    elif statuses:
+        valid = [s for s in statuses if s in statuses_all]
+        if valid:
+            placeholders = ",".join("?" for _ in valid)
+            conds.append(f"d.status IN ({placeholders})")
+            params += valid
     if carrier_id:
         conds.append("d.carrier_id = ?")
         params.append(carrier_id.strip())
+    if eta_from:
+        conds.append("SUBSTR(d.eta, 1, 10) >= ?")
+        params.append(eta_from)
+    if eta_to:
+        conds.append("SUBSTR(d.eta, 1, 10) <= ?")
+        params.append(eta_to)
     if search:
         s = f"%{search.strip()}%"
         conds.append("(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?)")
@@ -73,7 +88,7 @@ def list_trips_aggregated(
         LEFT JOIN trip_lines l ON l.trip_id = d.id AND l.is_deleted = 0
         WHERE {where}
         GROUP BY d.id
-        ORDER BY d.created_at DESC
+        ORDER BY NULLIF(d.eta, '') IS NULL, NULLIF(d.eta, '') DESC, d.created_at DESC
         LIMIT ? OFFSET ?
         """,
         params + [limit, offset],

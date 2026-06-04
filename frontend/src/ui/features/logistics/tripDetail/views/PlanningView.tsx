@@ -57,7 +57,6 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
                 <PrimaryAction
                   icon="arrowRight"
                   label="Передать на склад"
-                  hint="Рейс уйдёт кладовщику в очередь «Мои задачи»"
                   onClick={onHandoff}
                   disabled={busy}
                 />

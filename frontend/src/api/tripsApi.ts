@@ -121,8 +121,11 @@ export type TripListParams = {
   page?: number
   limit?: number
   status?: TripStatus
+  statuses?: TripStatus[]
   carrier_id?: string
   search?: string
+  eta_from?: string
+  eta_to?: string
 }
 
 // --- API functions ---
@@ -132,8 +135,11 @@ export function getTrips(params: TripListParams = {}, signal?: AbortSignal) {
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
   if (params.status) sp.set('status', params.status)
+  if (params.statuses) params.statuses.forEach((s) => sp.append('statuses', s))
   if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
   if (params.search) sp.set('search', params.search)
+  if (params.eta_from) sp.set('eta_from', params.eta_from)
+  if (params.eta_to) sp.set('eta_to', params.eta_to)
   const q = sp.toString()
   return request<TripListResponse>(`/trips${q ? `?${q}` : ''}`, { signal })
 }

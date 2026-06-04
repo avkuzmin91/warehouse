@@ -173,15 +173,19 @@ def list_trips(
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
     status: str | None = Query(None),
+    statuses: list[str] | None = Query(None),
     carrier_id: str | None = Query(None),
     search: str | None = Query(None),
+    eta_from: str | None = Query(None),
+    eta_to: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         total, rows = list_trips_aggregated(
-            conn, page=page, limit=limit, status=status, carrier_id=carrier_id,
-            search=search, statuses_all=TRIP_STATUSES_ALL,
+            conn, page=page, limit=limit, status=status, statuses=statuses,
+            carrier_id=carrier_id, search=search, eta_from=eta_from, eta_to=eta_to,
+            statuses_all=TRIP_STATUSES_ALL,
         )
     items = [
         TripListItem(
