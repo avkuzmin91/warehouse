@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from dbconn import get_connection
-from modules.auth.service import get_current_admin
+from modules.auth.service import get_current_user
+from security import FORBIDDEN_DETAIL
 
 from .schemas import (
     MessageResponse,
@@ -19,6 +20,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _get_users_admin(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+    return user
 
 
 def _require_active_client(connection, raw: str | None) -> str:
@@ -92,7 +99,7 @@ def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> 
 
 
 @router.get("", response_model=list[UserListItem])
-def list_users(admin=Depends(get_current_admin)):
+def list_users(admin=Depends(_get_users_admin)):
     _ = admin
     with get_connection() as connection:
         users = connection.execute(
@@ -118,7 +125,7 @@ def list_users(admin=Depends(get_current_admin)):
 
 
 @router.patch("/{user_id}/role", response_model=MessageResponse)
-def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get_current_admin)):
+def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(_get_users_admin)):
     if payload.role not in ("user", "manager", "warehouse_manager", "client"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,7 +158,7 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(get
 
 
 @router.patch("/{user_id}/client", response_model=MessageResponse)
-def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Depends(get_current_admin)):
+def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Depends(_get_users_admin)):
     if user_id == admin["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -180,10 +187,10 @@ def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Dep
 
 
 @router.patch("/{user_id}", response_model=MessageResponse)
-def patch_user_deleted_flag(user_id: str, payload: UserDeletePatchRequest, admin=Depends(get_current_admin)):
+def patch_user_deleted_flag(user_id: str, payload: UserDeletePatchRequest, admin=Depends(_get_users_admin)):
     return _apply_user_deleted_flag(user_id, admin, is_deleted=payload.is_deleted)
 
 
 @router.delete("/{user_id}", response_model=MessageResponse)
-def delete_user(user_id: str, admin=Depends(get_current_admin)):
+def delete_user(user_id: str, admin=Depends(_get_users_admin)):
     return _disable_user_access(user_id, admin)

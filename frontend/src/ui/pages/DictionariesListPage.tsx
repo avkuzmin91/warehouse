@@ -1,6 +1,8 @@
 import { useNavigate } from 'react-router-dom'
 import { ListPage } from '../layouts/ListPage'
 import { Icon } from '../primitives/Icon'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { canManageUsers } from '../../utils/access'
 
 const SECTIONS = [
   { path: '/dictionaries/clients', icon: 'users' as const, title: 'Клиенты', desc: 'Управление клиентами склада' },
@@ -8,16 +10,18 @@ const SECTIONS = [
   { path: '/dictionaries/product-types', icon: 'boxes' as const, title: 'Типы товаров', desc: 'Классификация товаров' },
   { path: '/dictionaries/colors', icon: 'chart' as const, title: 'Цвета', desc: 'Цветовые варианты' },
   { path: '/dictionaries/sizes', icon: 'archive' as const, title: 'Размеры', desc: 'Размерная сетка' },
-  { path: '/dictionaries/users', icon: 'users' as const, title: 'Пользователи', desc: 'Учётные записи' },
+  { path: '/dictionaries/users', icon: 'users' as const, title: 'Пользователи', desc: 'Учётные записи', usersAdminOnly: true },
 ]
 
 export function DictionariesListPage() {
   const navigate = useNavigate()
+  const { user } = useCurrentUser()
+  const sections = SECTIONS.filter((section) => !section.usersAdminOnly || canManageUsers(user))
 
   return (
     <ListPage title="Справочники" subtitle="Управление данными системы">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, maxWidth: 900 }}>
-        {SECTIONS.map((s) => (
+        {sections.map((s) => (
           <div
             key={s.path}
             className="card"

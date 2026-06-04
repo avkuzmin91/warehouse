@@ -43,6 +43,8 @@ def _clear_dependency_overrides():
     [
         ("client", "client-uuid-1"),
         ("user", None),
+        ("manager", None),
+        ("warehouse_manager", None),
     ],
 )
 def test_get_users_forbidden_non_admin(role: str, client_id: str | None):

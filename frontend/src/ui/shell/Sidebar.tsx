@@ -6,6 +6,7 @@ import { Avatar, getInitials } from '../primitives/Avatar'
 import { authLogout } from '../../api/sessionAuth'
 import type { IconName } from '../primitives/Icon'
 import type { User } from '../../api/typesUser'
+import { canManageUsers } from '../../utils/access'
 
 interface NavItem {
   to: string
@@ -25,6 +26,9 @@ const OPS_NAV: NavItem[] = [
 const ADMIN_NAV: NavItem[] = [
   { to: '/analytics', icon: 'chart', label: 'Аналитика' },
   { to: '/dictionaries', icon: 'book', label: 'Справочники' },
+]
+
+const USERS_NAV: NavItem[] = [
   { to: '/dictionaries/users', icon: 'users', label: 'Пользователи' },
 ]
 
@@ -129,7 +133,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
           {hasAdminAccess && (
             <>
               {!collapsed && <div className="sidebar-section">Управление</div>}
-              {ADMIN_NAV.map((item) => (
+              {[...ADMIN_NAV, ...(canManageUsers(user) ? USERS_NAV : [])].map((item) => (
                 <NavItem key={item.to} {...item} collapsed={collapsed} />
               ))}
             </>
