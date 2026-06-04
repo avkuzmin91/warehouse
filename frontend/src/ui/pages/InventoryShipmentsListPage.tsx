@@ -48,7 +48,6 @@ const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] 
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
   draft:   'В план',
-  packing: 'Отгрузить',
 }
 
 function shipmentProgress(item: ShipmentListItem) {

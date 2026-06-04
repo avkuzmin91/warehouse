@@ -20,13 +20,15 @@ function money(value: string): string {
   return Number.isFinite(n) && value.trim() ? `${n.toLocaleString('ru-RU')} ₽` : '—'
 }
 
-export function PlanningForm({ value, onChange, state = 'active', invalid, showCosts = true, readonly = false }: {
+export function PlanningForm({ value, onChange, state = 'active', invalid, showCosts = true, readonly = false, routeLabel = 'Откуда', etaLabel = 'Плановое прибытие' }: {
   value: PlanningFormValue
   onChange: (patch: Partial<PlanningFormValue>) => void
   state?: PhaseState
   invalid?: Partial<Record<keyof PlanningFormValue, boolean>>
   showCosts?: boolean
   readonly?: boolean
+  routeLabel?: string
+  etaLabel?: string
 }) {
   const { warehouses, carriers, vehicleTypes } = useLookups()
   const toOpts = (xs: { id: string; name: string }[]): SelectOption[] => xs.map((x) => ({ id: x.id, name: x.name }))
@@ -38,12 +40,12 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
     return (
       <PhaseBlock icon="edit" title="Планирование транспорта" role="manager" state={state}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
-          <ReadRow label="Откуда">{origin?.name ?? '—'}</ReadRow>
+          <ReadRow label={routeLabel}>{origin?.name ?? '—'}</ReadRow>
           <ReadRow label="Перевозчик">{carrier?.name ?? '—'}</ReadRow>
           <ReadRow label="Тип кузова">{vehicleType?.name ?? '—'}</ReadRow>
           {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(value.cost_estimate)}</ReadRow>}
           <ReadRow label="Транспорт заказан" mono>{value.transport_ordered_at || '—'}</ReadRow>
-          <ReadRow label="Плановое прибытие" mono>{value.eta || '—'}</ReadRow>
+          <ReadRow label={etaLabel} mono>{value.eta || '—'}</ReadRow>
           <div style={{ gridColumn: '1 / -1' }}>
             <ReadRow label="Комментарий">{value.comment || '—'}</ReadRow>
           </div>
@@ -56,7 +58,7 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
     <PhaseBlock icon="edit" title="Планирование транспорта" role="manager" state={state}>
       <div className="form-grid-2">
         <div>
-          <FieldLabel required>Откуда</FieldLabel>
+          <FieldLabel required>{routeLabel}</FieldLabel>
           <SelectField value={value.origin_id} options={toOpts(warehouses)} leadIcon="map" placeholder="Выберите склад"
             invalid={invalid?.origin_id} onChange={(id) => onChange({ origin_id: id })} />
         </div>

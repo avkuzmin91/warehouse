@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { getMyTasks, taskLink } from '../../../api/tasksApi'
 import type { TaskItem, TaskKind } from '../../../api/tasksApi'
+import { isOutbound } from '../../../api/tripsApi'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
@@ -28,6 +29,16 @@ const STATUS_SUB: Record<string, string> = {
   costing: 'Уточнение стоимости',
   on_intake: 'Принят',
   on_review: 'На проверке',
+}
+
+function taskTitle(t: TaskItem): string {
+  if (t.kind === 'trip_unload' && isOutbound(t.direction)) return 'Завершить погрузку'
+  return KIND_LABEL[t.kind] ?? t.title
+}
+
+function taskSub(t: TaskItem): string {
+  if (t.status === 'unloading' && isOutbound(t.direction)) return 'Идёт погрузка'
+  return STATUS_SUB[t.status] ?? (t.doc_type === 'trip' ? 'Рейс' : 'Поступление')
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -119,11 +130,11 @@ export function MyTasksFeature() {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    <span style={{ fontSize: 14.5, fontWeight: 600 }}>{KIND_LABEL[t.kind] ?? t.title}</span>
+                    <span style={{ fontSize: 14.5, fontWeight: 600 }}>{taskTitle(t)}</span>
                     <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{t.doc_number}</span>
                   </div>
                   <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1 }}>
-                    {STATUS_SUB[t.status] ?? (t.doc_type === 'trip' ? 'Рейс' : 'Поступление')}
+                    {taskSub(t)}
                   </div>
                 </div>
                 <span style={{

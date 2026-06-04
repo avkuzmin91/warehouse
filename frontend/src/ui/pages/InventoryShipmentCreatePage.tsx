@@ -190,11 +190,11 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
+                <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
                 {showCosts && (
-                  <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
+                  <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0 }}>
                     <input
                       className="input"
                       type="number"

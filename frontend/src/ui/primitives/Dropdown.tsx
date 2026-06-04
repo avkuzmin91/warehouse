@@ -39,7 +39,7 @@ export function Dropdown({ trigger, items, align = 'right' }: DropdownProps) {
           border: '1px solid var(--c-border)',
           borderRadius: 'var(--r-lg)',
           boxShadow: 'var(--sh-2)',
-          minWidth: 160,
+          minWidth: 190,
           zIndex: 30,
           overflow: 'hidden',
           padding: 4,
@@ -55,6 +55,7 @@ export function Dropdown({ trigger, items, align = 'right' }: DropdownProps) {
                 cursor: 'pointer',
                 fontSize: 13,
                 color: item.danger ? 'var(--c-danger)' : 'var(--c-text)',
+                whiteSpace: 'nowrap',
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--c-bg-hover)' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = '' }}

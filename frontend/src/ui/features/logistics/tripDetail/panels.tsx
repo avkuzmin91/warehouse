@@ -27,11 +27,11 @@ export function Panel({ icon, iconColor = 'var(--c-accent)', title, right, child
   )
 }
 
-export function ProcessPanel({ status, ops }: { status: TripStatus; ops: TripOp[] }) {
+export function ProcessPanel({ status, ops, direction }: { status: TripStatus; ops: TripOp[]; direction?: string | null }) {
   return (
     <Panel icon="layers" title="Процесс рейса" bodyPad={false}>
       <div style={{ padding: '12px 14px' }}>
-        <ProcessRail status={status} ops={ops} />
+        <ProcessRail status={status} ops={ops} direction={direction} />
       </div>
     </Panel>
   )

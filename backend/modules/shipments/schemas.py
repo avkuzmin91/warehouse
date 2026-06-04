@@ -101,9 +101,12 @@ class ShipmentDetailResponse(BaseModel):
     carrier:      str | None
     logistics_cost: float | None
     ship_date:    str | None
+    actual_ship_date: str | None = None
     comment:      str | None
     status:       str
     status_label: str
+    trip_id:      str | None = None
+    trip_number:  str | None = None
     created_at:   str
     created_by:   str | None
     updated_at:   str | None

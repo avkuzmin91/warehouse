@@ -6,16 +6,22 @@ import {
   getTrip,
   handoffTrip,
   linkTripReceipts,
+  linkTripShipments,
   tripArrival,
   tripCost,
   tripUnload,
   unlinkTripReceipt,
+  unlinkTripShipment,
   updateTripExecution,
   updateTrip,
+  isOutbound,
+  tripLexicon,
 } from '../../../api/tripsApi'
 import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
 import { getReceipts, createReceipt, advanceReceiptStatus } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
+import { listShipments } from '../../../api/shipmentsApi'
+import type { ShipmentListItem } from '../../../api/shipmentsApi'
 import type { CreateReceiptFormValue } from './tripDetail/components/CreateReceiptForm'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Alert } from '../../primitives/Alert'
@@ -26,6 +32,8 @@ import { isDateTimeComplete, isDateTimeBefore } from './components/fields'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
+import { ShipmentsBlock } from './tripDetail/ShipmentsBlock'
+import type { ShipmentLink, ShipmentEnrich } from './tripDetail/ShipmentsBlock'
 import type { Check } from './tripDetail/panels'
 import { PlanningView } from './tripDetail/views/PlanningView'
 import { AwaitingView } from './tripDetail/views/AwaitingView'
@@ -73,7 +81,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [unloadStart, setUnloadStart] = useState<string>('')
   const [unloadEnd, setUnloadEnd] = useState<string>('')
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
+  const [availableShipments, setAvailableShipments] = useState<ShipmentListItem[]>([])
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+
+  const outbound = isOutbound(detail?.doc.direction)
+  const lex = tripLexicon(detail?.doc.direction)
 
   const load = useCallback(async () => {
     try {
@@ -109,9 +121,15 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   useEffect(() => {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
-    getReceipts({ status: 'planned', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
-      .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
-      .catch(() => {})
+    if (isOutbound(detail.doc.direction)) {
+      listShipments({ status: 'packing', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+        .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
+        .catch(() => {})
+    } else {
+      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+        .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
+        .catch(() => {})
+    }
     return () => ctrl.abort()
   }, [detail])
 
@@ -170,15 +188,16 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     transport_ordered_at: !isDateTimeComplete(form.transport_ordered_at),
     eta: !isDateTimeComplete(form.eta) || etaBeforeOrder,
   }
+  const linkedDocsCount = outbound ? (detail?.shipments.length ?? 0) : (detail?.receipts.length ?? 0)
   const handoffBlockReasons: string[] = [
-    ...(requiredErrors.origin_id ? ['Не указано «Откуда»'] : []),
+    ...(requiredErrors.origin_id ? [`Не указано «${lex.routeLabel}»`] : []),
     ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
     ...(requiredErrors.vehicle_type_id ? ['Не выбран тип кузова'] : []),
     ...(showCosts && requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
     ...(requiredErrors.transport_ordered_at ? ['Не указано «Транспорт заказан»'] : []),
-    ...(!isDateTimeComplete(form.eta) ? ['Не указано плановое прибытие'] : []),
-    ...(etaBeforeOrder ? ['Плановое прибытие раньше заказа транспорта'] : []),
-    ...((detail?.receipts.length ?? 0) === 0 ? ['Не привязано ни одного поступления'] : []),
+    ...(!isDateTimeComplete(form.eta) ? [`Не указано ${lex.etaLabel.toLowerCase()}`] : []),
+    ...(etaBeforeOrder ? [`${lex.etaLabel} раньше заказа транспорта`] : []),
+    ...(linkedDocsCount === 0 ? [outbound ? 'Не привязано ни одной отгрузки' : 'Не привязано ни одного поступления'] : []),
   ]
 
   const handleSaveFields = () => run(saveFields)
@@ -245,6 +264,10 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
 
   const handleUnlink = (receiptDocId: string) => run(() => unlinkTripReceipt(tripId, receiptDocId))
 
+  const handleLinkShipments = (shipmentIds: string[]) =>
+    runThrowing(() => linkTripShipments(tripId, shipmentIds))
+  const handleUnlinkShipment = (shipmentDocId: string) => run(() => unlinkTripShipment(tripId, shipmentDocId))
+
   if (loading) {
     return <div className="page"><div style={{ padding: '80px 0', textAlign: 'center', color: 'var(--c-text-subtle)' }}>Загрузка…</div></div>
   }
@@ -252,10 +275,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     return <div className="page"><div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--c-danger)' }}>{error || 'Рейс не найден'}</div></div>
   }
 
-  const { doc, receipts } = detail
+  const { doc, receipts, shipments } = detail
   const status = doc.status
   const onBack = () => navigate('/logistics/trips')
   const onOpenReceipt = (id: string) => navigate(`/inventory/receipts/${id}`)
+  const onOpenShipment = (id: string) => navigate(`/inventory/shipments/${id}`)
 
   const linkedIds = new Set(receipts.map((r) => r.receipt_doc_id))
   const link: ReceiptLink = {
@@ -273,15 +297,40 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const enrich: ReceiptEnrich = {}
   for (const a of available) enrich[a.id] = { sku: a.sku_count, qty: a.total_planned, eta: fmtDay(a.arrival_date) }
 
+  const linkedShipmentIds = new Set(shipments.map((s) => s.shipment_doc_id))
+  const shipmentLink: ShipmentLink = {
+    options: availableShipments.filter((s) => !linkedShipmentIds.has(s.id)),
+    tripNumber: doc.trip_number,
+    tripDestination: doc.origin_name,
+    onLink: handleLinkShipments,
+    onUnlink: handleUnlinkShipment,
+    busy,
+  }
+  const shipmentEnrich: ShipmentEnrich = {}
+  for (const s of availableShipments) shipmentEnrich[s.id] = { sku: s.sku_count, qty: s.total_qty }
+
+  /** Блок документов рейса по направлению; передаётся во view как docsNode. */
+  const docsNode = outbound ? (
+    <ShipmentsBlock
+      title={lex.docsTitle}
+      shipments={shipments}
+      enrich={shipmentEnrich}
+      onOpen={onOpenShipment}
+      link={CAN_LINK.has(status) ? shipmentLink : undefined}
+      expandable
+      resetKey={doc.id}
+    />
+  ) : undefined
+
   const checks: Check[] = [
-    { ok: !!form.origin_id, label: 'Откуда указано' },
+    { ok: !!form.origin_id, label: `${lex.routeLabel} указано` },
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
     { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
     ...(showCosts ? [{ ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' }] : []),
     { ok: !requiredErrors.transport_ordered_at, label: 'Транспорт заказан' },
-    { ok: isDateTimeComplete(form.eta), label: 'Плановое прибытие указано' },
-    ...(etaBeforeOrder ? [{ ok: false, label: 'Прибытие не раньше заказа транспорта' }] : []),
-    { ok: receipts.length > 0, label: `Поступлений: ${receipts.length}` },
+    { ok: isDateTimeComplete(form.eta), label: `${lex.etaLabel} указано` },
+    ...(etaBeforeOrder ? [{ ok: false, label: `${lex.arrivalLabel} не раньше заказа транспорта` }] : []),
+    { ok: linkedDocsCount > 0, label: outbound ? `Отгрузок: ${shipments.length}` : `Поступлений: ${receipts.length}` },
   ]
 
   const dirtyCost =
@@ -309,6 +358,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         blockReasons={showBlockReasons ? handoffBlockReasons : []}
         dirtyFields={dirtyFields}
         onBack={onBack} onCancel={handleCancel} onSaveFields={handleSaveFields} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
+        docsNode={docsNode}
       />
     )
   } else if (status === 'awaiting_arrival' || status === 'unloading') {
@@ -321,6 +371,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
           unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
           unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
           onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
+          docsNode={docsNode}
         />
       ) : (
         <InWarehouseView
@@ -336,6 +387,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
           busy={busy} onBack={onBack} onCancel={handleCancel}
           onSaveFields={handleSaveFields} onArrival={handleArrival} onUnload={handleUnload}
           onOpenReceipt={onOpenReceipt}
+          docsNode={docsNode}
         />
       )
     )
@@ -352,10 +404,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
         loadFactor={loadFactor} onLoadFactor={setLoadFactor} onSaveExecution={handleSaveExecution}
         busy={busy} onBack={onBack} onCancel={handleCancel} onClose={handleClose} onOpenReceipt={onOpenReceipt}
+        docsNode={docsNode}
       />
     )
   } else {
-    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} />
+    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} docsNode={docsNode} />
   }
 
   return (

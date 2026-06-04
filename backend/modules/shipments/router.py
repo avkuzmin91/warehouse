@@ -133,12 +133,19 @@ def list_shipments(
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
+    available_for_trip_id: str | None = Query(None),
     user=Depends(_get_manager),
 ):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
+        if available_for_trip_id and available_for_trip_id.strip():
+            conds.append(
+                "NOT EXISTS (SELECT 1 FROM trip_lines tl"
+                " WHERE tl.shipment_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id != ?)"
+            )
+            params.append(available_for_trip_id.strip())
         if status:
             # Поддерживаем как одно значение, так и CSV ("shipped,cancelled" — вкладка «Завершённые»).
             requested = [s.strip() for s in status.split(",") if s.strip()]
@@ -229,6 +236,13 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
+        trip_row = conn.execute(
+            "SELECT t.id AS trip_id, t.trip_number AS trip_number "
+            "FROM trip_lines tl "
+            "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+            "WHERE tl.shipment_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0",
+            (doc_id,),
+        ).fetchone()
         lines_rows = conn.execute(
             "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
@@ -278,9 +292,12 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
         carrier=row["carrier"],
         logistics_cost=float(row["logistics_cost"]) if show_costs and row.get("logistics_cost") is not None else None,
         ship_date=row["ship_date"],
+        actual_ship_date=row.get("actual_ship_date"),
         comment=row["comment"],
         status=str(row["status"]),
         status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
+        trip_id=str(trip_row["trip_id"]) if trip_row else None,
+        trip_number=str(trip_row["trip_number"]) if trip_row else None,
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
         updated_at=row["updated_at"],

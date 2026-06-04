@@ -76,12 +76,15 @@ export type ShipmentListItem = {
 }
 
 export type ShipmentDetail = ShipmentListItem & {
-  comment:    string | null
-  created_by: string | null
-  updated_at: string | null
-  lines:      ShipmentLine[]
-  ops:        ShipmentOp[]
-  total_qty:  number
+  comment:          string | null
+  actual_ship_date: string | null
+  trip_id:          string | null
+  trip_number:      string | null
+  created_by:       string | null
+  updated_at:       string | null
+  lines:            ShipmentLine[]
+  ops:              ShipmentOp[]
+  total_qty:        number
 }
 
 export type ShipmentListResponse = {
@@ -102,6 +105,8 @@ export type ShipmentListParams = {
   date_from?: string
   date_to?:   string
   overdue?:   boolean
+  /** Кандидаты на привязку к рейсу: исключает отгрузки, привязанные к другому активному рейсу. */
+  available_for_trip_id?: string
 }
 
 export type ShipmentsSummary = {
@@ -169,6 +174,7 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')
+  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
 }

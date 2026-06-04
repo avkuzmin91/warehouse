@@ -15,6 +15,7 @@ export type TaskItem = {
   doc_number: string
   status: string
   role: string
+  direction: 'inbound' | 'outbound' | null
   since: string | null
 }
 

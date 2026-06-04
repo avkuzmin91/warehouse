@@ -284,8 +284,8 @@ export function InventoryShipmentDetailPage() {
       ? [
           {
             ok: !!infoShipDate,
-            label: 'Дата отгрузки указана',
-            error: 'Укажите дату отгрузки',
+            label: 'Дата отгрузки (план) указана',
+            error: 'Укажите дату отгрузки (план)',
           },
           ...(showCosts
             ? [{
@@ -570,11 +570,25 @@ export function InventoryShipmentDetailPage() {
                       </div>
                     </div>
                   </Field>
-                  <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
+                  <Field label="Рейс" style={{ marginBottom: 0 }}>
+                    {doc.trip_id ? (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}
+                      >
+                        <Icon name="truckIn" size={13} />{doc.trip_number}
+                      </button>
+                    ) : (
+                      <Input value="—" readOnly style={{ cursor: 'default' }} />
+                    )}
+                  </Field>
+                  <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
+                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
                   {showCosts && (
-                    <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
+                    <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                       <input
                         className="input"
                         type="number"
@@ -603,13 +617,30 @@ export function InventoryShipmentDetailPage() {
                 <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <ReadOnlyField label="Дата отгрузки" value={fmtDateLong(doc.ship_date)} />
+                  <div>
+                    <div className="field-label"><span>Рейс</span></div>
+                    {doc.trip_id ? (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}
+                      >
+                        <Icon name="truckIn" size={13} />{doc.trip_number}
+                      </button>
+                    ) : (
+                      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
+                    )}
+                  </div>
+                  <ReadOnlyField label="Дата отгрузки (план)" value={fmtDateLong(doc.ship_date)} />
+                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
                   {showCosts && (
-                    <ReadOnlyField
-                      label="Стоимость логистики, ₽"
-                      value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
-                      mono
-                    />
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <ReadOnlyField
+                        label="Стоимость логистики для клиента, ₽"
+                        value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
+                        mono
+                      />
+                    </div>
                   )}
                   <div style={{ gridColumn: '1 / -1' }}>
                     <ReadOnlyField label="Комментарий" value={doc.comment} />

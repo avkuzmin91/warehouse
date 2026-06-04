@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
-import type { TripDetail } from '../../../../../api/tripsApi'
+import type { TripDetail, TripDirection } from '../../../../../api/tripsApi'
+import { tripLexicon } from '../../../../../api/tripsApi'
 import { TripHeader, PrimaryAction } from '../TripHeader'
 import { PlanningForm } from '../PlanningForm'
 import type { PlanningFormValue } from '../PlanningForm'
@@ -23,7 +25,7 @@ function LockedGrid({ labels }: { labels: string[] }) {
   )
 }
 
-export function PlanningView({ detail, form, onField, link, enrich, busy, checks, showCosts, canEditTransportPlanning, invalid, blockReasons, dirtyFields, onBack, onCancel, onSaveFields, onHandoff, onOpenReceipt }: {
+export function PlanningView({ detail, form, onField, link, enrich, busy, checks, showCosts, canEditTransportPlanning, invalid, blockReasons, dirtyFields, onBack, onCancel, onSaveFields, onHandoff, onOpenReceipt, docsNode }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -41,13 +43,18 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
   onSaveFields: () => void
   onHandoff: () => void
   onOpenReceipt: (id: string) => void
+  /** Для outbound-рейса — блок отгрузок вместо ReceiptsBlock. */
+  docsNode?: ReactNode
 }) {
   const { doc, ops, receipts } = detail
+  const direction = (doc.direction as TripDirection) ?? 'inbound'
+  const lex = tripLexicon(direction)
   return (
     <div className="page">
       <TripHeader
         number={doc.trip_number}
         status="draft"
+        direction={direction}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
@@ -82,20 +89,22 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
 
       <div className="split-360">
         <div className="col gap-16">
-          <PlanningForm value={form} onChange={onField} state="active" invalid={invalid} showCosts={showCosts} readonly={!canEditTransportPlanning} />
+          <PlanningForm value={form} onChange={onField} state="active" invalid={invalid} showCosts={showCosts} readonly={!canEditTransportPlanning} routeLabel={lex.routeLabel} etaLabel={lex.etaLabel} />
 
-          <ReceiptsBlock
-            receipts={receipts}
-            enrich={enrich}
-            onOpen={onOpenReceipt}
-            link={link}
-            expandable
-            resetKey={doc.id}
-          />
+          {docsNode ?? (
+            <ReceiptsBlock
+              receipts={receipts}
+              enrich={enrich}
+              onOpen={onOpenReceipt}
+              link={link}
+              expandable
+              resetKey={doc.id}
+            />
+          )}
 
           <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="locked"
             hint="Заполнит кладовщик, когда машина приедет">
-            <LockedGrid labels={['Прибытие', 'Окончание разгрузки', 'Загруженность']} />
+            <LockedGrid labels={[lex.arrivalLabel, lex.unloadEndLabel, 'Загруженность']} />
           </PhaseBlock>
 
           {showCosts && (
@@ -106,7 +115,7 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
         </div>
 
         <div className="col gap-16">
-          <ProcessPanel status="draft" ops={ops} />
+          <ProcessPanel status="draft" ops={ops} direction={direction} />
           <ReadyChecklist checks={checks} />
         </div>
       </div>

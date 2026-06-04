@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
+    TRIP_DIRECTION_OUTBOUND,
     TRIP_STATUS_AWAITING_ARRIVAL,
     TRIP_STATUS_COSTING,
     TRIP_STATUS_UNLOADING,
@@ -12,7 +13,7 @@ ROLE_MANAGER = "manager"
 
 _TRIP_TASKS = {
     TRIP_STATUS_AWAITING_ARRIVAL: (ROLE_WAREHOUSE, "trip_arrival", "Встретить рейс {num}"),
-    TRIP_STATUS_UNLOADING:        (ROLE_WAREHOUSE, "trip_unload", "Завершить разгрузку рейса {num}"),
+    TRIP_STATUS_UNLOADING:        (ROLE_WAREHOUSE, "trip_unload", "Завершить {phase} рейса {num}"),
     TRIP_STATUS_COSTING:          (ROLE_MANAGER, "trip_cost", "Уточнить стоимость рейса {num}"),
 }
 
@@ -47,7 +48,7 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     tasks: list[dict] = []
 
     trip_rows = connection.execute(
-        "SELECT id, trip_number, status, updated_at, created_at FROM trip_docs "
+        "SELECT id, trip_number, status, direction, updated_at, created_at FROM trip_docs "
         "WHERE is_deleted = 0 AND status IN (?,?,?)",
         (TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING, TRIP_STATUS_COSTING),
     ).fetchall()
@@ -55,14 +56,17 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         task_role, kind, title_tpl = _TRIP_TASKS[str(r["status"])]
         if task_role not in visible_roles:
             continue
+        direction = str(r["direction"] or "")
+        phase = "погрузку" if direction == TRIP_DIRECTION_OUTBOUND else "разгрузку"
         tasks.append({
             "kind": kind,
-            "title": title_tpl.format(num=r["trip_number"]),
+            "title": title_tpl.format(num=r["trip_number"], phase=phase),
             "doc_type": "trip",
             "doc_id": str(r["id"]),
             "doc_number": str(r["trip_number"]),
             "status": str(r["status"]),
             "role": task_role,
+            "direction": direction or None,
             "since": r["updated_at"] or r["created_at"],
         })
 

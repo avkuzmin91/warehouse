@@ -2,6 +2,7 @@ import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { RoleChip } from './RoleChip'
 import type { TripRole } from './RoleChip'
+import { isOutbound } from '../../../../api/tripsApi'
 import type { TripOp, TripStatus } from '../../../../api/tripsApi'
 
 /** Вертикальный таймлайн фаз рейса. Заменяет горизонтальный TripStepper. */
@@ -40,10 +41,15 @@ function fmt(s: string): string {
   return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
-export function ProcessRail({ status, ops = [] }: { status: TripStatus; ops?: TripOp[] }) {
+export function ProcessRail({ status, ops = [], direction }: { status: TripStatus; ops?: TripOp[]; direction?: string | null }) {
   const cancelled = status === 'cancelled'
   const curIdx = cancelled ? 1 : STATUS_ORDER.indexOf(status)
   const ts = getTimestamps(ops)
+  const outbound = isOutbound(direction)
+  const titleFor = (s: TripStatus): string => {
+    if (outbound && s === 'unloading') return 'Погрузка'
+    return META[s].title
+  }
 
   return (
     <div style={{ padding: '6px 4px' }}>
@@ -77,7 +83,7 @@ export function ProcessRail({ status, ops = [] }: { status: TripStatus; ops?: Tr
                 <span style={{
                   fontSize: 13, fontWeight: state === 'active' ? 600 : 500,
                   color: state === 'future' ? 'var(--c-text-subtle)' : 'var(--c-text)',
-                }}>{m.title}</span>
+                }}>{titleFor(s)}</span>
                 {state === 'active' && (
                   <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: dotColor }}>
                     сейчас

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
-import { getTrips, TRIP_STATUS_LABELS, tripStatusTone } from '../../../api/tripsApi'
-import type { TripListItem, TripStatus } from '../../../api/tripsApi'
+import { getTrips, tripStatusLabel, tripStatusTone } from '../../../api/tripsApi'
+import type { TripListItem, TripStatus, TripDirection } from '../../../api/tripsApi'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { FilterSelect } from '../../data/FiltersBar'
@@ -9,8 +9,8 @@ import { Pagination } from '../../data/Pagination'
 import { KPI } from '../../primitives/KPI'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
+import { Dropdown } from '../../primitives/Dropdown'
 import { Icon } from '../../primitives/Icon'
-import type { IconName } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useApi } from '../../../hooks/useApi'
@@ -24,6 +24,12 @@ const PAGE_SIZE = 25
 const ACTIVE: TripStatus[] = ['draft', 'awaiting_arrival', 'unloading', 'costing']
 const IN_QUEUE: TripStatus[] = ['awaiting_arrival', 'unloading']
 
+const TYPE_OPTIONS: { value: '' | TripDirection; label: string }[] = [
+  { value: '', label: 'Все типы' },
+  { value: 'inbound', label: 'Поступление' },
+  { value: 'outbound', label: 'Отгрузка' },
+]
+
 const GROUPS: { id: string; label: string; statuses: TripStatus[] }[] = [
   { id: 'all', label: 'Все', statuses: [] },
   { id: 'draft', label: 'Черновики', statuses: ['draft'] },
@@ -31,14 +37,6 @@ const GROUPS: { id: string; label: string; statuses: TripStatus[] }[] = [
   { id: 'costing', label: 'Уточнение', statuses: ['costing'] },
   { id: 'closed', label: 'Закрыты', statuses: ['closed', 'cancelled'] },
 ]
-
-function vehicleIcon(name: string | null): IconName {
-  const n = (name ?? '').toLowerCase()
-  if (n.includes('реф')) return 'snow'
-  if (n.includes('изотерм')) return 'box'
-  if (n.includes('борт')) return 'truckOut'
-  return 'truckIn'
-}
 
 function fmtMoney(v: number | null | undefined): string {
   return v == null ? '—' : v.toLocaleString('ru-RU')
@@ -74,12 +72,40 @@ function EtaCell({ eta }: { eta: string | null }) {
   )
 }
 
+function tripDirection(direction: string | null | undefined): TripDirection {
+  return direction === 'outbound' ? 'outbound' : 'inbound'
+}
+
+function TypeBadge({ direction }: { direction: string | null | undefined }) {
+  const outbound = tripDirection(direction) === 'outbound'
+  return (
+    <Badge
+      style={{
+        background: 'var(--c-bg-sunken)',
+        borderColor: 'var(--c-border)',
+        color: 'var(--c-text-muted)',
+      }}
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <Icon
+          name={outbound ? 'truckOut' : 'truckIn'}
+          size={16}
+          style={{ color: outbound ? 'var(--c-info)' : 'var(--c-success)' }}
+        />
+        {outbound ? 'Отгрузка' : 'Поступление'}
+      </span>
+    </Badge>
+  )
+}
+
 export function TripsListFeature() {
   const navigate = useNavigate()
   const { carriers } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
 
+  const [typeRaw, setType] = useFilterParam('type', '')
+  const typeFilter: '' | TripDirection = typeRaw === 'outbound' || typeRaw === 'inbound' ? typeRaw : ''
   const [group, setGroup] = useFilterParam('group', 'all')
   const [carrier, setCarrier] = useFilterParam('carrier', '')
   const [from, setFrom] = useFilterParam('from', '')
@@ -94,44 +120,66 @@ export function TripsListFeature() {
     (signal) => getTrips({
       page,
       limit: PAGE_SIZE,
+      direction: typeFilter || undefined,
       statuses,
       carrier_id: carrier || undefined,
       eta_from: from || undefined,
       eta_to: to || undefined,
     }, signal),
-    [group, carrier, from, to, page],
+    [typeFilter, group, carrier, from, to, page],
   )
   const trips: TripListItem[] = data?.items ?? []
   const total = data?.total ?? 0
-  const colCount = showCosts ? 8 : 6
+  const colCount = showCosts ? 9 : 7
 
-  const { data: activeData } = useApi((signal) => getTrips({ statuses: ACTIVE, limit: 1 }, signal), [])
-  const { data: queueData } = useApi((signal) => getTrips({ statuses: IN_QUEUE, limit: 1 }, signal), [])
+  const { data: activeData } = useApi((signal) => getTrips({ direction: typeFilter || undefined, statuses: ACTIVE, limit: 1 }, signal), [typeFilter])
+  const { data: queueData } = useApi((signal) => getTrips({ direction: typeFilter || undefined, statuses: IN_QUEUE, limit: 1 }, signal), [typeFilter])
 
   return (
     <ListPage
       title="Рейсы"
-      subtitle="Транспортные поездки на склад · поступления"
+      subtitle="Транспортные рейсы поступлений и отгрузок"
       actions={
-        <button className="btn primary" onClick={() => navigate('/logistics/trips/new')}>
-          <Icon name="plus" size={14} />Новый рейс
-        </button>
+        <Dropdown
+          trigger={
+            <button className="btn primary" type="button">
+              <Icon name="plus" size={14} />Новый рейс
+              <Icon name="chevDown" size={12} />
+            </button>
+          }
+          items={[
+            {
+              label: 'Рейс поступления',
+              icon: <Icon name="truckIn" size={16} style={{ color: 'var(--c-success)' }} />,
+              onClick: () => navigate('/logistics/trips/new?dir=inbound'),
+            },
+            {
+              label: 'Рейс отгрузки',
+              icon: <Icon name="truckOut" size={16} style={{ color: 'var(--c-info)' }} />,
+              onClick: () => navigate('/logistics/trips/new?dir=outbound'),
+            },
+          ]}
+        />
       }
     >
-      {/* KPI-полоса */}
       <div className="kpi-grid" style={{ marginBottom: 16 }}>
         <KPI label="Активных рейсов" value={activeData ? activeData.total : '…'} />
         <KPI label="В очереди склада" value={queueData ? queueData.total : '…'} />
         <KPI label="Простой за период" value="—" />
-        <KPI label="Ср. разгрузка" value="—" />
+        <KPI label="Ср. обработка" value="—" />
       </div>
 
-      {/* Фильтры */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {GROUPS.map((g) => (
           <Chip key={g.id} active={group === g.id} onClick={() => setGroup(g.id)}>{g.label}</Chip>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FilterSelect
+            label="Тип"
+            value={typeFilter}
+            options={TYPE_OPTIONS}
+            onChange={(v) => setType(v)}
+          />
           <FilterSelect
             label="Перевозчик"
             value={carrier}
@@ -150,12 +198,13 @@ export function TripsListFeature() {
       <Table>
         <thead>
           <tr>
+            <th style={{ width: 130 }}>Тип</th>
             <th style={{ width: 120 }}>Номер</th>
             <th style={{ width: 170 }}>Статус</th>
-            <th>Откуда</th>
+            <th>Маршрут</th>
             <th style={{ width: 160 }}>Перевозчик</th>
-            <th style={{ textAlign: 'right', width: 110 }}>Поступления</th>
-            <th style={{ width: 130 }}>План. прибытие</th>
+            <th style={{ textAlign: 'right', width: 90 }}>Строки</th>
+            <th style={{ width: 130 }}>План</th>
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>}
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>Факт ₽</th>}
           </tr>
@@ -166,25 +215,29 @@ export function TripsListFeature() {
           ) : trips.length === 0 ? (
             <tr><td colSpan={colCount}><EmptyState title="Рейсов нет" sub={group === 'all' ? 'Создайте первый рейс' : undefined} /></td></tr>
           ) : (
-            trips.map((t) => (
-              <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
-                <Td className="mono" style={{ fontWeight: 500 }}>{t.trip_number}</Td>
-                <Td>
-                  <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{TRIP_STATUS_LABELS[t.status]}</Badge>
-                </Td>
-                <Td>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <Icon name={vehicleIcon(t.vehicle_type_name)} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
-                    {t.origin_name ?? '—'}
-                  </span>
-                </Td>
-                <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
-                <Td className="num">{t.receipts_count}</Td>
-                <Td><EtaCell eta={t.eta} /></Td>
-                {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
-                {showCosts && <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>}
-              </tr>
-            ))
+            trips.map((t) => {
+              const direction = tripDirection(t.direction)
+              return (
+                <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
+                  <Td><TypeBadge direction={direction} /></Td>
+                  <Td className="mono" style={{ fontWeight: 500 }}>{t.trip_number}</Td>
+                  <Td>
+                    <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{tripStatusLabel(t.status, direction)}</Badge>
+                  </Td>
+                  <Td>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <Icon name={direction === 'outbound' ? 'truckOut' : 'truckIn'} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+                      {t.origin_name ?? '—'}
+                    </span>
+                  </Td>
+                  <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
+                  <Td className="num">{t.receipts_count}</Td>
+                  <Td><EtaCell eta={t.eta} /></Td>
+                  {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
+                  {showCosts && <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>}
+                </tr>
+              )
+            })
           )}
         </tbody>
       </Table>

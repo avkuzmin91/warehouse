@@ -7,16 +7,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
     TRIP_DIRECTION_INBOUND,
+    TRIP_DIRECTION_OUTBOUND,
     TRIP_LOAD_FULL,
     TRIP_LOAD_PARTIAL,
     TRIP_OP_ARRIVAL,
     TRIP_OP_CANCEL,
     TRIP_OP_CLOSE,
     TRIP_OP_COST_ACTUAL,
+    TRIP_OP_DEPARTURE,
     TRIP_OP_DOC_CREATE,
     TRIP_OP_DOC_UPDATE,
     TRIP_OP_HANDOFF,
+    TRIP_OP_LOAD_DONE,
     TRIP_OP_RECEIPT_UNLINK,
+    TRIP_OP_SHIPMENT_UNLINK,
     TRIP_OP_UNLOAD_DONE,
     TRIP_STATUS_ASSIGNEE_ROLE,
     TRIP_STATUS_AWAITING_ARRIVAL,
@@ -24,9 +28,9 @@ from config import (
     TRIP_STATUS_CLOSED,
     TRIP_STATUS_COSTING,
     TRIP_STATUS_DRAFT,
-    TRIP_STATUS_RU,
     TRIP_STATUS_UNLOADING,
     TRIP_STATUSES_ALL,
+    trip_status_ru,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_manager, get_current_warehouse
@@ -43,14 +47,19 @@ from modules.logistics.schemas import (
     TripListResponse,
     TripOpResponse,
     TripReceiptItem,
+    TripShipmentItem,
+    TripShipmentLinkPayload,
     TripUnloadPayload,
 )
 from modules.logistics.service import (
     cascade_receipts_to_intake,
+    cascade_shipments_to_shipped,
     link_receipts,
+    link_shipments,
     list_trips_aggregated,
     next_trip_number,
     sync_actual_arrival,
+    sync_actual_ship_date,
 )
 from security import can_view_costs, ensure_cost_access
 
@@ -73,11 +82,11 @@ def _dt_value(value: str | None) -> datetime | None:
     return dt
 
 
-def _ensure_unload_period(unload_started_at: str | None, unload_finished_at: str | None) -> None:
+def _ensure_unload_period(unload_started_at: str | None, unload_finished_at: str | None, noun: str = "разгрузки") -> None:
     start = _dt_value(unload_started_at)
     finish = _dt_value(unload_finished_at)
     if start is not None and finish is not None and finish < start:
-        raise HTTPException(status_code=400, detail="Окончание разгрузки не может быть раньше начала разгрузки")
+        raise HTTPException(status_code=400, detail=f"Окончание {noun} не может быть раньше начала {noun}")
 
 
 def _ensure_trip_manager_edit_access(user) -> None:
@@ -128,6 +137,9 @@ def _fetch_doc(conn, trip_id: str):
 def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
     if payload.cost_estimate is not None:
         ensure_cost_access(user)
+    direction = (payload.direction or TRIP_DIRECTION_INBOUND).strip()
+    if direction not in (TRIP_DIRECTION_INBOUND, TRIP_DIRECTION_OUTBOUND):
+        raise HTTPException(status_code=400, detail="Недопустимое направление рейса")
     uid = str(user["id"])
     with get_connection() as conn:
         trip_id = str(uuid4())
@@ -143,7 +155,7 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                trip_id, trip_num, TRIP_DIRECTION_INBOUND, TRIP_STATUS_DRAFT,
+                trip_id, trip_num, direction, TRIP_STATUS_DRAFT,
                 TRIP_STATUS_ASSIGNEE_ROLE.get(TRIP_STATUS_DRAFT),
                 (payload.origin_id or "").strip() or None,
                 (payload.origin_name or "").strip() or None,
@@ -162,7 +174,10 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_DOC_CREATE, f"Рейс {trip_num} создан", now, uid),
         )
-        if payload.receipt_doc_ids:
+        if direction == TRIP_DIRECTION_OUTBOUND:
+            if payload.shipment_doc_ids:
+                link_shipments(conn, trip_id, payload.shipment_doc_ids, uid)
+        elif payload.receipt_doc_ids:
             link_receipts(conn, trip_id, payload.receipt_doc_ids, uid)
         conn.commit()
     return {"message": trip_id}
@@ -172,6 +187,7 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
 def list_trips(
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
+    direction: str | None = Query(None),
     status: str | None = Query(None),
     statuses: list[str] | None = Query(None),
     carrier_id: str | None = Query(None),
@@ -180,10 +196,12 @@ def list_trips(
     eta_to: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
+    if direction and direction not in (TRIP_DIRECTION_INBOUND, TRIP_DIRECTION_OUTBOUND):
+        direction = None
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         total, rows = list_trips_aggregated(
-            conn, page=page, limit=limit, status=status, statuses=statuses,
+            conn, page=page, limit=limit, direction=direction, status=status, statuses=statuses,
             carrier_id=carrier_id, search=search, eta_from=eta_from, eta_to=eta_to,
             statuses_all=TRIP_STATUSES_ALL,
         )
@@ -213,17 +231,33 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
-        receipt_rows = conn.execute(
-            """
-            SELECT l.id AS line_id, l.receipt_doc_id, l.client_id, l.client_name,
-                   r.doc_number AS receipt_number, r.status AS receipt_status
-            FROM trip_lines l
-            LEFT JOIN receipt_docs r ON r.id = l.receipt_doc_id
-            WHERE l.trip_id = ? AND l.is_deleted = 0
-            ORDER BY l.created_at
-            """,
-            (trip_id,),
-        ).fetchall()
+        is_outbound = str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND
+        receipt_rows = []
+        shipment_rows = []
+        if is_outbound:
+            shipment_rows = conn.execute(
+                """
+                SELECT l.id AS line_id, l.shipment_doc_id, l.client_id, l.client_name,
+                       s.doc_number AS shipment_number, s.status AS shipment_status
+                FROM trip_lines l
+                LEFT JOIN shipment_docs s ON s.id = l.shipment_doc_id
+                WHERE l.trip_id = ? AND l.is_deleted = 0
+                ORDER BY l.created_at
+                """,
+                (trip_id,),
+            ).fetchall()
+        else:
+            receipt_rows = conn.execute(
+                """
+                SELECT l.id AS line_id, l.receipt_doc_id, l.client_id, l.client_name,
+                       r.doc_number AS receipt_number, r.status AS receipt_status
+                FROM trip_lines l
+                LEFT JOIN receipt_docs r ON r.id = l.receipt_doc_id
+                WHERE l.trip_id = ? AND l.is_deleted = 0
+                ORDER BY l.created_at
+                """,
+                (trip_id,),
+            ).fetchall()
         ops_rows = conn.execute(
             "SELECT o.*, u.email AS user_email FROM trip_ops o "
             "LEFT JOIN users u ON u.id = o.created_by WHERE o.trip_id = ? ORDER BY o.created_at DESC",
@@ -241,6 +275,17 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         )
         for r in receipt_rows
     ]
+    shipments = [
+        TripShipmentItem(
+            line_id=str(s["line_id"]),
+            shipment_doc_id=str(s["shipment_doc_id"]),
+            shipment_number=s["shipment_number"],
+            shipment_status=s["shipment_status"],
+            client_id=s["client_id"],
+            client_name=s["client_name"],
+        )
+        for s in shipment_rows
+    ]
     ops = [
         TripOpResponse(
             id=str(o["id"]),
@@ -253,7 +298,10 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         )
         for o in ops_rows
     ]
-    return TripDetailResponse(doc=_doc_response(doc_row, show_costs=show_costs), receipts=receipts, ops=ops)
+    return TripDetailResponse(
+        doc=_doc_response(doc_row, show_costs=show_costs),
+        receipts=receipts, shipments=shipments, ops=ops,
+    )
 
 
 @router.patch("/trips/{trip_id}")
@@ -301,6 +349,8 @@ def link_trip_receipts(trip_id: str, payload: TripLinkPayload, user=Depends(get_
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
+        if str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND:
+            raise HTTPException(status_code=400, detail="Поступления можно привязать только к рейсу поступления")
         if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
             raise HTTPException(status_code=400, detail="Привязать поступления можно до начала разгрузки")
         link_receipts(conn, trip_id, payload.receipt_doc_ids, uid)
@@ -333,6 +383,45 @@ def unlink_trip_receipt(trip_id: str, receipt_doc_id: str, user=Depends(get_curr
     return {"message": "ok"}
 
 
+@router.post("/trips/{trip_id}/shipments")
+def link_trip_shipments(trip_id: str, payload: TripShipmentLinkPayload, user=Depends(get_current_manager)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        doc_row = _fetch_doc(conn, trip_id)
+        if str(doc_row["direction"]) != TRIP_DIRECTION_OUTBOUND:
+            raise HTTPException(status_code=400, detail="Отгрузки можно привязать только к рейсу отгрузки")
+        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
+            raise HTTPException(status_code=400, detail="Привязать отгрузки можно до начала погрузки")
+        link_shipments(conn, trip_id, payload.shipment_doc_ids, uid)
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/trips/{trip_id}/shipments/{shipment_doc_id}")
+def unlink_trip_shipment(trip_id: str, shipment_doc_id: str, user=Depends(get_current_manager)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        doc_row = _fetch_doc(conn, trip_id)
+        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
+            raise HTTPException(status_code=400, detail="Отвязать отгрузку можно до начала погрузки")
+        line = conn.execute(
+            "SELECT l.id, s.doc_number FROM trip_lines l LEFT JOIN shipment_docs s ON s.id = l.shipment_doc_id "
+            "WHERE l.trip_id = ? AND l.shipment_doc_id = ? AND l.is_deleted = 0",
+            (trip_id, shipment_doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Отгрузка не привязана к рейсу")
+        now = _now()
+        conn.execute("UPDATE trip_lines SET is_deleted = 1 WHERE id = ?", (str(line["id"]),))
+        conn.execute(
+            "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), trip_id, TRIP_OP_SHIPMENT_UNLINK,
+             f"Отвязана отгрузка {line['doc_number']}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
 def _advance(conn, trip_id: str, *, to_status: str, op_type: str,
              comment: str, uid: str, extra_sql: str = "", extra_params: tuple = ()) -> None:
     now = _now()
@@ -357,13 +446,17 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_DRAFT:
             raise HTTPException(status_code=400, detail="Передать на склад можно только черновик")
+        outbound = str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND
         cnt = conn.execute(
             "SELECT COUNT(*) AS c FROM trip_lines WHERE trip_id = ? AND is_deleted = 0", (trip_id,)
         ).fetchone()
         if int(cnt["c"] if cnt else 0) == 0:
-            raise HTTPException(status_code=400, detail="Привяжите хотя бы одно поступление")
+            raise HTTPException(
+                status_code=400,
+                detail="Привяжите хотя бы одну отгрузку" if outbound else "Привяжите хотя бы одно поступление",
+            )
         required = [
-            ("origin_id", "Откуда"),
+            ("origin_id", "Куда" if outbound else "Откуда"),
             ("carrier_id", "Перевозчик"),
             ("vehicle_type_id", "Тип кузова"),
             ("cost_estimate", "Стоимость логистики (план)"),
@@ -374,9 +467,15 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
         if missing:
             raise HTTPException(status_code=400, detail="Заполните обязательные поля: " + ", ".join(missing))
         if str(doc_row["eta"]) < str(doc_row["transport_ordered_at"]):
-            raise HTTPException(status_code=400, detail="Плановое прибытие не может быть раньше заказа транспорта")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Плановое прибытие не может быть раньше заказа транспорта"
+                ),
+            )
+        to_ru = trip_status_ru(str(doc_row["direction"]), TRIP_STATUS_AWAITING_ARRIVAL)
         _advance(conn, trip_id, to_status=TRIP_STATUS_AWAITING_ARRIVAL,
-                 op_type=TRIP_OP_HANDOFF, comment="Черновик → Ожидает прибытия (передан на склад)", uid=uid)
+                 op_type=TRIP_OP_HANDOFF, comment=f"Черновик → {to_ru} (передан на склад)", uid=uid)
         conn.commit()
     return {"message": TRIP_STATUS_AWAITING_ARRIVAL}
 
@@ -386,11 +485,19 @@ def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_cur
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
+        direction = str(doc_row["direction"])
+        outbound = direction == TRIP_DIRECTION_OUTBOUND
         if str(doc_row["status"]) != TRIP_STATUS_AWAITING_ARRIVAL:
-            raise HTTPException(status_code=400, detail="Отметить прибытие можно только из статуса 'Ожидает прибытия'")
+            from_ru = trip_status_ru(direction, TRIP_STATUS_AWAITING_ARRIVAL)
+            verb = "прибытие"
+            raise HTTPException(status_code=400, detail=f"Отметить {verb} можно только из статуса '{from_ru}'")
         arrived_at = (payload.arrived_at or "").strip() or _now()
+        from_ru = trip_status_ru(direction, TRIP_STATUS_AWAITING_ARRIVAL)
+        to_ru = trip_status_ru(direction, TRIP_STATUS_UNLOADING)
+        event = "прибытие отмечено"
         _advance(conn, trip_id, to_status=TRIP_STATUS_UNLOADING,
-                 op_type=TRIP_OP_ARRIVAL, comment="Ожидает прибытия → Разгрузка (прибытие отмечено)", uid=uid,
+                 op_type=TRIP_OP_DEPARTURE if outbound else TRIP_OP_ARRIVAL,
+                 comment=f"{from_ru} → {to_ru} ({event})", uid=uid,
                  extra_sql="arrived_at = ?, unload_started_at = ?",
                  extra_params=(arrived_at, arrived_at))
         conn.commit()
@@ -404,8 +511,13 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
         raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
+        direction = str(doc_row["direction"])
+        outbound = direction == TRIP_DIRECTION_OUTBOUND
+        from_ru = trip_status_ru(direction, TRIP_STATUS_UNLOADING)
+        to_ru = trip_status_ru(direction, TRIP_STATUS_COSTING)
+        op_noun = "погрузку" if outbound else "разгрузку"
         if str(doc_row["status"]) != TRIP_STATUS_UNLOADING:
-            raise HTTPException(status_code=400, detail="Завершить разгрузку можно только из статуса 'Разгрузка'")
+            raise HTTPException(status_code=400, detail=f"Завершить {op_noun} можно только из статуса '{from_ru}'")
         unload_started_at = (
             (payload.unload_started_at or "").strip()
             or doc_row["unload_started_at"]
@@ -413,13 +525,19 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
             or _now()
         )
         unload_at = (payload.unload_finished_at or "").strip() or _now()
-        _ensure_unload_period(unload_started_at, unload_at)
+        _ensure_unload_period(unload_started_at, unload_at, "погрузки" if outbound else "разгрузки")
+        done = "погрузка завершена" if outbound else "разгрузка завершена"
         _advance(conn, trip_id, to_status=TRIP_STATUS_COSTING,
-                 op_type=TRIP_OP_UNLOAD_DONE, comment="Разгрузка → Уточнение стоимости (разгрузка завершена)", uid=uid,
+                 op_type=TRIP_OP_LOAD_DONE if outbound else TRIP_OP_UNLOAD_DONE,
+                 comment=f"{from_ru} → {to_ru} ({done})", uid=uid,
                  extra_sql="unload_started_at = ?, unload_finished_at = ?, load_factor = ?",
                  extra_params=(unload_started_at, unload_at, payload.load_factor))
-        cascade_receipts_to_intake(conn, trip_id, str(doc_row["trip_number"]), uid)
-        sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
+        if outbound:
+            cascade_shipments_to_shipped(conn, trip_id, str(doc_row["trip_number"]), uid)
+            sync_actual_ship_date(conn, trip_id, doc_row["arrived_at"])
+        else:
+            cascade_receipts_to_intake(conn, trip_id, str(doc_row["trip_number"]), uid)
+            sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
         conn.commit()
     return {"message": TRIP_STATUS_COSTING}
 
@@ -468,10 +586,11 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_COSTING:
             raise HTTPException(status_code=400, detail="Исполнение на складе можно редактировать только в статусе 'Уточнение стоимости'")
+        outbound = str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND
         arrived_at = (payload.arrived_at or "").strip() or None
         unload_started_at = (payload.unload_started_at or "").strip() or None
         unload_finished_at = (payload.unload_finished_at or "").strip() or None
-        _ensure_unload_period(unload_started_at, unload_finished_at)
+        _ensure_unload_period(unload_started_at, unload_finished_at, "погрузки" if outbound else "разгрузки")
         now = _now()
         conn.execute(
             """
@@ -493,7 +612,10 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_DOC_UPDATE, "Исполнение на складе изменено", now, uid),
         )
-        sync_actual_arrival(conn, trip_id, arrived_at)
+        if outbound:
+            sync_actual_ship_date(conn, trip_id, arrived_at)
+        else:
+            sync_actual_arrival(conn, trip_id, arrived_at)
         conn.commit()
     return {"message": "ok"}
 
@@ -527,7 +649,7 @@ def cancel_trip(trip_id: str, user=Depends(get_current_manager)):
         conn.execute(
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_CANCEL,
-             f"{TRIP_STATUS_RU.get(current, current)} → Аннулирован", now, uid),
+             f"{trip_status_ru(str(doc_row['direction']), current)} → Аннулирован", now, uid),
         )
         conn.commit()
     return {"message": TRIP_STATUS_CANCELLED}
