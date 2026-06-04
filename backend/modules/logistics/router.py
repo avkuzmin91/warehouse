@@ -107,6 +107,7 @@ def _doc_response(row, *, show_costs: bool = True) -> TripDocResponse:
         carrier_name=row["carrier_name"],
         vehicle_type_id=row["vehicle_type_id"],
         vehicle_type_name=row["vehicle_type_name"],
+        vehicle_number=row["vehicle_number"],
         transport_ordered_at=row["transport_ordered_at"],
         eta=row["eta"],
         cost_estimate=float(row["cost_estimate"]) if show_costs and row["cost_estimate"] is not None else None,
@@ -150,9 +151,9 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
             INSERT INTO trip_docs
               (id, trip_number, direction, status, assignee_role,
                origin_id, origin_name, carrier_id, carrier_name,
-               vehicle_type_id, vehicle_type_name, transport_ordered_at, eta,
+               vehicle_type_id, vehicle_type_name, vehicle_number, transport_ordered_at, eta,
                cost_estimate, comment, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 trip_id, trip_num, direction, TRIP_STATUS_DRAFT,
@@ -163,6 +164,7 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
                 (payload.carrier_name or "").strip() or None,
                 (payload.vehicle_type_id or "").strip() or None,
                 (payload.vehicle_type_name or "").strip() or None,
+                (payload.vehicle_number or "").strip() or None,
                 (payload.transport_ordered_at or "").strip() or None,
                 (payload.eta or "").strip() or None,
                 payload.cost_estimate,
@@ -320,7 +322,7 @@ def update_trip(trip_id: str, payload: TripDocUpdate, user=Depends(get_current_m
         params: list = []
         for col in (
             "origin_id", "origin_name", "carrier_id", "carrier_name",
-            "vehicle_type_id", "vehicle_type_name", "transport_ordered_at", "eta", "comment",
+            "vehicle_type_id", "vehicle_type_name", "vehicle_number", "transport_ordered_at", "eta", "comment",
         ):
             val = getattr(payload, col)
             if val is not None:
@@ -459,6 +461,7 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             ("origin_id", "Куда" if outbound else "Откуда"),
             ("carrier_id", "Перевозчик"),
             ("vehicle_type_id", "Тип кузова"),
+            ("vehicle_number", "Гос. номер"),
             ("cost_estimate", "Стоимость логистики (план)"),
             ("transport_ordered_at", "Транспорт заказан"),
             ("eta", "Плановое прибытие"),

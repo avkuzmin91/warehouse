@@ -129,7 +129,7 @@ def list_products(
         )
         rows = connection.execute(
             f"""
-            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base,
+            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size,
                    p.client_id, c.name AS client_name,
@@ -159,7 +159,7 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base,
+            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size,
                    p.client_id, c.name AS client_name,
@@ -260,10 +260,10 @@ async def create_product(
         try:
             connection.execute(
                 """
-                INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, image_url, gallery_json, is_active, created_at, creator_id)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, weight_grams, image_url, gallery_json, is_active, created_at, creator_id)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (pid, _normalize_name(inner.name), tid, cid, sku_base, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
+                (pid, _normalize_name(inner.name), tid, cid, sku_base, inner.weight_grams, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
             )
             for vr in variant_rows:
                 connection.execute(
@@ -296,7 +296,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         cur_client_id = str(meta["client_id"]) if meta["client_id"] else None
         target_client_id = cur_client_id
         if is_del and payload.is_deleted is not False:
-            if any([payload.name, payload.type_id, payload.client_id, payload.is_active, payload.sku_base, payload.image_urls]):
+            if any([payload.name, payload.type_id, payload.client_id, payload.is_active, payload.sku_base, "weight_grams" in payload.model_fields_set, payload.image_urls]):
                 raise HTTPException(status_code=400, detail="Товар удалён. Восстановите его перед редактированием.")
             if payload.is_deleted is None:
                 raise HTTPException(status_code=400, detail="Товар удалён")
@@ -338,6 +338,9 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         elif target_client_id is not None and target_client_id != cur_client_id:
             if _sku_taken_for_client_except_product(connection, cur_sku, target_client_id, item_id):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
+        if "weight_grams" in payload.model_fields_set:
+            fields.append("weight_grams = ?")
+            values.append(payload.weight_grams)
         if payload.image_urls is not None:
             urls = [str(u).strip() for u in payload.image_urls if str(u).strip()]
             fields.append("gallery_json = ?")

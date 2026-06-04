@@ -111,11 +111,12 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                 <ReadRow label={lex.routeLabel}>{doc.origin_name ?? '—'}</ReadRow>
                 <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
                 <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
+                <ReadRow label="Гос. номер">{doc.vehicle_number ?? '—'}</ReadRow>
+                <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
+                <ReadRow label={lex.etaLabel} mono>{fmtDateTime(doc.eta)}</ReadRow>
                 {showCosts && (
                   <ReadRow label="Стоимость логистики (план)" mono>{doc.cost_estimate != null ? money(doc.cost_estimate) : '—'}</ReadRow>
                 )}
-                <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
-                <ReadRow label={lex.etaLabel} mono>{fmtDateTime(doc.eta)}</ReadRow>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <ReadRow label="Комментарий">{doc.comment ?? '—'}</ReadRow>
                 </div>
@@ -190,7 +191,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                   <div style={{ display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)', border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)' }}>
                     <input value={cost.waiting_minutes} inputMode="numeric" placeholder="0"
                       onChange={(e) => onCost({ waiting_minutes: e.target.value.replace(/[^\d]/g, '') })}
-                      style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', minWidth: 0, color: 'var(--c-text)' }} />
+                      style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-num)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0, color: 'var(--c-text)' }} />
                     <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 13 }}>мин</span>
                   </div>
                 </div>

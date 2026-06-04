@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getShipment,
@@ -9,10 +10,13 @@ import {
   updateShipmentLine,
   updateShipment,
   deleteShipmentLine,
+  uploadShipmentLineFile,
+  deleteShipmentLineFile,
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
 } from '../../../api/shipmentsApi'
-import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../api/shipmentsApi'
+import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ShipmentLineFile } from '../../../api/shipmentsApi'
+import { resolvePublicUploadSrc } from '../../../api/constants'
 import { getBalances, getBalancesByZone } from '../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem } from '../../../api/balancesApi'
 import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
@@ -23,12 +27,13 @@ import { Alert } from '../../primitives/Alert'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Tooltip } from '../../primitives/Tooltip'
 import { useConfirm } from '../../feedback/ConfirmDialog'
+import { useToast } from '../../feedback/Toast'
 import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
-import { Field, Input } from '../../primitives/Input'
+import { AutoGrowTextarea, Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts } from '../../../utils/access'
+import { canViewCosts, canEditShipmentFiles } from '../../../utils/access'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
@@ -48,6 +53,7 @@ export function InventoryShipmentDetailPage() {
   const { docId } = useParams<{ docId: string }>()
   const navigate = useNavigate()
   const confirm = useConfirm()
+  const toast = useToast()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
@@ -61,10 +67,12 @@ export function InventoryShipmentDetailPage() {
   const [zoneBalances, setZoneBalances] = useState<BalanceZoneItem[]>([])
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [uploadingLines, setUploadingLines] = useState<Record<string, boolean>>({})
 
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
+  const [infoActualShipDate, setInfoActualShipDate] = useState('')
   const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
   const [infoComment, setInfoComment] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
@@ -76,6 +84,7 @@ export function InventoryShipmentDetailPage() {
     setInfoClientId(doc.client_id ?? null)
     setInfoClientName(doc.client_name ?? null)
     setInfoShipDate(doc.ship_date ?? '')
+    setInfoActualShipDate(doc.actual_ship_date ?? '')
     setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
@@ -104,6 +113,7 @@ export function InventoryShipmentDetailPage() {
         client_id:      infoClientId,
         client_name:    infoClientName,
         ship_date:      infoShipDate || null,
+        ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
         ...(showCosts ? { logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null } : {}),
         comment:        infoComment.trim() || null,
       })
@@ -127,6 +137,9 @@ export function InventoryShipmentDetailPage() {
   const canEditPlan = isDraft || isPlanned
   const canEditShipped = isPlanned
   const canEditInfo = isDraft || isPlanned
+  const canEditActualShipDate = isPlanned
+    && (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager')
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped'
 
   const shipmentClientId = doc?.client_id ?? null
   const shipmentCargoType = doc?.cargo_type
@@ -411,6 +424,50 @@ export function InventoryShipmentDetailPage() {
     })
   }
 
+  async function handleUploadFile(lineId: string, file: File) {
+    if (!docId) return
+    const invalid = validateLineFile(file)
+    if (invalid) { toast(invalid, 'error'); return }
+    setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await uploadShipmentLineFile(docId, lineId, file)
+      await load()
+      toast('Файл прикреплён', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка загрузки файла', 'error')
+    } finally {
+      setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
+    }
+  }
+
+  async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
+    if (!docId) return
+    const invalid = validateLineFile(file)
+    if (invalid) { toast(invalid, 'error'); return }
+    setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await uploadShipmentLineFile(docId, lineId, file)
+      await deleteShipmentLineFile(docId, lineId, oldFileId)
+      await load()
+      toast('Файл заменён', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка замены файла', 'error')
+    } finally {
+      setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
+    }
+  }
+
+  async function handleDeleteFile(lineId: string, fileId: string) {
+    if (!docId) return
+    try {
+      await deleteShipmentLineFile(docId, lineId, fileId)
+      await load()
+      toast('Файл удалён', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка удаления файла', 'error')
+    }
+  }
+
   function handleAdvanceClick() {
     if (advanceBlockReasons.length > 0) {
       setShowBlockReasons(true)
@@ -586,7 +643,13 @@ export function InventoryShipmentDetailPage() {
                   <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
-                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
+                  {canEditActualShipDate ? (
+                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                      <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
+                    </Field>
+                  ) : (
+                    <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
+                  )}
                   {showCosts && (
                     <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                       <input
@@ -601,9 +664,8 @@ export function InventoryShipmentDetailPage() {
                     </Field>
                   )}
                   <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                    <textarea
-                      className="input"
-                      rows={3}
+                    <AutoGrowTextarea
+                      minRows={3}
                       placeholder="Примечание для команды склада"
                       value={infoComment}
                       onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
@@ -643,7 +705,7 @@ export function InventoryShipmentDetailPage() {
                     </div>
                   )}
                   <div style={{ gridColumn: '1 / -1' }}>
-                    <ReadOnlyField label="Комментарий" value={doc.comment} />
+                    <ReadOnlyField label="Комментарий" value={doc.comment} multiline />
                   </div>
                 </div>
               </div>
@@ -679,8 +741,10 @@ export function InventoryShipmentDetailPage() {
                 canEditPlan={canEditPlan}
                 canEditShipped={canEditShipped}
                 canDelete={canDelete}
+                canAttachFiles={canAttachFiles}
                 acting={acting}
                 saving={saving}
+                uploadingLines={uploadingLines}
                 getDraft={getDraft}
                 getAvailable={getDraftAvailable}
                 getZoneOptions={getLineZoneOptions}
@@ -688,6 +752,9 @@ export function InventoryShipmentDetailPage() {
                 onShippedQty={setDraftShippedQty}
                 onZone={setDraftZone}
                 onDelete={handleDeleteLine}
+                onUploadFile={handleUploadFile}
+                onReplaceFile={handleReplaceFile}
+                onDeleteFile={handleDeleteFile}
               />
             )}
           </div>
@@ -803,13 +870,336 @@ export function InventoryShipmentDetailPage() {
   )
 }
 
-function ReadOnlyField({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+function ReadOnlyField({ label, value, mono, multiline }: { label: string; value: string | null | undefined; mono?: boolean; multiline?: boolean }) {
   return (
     <div>
       <div className="field-label"><span>{label}</span></div>
-      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>
+      <div style={{
+        fontSize: 13,
+        fontWeight: 500,
+        minHeight: 30,
+        display: 'flex',
+        alignItems: multiline ? 'flex-start' : 'center',
+        lineHeight: multiline ? 1.5 : undefined,
+        whiteSpace: multiline ? 'pre-wrap' : undefined,
+        overflowWrap: multiline ? 'anywhere' : undefined,
+      }}>
         <span className={mono ? 'mono' : undefined}>{value || '—'}</span>
       </div>
+    </div>
+  )
+}
+
+// --- LineFilesCell ---
+
+const ALLOWED_FILE_EXTS = ['pdf', 'png', 'jpg', 'jpeg']
+const MAX_FILE_BYTES = 10 * 1024 * 1024
+
+function validateLineFile(file: File): string | null {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  if (!ALLOWED_FILE_EXTS.includes(ext)) return 'Допустимы файлы: PDF, PNG, JPG'
+  if (file.size > MAX_FILE_BYTES) return 'Файл слишком большой (максимум 10 МБ)'
+  return null
+}
+
+function isPdf(mime: string | null, filename: string): boolean {
+  return filename.split('.').pop()?.toLowerCase() === 'pdf' || mime === 'application/pdf'
+}
+
+function fileTypeIcon(mime: string | null, filename: string): 'filePdf' | 'fileImg' {
+  return isPdf(mime, filename) ? 'filePdf' : 'fileImg'
+}
+
+/** Цвет глифа: красный для PDF (как в большинстве UI), accent для картинок. */
+function fileTypeColor(mime: string | null, filename: string): string {
+  return isPdf(mime, filename) ? 'var(--c-danger)' : 'var(--c-accent)'
+}
+
+function shortName(name: string, max = 16): string {
+  if (name.length <= max) return name
+  const ext = name.includes('.') ? '.' + name.split('.').pop() : ''
+  const base = name.slice(0, max - ext.length - 1)
+  return `${base}…${ext}`
+}
+
+function LineFilesCell({
+  lineId, files, canEdit, uploading, onUpload, onReplace, onDelete,
+}: {
+  lineId: string
+  files: ShipmentLineFile[]
+  canEdit: boolean
+  uploading: boolean
+  onUpload: (lineId: string, file: File) => void
+  onReplace: (lineId: string, oldFileId: string, file: File) => void
+  onDelete: (lineId: string, fileId: string) => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const replaceTargetRef = useRef<string | null>(null)
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  const [popStyle, setPopStyle] = useState<React.CSSProperties>({})
+
+  function pickFile(replaceFileId: string | null) {
+    replaceTargetRef.current = replaceFileId
+    inputRef.current?.click()
+  }
+
+  function handleInputChange(e: { target: HTMLInputElement }) {
+    const f = e.target.files?.[0]
+    if (f) {
+      if (replaceTargetRef.current) onReplace(lineId, replaceTargetRef.current, f)
+      else onUpload(lineId, f)
+    }
+    replaceTargetRef.current = null
+    e.target.value = ''
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    if (!canEdit) return
+    const f = e.dataTransfer.files?.[0]
+    if (f) onUpload(lineId, f)
+  }
+
+  const updatePopPosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const gap = 4
+    const width = 240
+    const left = Math.min(rect.left, window.innerWidth - width - 8)
+    setPopStyle({ position: 'fixed', top: rect.bottom + gap, left, width })
+  }, [])
+
+  useEffect(() => {
+    if (!popoverOpen) return
+    updatePopPosition()
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t) || popoverRef.current?.contains(t)) return
+      setPopoverOpen(false)
+    }
+    window.addEventListener('resize', updatePopPosition)
+    window.addEventListener('scroll', updatePopPosition, true)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      window.removeEventListener('resize', updatePopPosition)
+      window.removeEventListener('scroll', updatePopPosition, true)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [popoverOpen, updatePopPosition])
+
+  const hiddenInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept=".pdf,.png,.jpg,.jpeg"
+      style={{ display: 'none' }}
+      onChange={handleInputChange}
+    />
+  )
+
+  // Пусто + только просмотр → прочерк
+  if (files.length === 0 && !canEdit) {
+    return <span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>—</span>
+  }
+
+  // Пусто + можно прикрепить → приглушённая ghost-кнопка (не «кричит» на пустых строках)
+  if (files.length === 0) {
+    return (
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        style={{ display: 'inline-flex' }}
+      >
+        {hiddenInput}
+        <button
+          type="button"
+          title="Прикрепить файл (PDF, PNG, JPG)"
+          disabled={uploading}
+          onClick={() => pickFile(null)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            height: 28, width: 28, borderRadius: 'var(--r-md)',
+            border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`,
+            background: dragOver ? 'var(--c-bg-hover)' : 'var(--c-bg-elev)',
+            color: 'var(--c-accent)',
+            cursor: uploading ? 'default' : 'pointer', transition: 'all 120ms ease',
+          }}
+        >
+          <Icon name={uploading ? 'refresh' : 'importFile'} size={15} />
+        </button>
+      </div>
+    )
+  }
+
+  const single = files[0]
+  const many = files.length > 1
+
+  return (
+    <div
+      onDragOver={(e) => { if (canEdit) { e.preventDefault(); setDragOver(true) } }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ display: 'inline-flex', justifyContent: 'center' }}
+    >
+      {hiddenInput}
+      <div
+        ref={triggerRef}
+        onClick={() => { if (many) setPopoverOpen((o) => !o) }}
+        title={many ? `${files.length} файла` : single.filename}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          height: 28, maxWidth: 180, padding: '0 4px 0 8px',
+          borderRadius: 'var(--r-md)',
+          border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`,
+          background: dragOver ? 'var(--c-bg-hover)' : 'var(--c-bg-elev)',
+          cursor: many ? 'pointer' : 'default', transition: 'border-color 120ms ease',
+        }}
+      >
+        {many ? (
+          <>
+            <Icon name="filePdf" size={14} style={{ color: 'var(--c-danger)', flexShrink: 0 }} />
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--c-text)' }}>
+              {files.length} файла
+            </span>
+            <Icon name="chevDown" size={12} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+          </>
+        ) : (
+          <>
+            <a
+              href={resolvePublicUploadSrc(single.url)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+                textDecoration: 'none', color: 'var(--c-text)',
+              }}
+            >
+              <Icon
+                name={fileTypeIcon(single.mime_type, single.filename)}
+                size={14}
+                style={{ color: fileTypeColor(single.mime_type, single.filename), flexShrink: 0 }}
+              />
+              <span style={{
+                fontSize: 12, fontWeight: 500,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {shortName(single.filename)}
+              </span>
+            </a>
+            {canEdit && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 1, flexShrink: 0,
+                opacity: hover ? 1 : 0, transition: 'opacity 120ms ease',
+                pointerEvents: hover ? 'auto' : 'none',
+              }}>
+                <button
+                  type="button"
+                  title="Заменить файл"
+                  disabled={uploading}
+                  onClick={(e) => { e.stopPropagation(); pickFile(single.id) }}
+                  className="btn ghost icon sm"
+                  style={{ width: 22, height: 22, color: 'var(--c-text-subtle)' }}
+                >
+                  <Icon name="refresh" size={12} />
+                </button>
+                <button
+                  type="button"
+                  title="Удалить файл"
+                  onClick={(e) => { e.stopPropagation(); onDelete(lineId, single.id) }}
+                  className="btn ghost icon sm"
+                  style={{ width: 22, height: 22, color: 'var(--c-text-faint)' }}
+                >
+                  <Icon name="x" size={12} />
+                </button>
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      {popoverOpen && many && createPortal(
+        <div
+          ref={popoverRef}
+          style={{
+            ...popStyle,
+            background: 'var(--c-bg-elev)',
+            border: '1px solid var(--c-border)',
+            borderRadius: 'var(--r-lg)',
+            boxShadow: 'var(--sh-2)',
+            zIndex: 9999, padding: 4,
+          }}
+        >
+          {files.map((f) => (
+            <div
+              key={f.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 8px', borderRadius: 'var(--r-md)',
+              }}
+            >
+              <a
+                href={resolvePublicUploadSrc(f.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1,
+                  textDecoration: 'none', color: 'var(--c-text)',
+                }}
+              >
+                <Icon
+                  name={fileTypeIcon(f.mime_type, f.filename)}
+                  size={15}
+                  style={{ color: fileTypeColor(f.mime_type, f.filename), flexShrink: 0 }}
+                />
+                <span style={{
+                  fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {f.filename}
+                </span>
+              </a>
+              {canEdit && (
+                <button
+                  type="button"
+                  title="Удалить файл"
+                  onClick={() => onDelete(lineId, f.id)}
+                  className="btn ghost icon sm"
+                  style={{ width: 22, height: 22, color: 'var(--c-text-faint)', flexShrink: 0 }}
+                >
+                  <Icon name="x" size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+          {canEdit && (
+            <>
+              <div style={{ height: 1, background: 'var(--c-border)', margin: '4px 0' }} />
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => { setPopoverOpen(false); pickFile(null) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '6px 8px', borderRadius: 'var(--r-md)',
+                  border: 0, background: 'transparent', cursor: 'pointer',
+                  fontSize: 12.5, color: 'var(--c-accent)',
+                }}
+              >
+                <Icon name="importFile" size={15} />Прикрепить файл
+              </button>
+            </>
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }
@@ -820,32 +1210,38 @@ const groupBorder = '1px solid var(--c-border)'
 const tintShipped = 'var(--c-bg-sunken)'
 
 type ShipmentLinesTableProps = {
-  lines:          EditableShipmentLine[]
-  cargoType:      ShipmentCargoType
-  canEditPlan:    boolean
-  canEditShipped: boolean
-  canDelete:      boolean
-  acting:         boolean
-  saving:         Record<string, boolean>
-  getDraft:       (line: ShipmentLine) => LineDraft
-  getAvailable:   (line: ShipmentLine) => number
-  getZoneOptions: (line: ShipmentLine) => ZoneChoice[]
-  onQty:          (lineId: string, v: number) => void
-  onShippedQty:   (lineId: string, v: number) => void
-  onZone:         (lineId: string, zoneId: string, zoneName: string | null) => void
-  onDelete:       (lineId: string) => void
+  lines:           EditableShipmentLine[]
+  cargoType:       ShipmentCargoType
+  canEditPlan:     boolean
+  canEditShipped:  boolean
+  canDelete:       boolean
+  canAttachFiles:  boolean
+  acting:          boolean
+  saving:          Record<string, boolean>
+  uploadingLines:  Record<string, boolean>
+  getDraft:        (line: ShipmentLine) => LineDraft
+  getAvailable:    (line: ShipmentLine) => number
+  getZoneOptions:  (line: ShipmentLine) => ZoneChoice[]
+  onQty:           (lineId: string, v: number) => void
+  onShippedQty:    (lineId: string, v: number) => void
+  onZone:          (lineId: string, zoneId: string, zoneName: string | null) => void
+  onDelete:        (lineId: string) => void
+  onUploadFile:    (lineId: string, file: File) => void
+  onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
+  onDeleteFile:    (lineId: string, fileId: string) => void
 }
 
 function ShipmentLinesTable({
-  lines, cargoType, canEditPlan, canEditShipped, canDelete,
-  acting, saving, getDraft, getAvailable, getZoneOptions, onQty, onShippedQty, onZone, onDelete,
+  lines, cargoType, canEditPlan, canEditShipped, canDelete, canAttachFiles,
+  acting, saving, uploadingLines, getDraft, getAvailable, getZoneOptions,
+  onQty, onShippedQty, onZone, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
 }: ShipmentLinesTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
   const showZone = cargoType === 'good' || cargoType === 'defect'
-  // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Действие
-  const colCount = 2 + (showZone ? 2 : 1) + (canDelete ? 1 : 0)
+  // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Файлы | Действие
+  const colCount = 2 + (showZone ? 2 : 1) + 1 + (canDelete ? 1 : 0)
 
   return (
     <Table>
@@ -853,6 +1249,11 @@ function ShipmentLinesTable({
         <tr>
           <th rowSpan={2}>Товар</th>
           <th rowSpan={2} style={{ width: 110, textAlign: 'right' }}>План</th>
+          <th rowSpan={2} style={{ width: 124, textAlign: 'center' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
+              <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
+            </span>
+          </th>
           <th
             colSpan={showZone ? 2 : 1}
             style={{ background: tintShipped, textAlign: 'center', borderLeft: groupBorder }}
@@ -905,6 +1306,17 @@ function ShipmentLinesTable({
                 ) : (
                   <span className="mono" style={{ fontWeight: 500 }}>{line.qty}</span>
                 )}
+              </Td>
+              <Td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                <LineFilesCell
+                  lineId={line.id}
+                  files={line.files ?? []}
+                  canEdit={canAttachFiles}
+                  uploading={uploadingLines[line.id] ?? false}
+                  onUpload={onUploadFile}
+                  onReplace={onReplaceFile}
+                  onDelete={onDeleteFile}
+                />
               </Td>
               <Td className="num" style={{ background: tintShipped, borderLeft: groupBorder }}>
                 {canEditPlan ? (

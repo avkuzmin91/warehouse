@@ -3,12 +3,16 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from config import (
+    MAX_UPLOAD_BYTES,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
+    SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_REVERT_TRANSITIONS,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
@@ -17,6 +21,7 @@ from config import (
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUSES_ALL,
     SHIPMENT_TRANSITIONS,
+    UPLOADS_DIR,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_manager
@@ -24,6 +29,7 @@ from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
     ShipmentDocUpdate,
+    ShipmentLineFile,
     ShipmentLineIn,
     ShipmentLineItem,
     ShipmentListItem,
@@ -37,9 +43,30 @@ router = APIRouter(tags=["shipments"])
 
 _get_manager = get_current_manager
 
+_ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
+_FILE_EDIT_ROLES = {"admin", "manager"}
+_FILE_FINAL_STATUSES = {SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED}
+
+
+def _ensure_can_edit_files(user, status: str) -> None:
+    if str(user["role"]) not in _FILE_EDIT_ROLES:
+        raise HTTPException(status_code=403, detail="Менять файлы может только менеджер")
+    if status in _FILE_FINAL_STATUSES:
+        raise HTTPException(status_code=400, detail="Нельзя менять файлы в финальном статусе документа")
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _fmt_date(value) -> str:
+    if not value:
+        return "—"
+    try:
+        y, m, d = str(value).split("-")
+        return f"{d}.{m}.{y}"
+    except ValueError:
+        return str(value)
 
 
 @router.post("/shipments")
@@ -247,12 +274,29 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
             (doc_id,),
         ).fetchall()
+        files_rows = conn.execute(
+            "SELECT * FROM shipment_line_files WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+            (doc_id,),
+        ).fetchall()
         ops_rows = conn.execute(
             """SELECT o.*, u.email AS user_email
                FROM shipment_ops o LEFT JOIN users u ON u.id = o.created_by
                WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
             (doc_id,),
         ).fetchall()
+
+    files_by_line: dict[str, list[ShipmentLineFile]] = {}
+    for f in files_rows:
+        lid = str(f["line_id"])
+        if lid not in files_by_line:
+            files_by_line[lid] = []
+        files_by_line[lid].append(ShipmentLineFile(
+            id=str(f["id"]),
+            filename=str(f["filename"]),
+            url=str(f["url"]),
+            mime_type=f["mime_type"],
+            created_at=str(f["created_at"]),
+        ))
 
     lines = [
         ShipmentLineItem(
@@ -268,6 +312,7 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             shipped_qty=int(l["shipped_qty"] or 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
+            files=files_by_line.get(str(l["id"]), []),
         )
         for l in lines_rows
     ]
@@ -311,17 +356,23 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
 @router.patch("/shipments/{doc_id}")
 def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_manager)):
     now = _now()
+    uid = str(user["id"])
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, actual_ship_date FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
+        status = str(row["status"])
+        if status not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         fields = body.model_dump(exclude_unset=True)
         if "logistics_cost" in fields:
             ensure_cost_access(user)
+        if "actual_ship_date" in fields:
+            if status != SHIPMENT_STATUS_PACKING:
+                raise HTTPException(status_code=400, detail="Дату отгрузки (факт) можно менять только в статусе «В плане»")
+            fields["actual_ship_date"] = (fields["actual_ship_date"] or "").strip() or None
         if "comment" in fields:
             fields["comment"] = (fields["comment"] or "").strip() or None
         if "cargo_type" in fields:
@@ -333,6 +384,15 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             f"UPDATE shipment_docs SET {sets}, updated_at = ? WHERE id = ?",
             list(fields.values()) + [now, doc_id],
         )
+        if "actual_ship_date" in fields:
+            old_val = row["actual_ship_date"]
+            new_val = fields["actual_ship_date"]
+            if (str(old_val).strip() if old_val is not None else "") != (new_val or ""):
+                conn.execute(
+                    "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                    (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
+                     f"Дата отгрузки (факт): {_fmt_date(old_val)} → {_fmt_date(new_val)}", now, uid),
+                )
         conn.commit()
     return {"message": "ok"}
 
@@ -460,6 +520,78 @@ def revert_shipment(doc_id: str, user=Depends(_get_manager)):
         )
         conn.commit()
     return {"message": prev_status}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/files")
+async def upload_shipment_line_file(
+    doc_id: str,
+    line_id: str,
+    file: UploadFile = File(...),
+    user=Depends(_get_manager),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_LINE_FILE_EXTS:
+        raise HTTPException(status_code=400, detail="Допустимы файлы: pdf, png, jpg, jpeg")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        _ensure_can_edit_files(user, str(row["status"]))
+        line_row = conn.execute(
+            "SELECT id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line_row:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+
+        saved_filename = f"{uuid4()}{ext}"
+        file_path = UPLOADS_DIR / saved_filename
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_bytes(data)
+        tmp_path.rename(file_path)
+
+        file_id = str(uuid4())
+        url = f"/uploads/{saved_filename}"
+        conn.execute(
+            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (file_id, line_id, doc_id, file.filename, url, file.content_type or None, now, uid),
+        )
+        conn.commit()
+    return {"message": file_id}
+
+
+@router.delete("/shipments/{doc_id}/lines/{line_id}/files/{file_id}")
+def delete_shipment_line_file(
+    doc_id: str,
+    line_id: str,
+    file_id: str,
+    user=Depends(_get_manager),
+):
+    now = _now()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        _ensure_can_edit_files(user, str(row["status"]))
+        conn.execute(
+            "UPDATE shipment_line_files SET is_deleted=1 WHERE id=? AND line_id=? AND doc_id=?",
+            (file_id, line_id, doc_id),
+        )
+        conn.commit()
+    return {"message": "ok"}
 
 
 @router.delete("/shipments/{doc_id}")

@@ -75,7 +75,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
     <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <button className="btn ghost icon sm" onClick={onBack}><Icon name="arrowLeft" size={14} /></button>
-        <span style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{doc.trip_number}</span>
+        <span style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-code)' }}>{doc.trip_number}</span>
         <Badge tone="info" dot>{tripStatusLabel(doc.status, direction)}</Badge>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {doc.vehicle_type_name && <Chip icon={outbound ? 'truckOut' : 'truckIn'}>{doc.vehicle_type_name}</Chip>}
@@ -103,6 +103,23 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
                 : <>Транспорт заказан <b>{doc.transport_ordered_at ? fmtTime(doc.transport_ordered_at) : '—'}</b></>}
             </div>
           </div>
+          {doc.vehicle_number && (
+            <div style={{
+              marginLeft: 'auto',
+              padding: '6px 16px',
+              borderRadius: 8,
+              border: '2px solid var(--c-border)',
+              background: 'var(--c-bg)',
+              fontFamily: 'var(--font-code)',
+              fontSize: 22,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              color: 'var(--c-text)',
+              flexShrink: 0,
+            }}>
+              {doc.vehicle_number}
+            </div>
+          )}
         </div>
 
         <div style={{ borderTop: '1px solid var(--c-border)', padding: 18, display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>

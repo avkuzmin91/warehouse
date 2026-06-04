@@ -163,6 +163,9 @@ SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
 SHIPMENT_CARGO_GOOD   = "good"
 SHIPMENT_CARGO_DEFECT = "defect"
 
+# Типы операций журнала отгрузок
+SHIPMENT_OP_DOC_UPDATE = "doc_update"
+
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
 # ---------------------------------------------------------------------------

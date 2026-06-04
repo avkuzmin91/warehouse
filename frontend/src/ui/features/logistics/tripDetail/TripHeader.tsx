@@ -42,7 +42,7 @@ export function TripHeader({ number, status, direction = 'inbound', onBack, acti
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', fontFamily: 'var(--font-mono)' }}>{number}</span>
+          <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', fontFamily: 'var(--font-code)' }}>{number}</span>
           <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{outbound ? 'Рейс отгрузки' : 'Рейс поступления'}</span>
         </div>
       </div>

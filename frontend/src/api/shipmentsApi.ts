@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestForm } from './http'
 
 export type ShipmentStatus = 'draft' | 'packing' | 'shipped' | 'cancelled'
 
@@ -40,6 +40,14 @@ export type ShipmentOp = {
   created_by_email: string | null
 }
 
+export type ShipmentLineFile = {
+  id:         string
+  filename:   string
+  url:        string
+  mime_type:  string | null
+  created_at: string
+}
+
 export type ShipmentLine = {
   id:                string
   product_id:        string
@@ -53,6 +61,7 @@ export type ShipmentLine = {
   shipped_qty:       number
   storage_zone_id:   string | null
   storage_zone_name: string | null
+  files:             ShipmentLineFile[]
 }
 
 export type ShipmentListItem = {
@@ -148,7 +157,9 @@ export type ShipmentDocCreate = {
   lines?:          ShipmentLineIn[]
 }
 
-export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'>
+export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'> & {
+  actual_ship_date?: string | null
+}
 
 export function getShipmentsSummary(params: Pick<ShipmentListParams, 'client_id' | 'search' | 'sku' | 'date_from' | 'date_to'> = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
@@ -217,4 +228,19 @@ export function cancelShipment(id: string) {
 
 export function deleteShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}`, { method: 'DELETE' })
+}
+
+export function uploadShipmentLineFile(docId: string, lineId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function deleteShipmentLineFile(docId: string, lineId: string, fileId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}`, {
+    method: 'DELETE',
+  })
 }

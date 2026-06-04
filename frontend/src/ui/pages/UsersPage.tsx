@@ -444,7 +444,7 @@ export function UsersPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <Avatar initials={getInitials(item.email.split('@')[0])} />
                         <div>
-                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>{item.email}</div>
+                          <div style={{ fontFamily: 'var(--font-code)', fontSize: 12.5 }}>{item.email}</div>
                           <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 1 }}>
                             {item.id.slice(0, 8)}...
                           </div>

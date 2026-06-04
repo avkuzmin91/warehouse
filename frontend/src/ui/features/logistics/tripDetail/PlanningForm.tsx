@@ -8,6 +8,7 @@ export type PlanningFormValue = {
   origin_id: string
   carrier_id: string
   vehicle_type_id: string
+  vehicle_number: string
   transport_ordered_at: string
   eta: string
   cost_estimate: string
@@ -43,9 +44,10 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
           <ReadRow label={routeLabel}>{origin?.name ?? '—'}</ReadRow>
           <ReadRow label="Перевозчик">{carrier?.name ?? '—'}</ReadRow>
           <ReadRow label="Тип кузова">{vehicleType?.name ?? '—'}</ReadRow>
-          {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(value.cost_estimate)}</ReadRow>}
+          <ReadRow label="Гос. номер">{value.vehicle_number || '—'}</ReadRow>
           <ReadRow label="Транспорт заказан" mono>{value.transport_ordered_at || '—'}</ReadRow>
           <ReadRow label={etaLabel} mono>{value.eta || '—'}</ReadRow>
+          {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(value.cost_estimate)}</ReadRow>}
           <div style={{ gridColumn: '1 / -1' }}>
             <ReadRow label="Комментарий">{value.comment || '—'}</ReadRow>
           </div>
@@ -72,12 +74,16 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
           <SelectField value={value.vehicle_type_id} options={toOpts(vehicleTypes)} leadIcon="truckIn" placeholder="Выберите тип"
             invalid={invalid?.vehicle_type_id} onChange={(id) => onChange({ vehicle_type_id: id })} />
         </div>
-        {showCosts && (
-          <div>
-            <FieldLabel required>Стоимость логистики (план)</FieldLabel>
-            <MoneyField value={value.cost_estimate} invalid={invalid?.cost_estimate} onChange={(v) => onChange({ cost_estimate: v })} />
-          </div>
-        )}
+        <div>
+          <FieldLabel required>Гос. номер</FieldLabel>
+          <input
+            className="input"
+            value={value.vehicle_number}
+            placeholder="А123ВС 77"
+            onChange={(e) => onChange({ vehicle_number: e.target.value })}
+            style={invalid?.vehicle_number ? { borderColor: 'var(--c-danger)' } : undefined}
+          />
+        </div>
         <div>
           <FieldLabel required>Транспорт заказан</FieldLabel>
           <DateTimeField value={value.transport_ordered_at} invalid={invalid?.transport_ordered_at} onChange={(v) => onChange({ transport_ordered_at: v })} />
@@ -86,6 +92,12 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
           <FieldLabel required>Плановое прибытие</FieldLabel>
           <DateTimeField value={value.eta} invalid={invalid?.eta} onChange={(v) => onChange({ eta: v })} />
         </div>
+        {showCosts && (
+          <div>
+            <FieldLabel required>Стоимость логистики (план)</FieldLabel>
+            <MoneyField value={value.cost_estimate} invalid={invalid?.cost_estimate} onChange={(v) => onChange({ cost_estimate: v })} />
+          </div>
+        )}
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel>Комментарий</FieldLabel>
           <textarea className="input" rows={2} value={value.comment} placeholder="Догруз, ворота, особенности разгрузки…"

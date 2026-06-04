@@ -54,6 +54,10 @@ def _ensure_runtime_schema() -> None:
             ALTER TABLE IF EXISTS colors
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS products
+                ADD COLUMN IF NOT EXISTS weight_grams INTEGER
+        """)
         # Логистика (рейсы) + справочник «Тип кузова» — на случай dev-старта без alembic.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS vehicle_types (

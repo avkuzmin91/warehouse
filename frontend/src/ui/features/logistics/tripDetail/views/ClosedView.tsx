@@ -75,9 +75,10 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode 
               <ReadRow label={lex.routeLabel}>{doc.origin_name ?? '—'}</ReadRow>
               <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
               <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
-              {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(doc.cost_estimate)}</ReadRow>}
+              <ReadRow label="Гос. номер">{doc.vehicle_number ?? '—'}</ReadRow>
               <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
               <ReadRow label={lex.etaLabel} mono>{fmtDateTime(doc.eta)}</ReadRow>
+              {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(doc.cost_estimate)}</ReadRow>}
               <div style={{ gridColumn: '1 / -1' }}>
                 <ReadRow label="Комментарий">{doc.comment ?? '—'}</ReadRow>
               </div>

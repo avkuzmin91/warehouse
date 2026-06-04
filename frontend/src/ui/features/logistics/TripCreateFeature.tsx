@@ -23,7 +23,7 @@ import type { ShipmentLink, ShipmentEnrich } from './tripDetail/ShipmentsBlock'
 
 const EMPTY_FORM: PlanningFormValue = {
   origin_id: '', carrier_id: '', vehicle_type_id: '',
-  transport_ordered_at: '', eta: '', cost_estimate: '', comment: '',
+  vehicle_number: '', transport_ordered_at: '', eta: '', cost_estimate: '', comment: '',
 }
 
 function fmtDay(d: string | null): string | undefined {
@@ -80,6 +80,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     origin_id: !form.origin_id,
     carrier_id: !form.carrier_id,
     vehicle_type_id: !form.vehicle_type_id,
+    vehicle_number: form.vehicle_number.trim() === '',
     cost_estimate: showCosts && form.cost_estimate.trim() === '',
     transport_ordered_at: !isDateTimeComplete(form.transport_ordered_at),
     eta: !isDateTimeComplete(form.eta) || etaBeforeOrder,
@@ -88,6 +89,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     ...(requiredErrors.origin_id ? [`Не указано «${lex.routeLabel}»`] : []),
     ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
     ...(requiredErrors.vehicle_type_id ? ['Не выбран тип кузова'] : []),
+    ...(requiredErrors.vehicle_number ? ['Не указан гос. номер'] : []),
     ...(requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
     ...(requiredErrors.transport_ordered_at ? ['Не указано «Транспорт заказан»'] : []),
     ...(!isDateTimeComplete(form.eta) ? [`Не указано ${lex.etaLabel.toLowerCase()}`] : []),
@@ -99,6 +101,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     { ok: !!form.origin_id, label: `${lex.routeLabel} указано` },
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
     { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
+    { ok: form.vehicle_number.trim() !== '', label: 'Гос. номер указан' },
     ...(showCosts ? [{ ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' }] : []),
     { ok: !requiredErrors.transport_ordered_at, label: 'Транспорт заказан' },
     { ok: isDateTimeComplete(form.eta), label: `${lex.etaLabel} указано` },
@@ -157,6 +160,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
       carrier_name: carrier?.name ?? null,
       vehicle_type_id: form.vehicle_type_id || null,
       vehicle_type_name: vehicle?.name ?? null,
+      vehicle_number: form.vehicle_number.trim() || null,
       transport_ordered_at: form.transport_ordered_at || null,
       eta: form.eta || null,
       ...(showCosts ? { cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null } : {}),

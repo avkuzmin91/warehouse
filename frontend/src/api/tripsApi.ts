@@ -26,6 +26,7 @@ export type TripDoc = {
   carrier_name: string | null
   vehicle_type_id: string | null
   vehicle_type_name: string | null
+  vehicle_number: string | null
   transport_ordered_at: string | null
   eta: string | null
   cost_estimate: number | null
@@ -108,6 +109,7 @@ export type TripCreatePayload = {
   carrier_name?: string | null
   vehicle_type_id?: string | null
   vehicle_type_name?: string | null
+  vehicle_number?: string | null
   transport_ordered_at?: string | null
   eta?: string | null
   cost_estimate?: number | null

@@ -206,7 +206,7 @@ export function DateTimeField({ value, invalid, onChange }: {
   )
 }
 
-/** Денежное поле — ввод с ₽-суффиксом, моноширинный, по правому краю. */
+/** Денежное поле — ввод с ₽-суффиксом, табличные цифры, по правому краю. */
 export function MoneyField({ value, onChange, placeholder = '0', invalid }: {
   value: string
   onChange?: (v: string) => void
@@ -225,8 +225,8 @@ export function MoneyField({ value, onChange, placeholder = '0', invalid }: {
         inputMode="numeric"
         onChange={(e) => onChange?.(e.target.value.replace(/[^\d]/g, ''))}
         style={{
-          flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)',
-          fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', minWidth: 0,
+          flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-num)',
+          fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0,
           color: 'var(--c-text)',
         }}
       />

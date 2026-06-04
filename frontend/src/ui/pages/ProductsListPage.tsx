@@ -72,7 +72,7 @@ export function ProductsListPage() {
                       )}
                     </td>
                     <td className="td" style={{ fontWeight: 500 }}>{p.name}</td>
-                    <td className="td" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{p.sku_base}</td>
+                    <td className="td" style={{ fontFamily: 'var(--font-code)', fontSize: 12 }}>{p.sku_base}</td>
                     <td className="td" style={{ fontSize: 12.5 }}>{p.type_name ?? '—'}</td>
                     <td className="td" style={{ fontSize: 12.5 }}>{p.client_name ?? '—'}</td>
                     <td className="td">

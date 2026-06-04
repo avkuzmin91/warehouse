@@ -31,6 +31,13 @@ function parseNum(s: string) {
   return Number.isFinite(n) ? n : 0
 }
 
+function parseOptionalWeight(s: string): number | null {
+  const trimmed = s.trim()
+  if (!trimmed) return null
+  const n = Number(trimmed.replace(',', '.'))
+  return Number.isFinite(n) ? Math.round(n) : null
+}
+
 function emptyRow(requiresSize: boolean): ProductVariantWriteItem {
   return {
     id: null,
@@ -64,7 +71,7 @@ function DimInput({ value, onChange, disabled }: { value: number; onChange: (v: 
   return (
     <input
       className="input"
-      style={{ width: 64, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, padding: '0 6px' }}
+      style={{ width: 64, textAlign: 'center', fontFamily: 'var(--font-num)', fontSize: 12, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", padding: '0 6px' }}
       value={raw}
       disabled={disabled}
       onChange={(e) => {
@@ -85,6 +92,7 @@ export function ProductEditPage() {
   const [product, setProduct] = useState<ProductItem | null>(null)
   const [name, setName] = useState('')
   const [skuBase, setSkuBase] = useState('')
+  const [weightGrams, setWeightGrams] = useState('')
   const [clientId, setClientId] = useState<string | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -117,6 +125,7 @@ export function ProductEditPage() {
         setProduct(p)
         setName(p.name)
         setSkuBase(p.sku_base)
+        setWeightGrams(p.weight_grams != null ? String(p.weight_grams) : '')
         setClientId(p.client_id)
         setIsActive(p.is_active)
         setImages((p.image_urls ?? []).map((url) => ({ kind: 'url', previewUrl: url, serverUrl: url })))
@@ -231,6 +240,7 @@ export function ProductEditPage() {
     await updateProduct(id, {
       name: name.trim(),
       sku_base: skuBase.trim(),
+      weight_grams: parseOptionalWeight(weightGrams),
       client_id: clientId,
       is_active: isActive,
       image_urls,
@@ -391,7 +401,7 @@ export function ProductEditPage() {
                   <Input
                     value={skuBase}
                     onChange={(e) => setSkuBase(e.target.value)}
-                    style={{ fontFamily: 'var(--font-mono)' }}
+                    style={{ fontFamily: 'var(--font-code)' }}
                   />
                 </Field>
                 <Field label="Название" required>
@@ -487,45 +497,66 @@ export function ProductEditPage() {
           </div>
         </div>
 
-        <div className="card">
-          <div className="card-head">
-            <Icon name="palette" size={15} style={{ color: 'var(--c-accent)' }} />
-            <div className="card-head-title">Варианты</div>
-            <span className="badge accent" style={{ marginLeft: 6 }}>{rows.length}</span>
-            <div style={{ flex: 1 }} />
-            <button
-              type="button"
-              className="btn ghost sm"
-              disabled={busy}
-              onClick={() => setRows((prev) => [...prev, emptyRow(requiresSize)])}
-            >
-              <Icon name="plus" size={12} />Добавить
-            </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-head-title">Параметры</div>
+            </div>
+            <div className="card-body">
+              <Field label="Вес, гр.">
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={weightGrams}
+                  disabled={busy}
+                  onChange={(e) => setWeightGrams(e.target.value)}
+                  style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
+                />
+              </Field>
+            </div>
           </div>
 
-          {varLoading ? (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка…</div>
-          ) : (
-            <>
-              <Table>
-                <thead>
-                  <tr>
-                    <th>Цвет</th>
-                    {requiresSize && <th>Размер</th>}
-                    <th>Д x Ш x В (см)</th>
-                    <th style={{ width: 28 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 ? (
+          <div className="card">
+            <div className="card-head">
+              <Icon name="palette" size={15} style={{ color: 'var(--c-accent)' }} />
+              <div className="card-head-title">Варианты</div>
+              <span className="badge accent" style={{ marginLeft: 6 }}>{rows.length}</span>
+              <div style={{ flex: 1 }} />
+              <button
+                type="button"
+                className="btn ghost sm"
+                disabled={busy}
+                onClick={() => setRows((prev) => [...prev, emptyRow(requiresSize)])}
+              >
+                <Icon name="plus" size={12} />Добавить
+              </button>
+            </div>
+
+            {varLoading ? (
+              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка…</div>
+            ) : (
+              <>
+                <Table>
+                  <thead>
                     <tr>
-                      <td colSpan={requiresSize ? 4 : 3} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
-                        Нет вариантов — нажмите «Добавить»
-                      </td>
+                      <th>Цвет</th>
+                      {requiresSize && <th>Размер</th>}
+                      <th>Д x Ш x В (см)</th>
+                      <th style={{ width: 28 }} />
                     </tr>
-                  ) : rows.map((row, i) => {
-                    const locked = row.id ? (variantHasReceipts.get(row.id) ?? false) : false
-                    return (
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={requiresSize ? 4 : 3} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                          Нет вариантов — нажмите «Добавить»
+                        </td>
+                      </tr>
+                    ) : rows.map((row, i) => {
+                      const locked = row.id ? (variantHasReceipts.get(row.id) ?? false) : false
+                      return (
                     <tr key={row.id ?? `new-${i}`}>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -585,18 +616,19 @@ export function ProductEditPage() {
                         </button>
                       </Td>
                     </tr>
-                    )
-                  })}
-                </tbody>
-              </Table>
+                      )
+                    })}
+                  </tbody>
+                </Table>
 
-              <div style={{ padding: '10px 14px', borderTop: rows.length > 0 ? '1px solid var(--c-border)' : 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
-                {varError && <span style={{ fontSize: 12, color: 'var(--c-danger)', flex: 1 }}>{varError}</span>}
-                <div style={{ flex: 1 }} />
-                <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Варианты сохраняются кнопкой «Сохранить» сверху</span>
-              </div>
-            </>
-          )}
+                <div style={{ padding: '10px 14px', borderTop: rows.length > 0 ? '1px solid var(--c-border)' : 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {varError && <span style={{ fontSize: 12, color: 'var(--c-danger)', flex: 1 }}>{varError}</span>}
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Варианты сохраняются кнопкой «Сохранить» сверху</span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
       <Modal open={fullscreenImage !== null} onClose={closeFullscreenImage} width={960}>

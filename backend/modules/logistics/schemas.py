@@ -11,6 +11,7 @@ class TripDocCreate(BaseModel):
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None
@@ -26,6 +27,7 @@ class TripDocUpdate(BaseModel):
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None
@@ -75,6 +77,7 @@ class TripDocResponse(BaseModel):
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None

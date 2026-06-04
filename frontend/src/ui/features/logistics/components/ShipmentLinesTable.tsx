@@ -68,7 +68,7 @@ export function ShipmentLinesTable({ lines, loading, error, onRetry }: {
           const variant = variantOf(line)
           return (
             <tr key={line.id}>
-              <td style={{ padding: '5px 0', verticalAlign: 'top', fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--c-text-faint)' }}>
+              <td style={{ padding: '5px 0', verticalAlign: 'top', fontFamily: 'var(--font-code)', fontSize: 11.5, color: 'var(--c-text-faint)' }}>
                 {i + 1}
               </td>
               <td style={{ padding: '5px 8px', verticalAlign: 'top' }}>

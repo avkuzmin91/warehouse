@@ -42,6 +42,7 @@ def _handoff_ready_outbound(admin_client, shipment_id: str) -> str:
         "origin_id": "wh-2", "origin_name": "Склад-получатель",
         "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
         "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "vehicle_number": "А123ВС 77",
         "cost_estimate": 8000,
         "transport_ordered_at": "2026-06-09T10:00",
         "eta": "2026-06-10T08:00",
