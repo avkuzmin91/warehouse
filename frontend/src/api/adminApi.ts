@@ -256,6 +256,7 @@ export function createProduct(payload: {
       name: string
       type_id: string
       sku_base: string
+      weight_grams?: number | null
       client_id: string
       is_active: boolean
     }
@@ -284,6 +285,7 @@ export function updateProduct(
     is_active?: boolean
     is_deleted?: boolean
     sku_base?: string
+    weight_grams?: number | null
     image_urls?: string[]
   },
 ) {

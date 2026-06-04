@@ -9,7 +9,10 @@ from config import (
     RECEIPT_OP_INTAKE_START,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_SHIPPED,
     TRIP_OP_RECEIPT_LINK,
+    TRIP_OP_SHIPMENT_LINK,
 )
 
 
@@ -35,6 +38,7 @@ def list_trips_aggregated(
     *,
     page: int,
     limit: int,
+    direction: str | None,
     status: str | None,
     statuses: list[str] | None,
     carrier_id: str | None,
@@ -46,6 +50,9 @@ def list_trips_aggregated(
     conds = ["d.is_deleted = 0"]
     params: list = []
 
+    if direction:
+        conds.append("d.direction = ?")
+        params.append(direction)
     if status and status in statuses_all:
         conds.append("d.status = ?")
         params.append(status)
@@ -151,6 +158,60 @@ def link_receipts(connection, trip_id: str, receipt_doc_ids: list[str], uid: str
     return len(linked_numbers)
 
 
+def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: str) -> int:
+    """Привязывает отгрузки к outbound-рейсу. Возвращает число новых привязок.
+
+    Зеркало link_receipts: отгрузка существует, не удалена и не привязана к
+    другому активному рейсу.
+    """
+    ids = [str(x).strip() for x in shipment_doc_ids if str(x).strip()]
+    if not ids:
+        return 0
+
+    linked_numbers: list[str] = []
+    now = _now()
+    for sid in ids:
+        ship = connection.execute(
+            "SELECT id, doc_number, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+            (sid,),
+        ).fetchone()
+        if not ship:
+            raise HTTPException(status_code=400, detail=f"Отгрузка не найдена: {sid}")
+
+        existing = connection.execute(
+            "SELECT trip_id FROM trip_lines WHERE shipment_doc_id = ? AND is_deleted = 0",
+            (sid,),
+        ).fetchone()
+        if existing:
+            if str(existing["trip_id"]) == trip_id:
+                continue
+            raise HTTPException(
+                status_code=400,
+                detail=f"Отгрузка {ship['doc_number']} уже привязана к другому рейсу",
+            )
+
+        client_id = ship["client_id"]
+        client_row = connection.execute(
+            "SELECT name FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO trip_lines (id, trip_id, shipment_doc_id, client_id, client_name, created_at, created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), trip_id, sid, client_id,
+             client_row["name"] if client_row else None, now, uid),
+        )
+        linked_numbers.append(str(ship["doc_number"]))
+
+    if linked_numbers:
+        connection.execute(
+            "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), trip_id, TRIP_OP_SHIPMENT_LINK,
+             "Привязаны отгрузки: " + ", ".join(linked_numbers), now, uid),
+        )
+
+    return len(linked_numbers)
+
+
 def sync_actual_arrival(connection, trip_id: str, arrived_at: str | None) -> None:
     """Копирует фактическую дату прибытия рейса в привязанные поступления.
 
@@ -160,6 +221,16 @@ def sync_actual_arrival(connection, trip_id: str, arrived_at: str | None) -> Non
     connection.execute(
         "UPDATE receipt_docs SET actual_arrival_date = ? "
         "WHERE id IN (SELECT receipt_doc_id FROM trip_lines WHERE trip_id = ? AND COALESCE(is_deleted, 0) = 0)",
+        (date_part, trip_id),
+    )
+
+
+def sync_actual_ship_date(connection, trip_id: str, arrived_at: str | None) -> None:
+    """Копирует фактическую дату прибытия машины в привязанные отгрузки."""
+    date_part = (str(arrived_at).strip()[:10] or None) if arrived_at else None
+    connection.execute(
+        "UPDATE shipment_docs SET actual_ship_date = ? "
+        "WHERE id IN (SELECT shipment_doc_id FROM trip_lines WHERE trip_id = ? AND COALESCE(is_deleted, 0) = 0 AND shipment_doc_id IS NOT NULL)",
         (date_part, trip_id),
     )
 
@@ -191,6 +262,44 @@ def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: 
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), rid, RECEIPT_OP_INTAKE_START,
              f"В плане → Принят (разгрузка рейса {trip_number})", now, uid),
+        )
+        moved += 1
+    return moved
+
+
+def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
+    """При завершении погрузки outbound-рейса: привязанные отгрузки packing → shipped.
+
+    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped
+    (списывает остатки), поэтому прогоняет те же проверки, что и ручное
+    продвижение отгрузки. Идёт в одной транзакции со сменой статуса рейса.
+    """
+    from modules.shipments.service import _check_duplicate_lines, _check_stock_for_shipment
+
+    lines = connection.execute(
+        "SELECT shipment_doc_id FROM trip_lines "
+        "WHERE trip_id = ? AND is_deleted = 0 AND shipment_doc_id IS NOT NULL",
+        (trip_id,),
+    ).fetchall()
+    now = _now()
+    moved = 0
+    for ln in lines:
+        sid = str(ln["shipment_doc_id"])
+        ship = connection.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
+        ).fetchone()
+        if not ship or str(ship["status"]) != SHIPMENT_STATUS_PACKING:
+            continue
+        _check_duplicate_lines(connection, sid)
+        _check_stock_for_shipment(connection, sid)
+        connection.execute(
+            "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (SHIPMENT_STATUS_SHIPPED, now, sid),
+        )
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), sid, "advance",
+             f"В плане → Завершён (погрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved

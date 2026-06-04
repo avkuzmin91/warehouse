@@ -1,4 +1,4 @@
-import type { ReceiptLine } from '../../../../api/receiptsApi'
+import type { ShipmentLine } from '../../../../api/shipmentsApi'
 import { Icon } from '../../../primitives/Icon'
 import { EmptyState } from '../../../primitives/EmptyState'
 
@@ -12,13 +12,13 @@ const COL_HEAD: React.CSSProperties = {
   padding: '0 0 6px',
 }
 
-function variantOf(line: ReceiptLine): string | null {
+function variantOf(line: ShipmentLine): string | null {
   return [line.color_name, line.size_name].filter(Boolean).join(' · ') || null
 }
 
-/** Таблица ожидаемых товаров поступления (раскрытие строки в карточке рейса). */
-export function ReceiptLinesTable({ lines, loading, error, onRetry }: {
-  lines: ReceiptLine[]
+/** Таблица строк отгрузки (раскрытие строки в карточке рейса). */
+export function ShipmentLinesTable({ lines, loading, error, onRetry }: {
+  lines: ShipmentLine[]
   loading?: boolean
   error?: boolean
   onRetry?: () => void
@@ -46,13 +46,13 @@ export function ReceiptLinesTable({ lines, loading, error, onRetry }: {
   if (lines.length === 0) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--c-text-faint)', padding: '6px 0' }}>
-        <Icon name="inbox" size={14} style={{ flexShrink: 0 }} />
-        <span>Строки не заданы — состав появится на приёмке</span>
+        <Icon name="boxOut" size={14} style={{ flexShrink: 0 }} />
+        <span>Строки не заданы</span>
       </div>
     )
   }
 
-  const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
+  const totalQty = lines.reduce((s, l) => s + l.qty, 0)
 
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -60,7 +60,7 @@ export function ReceiptLinesTable({ lines, loading, error, onRetry }: {
         <tr>
           <th style={{ ...COL_HEAD, width: 28 }}>№</th>
           <th style={COL_HEAD}>SKU · товар</th>
-          <th style={{ ...COL_HEAD, textAlign: 'right' }}>план, шт</th>
+          <th style={{ ...COL_HEAD, textAlign: 'right' }}>кол-во, шт</th>
         </tr>
       </thead>
       <tbody>
@@ -79,7 +79,7 @@ export function ReceiptLinesTable({ lines, loading, error, onRetry }: {
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--c-text-faint)', marginTop: 1 }}>{line.product_sku}</div>
               </td>
               <td className="mono" style={{ padding: '5px 0', verticalAlign: 'top', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {line.planned_qty}
+                {line.qty}
               </td>
             </tr>
           )

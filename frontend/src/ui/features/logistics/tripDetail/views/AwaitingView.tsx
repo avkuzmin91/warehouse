@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
-import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
+import { TRIP_LOAD_LABELS, tripLexicon, tripStatusLabel } from '../../../../../api/tripsApi'
+import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptEnrich } from '../ReceiptsBlock'
 import { DateTimeField, FieldLabel, timePart } from '../../components/fields'
@@ -38,7 +39,7 @@ function isBefore(left: string, right: string): boolean {
   return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
 }
 
-export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt }: {
+export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt, docsNode }: {
   detail: TripDetail
   loadFactor: TripLoadFactor
   onLoadFactor: (v: TripLoadFactor) => void
@@ -54,8 +55,13 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
   onArrival: () => void
   onUnload: () => void
   onOpenReceipt: (id: string) => void
+  docsNode?: ReactNode
 }) {
   const { doc, receipts } = detail
+  const direction = (doc.direction as TripDirection) ?? 'inbound'
+  const lex = tripLexicon(direction)
+  const outbound = direction === 'outbound'
+  const docsCount = outbound ? detail.shipments.length : receipts.length
   const unloading = doc.status === 'unloading'
   const unloadingStartedAt = doc.unload_started_at ?? doc.arrived_at
   const inWork = minutesSince(unloadingStartedAt)
@@ -69,10 +75,10 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
     <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <button className="btn ghost icon sm" onClick={onBack}><Icon name="arrowLeft" size={14} /></button>
-        <span style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{doc.trip_number}</span>
-        <Badge tone="info" dot>{unloading ? 'Разгрузка' : 'Ожидает прибытия'}</Badge>
+        <span style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-code)' }}>{doc.trip_number}</span>
+        <Badge tone="info" dot>{tripStatusLabel(doc.status, direction)}</Badge>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {doc.vehicle_type_name && <Chip icon="truckIn">{doc.vehicle_type_name}</Chip>}
+          {doc.vehicle_type_name && <Chip icon={outbound ? 'truckOut' : 'truckIn'}>{doc.vehicle_type_name}</Chip>}
           {doc.carrier_name && <Chip icon="user">{doc.carrier_name}</Chip>}
           {doc.origin_name && <Chip icon="map">{doc.origin_name}</Chip>}
         </div>
@@ -90,30 +96,47 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             <Icon name={unloading ? 'forklift' : 'clock'} size={28} />
           </div>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>{unloading ? 'Идёт разгрузка' : 'Ожидает прибытия машины'}</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{unloading ? lex.progressTitle : lex.awaitingMachineTitle}</div>
             <div style={{ fontSize: 13, color: 'var(--c-text-muted)', marginTop: 2 }}>
               {unloading
-                ? <>Начало разгрузки <b>{fmtTime(unloadingStartedAt)}</b>{inWork != null ? <> · в работе <b>{inWork} мин</b></> : null}</>
+                ? <>{lex.unloadStartLabel} <b>{fmtTime(unloadingStartedAt)}</b>{inWork != null ? <> · в работе <b>{inWork} мин</b></> : null}</>
                 : <>Транспорт заказан <b>{doc.transport_ordered_at ? fmtTime(doc.transport_ordered_at) : '—'}</b></>}
             </div>
           </div>
+          {doc.vehicle_number && (
+            <div style={{
+              marginLeft: 'auto',
+              padding: '6px 16px',
+              borderRadius: 8,
+              border: '2px solid var(--c-border)',
+              background: 'var(--c-bg)',
+              fontFamily: 'var(--font-code)',
+              fontSize: 22,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              color: 'var(--c-text)',
+              flexShrink: 0,
+            }}>
+              {doc.vehicle_number}
+            </div>
+          )}
         </div>
 
         <div style={{ borderTop: '1px solid var(--c-border)', padding: 18, display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
           {!unloading && (
             <div style={{ minWidth: 240 }}>
-              <FieldLabel required>Прибытие</FieldLabel>
+              <FieldLabel required>{lex.arrivalLabel}</FieldLabel>
               <DateTimeField value={arrival} onChange={onArrivalChange} />
             </div>
           )}
           {unloading && (
             <>
               <div style={{ minWidth: 240 }}>
-                <FieldLabel required>Начало разгрузки</FieldLabel>
+                <FieldLabel required>{lex.unloadStartLabel}</FieldLabel>
                 <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
               </div>
               <div style={{ minWidth: 240 }}>
-                <FieldLabel required>Окончание разгрузки</FieldLabel>
+                <FieldLabel required>{lex.unloadEndLabel}</FieldLabel>
                 <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
               </div>
             </>
@@ -149,7 +172,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             style={{ marginLeft: 'auto', height: 52, padding: '0 28px', fontSize: 15.5, borderRadius: 12 }}
           >
             <Icon name={unloading ? 'check' : 'truckIn'} size={18} />
-            {unloading ? 'Завершить разгрузку' : 'Машина приехала'}
+            {unloading ? lex.finishAction : lex.arrivedAction}
           </button>
         </div>
 
@@ -158,10 +181,12 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             <Icon name={unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
             <span>
               {unloadPeriodInvalid
-                ? <>Окончание разгрузки не может быть раньше начала разгрузки.</>
+                ? <>{lex.periodInvalid}</>
                 : unloadStartReady && unloadEndReady
-                ? <>После завершения {receipts.length} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на закрытие.</>
-                : <>Укажите начало и окончание разгрузки — без времени завершить разгрузку нельзя.</>}
+                ? (outbound
+                    ? <>После завершения {docsCount} отгрузки уйдут в статус <b>«Завершён»</b>, а рейс — менеджеру на закрытие.</>
+                    : <>После завершения {docsCount} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на закрытие.</>)
+                : <>Укажите начало и окончание {lex.warehousePhaseGen} — без времени завершить {lex.warehousePhase.toLowerCase()} нельзя.</>}
             </span>
           </div>
         )}
@@ -169,19 +194,21 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
         {!unloading && !arrivalReady && (
           <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
             <Icon name="alert" size={13} style={{ color: 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
-            <span>Укажите время прибытия — без него рейс нельзя отправить на разгрузку.</span>
+            <span>Укажите время прибытия — без него рейс нельзя отправить на {lex.warehousePhase.toLowerCase()}.</span>
           </div>
         )}
       </div>
 
-      <ReceiptsBlock
-        title="В машине"
-        receipts={receipts}
-        enrich={enrich}
-        onOpen={onOpenReceipt}
-        expandable
-        resetKey={doc.id}
-      />
+      {docsNode ?? (
+        <ReceiptsBlock
+          title={lex.docsInVehicle}
+          receipts={receipts}
+          enrich={enrich}
+          onOpen={onOpenReceipt}
+          expandable
+          resetKey={doc.id}
+        />
+      )}
     </div>
   )
 }

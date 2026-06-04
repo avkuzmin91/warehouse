@@ -11,6 +11,7 @@ class TaskItem(BaseModel):
     doc_number: str
     status: str
     role: str
+    direction: str | None = None  # для рейсов: inbound | outbound
     since: str | None = None
 
 

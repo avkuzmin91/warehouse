@@ -85,6 +85,7 @@ export type ProductItem = {
   type_id: string
   type_name: string | null
   sku_base: string
+  weight_grams: number | null
   requires_color: boolean
   requires_size: boolean
   client_id: string | null

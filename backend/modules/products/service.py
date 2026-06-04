@@ -667,6 +667,7 @@ def _row_to_product_item(row: Mapping[str, Any]) -> ProductItem:
         type_id=row["type_id"],
         type_name=row["type_name"],
         sku_base=row["sku_base"],
+        weight_grams=int(row["weight_grams"]) if row["weight_grams"] is not None else None,
         requires_color=bool(row["requires_color"]),
         requires_size=bool(row["requires_size"]),
         client_id=row["client_id"],

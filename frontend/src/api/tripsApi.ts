@@ -12,6 +12,8 @@ export type TripStatus =
 
 export type TripLoadFactor = 'full' | 'partial'
 
+export type TripDirection = 'inbound' | 'outbound'
+
 export type TripDoc = {
   id: string
   trip_number: string
@@ -24,6 +26,7 @@ export type TripDoc = {
   carrier_name: string | null
   vehicle_type_id: string | null
   vehicle_type_name: string | null
+  vehicle_number: string | null
   transport_ordered_at: string | null
   eta: string | null
   cost_estimate: number | null
@@ -49,6 +52,15 @@ export type TripReceiptItem = {
   client_name: string | null
 }
 
+export type TripShipmentItem = {
+  line_id: string
+  shipment_doc_id: string
+  shipment_number: string | null
+  shipment_status: string | null
+  client_id: string | null
+  client_name: string | null
+}
+
 export type TripOp = {
   id: string
   trip_id: string
@@ -62,6 +74,7 @@ export type TripOp = {
 export type TripDetail = {
   doc: TripDoc
   receipts: TripReceiptItem[]
+  shipments: TripShipmentItem[]
   ops: TripOp[]
 }
 
@@ -89,17 +102,20 @@ export type TripListResponse = {
 }
 
 export type TripCreatePayload = {
+  direction?: TripDirection
   origin_id?: string | null
   origin_name?: string | null
   carrier_id?: string | null
   carrier_name?: string | null
   vehicle_type_id?: string | null
   vehicle_type_name?: string | null
+  vehicle_number?: string | null
   transport_ordered_at?: string | null
   eta?: string | null
   cost_estimate?: number | null
   comment?: string | null
   receipt_doc_ids?: string[]
+  shipment_doc_ids?: string[]
 }
 
 export type TripUpdatePayload = Omit<TripCreatePayload, 'receipt_doc_ids'>
@@ -120,6 +136,7 @@ export type TripExecutionPayload = {
 export type TripListParams = {
   page?: number
   limit?: number
+  direction?: TripDirection
   status?: TripStatus
   statuses?: TripStatus[]
   carrier_id?: string
@@ -134,6 +151,7 @@ export function getTrips(params: TripListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
+  if (params.direction) sp.set('direction', params.direction)
   if (params.status) sp.set('status', params.status)
   if (params.statuses) params.statuses.forEach((s) => sp.append('statuses', s))
   if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
@@ -171,6 +189,19 @@ export function linkTripReceipts(tripId: string, receiptDocIds: string[]) {
 
 export function unlinkTripReceipt(tripId: string, receiptDocId: string) {
   return request<{ message: string }>(`/trips/${tripId}/receipts/${receiptDocId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function linkTripShipments(tripId: string, shipmentDocIds: string[]) {
+  return request<{ message: string }>(`/trips/${tripId}/shipments`, {
+    method: 'POST',
+    body: JSON.stringify({ shipment_doc_ids: shipmentDocIds }),
+  })
+}
+
+export function unlinkTripShipment(tripId: string, shipmentDocId: string) {
+  return request<{ message: string }>(`/trips/${tripId}/shipments/${shipmentDocId}`, {
     method: 'DELETE',
   })
 }
@@ -224,6 +255,78 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   costing: 'Уточнение стоимости',
   closed: 'Закрыт',
   cancelled: 'Аннулирован',
+}
+
+const TRIP_STATUS_LABELS_OUTBOUND: Record<TripStatus, string> = {
+  draft: 'Черновик',
+  awaiting_arrival: 'Ожидает прибытия',
+  unloading: 'Погрузка',
+  costing: 'Уточнение стоимости',
+  closed: 'Закрыт',
+  cancelled: 'Аннулирован',
+}
+
+export function isOutbound(direction: string | null | undefined): boolean {
+  return direction === 'outbound'
+}
+
+/** Человекочитаемый статус с учётом направления (для outbound: погрузка). */
+export function tripStatusLabel(status: TripStatus, direction: string | null | undefined): string {
+  return (isOutbound(direction) ? TRIP_STATUS_LABELS_OUTBOUND : TRIP_STATUS_LABELS)[status]
+}
+
+/** Лексика, различающаяся по направлению рейса. */
+export type TripLexicon = {
+  routeLabel: string         // «Откуда» | «Куда»
+  docsTitle: string          // «Поступления в рейсе» | «Отгрузки в рейсе»
+  docsInVehicle: string      // «В машине» (поступления) | «В машине» (отгрузки)
+  warehousePhase: string     // «Разгрузка» | «Погрузка»
+  warehousePhaseGen: string  // «разгрузки» | «погрузки» (родительный, нижний регистр)
+  arrivalLabel: string       // «Прибытие»
+  unloadStartLabel: string   // «Начало разгрузки» | «Начало погрузки»
+  unloadEndLabel: string     // «Окончание разгрузки» | «Окончание погрузки»
+  etaLabel: string           // «Плановое прибытие»
+  finishAction: string       // «Завершить разгрузку» | «Завершить погрузку»
+  arrivedAction: string      // «Машина приехала» | «Машина прибыла»
+  progressTitle: string      // «Идёт разгрузка» | «Идёт погрузка»
+  awaitingMachineTitle: string // «Ожидает прибытия машины»
+  periodInvalid: string      // подсказка о порядке времён
+}
+
+export function tripLexicon(direction: string | null | undefined): TripLexicon {
+  return isOutbound(direction)
+    ? {
+        routeLabel: 'Куда',
+        docsTitle: 'Отгрузки в рейсе',
+        docsInVehicle: 'В машине',
+        warehousePhase: 'Погрузка',
+        warehousePhaseGen: 'погрузки',
+        arrivalLabel: 'Прибытие',
+        unloadStartLabel: 'Начало погрузки',
+        unloadEndLabel: 'Окончание погрузки',
+        etaLabel: 'Плановое прибытие',
+        finishAction: 'Завершить погрузку',
+        arrivedAction: 'Машина прибыла',
+        progressTitle: 'Идёт погрузка',
+        awaitingMachineTitle: 'Ожидает прибытия машины',
+        periodInvalid: 'Окончание погрузки не может быть раньше начала погрузки.',
+      }
+    : {
+        routeLabel: 'Откуда',
+        docsTitle: 'Поступления в рейсе',
+        docsInVehicle: 'В машине',
+        warehousePhase: 'Разгрузка',
+        warehousePhaseGen: 'разгрузки',
+        arrivalLabel: 'Прибытие',
+        unloadStartLabel: 'Начало разгрузки',
+        unloadEndLabel: 'Окончание разгрузки',
+        etaLabel: 'Плановое прибытие',
+        finishAction: 'Завершить разгрузку',
+        arrivedAction: 'Машина приехала',
+        progressTitle: 'Идёт разгрузка',
+        awaitingMachineTitle: 'Ожидает прибытия машины',
+        periodInvalid: 'Окончание разгрузки не может быть раньше начала разгрузки.',
+      }
 }
 
 export const TRIP_LOAD_LABELS: Record<TripLoadFactor, string> = {

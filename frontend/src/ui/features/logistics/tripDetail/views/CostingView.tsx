@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
-import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
+import { TRIP_LOAD_LABELS, tripLexicon } from '../../../../../api/tripsApi'
+import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
 import { TripHeader, PrimaryAction } from '../TripHeader'
 import { PlanningForm } from '../PlanningForm'
 import type { PlanningFormValue } from '../PlanningForm'
@@ -24,7 +25,7 @@ function durationMin(from: string | null, to: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
-export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, showCosts, canEditTransportPlanning, canEditExecution, onBack, onCancel, onClose, onOpenReceipt }: {
+export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, showCosts, canEditTransportPlanning, canEditExecution, onBack, onCancel, onClose, onOpenReceipt, docsNode }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -50,8 +51,12 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
   onCancel: () => void
   onClose: () => void
   onOpenReceipt: (id: string) => void
+  docsNode?: ReactNode
 }) {
   const { doc, ops, receipts } = detail
+  const direction = (doc.direction as TripDirection) ?? 'inbound'
+  const lex = tripLexicon(direction)
+  const outbound = direction === 'outbound'
   const [editTransport, setEditTransport] = useState(false)
   const [editExecution, setEditExecution] = useState(false)
   const total = (Number(cost.logistics_cost_actual) || 0) + (Number(cost.waiting_cost) || 0)
@@ -67,6 +72,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
       <TripHeader
         number={doc.trip_number}
         status="costing"
+        direction={direction}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -74,7 +80,8 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
               <Icon name="x" size={14} />Аннулировать
             </button>
             {showCosts && (
-              <PrimaryAction icon="check" label="Закрыть рейс" hint="Поступления досчитываются отдельным процессом"
+              <PrimaryAction icon="check" label="Закрыть рейс"
+                hint={outbound ? 'Отгрузки уже списаны при завершении погрузки' : 'Поступления досчитываются отдельным процессом'}
                 onClick={onClose} disabled={busy} />
             )}
           </div>
@@ -85,7 +92,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
         <div className="col gap-16">
           {editTransport && canEditTransportPlanning ? (
             <div>
-              <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} />
+              <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} routeLabel={lex.routeLabel} etaLabel={lex.etaLabel} />
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button className="btn sm primary" onClick={() => { onSaveFields(); setEditTransport(false) }} disabled={busy}>
                   <Icon name="save" size={13} />Сохранить транспорт
@@ -101,14 +108,15 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                 </button>
               ) : undefined}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
-                <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
+                <ReadRow label={lex.routeLabel}>{doc.origin_name ?? '—'}</ReadRow>
                 <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
                 <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
+                <ReadRow label="Гос. номер">{doc.vehicle_number ?? '—'}</ReadRow>
+                <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
+                <ReadRow label={lex.etaLabel} mono>{fmtDateTime(doc.eta)}</ReadRow>
                 {showCosts && (
                   <ReadRow label="Стоимость логистики (план)" mono>{doc.cost_estimate != null ? money(doc.cost_estimate) : '—'}</ReadRow>
                 )}
-                <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
-                <ReadRow label="Плановое прибытие" mono>{fmtDateTime(doc.eta)}</ReadRow>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <ReadRow label="Комментарий">{doc.comment ?? '—'}</ReadRow>
                 </div>
@@ -126,15 +134,15 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
               <div>
                 <div className="form-grid-2">
                   <div>
-                    <FieldLabel>Прибытие</FieldLabel>
+                    <FieldLabel>{lex.arrivalLabel}</FieldLabel>
                     <DateTimeField value={arrival} onChange={onArrivalChange} />
                   </div>
                   <div>
-                    <FieldLabel>Начало разгрузки</FieldLabel>
+                    <FieldLabel>{lex.unloadStartLabel}</FieldLabel>
                     <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
                   </div>
                   <div>
-                    <FieldLabel>Окончание разгрузки</FieldLabel>
+                    <FieldLabel>{lex.unloadEndLabel}</FieldLabel>
                     <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
                   </div>
                   <div>
@@ -158,11 +166,11 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
-                <ReadRow label="Прибытие" mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
-                <ReadRow label="Начало разгрузки" mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
-                <ReadRow label="Окончание разгрузки" mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
+                <ReadRow label={lex.arrivalLabel} mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
+                <ReadRow label={lex.unloadStartLabel} mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
+                <ReadRow label={lex.unloadEndLabel} mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>
                 <ReadRow label="Загруженность">{doc.load_factor ? TRIP_LOAD_LABELS[doc.load_factor] : '—'}</ReadRow>
-                {dur != null && <ReadRow label="Длительность разгрузки"><span style={{ color: 'var(--c-info)' }}>{dur} мин</span></ReadRow>}
+                {dur != null && <ReadRow label={`Длительность ${lex.warehousePhaseGen}`}><span style={{ color: 'var(--c-info)' }}>{dur} мин</span></ReadRow>}
               </div>
             )}
           </PhaseBlock>
@@ -183,7 +191,7 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                   <div style={{ display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)', border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)' }}>
                     <input value={cost.waiting_minutes} inputMode="numeric" placeholder="0"
                       onChange={(e) => onCost({ waiting_minutes: e.target.value.replace(/[^\d]/g, '') })}
-                      style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', minWidth: 0, color: 'var(--c-text)' }} />
+                      style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-num)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0, color: 'var(--c-text)' }} />
                     <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 13 }}>мин</span>
                   </div>
                 </div>
@@ -206,11 +214,11 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
             </PhaseBlock>
           )}
 
-          <ReceiptsBlock receipts={receipts} onOpen={onOpenReceipt} expandable resetKey={doc.id} />
+          {docsNode ?? <ReceiptsBlock receipts={receipts} onOpen={onOpenReceipt} expandable resetKey={doc.id} />}
         </div>
 
         <div className="col gap-16">
-          <ProcessPanel status="costing" ops={ops} />
+          <ProcessPanel status="costing" ops={ops} direction={direction} />
           {showCosts && <CostPanel estimate={doc.cost_estimate} actual={Number(cost.logistics_cost_actual) || null} waiting={Number(cost.waiting_cost) || null} showActual />}
           <JournalPanel ops={ops} />
         </div>

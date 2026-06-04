@@ -37,7 +37,16 @@ class ShipmentDocUpdate(BaseModel):
     carrier:         str | None = None
     logistics_cost:  float | None = None
     ship_date:       str | None = None
+    actual_ship_date: str | None = None
     comment:         str | None = None
+
+
+class ShipmentLineFile(BaseModel):
+    id:         str
+    filename:   str
+    url:        str
+    mime_type:  str | None = None
+    created_at: str
 
 
 class ShipmentLineItem(BaseModel):
@@ -53,6 +62,7 @@ class ShipmentLineItem(BaseModel):
     shipped_qty:       int
     storage_zone_id:   str | None
     storage_zone_name: str | None
+    files:             list[ShipmentLineFile] = []
 
 
 class ShipmentListItem(BaseModel):
@@ -101,9 +111,12 @@ class ShipmentDetailResponse(BaseModel):
     carrier:      str | None
     logistics_cost: float | None
     ship_date:    str | None
+    actual_ship_date: str | None = None
     comment:      str | None
     status:       str
     status_label: str
+    trip_id:      str | None = None
+    trip_number:  str | None = None
     created_at:   str
     created_by:   str | None
     updated_at:   str | None

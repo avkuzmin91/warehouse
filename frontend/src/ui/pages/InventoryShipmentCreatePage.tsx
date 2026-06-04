@@ -6,7 +6,7 @@ import type { BalanceItem } from '../../api/balancesApi'
 import { Combobox } from '../data/Combobox'
 import type { ComboboxOption } from '../data/Combobox'
 import { Icon } from '../primitives/Icon'
-import { Field } from '../primitives/Input'
+import { AutoGrowTextarea, Field } from '../primitives/Input'
 import { DatePicker } from '../primitives/DatePicker'
 import { Alert } from '../primitives/Alert'
 import { EmptyState } from '../primitives/EmptyState'
@@ -190,11 +190,11 @@ export function InventoryShipmentCreatePage() {
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
+                <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
                 {showCosts && (
-                  <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
+                  <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0 }}>
                     <input
                       className="input"
                       type="number"
@@ -206,9 +206,8 @@ export function InventoryShipmentCreatePage() {
                   </Field>
                 )}
                 <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                  <textarea
-                    className="input"
-                    rows={3}
+                  <AutoGrowTextarea
+                    minRows={3}
                     placeholder="Примечание для команды склада"
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}

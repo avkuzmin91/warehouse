@@ -55,9 +55,9 @@ export function WarehouseMap() {
 
         return (
           <div key={cell.code} className={`wh-cell fill-${cell.fill}`} title={cell.code}>
-            <span style={{ fontSize: 8.5, fontFamily: 'var(--font-mono)' }}>{zoneLabel}</span>
+            <span style={{ fontSize: 8.5, fontFamily: 'var(--font-code)' }}>{zoneLabel}</span>
             <div className="wh-tip">
-              <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 500 }}>{cell.code}</div>
+              <div style={{ fontFamily: 'var(--font-code)', fontWeight: 500 }}>{cell.code}</div>
               <div style={{ opacity: 0.7 }}>
                 {cell.qty} шт · {FILL_LABELS[cell.fill]}
               </div>

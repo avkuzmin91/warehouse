@@ -4,17 +4,20 @@ from pydantic import BaseModel, Field
 
 
 class TripDocCreate(BaseModel):
+    direction: str | None = None  # inbound | outbound (по умолчанию inbound)
     origin_id: str | None = None
     origin_name: str | None = None
     carrier_id: str | None = None
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None
     comment: str | None = None
     receipt_doc_ids: list[str] = []
+    shipment_doc_ids: list[str] = []
 
 
 class TripDocUpdate(BaseModel):
@@ -24,6 +27,7 @@ class TripDocUpdate(BaseModel):
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None
@@ -32,6 +36,10 @@ class TripDocUpdate(BaseModel):
 
 class TripLinkPayload(BaseModel):
     receipt_doc_ids: list[str] = Field(default_factory=list)
+
+
+class TripShipmentLinkPayload(BaseModel):
+    shipment_doc_ids: list[str] = Field(default_factory=list)
 
 
 class TripArrivalPayload(BaseModel):
@@ -69,6 +77,7 @@ class TripDocResponse(BaseModel):
     carrier_name: str | None = None
     vehicle_type_id: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     transport_ordered_at: str | None = None
     eta: str | None = None
     cost_estimate: float | None = None
@@ -94,6 +103,15 @@ class TripReceiptItem(BaseModel):
     client_name: str | None = None
 
 
+class TripShipmentItem(BaseModel):
+    line_id: str
+    shipment_doc_id: str
+    shipment_number: str | None = None
+    shipment_status: str | None = None
+    client_id: str | None = None
+    client_name: str | None = None
+
+
 class TripOpResponse(BaseModel):
     id: str
     trip_id: str
@@ -106,7 +124,8 @@ class TripOpResponse(BaseModel):
 
 class TripDetailResponse(BaseModel):
     doc: TripDocResponse
-    receipts: list[TripReceiptItem]
+    receipts: list[TripReceiptItem] = Field(default_factory=list)
+    shipments: list[TripShipmentItem] = Field(default_factory=list)
     ops: list[TripOpResponse]
 
 

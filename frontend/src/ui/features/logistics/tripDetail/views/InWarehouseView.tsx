@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
-import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
+import { TRIP_LOAD_LABELS, tripLexicon } from '../../../../../api/tripsApi'
+import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
 import { TripHeader } from '../TripHeader'
 import { PlanningForm } from '../PlanningForm'
 import type { PlanningFormValue } from '../PlanningForm'
@@ -10,13 +11,13 @@ import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptLink, ReceiptEnrich } from '../ReceiptsBlock'
 import { ProcessPanel, CostPanel, JournalPanel } from '../panels'
 
-function LockedCostFields() {
+function LockedCostFields({ after }: { after: string }) {
   return (
     <div className="form-grid-2">
       {['Логистика (факт)', 'Стоимость простоя'].map((label) => (
         <div key={label}>
           <FieldLabel>{label}</FieldLabel>
-          <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)' }}>после разгрузки</div>
+          <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)' }}>{after}</div>
         </div>
       ))}
     </div>
@@ -29,7 +30,7 @@ function isBefore(left: string, right: string): boolean {
   return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
 }
 
-export function InWarehouseView({ detail, form, onField, showCosts, canEditTransportPlanning, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt }: {
+export function InWarehouseView({ detail, form, onField, showCosts, canEditTransportPlanning, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt, docsNode }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -52,8 +53,11 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
   onArrival: () => void
   onUnload: () => void
   onOpenReceipt: (id: string) => void
+  docsNode?: ReactNode
 }) {
   const { doc, ops, receipts } = detail
+  const direction = (doc.direction as TripDirection) ?? 'inbound'
+  const lex = tripLexicon(direction)
   const unloading = doc.status === 'unloading'
   const arrivalReady = timePart(arrival).length === 5
   const unloadStartReady = timePart(unloadStart).length === 5
@@ -65,6 +69,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
       <TripHeader
         number={doc.trip_number}
         status={doc.status}
+        direction={direction}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -78,7 +83,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
       <div className="split-360">
         <div className="col gap-16">
           <div>
-            <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} readonly={!canEditTransportPlanning} />
+            <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} readonly={!canEditTransportPlanning} routeLabel={lex.routeLabel} etaLabel={lex.etaLabel} />
             {canEditTransportPlanning && (
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button className="btn sm primary" onClick={onSaveFields} disabled={busy}>
@@ -88,25 +93,27 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
             )}
           </div>
 
-          <ReceiptsBlock
-            receipts={receipts}
-            enrich={enrich}
-            onOpen={onOpenReceipt}
-            link={link}
-            expandable
-            resetKey={doc.id}
-          />
+          {docsNode ?? (
+            <ReceiptsBlock
+              receipts={receipts}
+              enrich={enrich}
+              onOpen={onOpenReceipt}
+              link={link}
+              expandable
+              resetKey={doc.id}
+            />
+          )}
 
           <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="active">
             {!unloading ? (
               <div className="form-grid-2" style={{ alignItems: 'end' }}>
                 <div>
-                  <FieldLabel required>Прибытие</FieldLabel>
+                  <FieldLabel required>{lex.arrivalLabel}</FieldLabel>
                   <DateTimeField value={arrival} onChange={onArrivalChange} />
                 </div>
                 <div>
                   <button className="btn primary" onClick={onArrival} disabled={busy || !arrivalReady}>
-                    <Icon name="truckIn" size={15} />Машина приехала
+                    <Icon name="truckIn" size={15} />{lex.arrivedAction}
                   </button>
                 </div>
               </div>
@@ -114,11 +121,11 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
               <>
                 <div className="form-grid-2">
                   <div>
-                    <FieldLabel required>Начало разгрузки</FieldLabel>
+                    <FieldLabel required>{lex.unloadStartLabel}</FieldLabel>
                     <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
                   </div>
                   <div>
-                    <FieldLabel required>Окончание разгрузки</FieldLabel>
+                    <FieldLabel required>{lex.unloadEndLabel}</FieldLabel>
                     <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
                   </div>
                   <div>
@@ -135,13 +142,13 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                   <button className="btn sm primary" onClick={onUnload} disabled={busy || !unloadStartReady || !unloadEndReady || unloadPeriodInvalid}>
-                    <Icon name="check" size={13} />Завершить разгрузку
+                    <Icon name="check" size={13} />{lex.finishAction}
                   </button>
                 </div>
                 {unloadPeriodInvalid && (
                   <div className="row gap-8" style={{ alignItems: 'center', marginTop: 10, fontSize: 12, color: 'var(--c-warning)' }}>
                     <Icon name="alert" size={13} style={{ flexShrink: 0 }} />
-                    <span>Окончание разгрузки не может быть раньше начала разгрузки.</span>
+                    <span>{lex.periodInvalid}</span>
                   </div>
                 )}
               </>
@@ -149,14 +156,14 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
           </PhaseBlock>
 
           {showCosts && (
-            <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint="После разгрузки">
-              <LockedCostFields />
+            <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint={`После ${lex.warehousePhaseGen}`}>
+              <LockedCostFields after={`после ${lex.warehousePhaseGen}`} />
             </PhaseBlock>
           )}
         </div>
 
         <div className="col gap-16">
-          <ProcessPanel status={doc.status} ops={ops} />
+          <ProcessPanel status={doc.status} ops={ops} direction={direction} />
           {showCosts && <CostPanel estimate={doc.cost_estimate} />}
           <JournalPanel ops={ops} />
         </div>

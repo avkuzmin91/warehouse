@@ -567,7 +567,7 @@ function AddLineDrawer({
               setQtyDraft(raw)
               if (raw !== '') setQty(parseInt(raw, 10))
             }}
-            style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'zero' 0", background: 'transparent', minWidth: 0 }}
+            style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-num)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", background: 'transparent', minWidth: 0 }}
           />
           <button
             className="btn ghost icon sm"

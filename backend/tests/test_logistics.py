@@ -28,6 +28,7 @@ def _handoff_ready_trip(admin_client, receipt_id: str) -> str:
         "origin_id": "wh-1", "origin_name": "Москва",
         "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
         "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "vehicle_number": "А123ВС 77",
         "cost_estimate": 10000,
         "transport_ordered_at": "2026-06-01T10:00",
         "eta": "2026-06-02T08:00",

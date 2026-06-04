@@ -11,3 +11,7 @@ export function canEditPlannedArrival(user: User | null | undefined): boolean {
 export function canManageUsers(user: User | null | undefined): boolean {
   return user?.role === 'admin'
 }
+
+export function canEditShipmentFiles(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+}

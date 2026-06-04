@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import type { CSSProperties, InputHTMLAttributes, TextareaHTMLAttributes, ReactNode } from 'react'
 
 interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
@@ -20,6 +21,49 @@ export function Textarea({ className = '', ...rest }: TextareaProps) {
     <textarea
       className={['input', className].filter(Boolean).join(' ')}
       style={{ height: 'auto', paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
+      {...rest}
+    />
+  )
+}
+
+type AutoGrowTextareaProps = TextareaProps & {
+  minRows?: number
+}
+
+export function AutoGrowTextarea({
+  className = '',
+  style,
+  minRows = 3,
+  onInput,
+  value,
+  defaultValue,
+  ...rest
+}: AutoGrowTextareaProps) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+
+  const resize = () => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
+  useLayoutEffect(() => {
+    resize()
+  }, [value, defaultValue])
+
+  return (
+    <textarea
+      ref={ref}
+      className={['input', className].filter(Boolean).join(' ')}
+      rows={minRows}
+      value={value}
+      defaultValue={defaultValue}
+      onInput={(e) => {
+        resize()
+        onInput?.(e)
+      }}
+      style={{ resize: 'vertical', overflow: 'hidden', ...style }}
       {...rest}
     />
   )

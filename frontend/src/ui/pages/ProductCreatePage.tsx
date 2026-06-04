@@ -25,6 +25,13 @@ function parseNum(s: string): number {
   return Number.isFinite(n) ? n : 0
 }
 
+function parseOptionalWeight(s: string): number | null {
+  const trimmed = s.trim()
+  if (!trimmed) return null
+  const n = Number(trimmed.replace(',', '.'))
+  return Number.isFinite(n) ? Math.round(n) : null
+}
+
 function mapServerError(msg: string): string {
   const l = msg.toLowerCase()
   if (l.includes('штрих-код') || l.includes('sku') || l.includes('unique') || l.includes('duplicate')) {
@@ -71,6 +78,7 @@ export function ProductCreatePage() {
   const [typeId, setTypeId] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
   const [skuBase, setSkuBase] = useState('')
+  const [weightGrams, setWeightGrams] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [colorIds, setColorIds] = useState<string[]>([])
   const [dims, setDims] = useState<DimBlock[]>([{ length: '', width: '', height: '', sizes: [] }])
@@ -176,7 +184,14 @@ export function ProductCreatePage() {
     try {
       await createProduct({
         meta: {
-          product: { name: name.trim(), type_id: typeId!, sku_base: skuBase.trim(), client_id: clientId!, is_active: isActive },
+          product: {
+            name: name.trim(),
+            type_id: typeId!,
+            sku_base: skuBase.trim(),
+            weight_grams: parseOptionalWeight(weightGrams),
+            client_id: clientId!,
+            is_active: isActive,
+          },
           colors: colorIds,
           dimensions: dims.map((d) => ({
             length: parseNum(d.length), width: parseNum(d.width), height: parseNum(d.height),
@@ -237,7 +252,7 @@ export function ProductCreatePage() {
                     onChange={(e) => setSkuBase(e.target.value)}
                     onBlur={() => touch('sku_base')}
                     placeholder="BASE-001"
-                    style={{ fontFamily: 'var(--font-mono)', ...(err('sku_base') ? { borderColor: 'var(--c-danger)' } : {}) }}
+                    style={{ fontFamily: 'var(--font-code)', ...(err('sku_base') ? { borderColor: 'var(--c-danger)' } : {}) }}
                   />
                   <ErrMsg msg={err('sku_base') ? 'Обязательное поле' : undefined} />
                 </Field>
@@ -327,6 +342,24 @@ export function ProductCreatePage() {
 
           {/* ── Правая колонка: цвета + габариты ── */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'sticky', top: 16 }}>
+            <div className="card">
+              <div className="card-head">
+                <div className="card-head-title">Параметры</div>
+              </div>
+              <div className="card-body">
+                <Field label="Вес, гр.">
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={weightGrams}
+                    onChange={(e) => setWeightGrams(e.target.value)}
+                    style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
+                  />
+                </Field>
+              </div>
+            </div>
 
             {/* Цвета */}
             <div className="card" style={err('colors') ? { borderColor: 'var(--c-danger)' } : undefined}>

@@ -163,6 +163,9 @@ SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
 SHIPMENT_CARGO_GOOD   = "good"
 SHIPMENT_CARGO_DEFECT = "defect"
 
+# Типы операций журнала отгрузок
+SHIPMENT_OP_DOC_UPDATE = "doc_update"
+
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
 # ---------------------------------------------------------------------------
@@ -202,6 +205,26 @@ TRIP_STATUS_RU: dict[str, str] = {
     TRIP_STATUS_CANCELLED:        "Аннулирован",
 }
 
+# Статус-коды у обоих направлений общие; различается только лексика погрузки/разгрузки.
+TRIP_STATUS_RU_OUTBOUND: dict[str, str] = {
+    TRIP_STATUS_DRAFT:            "Черновик",
+    TRIP_STATUS_AWAITING_ARRIVAL: "Ожидает прибытия",
+    TRIP_STATUS_UNLOADING:        "Погрузка",
+    TRIP_STATUS_COSTING:          "Уточнение стоимости",
+    TRIP_STATUS_CLOSED:           "Закрыт",
+    TRIP_STATUS_CANCELLED:        "Аннулирован",
+}
+
+TRIP_STATUS_RU_BY_DIRECTION: dict[str, dict[str, str]] = {
+    TRIP_DIRECTION_INBOUND:  TRIP_STATUS_RU,
+    TRIP_DIRECTION_OUTBOUND: TRIP_STATUS_RU_OUTBOUND,
+}
+
+
+def trip_status_ru(direction: str, status: str) -> str:
+    table = TRIP_STATUS_RU_BY_DIRECTION.get(direction, TRIP_STATUS_RU)
+    return table.get(status, status)
+
 # Роль-владелец текущего статуса (для «Моих задач»)
 TRIP_STATUS_ASSIGNEE_ROLE: dict[str, str] = {
     TRIP_STATUS_DRAFT:            "manager",
@@ -219,16 +242,20 @@ TRIP_LOAD_RU: dict[str, str] = {
 }
 
 # Типы операций журнала рейсов (append-only)
-TRIP_OP_DOC_CREATE     = "doc_create"
-TRIP_OP_DOC_UPDATE     = "doc_update"
-TRIP_OP_RECEIPT_LINK   = "receipt_link"
-TRIP_OP_RECEIPT_UNLINK = "receipt_unlink"
-TRIP_OP_HANDOFF        = "handoff"
-TRIP_OP_ARRIVAL        = "arrival"
-TRIP_OP_UNLOAD_DONE    = "unload_done"
-TRIP_OP_COST_ACTUAL    = "cost_actual"
-TRIP_OP_CLOSE          = "close"
-TRIP_OP_CANCEL         = "cancel"
+TRIP_OP_DOC_CREATE      = "doc_create"
+TRIP_OP_DOC_UPDATE      = "doc_update"
+TRIP_OP_RECEIPT_LINK    = "receipt_link"
+TRIP_OP_RECEIPT_UNLINK  = "receipt_unlink"
+TRIP_OP_SHIPMENT_LINK   = "shipment_link"
+TRIP_OP_SHIPMENT_UNLINK = "shipment_unlink"
+TRIP_OP_HANDOFF         = "handoff"
+TRIP_OP_ARRIVAL         = "arrival"
+TRIP_OP_DEPARTURE       = "departure"
+TRIP_OP_UNLOAD_DONE     = "unload_done"
+TRIP_OP_LOAD_DONE       = "load_done"
+TRIP_OP_COST_ACTUAL     = "cost_actual"
+TRIP_OP_CLOSE           = "close"
+TRIP_OP_CANCEL          = "cancel"
 
 # ---------------------------------------------------------------------------
 # Сортировка — словари допустимых колонок (для SQL ORDER BY)

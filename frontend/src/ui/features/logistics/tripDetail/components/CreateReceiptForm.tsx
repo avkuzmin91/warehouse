@@ -152,7 +152,7 @@ export function CreateReceiptForm({ value, onChange }: {
                     inputMode="numeric"
                     value={l.planned_qty ? String(l.planned_qty) : ''}
                     onChange={(e) => { const raw = e.target.value.replace(/\D/g, ''); setLineQty(l._id, raw ? parseInt(raw, 10) : 0) }}
-                    style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', minWidth: 0, color: 'var(--c-text)' }}
+                    style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-num)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0, color: 'var(--c-text)' }}
                   />
                   <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 12.5 }}>шт</span>
                 </div>
