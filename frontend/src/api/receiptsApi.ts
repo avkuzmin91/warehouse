@@ -364,7 +364,7 @@ export function reopenReceipt(docId: string) {
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
-  on_intake: 'Принят',
+  on_intake: 'На приемке',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
