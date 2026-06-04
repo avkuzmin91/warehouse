@@ -210,6 +210,7 @@ def list_receipts_aggregated(
         f"""
         SELECT
             d.id, d.doc_number, d.client_id, d.supplier_name, d.arrival_date,
+            d.actual_arrival_date,
             d.comment, d.status, d.zone_id, d.zone_name, d.ttn, d.logistics_cost,
             d.created_at, d.created_by,
             MAX(cl.name) AS client_name,
@@ -239,7 +240,7 @@ def list_receipts_aggregated(
         LEFT JOIN receipt_lines l ON l.doc_id = d.id
         WHERE {where}
         GROUP BY d.id
-        ORDER BY d.arrival_date DESC, d.created_at DESC
+        ORDER BY COALESCE(d.actual_arrival_date, d.arrival_date) DESC, d.created_at DESC
         LIMIT ? OFFSET ?
         """,
         params + [limit, offset],

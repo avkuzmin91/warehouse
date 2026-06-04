@@ -18,7 +18,9 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
+import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -53,6 +55,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const [showAddLine, setShowAddLine] = useState(false)
 
   const { clients: clientsAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
+  const canEditPlan = canEditPlannedArrival(user)
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
@@ -71,9 +76,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
       if (metaDirty) {
         await updateReceipt(docId, {
           client_id: clientId || undefined,
-          arrival_date: arrivalDate || null,
+          ...(canEditPlan ? { arrival_date: arrivalDate || null } : {}),
           comment: comment.trim() || null,
-          logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
+          ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         })
       }
       for (const line of lines) {
@@ -114,7 +119,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент указан', error: 'Не выбран клиент' },
-    { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
+    { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
     { ok: lines.length > 0, label: `Строк добавлено: ${lines.length}`, error: 'Не добавлено ни одной строки' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
@@ -205,25 +210,46 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                   )}
                 </div>
                 <div>
-                  <label className="field-label">
-                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  <label className="field-label"><span>Рейс</span></label>
+                  {doc.trip_id ? (
+                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                      style={{ width: '100%', justifyContent: 'flex-start' }}>
+                      <Icon name="truckIn" size={13} />{doc.trip_number}
+                    </button>
+                  ) : (
+                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Стоимость логистики, ₽</span>
-                    <span className="text-xs faint">не обязательно</span>
+                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
                   </label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    placeholder="0"
-                    value={logisticsCost}
-                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
-                  />
+                  {canEditPlan ? (
+                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  ) : (
+                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
+                <div>
+                  <label className="field-label"><span>Дата прибытия (факт)</span></label>
+                  <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                </div>
+                {showCosts && (
+                  <div>
+                    <label className="field-label">
+                      <span>Стоимость логистики для клиента, ₽</span>
+                      <span className="text-xs faint">не обязательно</span>
+                    </label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      placeholder="0"
+                      value={logisticsCost}
+                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
+                    />
+                  </div>
+                )}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label className="field-label">
                     <span>Комментарий</span>

@@ -44,6 +44,16 @@ def _manager_user_row():
     }
 
 
+def _warehouse_user_row():
+    return {
+        "id": "test-warehouse-id",
+        "email": "warehouse@test.com",
+        "role": "warehouse_manager",
+        "created_at": "2020-01-01T00:00:00",
+        "client_id": None,
+    }
+
+
 @pytest.fixture
 def admin_client():
     """TestClient с авторизацией администратора (dependency override)."""
@@ -57,6 +67,15 @@ def admin_client():
 def manager_client():
     """TestClient с авторизацией менеджера (dependency override)."""
     app.dependency_overrides[get_current_user] = lambda: _manager_user_row()
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def warehouse_client():
+    """TestClient с авторизацией кладовщика (dependency override)."""
+    app.dependency_overrides[get_current_user] = lambda: _warehouse_user_row()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

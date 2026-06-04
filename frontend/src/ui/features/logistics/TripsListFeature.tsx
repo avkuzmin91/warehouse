@@ -14,7 +14,9 @@ import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useApi } from '../../../hooks/useApi'
 import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
+import { canViewCosts } from '../../../utils/access'
 
 const ACTIVE: TripStatus[] = ['draft', 'awaiting_arrival', 'unloading', 'costing']
 const IN_QUEUE: TripStatus[] = ['awaiting_arrival', 'unloading']
@@ -72,6 +74,8 @@ function EtaCell({ eta }: { eta: string | null }) {
 export function TripsListFeature() {
   const navigate = useNavigate()
   const { carriers } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
 
   const [group, setGroup] = useFilterParam('group', 'all')
   const [carrier, setCarrier] = useFilterParam('carrier', '')
@@ -81,6 +85,7 @@ export function TripsListFeature() {
 
   const { data, loading } = useApi((signal) => getTrips({ limit: 200 }, signal), [])
   const trips: TripListItem[] = data?.items ?? []
+  const colCount = showCosts ? 9 : 7
 
   const kpiActive = trips.filter((t) => ACTIVE.includes(t.status)).length
   const kpiQueue = trips.filter((t) => IN_QUEUE.includes(t.status)).length
@@ -144,15 +149,15 @@ export function TripsListFeature() {
             <th style={{ textAlign: 'right', width: 64 }}>Кли.</th>
             <th style={{ textAlign: 'right', width: 70 }}>Пост.</th>
             <th style={{ width: 130 }}>План. прибытие</th>
-            <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>
-            <th style={{ textAlign: 'right', width: 90 }}>Факт ₽</th>
+            {showCosts && <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>}
+            {showCosts && <th style={{ textAlign: 'right', width: 90 }}>Факт ₽</th>}
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={9} />
+            <SkeletonRows rows={8} cols={colCount} />
           ) : filtered.length === 0 ? (
-            <tr><td colSpan={9}><EmptyState title="Рейсов нет" sub={group === 'all' ? 'Создайте первый рейс' : undefined} /></td></tr>
+            <tr><td colSpan={colCount}><EmptyState title="Рейсов нет" sub={group === 'all' ? 'Создайте первый рейс' : undefined} /></td></tr>
           ) : (
             filtered.map((t) => (
               <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
@@ -170,8 +175,8 @@ export function TripsListFeature() {
                 <Td className="num">—</Td>
                 <Td className="num">{t.receipts_count}</Td>
                 <Td><EtaCell eta={t.eta} /></Td>
-                <Td className="num">{fmtMoney(t.cost_estimate)}</Td>
-                <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>
+                {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
+                {showCosts && <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>}
               </tr>
             ))
           )}

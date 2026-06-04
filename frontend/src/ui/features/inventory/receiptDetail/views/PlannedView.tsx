@@ -6,6 +6,7 @@ import {
   deleteReceiptLine,
   receiptStatusTone,
   updateReceipt,
+  updateReceiptActualArrival,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from '../../../../../api/receiptsApi'
@@ -18,8 +19,10 @@ import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
-import { localTodayYmd } from '../../../../../utils/format'
+import { fmtDate, localTodayYmd } from '../../../../../utils/format'
+import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -50,8 +53,12 @@ export function PlannedView({
   const status = doc.status
 
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
+  const [actualArrivalDate, setActualArrivalDate] = useState(doc.actual_arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+
+  const hasTrip = !!doc.trip_id
+  const actualDirty = actualArrivalDate !== (doc.actual_arrival_date ?? '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
@@ -85,6 +92,9 @@ export function PlannedView({
   }
 
   const { unloadingZones: zonesAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
+  const canEditPlan = canEditPlannedArrival(user)
   const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
@@ -99,10 +109,13 @@ export function PlannedView({
     try {
       if (metaDirty) {
         await updateReceipt(docId, {
-          arrival_date: arrivalDate || null,
+          ...(canEditPlan ? { arrival_date: arrivalDate || null } : {}),
           comment: comment.trim() || null,
-          logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
+          ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         })
+      }
+      if (!hasTrip && actualDirty) {
+        await updateReceiptActualArrival(docId, actualArrivalDate || null)
       }
       for (const line of lines) {
         const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
@@ -161,13 +174,14 @@ export function PlannedView({
 
   const today = localTodayYmd()
   const readyChecks = [
-    { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
-    { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
+    { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
+    { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия (план) наступила', error: 'Дата прибытия (план) ещё не наступила' },
+    ...(status === 'planned' ? [{ ok: hasTrip ? !!doc.actual_arrival_date : !!actualArrivalDate, label: 'Дата прибытия (факт) указана', error: 'Не указана дата прибытия (факт)' }] : []),
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
     { ok: lines.length > 0 && lines.every((l) => plannedQtyFor(l.id) >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
     { ok: lines.length > 0 && missingStorageCount === 0, label: 'Место (на проверке) указано по всем строкам', error: `Не указано место (на проверке): ${missingStorageCount}` },
     { ok: lines.length > 0 && lines.every((l) => acceptedFor(l.id) >= 0), label: 'Принят указан по всем строкам', error: 'Укажите принятое количество по всем строкам' },
-    { ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
+    ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики для клиента указана', error: 'Не указана стоимость логистики для клиента' }] : []),
   ]
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
@@ -175,7 +189,7 @@ export function PlannedView({
     const line = lines.find((l) => l.id === id)
     return line !== undefined && accepted[id] !== acceptedBaseline(line)
   })
-  const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage || hasPendingAccepted
+  const hasUnsavedChanges = metaDirty || (!hasTrip && actualDirty) || hasPendingQty || hasPendingStorage || hasPendingAccepted
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
@@ -271,18 +285,48 @@ export function PlannedView({
                   <input className="input" value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
                 </div>
                 <div>
-                  <label className="field-label">
-                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  <label className="field-label"><span>Рейс</span></label>
+                  {doc.trip_id ? (
+                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                      style={{ width: '100%', justifyContent: 'flex-start' }}>
+                      <Icon name="truckIn" size={13} />{doc.trip_number}
+                    </button>
+                  ) : (
+                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Стоимость логистики, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
                   </label>
-                  <input className="input" type="number" min={0} placeholder="0" value={logisticsCost}
-                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }} />
+                  {canEditPlan ? (
+                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  ) : (
+                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
+                <div>
+                  <label className="field-label">
+                    <span>Дата прибытия (факт){status === 'planned' && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
+                    {hasTrip
+                      ? <span className="text-xs faint">из рейса</span>
+                      : null}
+                  </label>
+                  {hasTrip ? (
+                    <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  ) : (
+                    <DatePicker value={actualArrivalDate} onChange={setActualArrivalDate} />
+                  )}
+                </div>
+                {showCosts && (
+                  <div>
+                    <label className="field-label">
+                      <span>Стоимость логистики для клиента, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    </label>
+                    <input className="input" type="number" min={0} placeholder="0" value={logisticsCost}
+                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }} />
+                  </div>
+                )}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label className="field-label">
                     <span>Комментарий</span>

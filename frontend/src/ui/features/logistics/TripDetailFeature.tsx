@@ -21,6 +21,8 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { canViewCosts } from '../../../utils/access'
+import { isDateTimeComplete, isDateTimeBefore } from './components/fields'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
@@ -55,6 +57,9 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const confirm = useConfirm()
   const { warehouses, carriers, vehicleTypes } = useLookups()
   const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
+  const canEditTransportPlanning = user?.role === 'admin' || user?.role === 'manager'
+  const canEditCostingExecution = canEditTransportPlanning
 
   const [detail, setDetail] = useState<TripDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -136,7 +141,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       vehicle_type_name: vehicle?.name ?? null,
       transport_ordered_at: form.transport_ordered_at || null,
       eta: form.eta || null,
-      cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null,
+      ...(showCosts ? { cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null } : {}),
       comment: form.comment.trim() || null,
     })
   }
@@ -153,27 +158,26 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     load_factor: loadFactor,
   })
 
-  const onField = (patch: Partial<PlanningFormValue>) => {
-    setForm((f) => ({ ...f, ...patch }))
-    setShowBlockReasons(false)
-  }
+  const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
   const onCostField = (patch: Partial<CostForm>) => setCost((c) => ({ ...c, ...patch }))
 
+  const etaBeforeOrder = isDateTimeBefore(form.eta, form.transport_ordered_at)
   const requiredErrors: Partial<Record<keyof PlanningFormValue, boolean>> = {
     origin_id: !form.origin_id,
     carrier_id: !form.carrier_id,
     vehicle_type_id: !form.vehicle_type_id,
-    cost_estimate: form.cost_estimate.trim() === '',
-    transport_ordered_at: !form.transport_ordered_at,
-    eta: !form.eta,
+    cost_estimate: showCosts && form.cost_estimate.trim() === '',
+    transport_ordered_at: !isDateTimeComplete(form.transport_ordered_at),
+    eta: !isDateTimeComplete(form.eta) || etaBeforeOrder,
   }
   const handoffBlockReasons: string[] = [
     ...(requiredErrors.origin_id ? ['Не указано «Откуда»'] : []),
     ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
     ...(requiredErrors.vehicle_type_id ? ['Не выбран тип кузова'] : []),
-    ...(requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
+    ...(showCosts && requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
     ...(requiredErrors.transport_ordered_at ? ['Не указано «Транспорт заказан»'] : []),
-    ...(requiredErrors.eta ? ['Не указано плановое прибытие'] : []),
+    ...(!isDateTimeComplete(form.eta) ? ['Не указано плановое прибытие'] : []),
+    ...(etaBeforeOrder ? ['Плановое прибытие раньше заказа транспорта'] : []),
     ...((detail?.receipts.length ?? 0) === 0 ? ['Не привязано ни одного поступления'] : []),
   ]
 
@@ -273,9 +277,10 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     { ok: !!form.origin_id, label: 'Откуда указано' },
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
     { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
-    { ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' },
-    { ok: !!form.transport_ordered_at, label: 'Транспорт заказан' },
-    { ok: !!form.eta, label: 'Плановое прибытие указано' },
+    ...(showCosts ? [{ ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' }] : []),
+    { ok: !requiredErrors.transport_ordered_at, label: 'Транспорт заказан' },
+    { ok: isDateTimeComplete(form.eta), label: 'Плановое прибытие указано' },
+    ...(etaBeforeOrder ? [{ ok: false, label: 'Прибытие не раньше заказа транспорта' }] : []),
     { ok: receipts.length > 0, label: `Поступлений: ${receipts.length}` },
   ]
 
@@ -289,6 +294,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     view = (
       <PlanningView
         detail={detail} form={form} onField={onField} link={link} enrich={enrich} busy={busy} checks={checks}
+        showCosts={showCosts}
+        canEditTransportPlanning={canEditTransportPlanning}
         invalid={showBlockReasons ? requiredErrors : undefined}
         blockReasons={showBlockReasons ? handoffBlockReasons : []}
         onBack={onBack} onCancel={handleCancel} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
@@ -308,6 +315,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       ) : (
         <InWarehouseView
           detail={detail} form={form} onField={onField}
+          showCosts={showCosts}
+          canEditTransportPlanning={canEditTransportPlanning}
           link={status === 'awaiting_arrival' ? link : undefined}
           enrich={enrich}
           loadFactor={loadFactor} onLoadFactor={setLoadFactor}
@@ -324,6 +333,9 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     view = (
       <CostingView
         detail={detail} form={form} onField={onField} cost={cost} onCost={onCostField}
+        showCosts={showCosts}
+        canEditTransportPlanning={canEditTransportPlanning}
+        canEditExecution={canEditCostingExecution}
         dirtyCost={dirtyCost} onSaveCost={handleSaveCost} onSaveFields={handleSaveFields}
         arrival={arrival} onArrivalChange={setArrival}
         unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
@@ -333,7 +345,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       />
     )
   } else {
-    view = <ClosedView detail={detail} onBack={onBack} onOpenReceipt={onOpenReceipt} />
+    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} />
   }
 
   return (

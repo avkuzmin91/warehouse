@@ -2,6 +2,7 @@ import { getDashboardToday } from '../../../api/dashboardApi'
 import type { DashboardTodayStats } from '../../../api/dashboardApi'
 import { useApi } from '../../../hooks/useApi'
 import { KPI } from '../../primitives/KPI'
+import { PacmanPlaceholder } from './PacmanPlaceholder'
 
 // Декоративный спарклайн: формы из дизайна, без претензии на реальный временной ряд.
 function spark(seed: number, n = 14): number[] {
@@ -26,13 +27,6 @@ function delta(today: number, yesterday: number): { label: string; dir: 'up' | '
   return { label: `${sign}${fmt(Math.abs(diff))} к вчера`, dir: diff > 0 ? 'up' : 'down' }
 }
 
-// Для браков рост — это плохо, поэтому направление инвертируем (рост = down/красный).
-function defectDelta(today: number, yesterday: number): { label: string; dir: 'up' | 'down' } {
-  const base = delta(today, yesterday)
-  if (base.label === 'без изменений') return base
-  return { label: base.label, dir: base.dir === 'up' ? 'down' : 'up' }
-}
-
 export function HomeKpiFeature() {
   const { data, loading, error } = useApi(getDashboardToday, [])
 
@@ -42,7 +36,9 @@ export function HomeKpiFeature() {
         <KPI label="Поступления сегодня" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Принято товара" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Отгружено" value="—" delta="не удалось загрузить" deltaDir="down" />
-        <KPI label="Браков зафиксировано" value="—" delta="не удалось загрузить" deltaDir="down" />
+        <div className="kpi" style={{ padding: 0 }}>
+          <PacmanPlaceholder title="Браков зафиксировано" compact />
+        </div>
       </div>
     )
   }
@@ -77,13 +73,9 @@ export function HomeKpiFeature() {
         deltaDir={ready ? delta(today.shipped, yesterday.shipped).dir : undefined}
         spark={spark(3)}
       />
-      <KPI
-        label="Браков зафиксировано"
-        value={loading ? '…' : fmt(today?.defects ?? 0)}
-        delta={ready ? defectDelta(today.defects, yesterday.defects).label : undefined}
-        deltaDir={ready ? defectDelta(today.defects, yesterday.defects).dir : undefined}
-        spark={spark(4)}
-      />
+      <div className="kpi" style={{ padding: 0 }}>
+        <PacmanPlaceholder title="Браков зафиксировано" compact />
+      </div>
     </div>
   )
 }

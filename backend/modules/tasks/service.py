@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_REVIEW,
     TRIP_STATUS_AWAITING_ARRIVAL,
     TRIP_STATUS_COSTING,
     TRIP_STATUS_UNLOADING,
@@ -19,8 +18,14 @@ _TRIP_TASKS = {
 
 _RECEIPT_TASKS = {
     RECEIPT_STATUS_ON_INTAKE: (ROLE_WAREHOUSE, "receipt_intake", "Принять товары — {num}"),
-    RECEIPT_STATUS_ON_REVIEW: (ROLE_MANAGER, "receipt_review", "Проверить поступление {num}"),
 }
+
+
+def _receipt_task_statuses(visible_roles: set[str]) -> tuple[str, ...]:
+    statuses: list[str] = []
+    if ROLE_WAREHOUSE in visible_roles:
+        statuses.append(RECEIPT_STATUS_ON_INTAKE)
+    return tuple(statuses)
 
 
 def list_my_tasks(connection, *, user) -> list[dict]:
@@ -61,25 +66,28 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             "since": r["updated_at"] or r["created_at"],
         })
 
-    receipt_rows = connection.execute(
-        "SELECT id, doc_number, status, updated_at, created_at FROM receipt_docs "
-        "WHERE is_deleted = 0 AND status IN (?,?)",
-        (RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW),
-    ).fetchall()
-    for r in receipt_rows:
-        task_role, kind, title_tpl = _RECEIPT_TASKS[str(r["status"])]
-        if task_role not in visible_roles:
-            continue
-        tasks.append({
-            "kind": kind,
-            "title": title_tpl.format(num=r["doc_number"]),
-            "doc_type": "receipt",
-            "doc_id": str(r["id"]),
-            "doc_number": str(r["doc_number"]),
-            "status": str(r["status"]),
-            "role": task_role,
-            "since": r["updated_at"] or r["created_at"],
-        })
+    receipt_statuses = _receipt_task_statuses(visible_roles)
+    if receipt_statuses:
+        placeholders = ",".join("?" for _ in receipt_statuses)
+        receipt_rows = connection.execute(
+            "SELECT id, doc_number, status, updated_at, created_at FROM receipt_docs "
+            f"WHERE is_deleted = 0 AND status IN ({placeholders})",
+            receipt_statuses,
+        ).fetchall()
+        for r in receipt_rows:
+            task_role, kind, title_tpl = _RECEIPT_TASKS[str(r["status"])]
+            if task_role not in visible_roles:
+                continue
+            tasks.append({
+                "kind": kind,
+                "title": title_tpl.format(num=r["doc_number"]),
+                "doc_type": "receipt",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": str(r["status"]),
+                "role": task_role,
+                "since": r["updated_at"] or r["created_at"],
+            })
 
     tasks.sort(key=lambda t: (t["since"] or ""))
     return tasks

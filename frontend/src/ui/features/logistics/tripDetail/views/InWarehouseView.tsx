@@ -29,10 +29,12 @@ function isBefore(left: string, right: string): boolean {
   return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
 }
 
-export function InWarehouseView({ detail, form, onField, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt }: {
+export function InWarehouseView({ detail, form, onField, showCosts, canEditTransportPlanning, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
+  showCosts: boolean
+  canEditTransportPlanning: boolean
   link?: ReceiptLink
   enrich?: ReceiptEnrich
   loadFactor: TripLoadFactor
@@ -76,12 +78,14 @@ export function InWarehouseView({ detail, form, onField, link, enrich, loadFacto
       <div className="split-360">
         <div className="col gap-16">
           <div>
-            <PlanningForm value={form} onChange={onField} state="active" />
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button className="btn sm primary" onClick={onSaveFields} disabled={busy}>
-                <Icon name="save" size={13} />Сохранить транспорт
-              </button>
-            </div>
+            <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} readonly={!canEditTransportPlanning} />
+            {canEditTransportPlanning && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button className="btn sm primary" onClick={onSaveFields} disabled={busy}>
+                  <Icon name="save" size={13} />Сохранить транспорт
+                </button>
+              </div>
+            )}
           </div>
 
           <ReceiptsBlock
@@ -144,14 +148,16 @@ export function InWarehouseView({ detail, form, onField, link, enrich, loadFacto
             )}
           </PhaseBlock>
 
-          <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint="После разгрузки">
-            <LockedCostFields />
-          </PhaseBlock>
+          {showCosts && (
+            <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint="После разгрузки">
+              <LockedCostFields />
+            </PhaseBlock>
+          )}
         </div>
 
         <div className="col gap-16">
           <ProcessPanel status={doc.status} ops={ops} />
-          <CostPanel estimate={doc.cost_estimate} />
+          {showCosts && <CostPanel estimate={doc.cost_estimate} />}
           <JournalPanel ops={ops} />
         </div>
       </div>

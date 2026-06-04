@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import { TRIP_LOAD_LABELS } from '../../../../../api/tripsApi'
 import type { TripDetail, TripLoadFactor } from '../../../../../api/tripsApi'
@@ -24,7 +24,7 @@ function durationMin(from: string | null, to: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
-export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, onBack, onCancel, onClose, onOpenReceipt }: {
+export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, showCosts, canEditTransportPlanning, canEditExecution, onBack, onCancel, onClose, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -43,6 +43,9 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
   onLoadFactor: (v: TripLoadFactor) => void
   onSaveExecution: () => void
   busy: boolean
+  showCosts: boolean
+  canEditTransportPlanning: boolean
+  canEditExecution: boolean
   onBack: () => void
   onCancel: () => void
   onClose: () => void
@@ -53,6 +56,11 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
   const [editExecution, setEditExecution] = useState(false)
   const total = (Number(cost.logistics_cost_actual) || 0) + (Number(cost.waiting_cost) || 0)
   const dur = durationMin(doc.unload_started_at ?? doc.arrived_at, doc.unload_finished_at)
+
+  useEffect(() => {
+    if (!canEditTransportPlanning) setEditTransport(false)
+    if (!canEditExecution) setEditExecution(false)
+  }, [canEditExecution, canEditTransportPlanning])
 
   return (
     <div className="page">
@@ -65,17 +73,19 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
             <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
               <Icon name="x" size={14} />Аннулировать
             </button>
-            <PrimaryAction icon="check" label="Закрыть рейс" hint="Поступления досчитываются отдельным процессом"
-              onClick={onClose} disabled={busy} />
+            {showCosts && (
+              <PrimaryAction icon="check" label="Закрыть рейс" hint="Поступления досчитываются отдельным процессом"
+                onClick={onClose} disabled={busy} />
+            )}
           </div>
         }
       />
 
       <div className="split-360">
         <div className="col gap-16">
-          {editTransport ? (
+          {editTransport && canEditTransportPlanning ? (
             <div>
-              <PlanningForm value={form} onChange={onField} state="active" />
+              <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts} />
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button className="btn sm primary" onClick={() => { onSaveFields(); setEditTransport(false) }} disabled={busy}>
                   <Icon name="save" size={13} />Сохранить транспорт
@@ -85,16 +95,18 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
             </div>
           ) : (
             <PhaseBlock icon="edit" title="Планирование транспорта" role="manager" state="done"
-              action={
+              action={canEditTransportPlanning ? (
                 <button className="btn sm ghost" onClick={() => setEditTransport(true)}>
                   <Icon name="edit" size={13} />Изменить транспорт
                 </button>
-              }>
+              ) : undefined}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
                 <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
                 <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
                 <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
-                <ReadRow label="Стоимость логистики (план)" mono>{doc.cost_estimate != null ? money(doc.cost_estimate) : '—'}</ReadRow>
+                {showCosts && (
+                  <ReadRow label="Стоимость логистики (план)" mono>{doc.cost_estimate != null ? money(doc.cost_estimate) : '—'}</ReadRow>
+                )}
                 <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
                 <ReadRow label="Плановое прибытие" mono>{fmtDateTime(doc.eta)}</ReadRow>
                 <div style={{ gridColumn: '1 / -1' }}>
@@ -105,12 +117,12 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
           )}
 
           <PhaseBlock icon="forklift" title="Исполнение на складе" role="warehouse" state="done"
-            action={!editExecution && (
+            action={canEditExecution && !editExecution ? (
               <button className="btn sm ghost" onClick={() => setEditExecution(true)}>
                 <Icon name="edit" size={13} />Изменить
               </button>
-            )}>
-            {editExecution ? (
+            ) : undefined}>
+            {editExecution && canEditExecution ? (
               <div>
                 <div className="form-grid-2">
                   <div>
@@ -155,49 +167,51 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
             )}
           </PhaseBlock>
 
-          <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="active">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, alignItems: 'end' }}>
-              <div>
-                <FieldLabel required>Логистика (факт)</FieldLabel>
-                <MoneyField value={cost.logistics_cost_actual} onChange={(v) => onCost({ logistics_cost_actual: v })} />
-              </div>
-              <div>
-                <FieldLabel>Стоимость простоя</FieldLabel>
-                <MoneyField value={cost.waiting_cost} onChange={(v) => onCost({ waiting_cost: v })} />
-              </div>
-              <div>
-                <FieldLabel>Время простоя, мин</FieldLabel>
-                <div style={{ display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)', border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)' }}>
-                  <input value={cost.waiting_minutes} inputMode="numeric" placeholder="0"
-                    onChange={(e) => onCost({ waiting_minutes: e.target.value.replace(/[^\d]/g, '') })}
-                    style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', minWidth: 0, color: 'var(--c-text)' }} />
-                  <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 13 }}>мин</span>
+          {showCosts && (
+            <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="active">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, alignItems: 'end' }}>
+                <div>
+                  <FieldLabel required>Логистика (факт)</FieldLabel>
+                  <MoneyField value={cost.logistics_cost_actual} onChange={(v) => onCost({ logistics_cost_actual: v })} />
+                </div>
+                <div>
+                  <FieldLabel>Стоимость простоя</FieldLabel>
+                  <MoneyField value={cost.waiting_cost} onChange={(v) => onCost({ waiting_cost: v })} />
+                </div>
+                <div>
+                  <FieldLabel>Время простоя, мин</FieldLabel>
+                  <div style={{ display: 'flex', alignItems: 'center', height: 34, padding: '0 10px', borderRadius: 'var(--r-md)', border: '1px solid var(--c-border-strong)', background: 'var(--c-bg-elev)' }}>
+                    <input value={cost.waiting_minutes} inputMode="numeric" placeholder="0"
+                      onChange={(e) => onCost({ waiting_minutes: e.target.value.replace(/[^\d]/g, '') })}
+                      style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 500, textAlign: 'right', minWidth: 0, color: 'var(--c-text)' }} />
+                    <span style={{ marginLeft: 6, color: 'var(--c-text-subtle)', fontSize: 13 }}>мин</span>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div style={{
-              marginTop: 14, display: 'flex', alignItems: 'center', gap: 8,
-              padding: '10px 14px', borderRadius: 'var(--r-md)',
-              background: 'color-mix(in oklab, var(--c-accent) 6%, var(--c-bg-elev))',
-              border: '1px solid var(--c-accent-border)',
-            }}>
-              <Icon name="ruble" size={15} style={{ color: 'var(--c-accent)' }} />
-              <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>Итого по рейсу</span>
-              <span className="mono" style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 600 }}>{money(total)}</span>
-            </div>
-            {dirtyCost && (
-              <button className="btn sm" style={{ marginTop: 10 }} onClick={onSaveCost} disabled={busy}>
-                <Icon name="save" size={13} />Сохранить стоимость
-              </button>
-            )}
-          </PhaseBlock>
+              <div style={{
+                marginTop: 14, display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 14px', borderRadius: 'var(--r-md)',
+                background: 'color-mix(in oklab, var(--c-accent) 6%, var(--c-bg-elev))',
+                border: '1px solid var(--c-accent-border)',
+              }}>
+                <Icon name="ruble" size={15} style={{ color: 'var(--c-accent)' }} />
+                <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>Итого по рейсу</span>
+                <span className="mono" style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 600 }}>{money(total)}</span>
+              </div>
+              {dirtyCost && (
+                <button className="btn sm" style={{ marginTop: 10 }} onClick={onSaveCost} disabled={busy}>
+                  <Icon name="save" size={13} />Сохранить стоимость
+                </button>
+              )}
+            </PhaseBlock>
+          )}
 
           <ReceiptsBlock receipts={receipts} onOpen={onOpenReceipt} expandable resetKey={doc.id} />
         </div>
 
         <div className="col gap-16">
           <ProcessPanel status="costing" ops={ops} />
-          <CostPanel estimate={doc.cost_estimate} actual={Number(cost.logistics_cost_actual) || null} waiting={Number(cost.waiting_cost) || null} showActual />
+          {showCosts && <CostPanel estimate={doc.cost_estimate} actual={Number(cost.logistics_cost_actual) || null} waiting={Number(cost.waiting_cost) || null} showActual />}
           <JournalPanel ops={ops} />
         </div>
       </div>

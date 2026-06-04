@@ -7,6 +7,9 @@ import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { canViewCosts } from '../../../utils/access'
+import { isDateTimeComplete, isDateTimeBefore } from './components/fields'
 import { PlanningForm } from './tripDetail/PlanningForm'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import { ProcessPanel, ReadyChecklist } from './tripDetail/panels'
@@ -29,12 +32,15 @@ function fmtDay(d: string | null): string | undefined {
 export function TripCreateFeature() {
   const navigate = useNavigate()
   const { warehouses, carriers, vehicleTypes } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
 
   const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -54,11 +60,34 @@ export function TripCreateFeature() {
     })
   }
 
+  const etaBeforeOrder = isDateTimeBefore(form.eta, form.transport_ordered_at)
+  const requiredErrors: Partial<Record<keyof PlanningFormValue, boolean>> = {
+    origin_id: !form.origin_id,
+    carrier_id: !form.carrier_id,
+    vehicle_type_id: !form.vehicle_type_id,
+    cost_estimate: showCosts && form.cost_estimate.trim() === '',
+    transport_ordered_at: !isDateTimeComplete(form.transport_ordered_at),
+    eta: !isDateTimeComplete(form.eta) || etaBeforeOrder,
+  }
+  const blockReasons: string[] = [
+    ...(requiredErrors.origin_id ? ['Не указано «Откуда»'] : []),
+    ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
+    ...(requiredErrors.vehicle_type_id ? ['Не выбран тип кузова'] : []),
+    ...(requiredErrors.cost_estimate ? ['Не указана стоимость логистики (план)'] : []),
+    ...(requiredErrors.transport_ordered_at ? ['Не указано «Транспорт заказан»'] : []),
+    ...(!isDateTimeComplete(form.eta) ? ['Не указано плановое прибытие'] : []),
+    ...(etaBeforeOrder ? ['Плановое прибытие раньше заказа транспорта'] : []),
+    ...(selected.size === 0 ? ['Не выбрано ни одного поступления'] : []),
+  ]
+
   const checks: Check[] = [
     { ok: !!form.origin_id, label: 'Откуда указано' },
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
     { ok: !!form.vehicle_type_id, label: 'Тип кузова указан' },
-    { ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' },
+    ...(showCosts ? [{ ok: form.cost_estimate.trim() !== '', label: 'Стоимость (план) указана' }] : []),
+    { ok: !requiredErrors.transport_ordered_at, label: 'Транспорт заказан' },
+    { ok: isDateTimeComplete(form.eta), label: 'Плановое прибытие указано' },
+    ...(etaBeforeOrder ? [{ ok: false, label: 'Прибытие не раньше заказа транспорта' }] : []),
     { ok: selected.size > 0, label: `Поступлений выбрано: ${selected.size}` },
   ]
 
@@ -96,7 +125,7 @@ export function TripCreateFeature() {
       vehicle_type_name: vehicle?.name ?? null,
       transport_ordered_at: form.transport_ordered_at || null,
       eta: form.eta || null,
-      cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null,
+      ...(showCosts ? { cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null } : {}),
       comment: form.comment.trim() || null,
       receipt_doc_ids: [...selected],
     }
@@ -116,7 +145,11 @@ export function TripCreateFeature() {
   }
 
   const handleSaveDraft = () => saveTrip({ handoff: false })
-  const handleHandoff = () => saveTrip({ handoff: true })
+  const handleHandoff = () => {
+    if (blockReasons.length > 0) { setShowBlockReasons(true); return }
+    setShowBlockReasons(false)
+    saveTrip({ handoff: true })
+  }
 
   return (
     <div className="page">
@@ -131,13 +164,24 @@ export function TripCreateFeature() {
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>Новый рейс</div>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <button className="btn lg" onClick={handleSaveDraft} disabled={saving}>
-            <Icon name="save" size={15} />Сохранить черновик
-          </button>
-          <button className="btn lg primary" onClick={handleHandoff} disabled={saving || selected.size === 0}>
-            <Icon name="arrowRight" size={15} />Передать на склад
-          </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <button className="btn lg" onClick={handleSaveDraft} disabled={saving}>
+              <Icon name="save" size={15} />Сохранить черновик
+            </button>
+            {showCosts && (
+              <button className="btn lg primary" onClick={handleHandoff} disabled={saving}>
+                <Icon name="arrowRight" size={15} />Передать на склад
+              </button>
+            )}
+          </div>
+          {showBlockReasons && blockReasons.length > 0 && (
+            <div className="block-reasons">
+              {blockReasons.map((r, i) => (
+                <div key={i}>· {r}</div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -145,7 +189,8 @@ export function TripCreateFeature() {
 
       <div className="split-360">
         <div className="col gap-16">
-          <PlanningForm value={form} onChange={onField} state="active" />
+          <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts}
+            invalid={showBlockReasons ? requiredErrors : undefined} />
           <ReceiptsBlock receipts={selectedReceipts} enrich={enrich} link={link} />
         </div>
 

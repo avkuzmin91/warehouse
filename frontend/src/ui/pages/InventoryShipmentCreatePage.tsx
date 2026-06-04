@@ -15,7 +15,9 @@ import { BalancePicker } from '../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../features/inventory/shared/NumberStep'
 import { fmtYmdAsDmy } from '../../utils/format'
 import { balanceKey } from '../../utils/balanceKey'
+import { canViewCosts } from '../../utils/access'
 import { useLookups } from '../../hooks/useLookups'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
 
 type DraftLine = ShipmentLineIn & { _key: string; available: number }
 
@@ -35,6 +37,8 @@ export function InventoryShipmentCreatePage() {
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const { clients } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
 
@@ -45,7 +49,7 @@ export function InventoryShipmentCreatePage() {
   const readyChecks = [
     { ok: !!clientId, error: 'Выберите клиента' },
     { ok: !!shipDate, error: 'Укажите дату отгрузки' },
-    { ok: logisticsCostFilled, error: 'Укажите стоимость логистики' },
+    ...(showCosts ? [{ ok: logisticsCostFilled, error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: !hasOverflow, error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
   ]
@@ -78,7 +82,7 @@ export function InventoryShipmentCreatePage() {
       size_id:           b.size_id,
       size_name:         b.size_name,
       qty,
-      available:         cargoType === 'defect' ? b.defect : b.good,
+      available:         cargoType === 'defect' ? b.defect : b.good + b.on_review,
       storage_zone_id:   zoneId,
       storage_zone_name: zoneName,
     }])
@@ -92,7 +96,7 @@ export function InventoryShipmentCreatePage() {
         cargo_type:     cargoType,
         client_id:      clientId || null,
         client_name:    clientName || null,
-        logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
+        ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         ship_date:      shipDate || null,
         comment:        comment.trim() || null,
         lines:          lines.map((line) => ({
@@ -189,16 +193,18 @@ export function InventoryShipmentCreatePage() {
                 <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
-                <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={logisticsCost}
-                    onChange={(e) => setLogisticsCost(e.target.value)}
-                  />
-                </Field>
+                {showCosts && (
+                  <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={logisticsCost}
+                      onChange={(e) => setLogisticsCost(e.target.value)}
+                    />
+                  </Field>
+                )}
                 <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                   <textarea
                     className="input"
@@ -301,7 +307,7 @@ export function InventoryShipmentCreatePage() {
               <span className="mono" style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
               <span style={{ color: 'var(--c-text-muted)' }}>Дата</span>
               <span className="mono" style={{ textAlign: 'right' }}>{fmtYmdAsDmy(shipDate)}</span>
-              {logisticsCostFilled && (
+              {showCosts && logisticsCostFilled && (
                 <>
                   <span style={{ color: 'var(--c-text-muted)' }}>Логистика</span>
                   <span className="mono" style={{ textAlign: 'right' }}>{logisticsCostNumber.toLocaleString()}</span>

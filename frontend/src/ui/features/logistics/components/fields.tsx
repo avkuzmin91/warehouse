@@ -104,6 +104,19 @@ export function timePart(value: string): string {
   return match ? match[1] : ''
 }
 
+/** Значение `DateTimeField` заполнено полностью — есть и дата, и время `ЧЧ:ММ`. */
+export function isDateTimeComplete(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
+}
+
+/**
+ * `end` раньше `start`. Сравнивает только полностью заполненные значения
+ * `YYYY-MM-DDTHH:mm` (лексикографический порядок совпадает с хронологическим).
+ */
+export function isDateTimeBefore(end: string, start: string): boolean {
+  return isDateTimeComplete(end) && isDateTimeComplete(start) && end < start
+}
+
 export function combineDateTime(date: string, time: string): string {
   if (!date) return ''
   return time ? `${date}T${time}` : date

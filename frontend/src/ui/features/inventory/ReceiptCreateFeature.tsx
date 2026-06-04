@@ -23,6 +23,8 @@ import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { canViewCosts } from '../../../utils/access'
 import { NumberStep } from './shared/NumberStep'
 import {
   receiptLineColorRequired,
@@ -54,6 +56,8 @@ export function ReceiptCreateFeature() {
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const { clients: clientsAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
@@ -63,8 +67,8 @@ export function ReceiptCreateFeature() {
 
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент указан', error: 'Не выбран клиент' },
-    { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
-    { ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
+    { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
+    ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики для клиента указана', error: 'Не указана стоимость логистики для клиента' }] : []),
     { ok: lines.length > 0, label: `Строк добавлено: ${lines.length}`, error: 'Не добавлено ни одной строки' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
@@ -80,7 +84,7 @@ export function ReceiptCreateFeature() {
         client_id: clientId,
         arrival_date: arrivalDate || null,
         comment: comment.trim() || null,
-        logistics_cost: logisticsCostFilled ? logisticsCostNumber : null,
+        ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
       })
@@ -173,22 +177,24 @@ export function ReceiptCreateFeature() {
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия (план) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
                   </label>
                   <DatePicker value={arrivalDate} onChange={setArrivalDate} />
                 </div>
-                <div>
-                  <label className="field-label">
-                    <span>Стоимость логистики, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    value={logisticsCost}
-                    onChange={(e) => setLogisticsCost(e.target.value)}
-                  />
-                </div>
+                {showCosts && (
+                  <div>
+                    <label className="field-label">
+                      <span>Стоимость логистики для клиента, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    </label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      value={logisticsCost}
+                      onChange={(e) => setLogisticsCost(e.target.value)}
+                    />
+                  </div>
+                )}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label className="field-label">
                     <span>Комментарий</span>
@@ -458,6 +464,7 @@ function AddLineDrawer({
 
   function handleAdd() {
     if (!selectedProduct || qty < 1) return
+    if (needsColor && !colorId) return
     if (needsSize && !sizeId) return
     const selectedColor = colors.find((c) => c.id === colorId)
     const selectedSize = sizes.find((s) => s.id === sizeId)
@@ -489,7 +496,7 @@ function AddLineDrawer({
           <button className="btn" onClick={onClose}>Отмена</button>
           <button
             className="btn primary"
-            disabled={!productId || qty < 1 || (needsSize && !sizeId)}
+            disabled={!productId || (needsColor && !colorId) || qty < 1 || (needsSize && !sizeId)}
             onClick={handleAdd}
           >
             <Icon name="plus" size={13} />Добавить
@@ -514,7 +521,6 @@ function AddLineDrawer({
         <div>
           <label className="field-label">
             <span>Цвет{needsColor && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
-            {!needsColor && <span className="text-xs faint">не обязательно</span>}
           </label>
           <Select
             value={colorId}

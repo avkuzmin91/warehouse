@@ -19,6 +19,11 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
 
+  // Доступно для плана: брак → defect; годный → годный + на проверке.
+  // Товар на проверке физически на складе, по нему можно планировать заранее;
+  // если уйдёт в брак — план скорректируют. Отгрузка остаётся строго по годному.
+  const planAvailable = (b: BalanceItem) => (cargoType === 'defect' ? b.defect : b.good + b.on_review)
+
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
@@ -31,7 +36,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
       }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
-        setItems(res.items.filter((b) => cargoType === 'defect' ? b.defect > 0 : b.good > 0))
+        setItems(res.items.filter((b) => planAvailable(b) > 0))
       })
       .catch(() => { /* aborted or error */ })
       .finally(() => {
@@ -41,13 +46,8 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
     return () => ctrl.abort()
   }, [search, clientId, cargoType])
 
-  const available = pending
-    ? cargoType === 'defect' ? pending.item.defect : pending.item.good
-    : 0
-
-  const aggregateAvailable = pending
-    ? (cargoType === 'defect' ? pending.item.defect : pending.item.good)
-    : 0
+  const available = pending ? planAvailable(pending.item) : 0
+  const aggregateAvailable = available
 
   return (
     <>
@@ -106,6 +106,12 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                   {aggregateAvailable}
                 </span> шт
               </div>
+              {cargoType !== 'defect' && pending.item.on_review > 0 && (
+                <div style={{ marginTop: 4, fontSize: 12, color: 'var(--c-text-subtle)' }}>
+                  Годный <span className="mono" style={{ color: 'var(--c-success)' }}>{pending.item.good}</span>
+                  {' · '}На проверке <span className="mono" style={{ color: 'var(--c-warning)' }}>{pending.item.on_review}</span>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -155,7 +161,11 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                     <div className="mono" style={{ color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
                       {cargoType === 'defect' ? item.defect : item.good}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
+                    {cargoType !== 'defect' && item.on_review > 0 ? (
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--c-warning)' }}>+{item.on_review} на проверке</div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
+                    )}
                   </div>
                   <Icon name="plus" size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
                 </div>

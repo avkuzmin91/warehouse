@@ -2,11 +2,10 @@ import type { InventoryProductLookup } from '../../../../api/domainTypes'
 
 /**
  * Правила вариантов при добавлении строки поступления.
- * requires_color типа товара относится к карточке товара в справочнике,
- * а не к документу поступления — цвет строки всегда опционален.
+ * В поступлении цвет является частью складского варианта, поэтому обязателен для любой строки.
  */
 export function receiptLineColorRequired(_product: InventoryProductLookup | undefined): boolean {
-  return false
+  return true
 }
 
 export function receiptLineSizeRequired(product: InventoryProductLookup | undefined): boolean {

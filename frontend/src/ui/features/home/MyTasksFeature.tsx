@@ -51,12 +51,24 @@ function ageInfo(since: string | null): { label: string; overdue: boolean } {
   return { label: 'просрочено', overdue: true }
 }
 
+function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean {
+  if (role === 'manager') {
+    return task.kind === 'trip_cost'
+  }
+  if (role === 'warehouse_manager' && task.doc_type === 'receipt' && task.status === 'on_review') {
+    return false
+  }
+  return true
+}
+
 export function MyTasksFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const { data, loading } = useApi((signal) => getMyTasks(signal), [])
 
-  const tasks: TaskItem[] = [...(data?.items ?? [])].sort((a, b) => (a.since ?? '').localeCompare(b.since ?? ''))
+  const tasks: TaskItem[] = [...(data?.items ?? [])]
+    .filter((task) => isTaskVisibleForRole(task, user?.role))
+    .sort((a, b) => (a.since ?? '').localeCompare(b.since ?? ''))
   const roleLabel = ROLE_LABEL[user?.role ?? ''] ?? (user?.role ?? '—')
 
   return (

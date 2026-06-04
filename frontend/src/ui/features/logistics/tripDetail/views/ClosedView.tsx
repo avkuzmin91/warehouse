@@ -30,8 +30,9 @@ function Kpi({ icon, label, value }: { icon: IconName; label: string; value: str
   )
 }
 
-export function ClosedView({ detail, onBack, onOpenReceipt }: {
+export function ClosedView({ detail, showCosts, onBack, onOpenReceipt }: {
   detail: TripDetail
+  showCosts: boolean
   onBack: () => void
   onOpenReceipt: (id: string) => void
 }) {
@@ -54,10 +55,10 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
       />
 
       {closed && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-          <Kpi icon="ruble" label="Итого по рейсу" value={money(total)} />
+        <div style={{ display: 'grid', gridTemplateColumns: showCosts ? 'repeat(4, 1fr)' : 'repeat(2, 1fr)', gap: 12, marginBottom: 18 }}>
+          {showCosts && <Kpi icon="ruble" label="Итого по рейсу" value={money(total)} />}
           <Kpi icon="forklift" label="Разгрузка" value={unloadMin != null ? `${unloadMin} мин` : '—'} />
-          <Kpi icon="clock" label="Простой" value={`${doc.waiting_minutes ?? 0} мин · ${money(doc.waiting_cost)}`} />
+          {showCosts && <Kpi icon="clock" label="Простой" value={`${doc.waiting_minutes ?? 0} мин · ${money(doc.waiting_cost)}`} />}
           <Kpi icon="check" label="Загруженность" value={doc.load_factor ? TRIP_LOAD_LABELS[doc.load_factor] : '—'} />
         </div>
       )}
@@ -69,7 +70,7 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
               <ReadRow label="Откуда">{doc.origin_name ?? '—'}</ReadRow>
               <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
               <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
-              <ReadRow label="Стоимость логистики (план)" mono>{money(doc.cost_estimate)}</ReadRow>
+              {showCosts && <ReadRow label="Стоимость логистики (план)" mono>{money(doc.cost_estimate)}</ReadRow>}
               <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>
               <ReadRow label="Плановое прибытие" mono>{fmtDateTime(doc.eta)}</ReadRow>
               <div style={{ gridColumn: '1 / -1' }}>
@@ -104,7 +105,7 @@ export function ClosedView({ detail, onBack, onOpenReceipt }: {
 
         <div className="col gap-16">
           <ProcessPanel status={doc.status} ops={ops} />
-          <CostPanel estimate={doc.cost_estimate} actual={doc.logistics_cost_actual} waiting={doc.waiting_cost} showActual={closed} />
+          {showCosts && <CostPanel estimate={doc.cost_estimate} actual={doc.logistics_cost_actual} waiting={doc.waiting_cost} showActual={closed} />}
           <JournalPanel ops={ops} />
         </div>
       </div>

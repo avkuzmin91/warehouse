@@ -21,7 +21,9 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { Icon } from '../../../../primitives/Icon'
 import { Drawer } from '../../../../feedback/Drawer'
 import { fmtDate } from '../../../../../utils/format'
+import { canViewCosts } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
@@ -60,6 +62,8 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
 
   const { unloadingZones: zonesAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
   const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function getDraft(line: ReceiptLine): LineQcDraft {
@@ -276,8 +280,22 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
           <CardBody>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <ReadOnlyInputField label="Клиент" value={doc.client_name} />
-              <ReadOnlyInputField label="Дата прибытия" value={fmtDate(doc.arrival_date)} />
-              <ReadOnlyInputField label="Стоимость логистики, ₽" value={doc.logistics_cost.toLocaleString('ru-RU')} mono />
+              <div>
+                <div className="field-label"><span>Рейс</span></div>
+                {doc.trip_id ? (
+                  <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                    style={{ width: '100%', justifyContent: 'flex-start' }}>
+                    <Icon name="truckIn" size={13} />{doc.trip_number}
+                  </button>
+                ) : (
+                  <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                )}
+              </div>
+              <ReadOnlyInputField label="Дата прибытия (план)" value={fmtDate(doc.arrival_date)} />
+              <ReadOnlyInputField label="Дата прибытия (факт)" value={fmtDate(doc.actual_arrival_date)} />
+              {showCosts && (
+                <ReadOnlyInputField label="Стоимость логистики для клиента, ₽" value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null} mono />
+              )}
               <div style={{ gridColumn: '1 / -1' }}>
                 <div className="field-label"><span>Комментарий</span></div>
                 {isReadonly ? (

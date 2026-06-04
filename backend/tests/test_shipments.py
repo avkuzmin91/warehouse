@@ -10,7 +10,7 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
-from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
+from tests.conftest import admin_client, warehouse_client, make_client_id, cleanup_client  # noqa: F401
 
 
 @pytest.fixture
@@ -146,3 +146,23 @@ def test_shipment_list_returns_pagination(admin_client):
     assert "items" in data
     assert "total" in data
     assert data["page"] == 1
+
+
+def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
+    payload = _make_shipment_payload(client_id)
+    payload["logistics_cost"] = 54321
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+
+    detail = warehouse_client.get(f"/shipments/{doc_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["logistics_cost"] is None
+
+    listing = warehouse_client.get("/shipments?limit=200")
+    assert listing.status_code == 200, listing.text
+    item = next(i for i in listing.json()["items"] if i["id"] == doc_id)
+    assert item["logistics_cost"] is None
+
+    forbidden = warehouse_client.patch(f"/shipments/{doc_id}", json={"logistics_cost": 777})
+    assert forbidden.status_code == 403

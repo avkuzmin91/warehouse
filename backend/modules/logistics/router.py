@@ -50,7 +50,9 @@ from modules.logistics.service import (
     link_receipts,
     list_trips_aggregated,
     next_trip_number,
+    sync_actual_arrival,
 )
+from security import can_view_costs, ensure_cost_access
 
 router = APIRouter(tags=["logistics"])
 
@@ -78,7 +80,12 @@ def _ensure_unload_period(unload_started_at: str | None, unload_finished_at: str
         raise HTTPException(status_code=400, detail="Окончание разгрузки не может быть раньше начала разгрузки")
 
 
-def _doc_response(row) -> TripDocResponse:
+def _ensure_trip_manager_edit_access(user) -> None:
+    if not can_view_costs(user):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+
+def _doc_response(row, *, show_costs: bool = True) -> TripDocResponse:
     return TripDocResponse(
         id=str(row["id"]),
         trip_number=str(row["trip_number"]),
@@ -93,14 +100,14 @@ def _doc_response(row) -> TripDocResponse:
         vehicle_type_name=row["vehicle_type_name"],
         transport_ordered_at=row["transport_ordered_at"],
         eta=row["eta"],
-        cost_estimate=float(row["cost_estimate"]) if row["cost_estimate"] is not None else None,
+        cost_estimate=float(row["cost_estimate"]) if show_costs and row["cost_estimate"] is not None else None,
         comment=row["comment"],
         arrived_at=row["arrived_at"],
         unload_started_at=row["unload_started_at"],
         unload_finished_at=row["unload_finished_at"],
         load_factor=row["load_factor"],
-        logistics_cost_actual=float(row["logistics_cost_actual"]) if row["logistics_cost_actual"] is not None else None,
-        waiting_cost=float(row["waiting_cost"]) if row["waiting_cost"] is not None else None,
+        logistics_cost_actual=float(row["logistics_cost_actual"]) if show_costs and row["logistics_cost_actual"] is not None else None,
+        waiting_cost=float(row["waiting_cost"]) if show_costs and row["waiting_cost"] is not None else None,
         waiting_minutes=int(row["waiting_minutes"]) if row["waiting_minutes"] is not None else None,
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
@@ -119,6 +126,8 @@ def _fetch_doc(conn, trip_id: str):
 
 @router.post("/trips")
 def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
+    if payload.cost_estimate is not None:
+        ensure_cost_access(user)
     uid = str(user["id"])
     with get_connection() as conn:
         trip_id = str(uuid4())
@@ -168,6 +177,7 @@ def list_trips(
     search: str | None = Query(None),
     user=Depends(get_current_manager),
 ):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         total, rows = list_trips_aggregated(
             conn, page=page, limit=limit, status=status, carrier_id=carrier_id,
@@ -184,8 +194,8 @@ def list_trips(
             vehicle_type_name=r["vehicle_type_name"],
             eta=r["eta"],
             arrived_at=r["arrived_at"],
-            cost_estimate=float(r["cost_estimate"]) if r["cost_estimate"] is not None else None,
-            logistics_cost_actual=float(r["logistics_cost_actual"]) if r["logistics_cost_actual"] is not None else None,
+            cost_estimate=float(r["cost_estimate"]) if show_costs and r["cost_estimate"] is not None else None,
+            logistics_cost_actual=float(r["logistics_cost_actual"]) if show_costs and r["logistics_cost_actual"] is not None else None,
             created_at=str(r["created_at"]),
             receipts_count=int(r["receipts_count"] or 0),
         )
@@ -196,6 +206,7 @@ def list_trips(
 
 @router.get("/trips/{trip_id}", response_model=TripDetailResponse)
 def get_trip(trip_id: str, user=Depends(get_current_manager)):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
         receipt_rows = conn.execute(
@@ -238,11 +249,14 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         )
         for o in ops_rows
     ]
-    return TripDetailResponse(doc=_doc_response(doc_row), receipts=receipts, ops=ops)
+    return TripDetailResponse(doc=_doc_response(doc_row, show_costs=show_costs), receipts=receipts, ops=ops)
 
 
 @router.patch("/trips/{trip_id}")
 def update_trip(trip_id: str, payload: TripDocUpdate, user=Depends(get_current_manager)):
+    _ensure_trip_manager_edit_access(user)
+    if "cost_estimate" in payload.model_fields_set:
+        ensure_cost_access(user)
     uid = str(user["id"])
     editable = {TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING, TRIP_STATUS_COSTING}
     with get_connection() as conn:
@@ -355,6 +369,8 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
         missing = [label for col, label in required if doc_row[col] in (None, "")]
         if missing:
             raise HTTPException(status_code=400, detail="Заполните обязательные поля: " + ", ".join(missing))
+        if str(doc_row["eta"]) < str(doc_row["transport_ordered_at"]):
+            raise HTTPException(status_code=400, detail="Плановое прибытие не может быть раньше заказа транспорта")
         _advance(conn, trip_id, to_status=TRIP_STATUS_AWAITING_ARRIVAL,
                  op_type=TRIP_OP_HANDOFF, comment="Черновик → Ожидает прибытия (передан на склад)", uid=uid)
         conn.commit()
@@ -399,12 +415,14 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
                  extra_sql="unload_started_at = ?, unload_finished_at = ?, load_factor = ?",
                  extra_params=(unload_started_at, unload_at, payload.load_factor))
         cascade_receipts_to_intake(conn, trip_id, str(doc_row["trip_number"]), uid)
+        sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
         conn.commit()
     return {"message": TRIP_STATUS_COSTING}
 
 
 @router.post("/trips/{trip_id}/cost")
 def trip_cost(trip_id: str, payload: TripCostPayload, user=Depends(get_current_manager)):
+    ensure_cost_access(user)
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
@@ -438,6 +456,7 @@ def trip_cost(trip_id: str, payload: TripCostPayload, user=Depends(get_current_m
 
 @router.patch("/trips/{trip_id}/execution")
 def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depends(get_current_manager)):
+    _ensure_trip_manager_edit_access(user)
     uid = str(user["id"])
     if payload.load_factor is not None and payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
         raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
@@ -470,6 +489,7 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_DOC_UPDATE, "Исполнение на складе изменено", now, uid),
         )
+        sync_actual_arrival(conn, trip_id, arrived_at)
         conn.commit()
     return {"message": "ok"}
 

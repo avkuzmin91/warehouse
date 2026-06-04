@@ -23,7 +23,7 @@ function LockedGrid({ labels }: { labels: string[] }) {
   )
 }
 
-export function PlanningView({ detail, form, onField, link, enrich, busy, checks, invalid, blockReasons, onBack, onCancel, onHandoff, onOpenReceipt }: {
+export function PlanningView({ detail, form, onField, link, enrich, busy, checks, showCosts, canEditTransportPlanning, invalid, blockReasons, onBack, onCancel, onHandoff, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -31,6 +31,8 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
   enrich?: ReceiptEnrich
   busy: boolean
   checks: Check[]
+  showCosts: boolean
+  canEditTransportPlanning: boolean
   invalid?: Partial<Record<keyof PlanningFormValue, boolean>>
   blockReasons: string[]
   onBack: () => void
@@ -51,13 +53,15 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
               <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
-              <PrimaryAction
-                icon="arrowRight"
-                label="Передать на склад"
-                hint="Рейс уйдёт кладовщику в очередь «Мои задачи»"
-                onClick={onHandoff}
-                disabled={busy}
-              />
+              {showCosts && (
+                <PrimaryAction
+                  icon="arrowRight"
+                  label="Передать на склад"
+                  hint="Рейс уйдёт кладовщику в очередь «Мои задачи»"
+                  onClick={onHandoff}
+                  disabled={busy}
+                />
+              )}
             </div>
             {blockReasons.length > 0 && (
               <div className="block-reasons">
@@ -72,7 +76,7 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
 
       <div className="split-360">
         <div className="col gap-16">
-          <PlanningForm value={form} onChange={onField} state="active" invalid={invalid} />
+          <PlanningForm value={form} onChange={onField} state="active" invalid={invalid} showCosts={showCosts} readonly={!canEditTransportPlanning} />
 
           <ReceiptsBlock
             receipts={receipts}
@@ -88,9 +92,11 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
             <LockedGrid labels={['Прибытие', 'Окончание разгрузки', 'Загруженность']} />
           </PhaseBlock>
 
-          <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint="После разгрузки">
-            <LockedGrid labels={['Логистика (факт)', 'Стоимость простоя']} />
-          </PhaseBlock>
+          {showCosts && (
+            <PhaseBlock icon="ruble" title="Закрытие и стоимость" role="manager" state="locked" hint="После разгрузки">
+              <LockedGrid labels={['Логистика (факт)', 'Стоимость простоя']} />
+            </PhaseBlock>
+          )}
         </div>
 
         <div className="col gap-16">

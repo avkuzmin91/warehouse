@@ -9,6 +9,8 @@ import {
   FieldLabel, SelectField, MoneyField, TimeField, ReadRow, Segmented,
 } from '../features/logistics/components/fields'
 import type { SelectOption } from '../features/logistics/components/fields'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { canViewCosts } from '../../utils/access'
 
 const op = (op_type: string, created_at: string): TripOp => ({
   id: op_type, trip_id: 't', op_type, comment: null, created_at, created_by: null, created_by_email: null,
@@ -45,6 +47,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function LogisticsKitPage() {
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
   const [origin, setOrigin] = useState('w1')
   const [vehicle, setVehicle] = useState('v1')
   const [cost, setCost] = useState('48000')
@@ -97,10 +101,12 @@ export function LogisticsKitPage() {
                 <FieldLabel required>Тип кузова</FieldLabel>
                 <SelectField value={vehicle} options={VEHICLES} leadIcon="truckIn" onChange={setVehicle} />
               </div>
-              <div>
-                <FieldLabel required>Стоимость логистики (план)</FieldLabel>
-                <MoneyField value={cost} onChange={setCost} />
-              </div>
+              {showCosts && (
+                <div>
+                  <FieldLabel required>Стоимость логистики (план)</FieldLabel>
+                  <MoneyField value={cost} onChange={setCost} />
+                </div>
+              )}
               <div>
                 <FieldLabel>Транспорт заказан</FieldLabel>
                 <TimeField value="02 июн, 11:40" />
@@ -137,18 +143,20 @@ export function LogisticsKitPage() {
         </div>
       </Section>
 
-      <Section title="CostLedger (план-only / showActual)">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 300px))', gap: 16 }}>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="t-sub" style={{ marginBottom: 6, fontSize: 11 }}>до разгрузки</div>
-            <CostLedger estimate={48000} />
+      {showCosts && (
+        <Section title="CostLedger (план-only / showActual)">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 300px))', gap: 16 }}>
+            <div className="card" style={{ padding: 14 }}>
+              <div className="t-sub" style={{ marginBottom: 6, fontSize: 11 }}>до разгрузки</div>
+              <CostLedger estimate={48000} />
+            </div>
+            <div className="card" style={{ padding: 14 }}>
+              <div className="t-sub" style={{ marginBottom: 6, fontSize: 11 }}>showActual</div>
+              <CostLedger estimate={48000} actual={52000} waiting={6000} showActual />
+            </div>
           </div>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="t-sub" style={{ marginBottom: 6, fontSize: 11 }}>showActual</div>
-            <CostLedger estimate={48000} actual={52000} waiting={6000} showActual />
-          </div>
-        </div>
-      </Section>
+        </Section>
+      )}
     </div>
   )
 }

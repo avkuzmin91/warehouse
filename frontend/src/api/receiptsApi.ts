@@ -38,12 +38,15 @@ export type ReceiptDoc = {
   client_name: string | null
   supplier_name: string | null
   arrival_date: string | null
+  actual_arrival_date: string | null
   comment: string | null
   status: ReceiptStatus
   zone_id: string | null
   zone_name: string | null
   ttn: string | null
-  logistics_cost: number
+  logistics_cost: number | null
+  trip_id: string | null
+  trip_number: string | null
   created_at: string
   created_by: string | null
   updated_at: string | null
@@ -255,6 +258,13 @@ export function updateReceipt(docId: string, payload: ReceiptUpdatePayload) {
   return request<{ message: string }>(`/receipts/${docId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+export function updateReceiptActualArrival(docId: string, actual_arrival_date: string | null) {
+  return request<{ message: string }>(`/receipts/${docId}/actual-arrival`, {
+    method: 'PATCH',
+    body: JSON.stringify({ actual_arrival_date }),
   })
 }
 

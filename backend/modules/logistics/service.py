@@ -136,6 +136,19 @@ def link_receipts(connection, trip_id: str, receipt_doc_ids: list[str], uid: str
     return len(linked_numbers)
 
 
+def sync_actual_arrival(connection, trip_id: str, arrived_at: str | None) -> None:
+    """Копирует фактическую дату прибытия рейса в привязанные поступления.
+
+    Берём дату из `arrived_at` (YYYY-MM-DDTHH:mm → YYYY-MM-DD). Пустое значение → NULL.
+    """
+    date_part = (str(arrived_at).strip()[:10] or None) if arrived_at else None
+    connection.execute(
+        "UPDATE receipt_docs SET actual_arrival_date = ? "
+        "WHERE id IN (SELECT receipt_doc_id FROM trip_lines WHERE trip_id = ? AND COALESCE(is_deleted, 0) = 0)",
+        (date_part, trip_id),
+    )
+
+
 def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: str) -> int:
     """При завершении разгрузки рейса: привязанные поступления planned → on_intake.
 

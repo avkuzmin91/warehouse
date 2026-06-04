@@ -28,6 +28,8 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
+import { canViewCosts } from '../../../utils/access'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
 import { CargoTypeDisplay } from './components/CargoTypeDisplay'
@@ -46,6 +48,8 @@ export function InventoryShipmentDetailPage() {
   const { docId } = useParams<{ docId: string }>()
   const navigate = useNavigate()
   const confirm = useConfirm()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -100,7 +104,7 @@ export function InventoryShipmentDetailPage() {
         client_id:      infoClientId,
         client_name:    infoClientName,
         ship_date:      infoShipDate || null,
-        logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null,
+        ...(showCosts ? { logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null } : {}),
         comment:        infoComment.trim() || null,
       })
       await load()
@@ -140,7 +144,7 @@ export function InventoryShipmentDetailPage() {
       has_defect: shipmentCargoType === 'defect' ? true : undefined,
     }
     const res = await getBalances(balanceParams)
-    setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good > 0))
+    setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good + b.on_review > 0))
     const zonesRes = await getBalancesByZone({
       client_id: shipmentClientId,
       only_positive: true,
@@ -283,11 +287,13 @@ export function InventoryShipmentDetailPage() {
             label: 'Дата отгрузки указана',
             error: 'Укажите дату отгрузки',
           },
-          {
-            ok: infoLogisticsFilled,
-            label: 'Стоимость логистики указана',
-            error: 'Укажите стоимость логистики',
-          },
+          ...(showCosts
+            ? [{
+                ok: infoLogisticsFilled,
+                label: 'Стоимость логистики указана',
+                error: 'Укажите стоимость логистики',
+              }]
+            : []),
           {
             ok: doc?.lines.every((line) => getDraft(line).shippedQty > 0) ?? false,
             label: 'Указано отгруженное количество',
@@ -567,17 +573,19 @@ export function InventoryShipmentDetailPage() {
                   <Field label="Дата отгрузки" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
-                  <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={infoLogisticsCost}
-                      onChange={(e) => { setInfoLogisticsCost(e.target.value); setInfoDirty(true) }}
-                      placeholder="0.00"
-                    />
-                  </Field>
+                  {showCosts && (
+                    <Field label="Стоимость логистики, ₽" required style={{ marginBottom: 0 }}>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={infoLogisticsCost}
+                        onChange={(e) => { setInfoLogisticsCost(e.target.value); setInfoDirty(true) }}
+                        placeholder="0.00"
+                      />
+                    </Field>
+                  )}
                   <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                     <textarea
                       className="input"
@@ -596,11 +604,13 @@ export function InventoryShipmentDetailPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
                   <ReadOnlyField label="Дата отгрузки" value={fmtDateLong(doc.ship_date)} />
-                  <ReadOnlyField
-                    label="Стоимость логистики, ₽"
-                    value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
-                    mono
-                  />
+                  {showCosts && (
+                    <ReadOnlyField
+                      label="Стоимость логистики, ₽"
+                      value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
+                      mono
+                    />
+                  )}
                   <div style={{ gridColumn: '1 / -1' }}>
                     <ReadOnlyField label="Комментарий" value={doc.comment} />
                   </div>

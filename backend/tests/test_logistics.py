@@ -12,7 +12,7 @@ import pytest
 if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
-from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
+from tests.conftest import admin_client, manager_client, warehouse_client, make_client_id, cleanup_client  # noqa: F401
 
 
 @pytest.fixture
@@ -134,6 +134,18 @@ def test_handoff_requires_linked_receipt(admin_client):
     assert bad.status_code == 400, bad.text
 
 
+def test_handoff_rejects_eta_before_transport_ordered(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.patch(f"/trips/{trip_id}", json={
+        "transport_ordered_at": "2026-06-02T10:00",
+        "eta": "2026-06-01T08:00",
+    })
+    bad = admin_client.post(f"/trips/{trip_id}/handoff")
+    assert bad.status_code == 400, bad.text
+    assert "раньше" in bad.json()["detail"]
+
+
 def test_receipt_cannot_be_linked_to_two_trips(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
     t1 = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
@@ -180,3 +192,159 @@ def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
     # рейс в costing → задача менеджеру; поступление в on_intake → задача кладовщику
     assert (trip_id, "trip_cost") in kinds
     assert (receipt_id, "receipt_intake") in kinds
+
+
+def test_unload_copies_actual_arrival_to_receipt(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={"arrived_at": "2025-06-05T09:30"})
+    unload = admin_client.post(f"/trips/{trip_id}/unload", json={
+        "unload_finished_at": "2025-06-05T11:00", "load_factor": "full",
+    })
+    assert unload.status_code == 200, unload.text
+
+    rec = admin_client.get(f"/receipts/{receipt_id}").json()
+    assert rec["doc"]["actual_arrival_date"] == "2025-06-05"
+    assert rec["doc"]["trip_id"] == trip_id
+    assert rec["doc"]["trip_number"].startswith("TR-")
+
+
+def test_manager_edits_arrival_resyncs_receipt(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={"arrived_at": "2025-06-05T09:30"})
+    admin_client.post(f"/trips/{trip_id}/unload", json={
+        "unload_finished_at": "2025-06-05T11:00", "load_factor": "full",
+    })
+
+    execution = admin_client.patch(f"/trips/{trip_id}/execution", json={
+        "arrived_at": "2025-06-07T12:00",
+        "unload_started_at": "2025-06-07T12:05",
+        "unload_finished_at": "2025-06-07T13:00",
+        "load_factor": "full",
+    })
+    assert execution.status_code == 200, execution.text
+    rec = admin_client.get(f"/receipts/{receipt_id}").json()
+    assert rec["doc"]["actual_arrival_date"] == "2025-06-07"
+
+
+def test_actual_arrival_editable_without_trip(warehouse_client, client_id):
+    free_receipt = _planned_receipt(warehouse_client, client_id)
+    ok = warehouse_client.patch(f"/receipts/{free_receipt}/actual-arrival", json={"actual_arrival_date": "2026-06-06"})
+    assert ok.status_code == 200, ok.text
+    assert warehouse_client.get(f"/receipts/{free_receipt}").json()["doc"]["actual_arrival_date"] == "2026-06-06"
+
+
+def test_actual_arrival_blocked_with_trip(admin_client, client_id):
+    linked_receipt = _planned_receipt(admin_client, client_id)
+    # достаточно привязки (trip_lines) — без cost_estimate, чтобы не упереться в cost-доступ
+    admin_client.post("/trips", json={"receipt_doc_ids": [linked_receipt]})
+    bad = admin_client.patch(f"/receipts/{linked_receipt}/actual-arrival", json={"actual_arrival_date": "2026-06-06"})
+    assert bad.status_code == 400, bad.text
+
+
+def test_tasks_endpoint_excludes_on_review_receipts_for_warehouse(admin_client, warehouse_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    to_intake = admin_client.post(f"/receipts/{receipt_id}/advance")
+    assert to_intake.status_code == 200, to_intake.text
+    assert to_intake.json()["message"] == "on_intake"
+    to_review = admin_client.post(f"/receipts/{receipt_id}/advance")
+    assert to_review.status_code == 200, to_review.text
+    assert to_review.json()["message"] == "on_review"
+
+    tasks = warehouse_client.get("/tasks")
+    assert tasks.status_code == 200, tasks.text
+    items = tasks.json()["items"]
+    kinds = {(t["doc_id"], t["kind"]) for t in items}
+    assert (receipt_id, "receipt_review") not in kinds
+    assert all(
+        not (t["doc_type"] == "receipt" and t["status"] == "on_review")
+        for t in items
+    )
+
+
+def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manager_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+    admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
+
+    tasks = manager_client.get("/tasks")
+    assert tasks.status_code == 200, tasks.text
+    items = tasks.json()["items"]
+    assert (trip_id, "trip_cost") in {(t["doc_id"], t["kind"]) for t in items}
+    assert all(t["kind"] == "trip_cost" for t in items)
+
+
+def test_warehouse_trip_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+    admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
+    cost = admin_client.post(f"/trips/{trip_id}/cost", json={
+        "logistics_cost_actual": 12000,
+        "waiting_cost": 1500,
+        "waiting_minutes": 90,
+    })
+    assert cost.status_code == 200, cost.text
+
+    detail = warehouse_client.get(f"/trips/{trip_id}")
+    assert detail.status_code == 200, detail.text
+    doc = detail.json()["doc"]
+    assert doc["cost_estimate"] is None
+    assert doc["logistics_cost_actual"] is None
+    assert doc["waiting_cost"] is None
+    assert doc["waiting_minutes"] == 90
+
+    listing = warehouse_client.get("/trips?limit=200")
+    assert listing.status_code == 200, listing.text
+    item = next(i for i in listing.json()["items"] if i["id"] == trip_id)
+    assert item["cost_estimate"] is None
+    assert item["logistics_cost_actual"] is None
+
+    patch = warehouse_client.patch(f"/trips/{trip_id}", json={"cost_estimate": 777})
+    assert patch.status_code == 403
+
+    forbidden = warehouse_client.post(f"/trips/{trip_id}/cost", json={
+        "logistics_cost_actual": 777,
+    })
+    assert forbidden.status_code == 403
+
+
+def test_warehouse_cannot_edit_trip_transport_planning(admin_client, warehouse_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+
+    draft_patch = warehouse_client.patch(f"/trips/{trip_id}", json={"carrier_name": "Другой перевозчик"})
+    assert draft_patch.status_code == 403, draft_patch.text
+
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+    admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
+
+    costing_patch = warehouse_client.patch(f"/trips/{trip_id}", json={"origin_name": "Другой склад"})
+    assert costing_patch.status_code == 403, costing_patch.text
+
+
+def test_warehouse_cannot_edit_trip_execution_in_costing(admin_client, warehouse_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-03T10:00"})
+    admin_client.post(f"/trips/{trip_id}/unload", json={
+        "unload_started_at": "2026-06-03T10:05",
+        "unload_finished_at": "2026-06-03T11:10",
+        "load_factor": "partial",
+    })
+
+    execution = warehouse_client.patch(f"/trips/{trip_id}/execution", json={
+        "arrived_at": "2026-06-03T10:02",
+        "unload_started_at": "2026-06-03T10:07",
+        "unload_finished_at": "2026-06-03T11:15",
+        "load_factor": "full",
+    })
+    assert execution.status_code == 403, execution.text
