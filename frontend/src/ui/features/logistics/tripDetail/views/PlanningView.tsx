@@ -23,7 +23,7 @@ function LockedGrid({ labels }: { labels: string[] }) {
   )
 }
 
-export function PlanningView({ detail, form, onField, link, enrich, busy, checks, showCosts, canEditTransportPlanning, invalid, blockReasons, onBack, onCancel, onHandoff, onOpenReceipt }: {
+export function PlanningView({ detail, form, onField, link, enrich, busy, checks, showCosts, canEditTransportPlanning, invalid, blockReasons, onBack, onCancel, onSaveFields, onHandoff, onOpenReceipt }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -37,6 +37,7 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
   blockReasons: string[]
   onBack: () => void
   onCancel: () => void
+  onSaveFields: () => void
   onHandoff: () => void
   onOpenReceipt: (id: string) => void
 }) {
@@ -53,6 +54,11 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
               <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
+              {canEditTransportPlanning && (
+                <button className="btn ghost" onClick={onSaveFields} disabled={busy}>
+                  <Icon name="save" size={14} />Сохранить
+                </button>
+              )}
               {showCosts && (
                 <PrimaryAction
                   icon="arrowRight"

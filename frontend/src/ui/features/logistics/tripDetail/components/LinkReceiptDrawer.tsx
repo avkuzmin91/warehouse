@@ -9,6 +9,8 @@ import type { CreateReceiptFormValue } from './CreateReceiptForm'
 
 type Mode = 'link' | 'create'
 
+const CREATE_RECEIPT_IN_TRIP_DRAWER_ENABLED = false
+
 const EMPTY_CREATE_FORM: CreateReceiptFormValue = {
   client_id: '', supplier_name: '', arrival_date: '', ttn: '', zone_id: '', zone_name: '', comment: '', lines: [],
 }
@@ -29,7 +31,9 @@ export type LinkReceiptDrawerProps = {
 /** Правая шторка «Поступления в рейс»: два режима — привязка существующих и создание нового. */
 export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candidates, busy, onLink, onCreate }: LinkReceiptDrawerProps) {
   const [mode, setMode] = useState<Mode>('link')
-  const segments: { value: Mode; icon: IconName; label: string }[] = onCreate
+  const canCreate = Boolean(onCreate && CREATE_RECEIPT_IN_TRIP_DRAWER_ENABLED)
+  const activeMode: Mode = canCreate ? mode : 'link'
+  const segments: { value: Mode; icon: IconName; label: string }[] = canCreate
     ? [{ value: 'link', icon: 'inbox', label: 'Привязать существующее' }, { value: 'create', icon: 'plus', label: 'Создать новое' }]
     : [{ value: 'link', icon: 'inbox', label: 'Привязать существующее' }]
   const [query, setQuery] = useState('')
@@ -76,7 +80,7 @@ export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candi
     close()
   }
   async function handleCreate() {
-    if (!onCreate || !createReady || createInvalidLine) return
+    if (!canCreate || !onCreate || !createReady || createInvalidLine) return
     await onCreate(form)
     close()
   }
@@ -123,7 +127,7 @@ export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candi
           {segments.length > 1 && (
             <div style={{ display: 'flex', gap: 3, padding: 3, background: 'var(--c-bg-sunken)', borderRadius: 9, marginTop: 14 }}>
               {segments.map((s) => {
-                const on = mode === s.value
+                const on = activeMode === s.value
                 return (
                   <button
                     key={s.value}
@@ -146,7 +150,7 @@ export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candi
 
         {/* body */}
         <div style={{ flex: 1, overflowY: 'auto', overflowX: 'visible', padding: '16px 20px' }}>
-          {mode === 'link' ? (
+          {activeMode === 'link' ? (
             <div className="col gap-12">
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <Icon name="search" size={13} style={{ position: 'absolute', left: 10, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
@@ -168,7 +172,7 @@ export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candi
                 <div style={{ textAlign: 'center', padding: '28px 0', color: 'var(--c-text-subtle)' }}>
                   <Icon name="inbox" size={26} style={{ color: 'var(--c-text-faint)' }} />
                   <div style={{ fontSize: 13, fontWeight: 500, marginTop: 8, color: 'var(--c-text-muted)' }}>Ничего не нашлось</div>
-                  {onCreate && (
+                  {canCreate && (
                     <button className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => setMode('create')}>
                       <Icon name="plus" size={12} />Создать новое
                     </button>
@@ -205,7 +209,7 @@ export function LinkReceiptDrawer({ open, onClose, tripNumber, tripOrigin, candi
           padding: '12px 20px', borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', flexShrink: 0,
           display: 'flex', alignItems: 'center', gap: 12,
         }}>
-          {mode === 'link' ? (
+          {activeMode === 'link' ? (
             <>
               <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>
                 {selected.size > 0

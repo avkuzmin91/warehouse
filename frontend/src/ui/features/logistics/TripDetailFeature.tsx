@@ -298,7 +298,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         canEditTransportPlanning={canEditTransportPlanning}
         invalid={showBlockReasons ? requiredErrors : undefined}
         blockReasons={showBlockReasons ? handoffBlockReasons : []}
-        onBack={onBack} onCancel={handleCancel} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
+        onBack={onBack} onCancel={handleCancel} onSaveFields={handleSaveFields} onHandoff={handleHandoff} onOpenReceipt={onOpenReceipt}
       />
     )
   } else if (status === 'awaiting_arrival' || status === 'unloading') {
