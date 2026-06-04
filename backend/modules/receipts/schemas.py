@@ -63,6 +63,10 @@ class ReceiptLineUpdate(BaseModel):
     defect_zone_name: str | None = None
 
 
+class ReceiptActualArrivalUpdate(BaseModel):
+    actual_arrival_date: str | None = None
+
+
 class ReceiptArriveLine(BaseModel):
     line_id: str
     accepted_qty: int = Field(ge=0)
@@ -92,12 +96,15 @@ class ReceiptDocResponse(BaseModel):
     client_name: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
+    actual_arrival_date: str | None = None
     comment: str | None = None
     status: str
     zone_id: str | None = None
     zone_name: str | None = None
     ttn: str | None = None
-    logistics_cost: float
+    logistics_cost: float | None = None
+    trip_id: str | None = None
+    trip_number: str | None = None
     created_at: str
     created_by: str | None = None
     updated_at: str | None = None
@@ -155,12 +162,15 @@ class ReceiptListItem(BaseModel):
     client_name: str | None = None
     supplier_name: str | None = None
     arrival_date: str | None = None
+    actual_arrival_date: str | None = None
     comment: str | None = None
     status: str
     zone_id: str | None = None
     zone_name: str | None = None
     ttn: str | None = None
-    logistics_cost: float
+    logistics_cost: float | None = None
+    trip_id: str | None = None
+    trip_number: str | None = None
     created_at: str
     created_by: str | None = None
     sku_count: int = 0

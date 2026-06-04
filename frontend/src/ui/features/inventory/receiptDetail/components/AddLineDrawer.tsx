@@ -70,6 +70,7 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
 
   async function handleAdd() {
     if (!selectedProduct) { setError('Выберите товар'); return }
+    if (needsColor && !colorId) { setError('Выберите цвет'); return }
     if (needsSize && !sizeId) { setError('Выберите размер — он обязателен для этого типа товара'); return }
     if (qty < 1) { setError('Количество должно быть не меньше 1'); return }
     setError('')
@@ -103,7 +104,7 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
       footer={
         <>
           <button className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" disabled={!productId || qty < 1 || saving} onClick={handleAdd}>
+          <button className="btn primary" disabled={!productId || (needsColor && !colorId) || qty < 1 || saving} onClick={handleAdd}>
             <Icon name="plus" size={13} />Добавить
           </button>
         </>
@@ -126,7 +127,6 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
         <div>
           <label className="field-label">
             <span>Цвет{needsColor && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
-            {!needsColor && <span className="text-xs faint">не обязательно</span>}
           </label>
           <Select
             value={colorId}

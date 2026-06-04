@@ -22,11 +22,14 @@ from rate_limit.login_rate_limit import check_login_rate_limits, close_login_red
 
 from modules.auth.router import router as auth_router
 from modules.balances.router import router as balances_router
+from modules.dashboard.router import router as dashboard_router
 from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
+from modules.logistics.router import router as logistics_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
+from modules.tasks.router import router as tasks_router
 from modules.users.router import router as users_router
 
 _auth_log = logging.getLogger("warehouse.auth")
@@ -44,12 +47,87 @@ def _ensure_runtime_schema() -> None:
         """)
         conn.execute("""
             ALTER TABLE IF EXISTS receipt_docs
-                ADD COLUMN IF NOT EXISTS comment TEXT
+                ADD COLUMN IF NOT EXISTS comment TEXT,
+                ADD COLUMN IF NOT EXISTS actual_arrival_date TEXT
         """)
         conn.execute("""
             ALTER TABLE IF EXISTS colors
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
+        # Логистика (рейсы) + справочник «Тип кузова» — на случай dev-старта без alembic.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vehicle_types (
+                id            TEXT PRIMARY KEY,
+                name          TEXT UNIQUE NOT NULL,
+                is_active     INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT NOT NULL,
+                creator_id    TEXT,
+                updated_at    TEXT,
+                updated_by_id TEXT,
+                is_deleted    INTEGER NOT NULL DEFAULT 0,
+                deleted_at    TEXT,
+                deleted_by_id TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trip_docs (
+                id                   TEXT PRIMARY KEY,
+                trip_number          TEXT NOT NULL UNIQUE,
+                direction            TEXT NOT NULL DEFAULT 'inbound',
+                status               TEXT NOT NULL DEFAULT 'draft',
+                assignee_role        TEXT,
+                assignee_id          TEXT,
+                origin_id            TEXT,
+                origin_name          TEXT,
+                carrier_id           TEXT,
+                carrier_name         TEXT,
+                vehicle_type_id      TEXT,
+                vehicle_type_name    TEXT,
+                transport_ordered_at TEXT,
+                eta                  TEXT,
+                cost_estimate        REAL,
+                comment              TEXT,
+                arrived_at           TEXT,
+                unload_finished_at   TEXT,
+                load_factor          TEXT,
+                logistics_cost_actual REAL,
+                waiting_cost         REAL,
+                waiting_minutes      INTEGER,
+                created_at           TEXT NOT NULL,
+                created_by           TEXT,
+                updated_at           TEXT,
+                is_deleted           INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_docs_status ON trip_docs(status)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trip_lines (
+                id             TEXT PRIMARY KEY,
+                trip_id        TEXT NOT NULL REFERENCES trip_docs(id),
+                receipt_doc_id TEXT NOT NULL,
+                client_id      TEXT,
+                client_name    TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_lines_trip ON trip_lines(trip_id)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_lines_receipt_unique "
+            "ON trip_lines(receipt_doc_id) WHERE is_deleted = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trip_ops (
+                id         TEXT PRIMARY KEY,
+                trip_id    TEXT NOT NULL REFERENCES trip_docs(id),
+                op_type    TEXT NOT NULL,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_ops_trip ON trip_ops(trip_id)")
         conn.commit()
 
 
@@ -219,3 +297,6 @@ app.include_router(products_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(balances_router)
+app.include_router(logistics_router)
+app.include_router(tasks_router)
+app.include_router(dashboard_router)

@@ -5,6 +5,7 @@ import { request } from './http'
 export type ReceiptStatus =
   | 'draft'
   | 'planned'
+  | 'on_intake'
   | 'on_review'
   | 'done'
   | 'cancelled'
@@ -15,6 +16,7 @@ export type ReceiptOpType =
   | 'line_add'
   | 'line_update'
   | 'plan_fix'
+  | 'intake_start'
   | 'arrival_fix'
   | 'arrival_accept'
   | 'receiving'
@@ -36,12 +38,15 @@ export type ReceiptDoc = {
   client_name: string | null
   supplier_name: string | null
   arrival_date: string | null
+  actual_arrival_date: string | null
   comment: string | null
   status: ReceiptStatus
   zone_id: string | null
   zone_name: string | null
   ttn: string | null
-  logistics_cost: number
+  logistics_cost: number | null
+  trip_id: string | null
+  trip_number: string | null
   created_at: string
   created_by: string | null
   updated_at: string | null
@@ -174,6 +179,8 @@ export type ReceiptListParams = {
   sku?: string
   date_from?: string
   date_to?: string
+  unlinked_to_trip?: boolean
+  available_for_trip_id?: string
 }
 
 // --- API functions ---
@@ -208,6 +215,8 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.sku) sp.set('sku', params.sku)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
+  if (params.unlinked_to_trip) sp.set('unlinked_to_trip', 'true')
+  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
 }
@@ -249,6 +258,13 @@ export function updateReceipt(docId: string, payload: ReceiptUpdatePayload) {
   return request<{ message: string }>(`/receipts/${docId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+export function updateReceiptActualArrival(docId: string, actual_arrival_date: string | null) {
+  return request<{ message: string }>(`/receipts/${docId}/actual-arrival`, {
+    method: 'PATCH',
+    body: JSON.stringify({ actual_arrival_date }),
   })
 }
 
@@ -316,6 +332,12 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
+export function startReceiptIntake(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/intake`, {
+    method: 'POST',
+  })
+}
+
 export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
 
 export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
@@ -342,6 +364,7 @@ export function reopenReceipt(docId: string) {
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
+  on_intake: 'Принят',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
@@ -349,14 +372,15 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
-  planned: 'Принят',
+  planned: 'Поступил',
+  on_intake: 'Принят',
   on_review: 'Проверен',
   done: 'Завершен',
   cancelled: 'Аннулирован',
 }
 
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_review', 'done',
+  'draft', 'planned', 'on_intake', 'on_review', 'done',
 ]
 
 export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
@@ -365,6 +389,7 @@ export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
   line_add: 'Добавление строки',
   line_update: 'Изменение строки',
   plan_fix: 'Запланировано поступление',
+  intake_start: 'Начало приёмки',
   arrival_fix: 'Фиксация прибытия',
   arrival_accept: 'Принят при прибытии',
   receiving: 'Приёмка товара',
@@ -382,6 +407,7 @@ export function receiptStatusTone(status: ReceiptStatus) {
   const map: Record<ReceiptStatus, string> = {
     draft: '',
     planned: 'info',
+    on_intake: 'warning',
     on_review: 'warning',
     done: 'success',
     cancelled: 'danger',

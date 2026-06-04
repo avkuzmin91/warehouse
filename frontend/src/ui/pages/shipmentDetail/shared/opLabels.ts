@@ -26,9 +26,14 @@ export const OP_TONES: Record<string, string> = {
   cancel: 'danger',
 }
 
-/** Доступный остаток для строки отгрузки (по cargoType). Если строка не нашлась в balances — возвращаем текущее qty. */
+/**
+ * Доступный остаток для плана строки отгрузки (по cargoType). Для годной отгрузки
+ * это годный + на проверке: планировать можно по уже завезённому товару, ещё не
+ * прошедшему QC (если уйдёт в брак — план скорректируют). Фактическая отгрузка
+ * остаётся строго по годному в месте. Если строка не нашлась в balances — qty.
+ */
 export function lineAvailable(line: ShipmentLine, balances: BalanceItem[], cargoType: ShipmentCargoType): number {
   const matched = balances.find((b) => balanceKey(b) === balanceKey(line))
   if (!matched) return line.qty
-  return cargoType === 'defect' ? matched.defect : matched.good
+  return cargoType === 'defect' ? matched.defect : matched.good + matched.on_review
 }

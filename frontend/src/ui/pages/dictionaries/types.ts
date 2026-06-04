@@ -11,6 +11,7 @@ export type DictionaryTypeId =
   | 'warehouses'
   | 'reasons'
   | 'carriers'
+  | 'vehicle-types'
 
 export type DictionaryKind = 'rich' | 'simple' | 'empty'
 export type DictionaryGroup = 'main' | 'system'
@@ -32,10 +33,10 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'sizes',         name: 'Размеры',       icon: 'ruler',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Размер' },
   { id: 'colors',        name: 'Цвета',         icon: 'palette',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Цвет' },
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
-  { id: 'suppliers',        name: 'Поставщики',       icon: 'cart',     kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Поставщик' },
   { id: 'unloading-zones', name: 'Места хранения',  icon: 'truckIn',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Место хранения' },
-  { id: 'warehouses',       name: 'Склады',           icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад' },
+  { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
+  { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },
   { id: 'reasons',       name: 'Причины брака', icon: 'alert',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Причина брака' },
   { id: 'product-types', name: 'Типы товаров',  icon: 'tag',      kind: 'simple', group: 'system', createLabel: 'Создать запись', sheetKind: 'Тип товара' },
 ]

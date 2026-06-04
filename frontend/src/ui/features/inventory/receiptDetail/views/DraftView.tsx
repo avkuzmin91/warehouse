@@ -18,7 +18,9 @@ import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
 import { fmtDate } from '../../../../../utils/format'
+import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -38,10 +40,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
   const { doc, lines } = detail
 
   const [clientId, setClientId] = useState(doc.client_id)
-  const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
-  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
+  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
@@ -53,11 +54,16 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const [showAddLine, setShowAddLine] = useState(false)
 
-  const { clients: clientsAll, suppliers: suppliersAll } = useLookups()
+  const { clients: clientsAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
+  const canEditPlan = canEditPlannedArrival(user)
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
-  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
+
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
   const hasUnsavedChanges = metaDirty || hasPendingQty
@@ -70,10 +76,9 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
       if (metaDirty) {
         await updateReceipt(docId, {
           client_id: clientId || undefined,
-          supplier_name: supplierName.trim() || null,
-          arrival_date: arrivalDate || null,
+          ...(canEditPlan ? { arrival_date: arrivalDate || null } : {}),
           comment: comment.trim() || null,
-          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+          ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         })
       }
       for (const line of lines) {
@@ -114,7 +119,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент указан', error: 'Не выбран клиент' },
-    { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
+    { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
     { ok: lines.length > 0, label: `Строк добавлено: ${lines.length}`, error: 'Не добавлено ни одной строки' },
     { ok: lines.length > 0 && lines.every((l) => l.planned_qty >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
   ]
@@ -205,42 +210,46 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                   )}
                 </div>
                 <div>
-                  <label className="field-label">
-                    <span>Поставщик</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Поиск поставщика…"
-                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                    onChange={(v) => {
-                      const found = suppliers.find((s) => s.id === String(v ?? ''))
-                      setSupplierName(found?.name ?? '')
-                      markDirty()
-                    }}
-                    clearable
-                  />
+                  <label className="field-label"><span>Рейс</span></label>
+                  {doc.trip_id ? (
+                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                      style={{ width: '100%', justifyContent: 'flex-start' }}>
+                      <Icon name="truckIn" size={13} />{doc.trip_number}
+                    </button>
+                  ) : (
+                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
                   </label>
-                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  {canEditPlan ? (
+                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  ) : (
+                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
-                  <label className="field-label">
-                    <span>Стоимость логистики, ₽</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    placeholder="0"
-                    value={logisticsCost}
-                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
-                  />
+                  <label className="field-label"><span>Дата прибытия (факт)</span></label>
+                  <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
                 </div>
+                {showCosts && (
+                  <div>
+                    <label className="field-label">
+                      <span>Стоимость логистики для клиента, ₽</span>
+                      <span className="text-xs faint">не обязательно</span>
+                    </label>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      placeholder="0"
+                      value={logisticsCost}
+                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
+                    />
+                  </div>
+                )}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label className="field-label">
                     <span>Комментарий</span>

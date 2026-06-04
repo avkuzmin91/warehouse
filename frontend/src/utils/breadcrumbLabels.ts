@@ -10,6 +10,8 @@ const STATIC: Record<string, string> = {
   products: 'Товары',
   users: 'Пользователи',
   inventory: 'Учет товаров',
+  logistics: 'Логистика',
+  trips: 'Рейсы',
   analytics: 'Аналитика',
   cabinet: 'Личный кабинет',
   receipt: 'Приёмка товаров',

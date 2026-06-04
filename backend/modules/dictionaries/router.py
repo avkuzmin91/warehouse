@@ -373,6 +373,52 @@ def delete_carrier(item_id: str, admin=Depends(get_current_admin)):
     return delete_dictionary_item("carriers", item_id, admin["id"])
 
 
+# ── Vehicle types ─────────────────────────────────────────────────────────────
+
+@router.get("/vehicle-types", response_model=DictionaryListResponse)
+def list_vehicle_types(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    return list_dictionary_items_page(
+        "vehicle_types", page, limit,
+        search=name, actuality_id=actuality_id,
+        date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
+        date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        include_deleted=include_deleted,
+    )
+
+
+@router.post("/vehicle-types", response_model=MessageResponse)
+def create_vehicle_type(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_item("vehicle_types", payload, admin["id"])
+
+
+@router.get("/vehicle-types/{item_id}", response_model=DictionaryBaseItem)
+def get_vehicle_type(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return get_dictionary_item("vehicle_types", item_id, include_deleted=include_deleted)
+
+
+@router.patch("/vehicle-types/{item_id}", response_model=MessageResponse)
+def update_vehicle_type(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return update_dictionary_item("vehicle_types", item_id, payload, admin["id"])
+
+
+@router.delete("/vehicle-types/{item_id}", response_model=MessageResponse)
+def delete_vehicle_type(item_id: str, admin=Depends(get_current_admin)):
+    return delete_dictionary_item("vehicle_types", item_id, admin["id"])
+
+
 # ── Defect reasons ────────────────────────────────────────────────────────────
 
 @router.get("/defect-reasons", response_model=DictionaryListResponse)

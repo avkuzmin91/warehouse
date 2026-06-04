@@ -7,8 +7,6 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from psycopg.errors import IntegrityConstraintViolation
-
 from config import PRODUCT_LIST_SORT_COLUMNS, UPLOADS_DIR, MAX_UPLOAD_BYTES
 from dbconn import get_connection
 
@@ -156,13 +154,64 @@ def _norm_variant_row_id(value: str | None) -> str | None:
     return s.lower() if s else None
 
 
-def _variant_sku_in_use(connection: Any, sku: str, exclude_variant_id: str | None) -> bool:
-    q = "SELECT 1 FROM product_variants WHERE sku = ? AND COALESCE(is_deleted, 0) = 0"
+def _variant_sku_in_use(
+    connection: Any,
+    sku: str,
+    exclude_variant_id: str | None,
+    client_id: str | None,
+) -> bool:
+    q = """
+        SELECT 1
+        FROM product_variants v
+        JOIN products p ON p.id = v.product_id
+        WHERE v.sku = ?
+          AND COALESCE(v.is_deleted, 0) = 0
+          AND COALESCE(p.is_deleted, 0) = 0
+    """
     params: list[object] = [sku]
+    if client_id is not None:
+        q += " AND p.client_id = ?"
+        params.append(client_id)
     if exclude_variant_id:
-        q += " AND id != ?"
+        q += " AND v.id != ?"
         params.append(exclude_variant_id)
     return connection.execute(q, tuple(params)).fetchone() is not None
+
+
+def _sku_taken_for_client_except_product(
+    connection: Any,
+    sku: str,
+    client_id: str,
+    exclude_product_id: str | None,
+) -> bool:
+    product_sql = """
+        SELECT 1
+        FROM products
+        WHERE sku = ?
+          AND client_id = ?
+          AND COALESCE(is_deleted, 0) = 0
+    """
+    product_params: list[object] = [sku, client_id]
+    if exclude_product_id:
+        product_sql += " AND id != ?"
+        product_params.append(exclude_product_id)
+    if connection.execute(product_sql, tuple(product_params)).fetchone():
+        return True
+
+    variant_sql = """
+        SELECT 1
+        FROM product_variants v
+        JOIN products p ON p.id = v.product_id
+        WHERE v.sku = ?
+          AND p.client_id = ?
+          AND COALESCE(v.is_deleted, 0) = 0
+          AND COALESCE(p.is_deleted, 0) = 0
+    """
+    variant_params: list[object] = [sku, client_id]
+    if exclude_product_id:
+        variant_sql += " AND v.product_id != ?"
+        variant_params.append(exclude_product_id)
+    return connection.execute(variant_sql, tuple(variant_params)).fetchone() is not None
 
 
 def _generate_variant_sku_for_patch(
@@ -172,6 +221,7 @@ def _generate_variant_sku_for_patch(
     color_id: str,
     size_id: str | None,
     exclude_variant_id: str | None,
+    client_id: str | None,
 ) -> str:
     base_norm = _normalize_sku(sku_base)
     color_labels, size_labels = _color_size_labels_for_skus(
@@ -186,10 +236,20 @@ def _generate_variant_sku_for_patch(
     sku = candidate
     salt = 0
     while True:
-        q = "SELECT id FROM product_variants WHERE sku = ? AND COALESCE(is_deleted, 0) = 0"
+        q = """
+            SELECT v.id
+            FROM product_variants v
+            JOIN products p ON p.id = v.product_id
+            WHERE v.sku = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+              AND COALESCE(p.is_deleted, 0) = 0
+        """
         params: list[object] = [sku]
+        if client_id is not None:
+            q += " AND p.client_id = ?"
+            params.append(client_id)
         if exclude_variant_id:
-            q += " AND id != ?"
+            q += " AND v.id != ?"
             params.append(exclude_variant_id)
         if not connection.execute(q, tuple(params)).fetchone():
             return sku
@@ -271,20 +331,6 @@ def _product_type_flags(connection: Any, type_id: str) -> tuple[bool, bool]:
     return bool(row["requires_color"]), bool(row["requires_size"])
 
 
-def _sku_taken_globally_except_product(connection: Any, sku: str, exclude_product_id: str) -> bool:
-    if connection.execute(
-        "SELECT 1 FROM products WHERE sku = ? AND id != ? AND COALESCE(is_deleted, 0) = 0",
-        (sku, exclude_product_id),
-    ).fetchone():
-        return True
-    if connection.execute(
-        "SELECT 1 FROM product_variants WHERE sku = ? AND product_id != ? AND COALESCE(is_deleted, 0) = 0",
-        (sku, exclude_product_id),
-    ).fetchone():
-        return True
-    return False
-
-
 def _rebase_variant_skus_for_new_product_base(
     connection: Any,
     *,
@@ -292,6 +338,7 @@ def _rebase_variant_skus_for_new_product_base(
     old_base_sku: str,
     new_base_sku: str,
     updated_at: str,
+    client_id: str | None,
 ) -> None:
     old_b = old_base_sku.strip()
     new_b = new_base_sku.strip()
@@ -308,9 +355,9 @@ def _rebase_variant_skus_for_new_product_base(
         if cur == old_b or cur.startswith(old_b + "-"):
             prop = new_b + cur[len(old_b):] if cur.startswith(old_b + "-") else new_b
         else:
-            prop = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid)
+            prop = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid, client_id=client_id)
         if prop == new_b:
-            prop = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid)
+            prop = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid, client_id=client_id)
         computed.append((vid, prop, color_id, sz_id))
 
     used_local: set[str] = set()
@@ -320,9 +367,9 @@ def _rebase_variant_skus_for_new_product_base(
         n = 0
         while n < 500:
             n += 1
-            if p not in used_local and not _variant_sku_in_use(connection, p, vid):
+            if p not in used_local and not _variant_sku_in_use(connection, p, vid, client_id):
                 break
-            p = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid)
+            p = _generate_variant_sku_for_patch(connection, sku_base=new_b, color_id=color_id, size_id=sz_id, exclude_variant_id=vid, client_id=client_id)
         else:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось подобрать уникальные штрих-коды вариантов")
         used_local.add(p)
@@ -348,6 +395,7 @@ def _build_variant_rows_for_create(
     *,
     requires_size: bool,
     sku_base: str,
+    client_id: str,
     color_ids: list[str],
     dimensions: list[ProductCreateDimensionBlock],
 ) -> list[dict]:
@@ -377,7 +425,7 @@ def _build_variant_rows_for_create(
                     sku = f"{sku_base}-{ct}-{st}"
                     n = 0
                     base_sku = sku
-                    while sku in used_skus or _variant_sku_in_use(connection, sku, None):
+                    while sku in used_skus or _variant_sku_in_use(connection, sku, None, client_id):
                         n += 1
                         sku = f"{base_sku}-{n}"
                     used_skus.add(sku)
@@ -402,7 +450,7 @@ def _build_variant_rows_for_create(
                 seen_keys.add(key)
                 n = 0
                 base_sku = sku
-                while sku in used_skus or _variant_sku_in_use(connection, sku, None):
+                while sku in used_skus or _variant_sku_in_use(connection, sku, None, client_id):
                     n += 1
                     sku = f"{base_sku}-{n}"
                 used_skus.add(sku)
@@ -422,7 +470,7 @@ def _sync_product_variants_from_request(
 ) -> None:
     prow = connection.execute(
         """
-        SELECT p.sku AS sku_base, COALESCE(pt.requires_size, 0) AS requires_size,
+        SELECT p.sku AS sku_base, p.client_id, COALESCE(pt.requires_size, 0) AS requires_size,
                COALESCE(p.is_deleted, 0) AS is_deleted
         FROM products p
         JOIN product_types pt ON pt.id = p.type_id
@@ -435,6 +483,7 @@ def _sync_product_variants_from_request(
     if bool(prow["is_deleted"]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Товар удалён. Восстановите его перед редактированием вариантов.")
     sku_base = str(prow["sku_base"])
+    client_id = str(prow["client_id"]) if prow["client_id"] else None
     requires_size = bool(prow["requires_size"])
     now = _now()
 
@@ -513,30 +562,34 @@ def _sync_product_variants_from_request(
             new_sku = (
                 _normalize_sku(item.sku)
                 if item.sku and str(item.sku).strip()
-                else _generate_variant_sku_for_patch(connection, sku_base=sku_base, color_id=item.color_id, size_id=eff_size, exclude_variant_id=rid)
+                else _generate_variant_sku_for_patch(connection, sku_base=sku_base, color_id=item.color_id, size_id=eff_size, exclude_variant_id=rid, client_id=client_id)
             )
+            if _variant_sku_in_use(connection, new_sku, rid, client_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят у этого клиента")
             connection.execute(
                 """
                 UPDATE product_variants
                 SET color_id = ?, size_id = ?, length = ?, width = ?, height = ?,
-                    sku = ?, images_json = ?, is_active = ?, updated_at = ?,
+                    sku = ?, images_json = ?, is_active = ?, updated_at = ?, client_id = ?,
                     is_deleted = 0, deleted_at = NULL, deleted_by_id = NULL
                 WHERE id = ? AND product_id = ?
                 """,
-                (item.color_id, eff_size, float(item.dimension.length), float(item.dimension.width), float(item.dimension.height), new_sku, imgs, 1 if item.is_active else 0, now, rid, product_id),
+                (item.color_id, eff_size, float(item.dimension.length), float(item.dimension.width), float(item.dimension.height), new_sku, imgs, 1 if item.is_active else 0, now, client_id, rid, product_id),
             )
         else:
             new_sku = (
                 _normalize_sku(item.sku)
                 if item.sku and str(item.sku).strip()
-                else _generate_variant_sku_for_patch(connection, sku_base=sku_base, color_id=item.color_id, size_id=eff_size, exclude_variant_id=None)
+                else _generate_variant_sku_for_patch(connection, sku_base=sku_base, color_id=item.color_id, size_id=eff_size, exclude_variant_id=None, client_id=client_id)
             )
+            if _variant_sku_in_use(connection, new_sku, None, client_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят у этого клиента")
             connection.execute(
                 """
-                INSERT INTO product_variants (id, product_id, color_id, size_id, length, width, height, sku, images_json, is_active, created_at, is_deleted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, length, width, height, sku, images_json, is_active, created_at, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
-                (str(uuid4()), product_id, item.color_id, eff_size, float(item.dimension.length), float(item.dimension.width), float(item.dimension.height), new_sku, imgs, 1 if item.is_active else 0, now),
+                (str(uuid4()), product_id, client_id, item.color_id, eff_size, float(item.dimension.length), float(item.dimension.width), float(item.dimension.height), new_sku, imgs, 1 if item.is_active else 0, now),
             )
 
 

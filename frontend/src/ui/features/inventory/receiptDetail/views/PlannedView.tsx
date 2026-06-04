@@ -4,21 +4,25 @@ import { useNavigate } from 'react-router-dom'
 import {
   RECEIPT_STATUS_LABELS,
   deleteReceiptLine,
+  receiptStatusTone,
   updateReceipt,
+  updateReceiptActualArrival,
   updateReceiptLine,
 } from '../../../../../api/receiptsApi'
 import type { ReceiptArriveLine, ReceiptDetail, ReceiptLineUpdatePayload } from '../../../../../api/receiptsApi'
 import type { DictionaryItem } from '../../../../../api/domainTypes'
-import { Combobox } from '../../../../data/Combobox'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
+import type { BadgeTone } from '../../../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { Icon } from '../../../../primitives/Icon'
-import { localTodayYmd } from '../../../../../utils/format'
+import { fmtDate, localTodayYmd } from '../../../../../utils/format'
+import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { ReceiptStepper } from '../../ReceiptStepper'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
@@ -29,6 +33,7 @@ type Props = {
   detail: ReceiptDetail
   onReload: () => Promise<void>
   onArrive: (lines: ReceiptArriveLine[]) => void
+  onStartIntake: () => void
   onCancel: () => void
   advancing: boolean
 }
@@ -38,17 +43,22 @@ export function PlannedView({
   detail,
   onReload,
   onArrive,
+  onStartIntake,
   onCancel,
   advancing,
 }: Props) {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const { doc, lines } = detail
+  const status = doc.status
 
-  const [supplierName, setSupplierName] = useState(doc.supplier_name ?? '')
   const [arrivalDate, setArrivalDate] = useState(doc.arrival_date ?? '')
+  const [actualArrivalDate, setActualArrivalDate] = useState(doc.actual_arrival_date ?? '')
   const [comment, setComment] = useState(doc.comment ?? '')
-  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost ? String(doc.logistics_cost) : '')
+  const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+
+  const hasTrip = !!doc.trip_id
+  const actualDirty = actualArrivalDate !== (doc.actual_arrival_date ?? '')
 
   const [metaDirty, setMetaDirty] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
@@ -81,11 +91,16 @@ export function PlannedView({
     return pendingStorage[lineId] ?? line?.storage_zone_id ?? ''
   }
 
-  const { suppliers: suppliersAll, unloadingZones: zonesAll } = useLookups()
-  const suppliers: DictionaryItem[] = suppliersAll.filter((s) => s.is_active && !s.is_deleted)
+  const { unloadingZones: zonesAll } = useLookups()
+  const { user } = useCurrentUser()
+  const showCosts = canViewCosts(user)
+  const canEditPlan = canEditPlannedArrival(user)
   const storageZones: DictionaryItem[] = zonesAll.filter((z) => z.is_active && !z.is_deleted)
 
   function markDirty() { setMetaDirty(true) }
+
+  const logisticsCostNumber = Number(logisticsCost)
+  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
   async function handleSaveChanges(): Promise<boolean> {
     if (!hasUnsavedChanges) return true
@@ -94,11 +109,13 @@ export function PlannedView({
     try {
       if (metaDirty) {
         await updateReceipt(docId, {
-          supplier_name: supplierName.trim() || null,
-          arrival_date: arrivalDate || null,
+          ...(canEditPlan ? { arrival_date: arrivalDate || null } : {}),
           comment: comment.trim() || null,
-          logistics_cost: logisticsCost ? parseFloat(logisticsCost) : null,
+          ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         })
+      }
+      if (!hasTrip && actualDirty) {
+        await updateReceiptActualArrival(docId, actualArrivalDate || null)
       }
       for (const line of lines) {
         const qtyDirty = pendingQty[line.id] !== undefined && pendingQty[line.id] !== line.planned_qty
@@ -157,13 +174,14 @@ export function PlannedView({
 
   const today = localTodayYmd()
   const readyChecks = [
-    { ok: !!arrivalDate, label: 'Дата прибытия указана', error: 'Не указана дата прибытия' },
-    { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия наступила', error: 'Дата прибытия ещё не наступила' },
+    { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
+    { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия (план) наступила', error: 'Дата прибытия (план) ещё не наступила' },
+    ...(status === 'planned' ? [{ ok: hasTrip ? !!doc.actual_arrival_date : !!actualArrivalDate, label: 'Дата прибытия (факт) указана', error: 'Не указана дата прибытия (факт)' }] : []),
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
     { ok: lines.length > 0 && lines.every((l) => plannedQtyFor(l.id) >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
     { ok: lines.length > 0 && missingStorageCount === 0, label: 'Место (на проверке) указано по всем строкам', error: `Не указано место (на проверке): ${missingStorageCount}` },
     { ok: lines.length > 0 && lines.every((l) => acceptedFor(l.id) >= 0), label: 'Принят указан по всем строкам', error: 'Укажите принятое количество по всем строкам' },
-    { ok: !!logisticsCost && parseFloat(logisticsCost) >= 0, label: 'Стоимость логистики указана', error: 'Не указана стоимость логистики' },
+    ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики для клиента указана', error: 'Не указана стоимость логистики для клиента' }] : []),
   ]
 
   const hasPendingQty = Object.keys(pendingQty).some((id) => pendingQty[id] !== lines.find((l) => l.id === id)?.planned_qty)
@@ -171,7 +189,7 @@ export function PlannedView({
     const line = lines.find((l) => l.id === id)
     return line !== undefined && accepted[id] !== acceptedBaseline(line)
   })
-  const hasUnsavedChanges = metaDirty || hasPendingQty || hasPendingStorage || hasPendingAccepted
+  const hasUnsavedChanges = metaDirty || (!hasTrip && actualDirty) || hasPendingQty || hasPendingStorage || hasPendingAccepted
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
@@ -184,6 +202,21 @@ export function PlannedView({
     onArrive(arrivalLines)
   }
 
+  async function handleStartIntake() {
+    if (hasUnsavedChanges) {
+      const ok = await handleSaveChanges()
+      if (!ok) return
+    }
+    onStartIntake()
+  }
+
+  const primaryLabel = status === 'planned' ? 'Начать приёмку' : 'Принять товары'
+  function runPrimary() {
+    if (blockReasons.length > 0) { setShowBlockReasons(true); return }
+    if (status === 'planned') void handleStartIntake()
+    else void handleArrive()
+  }
+
   return (
     <div className="page">
       <div className="page-header" style={{ alignItems: 'flex-start' }}>
@@ -192,7 +225,7 @@ export function PlannedView({
             <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
               <Icon name="arrowLeft" size={14} />
             </button>
-            <Badge tone="info" dot>{RECEIPT_STATUS_LABELS['planned']}</Badge>
+            <Badge tone={receiptStatusTone(status) as BadgeTone} dot>{RECEIPT_STATUS_LABELS[status]}</Badge>
             <span className="detail-meta">
               {doc.doc_number} · {doc.client_name ?? '—'}
             </span>
@@ -205,9 +238,11 @@ export function PlannedView({
               <Icon name="layers" size={14} />Журнал
               {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
             </button>
-            <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
-              <Icon name="x" size={14} />Аннулировать
-            </button>
+            {status === 'planned' && (
+              <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
+                <Icon name="x" size={14} />Аннулировать
+              </button>
+            )}
             {hasUnsavedChanges && (
               <button className="btn" onClick={handleSaveChanges} disabled={metaSaving}>
                 <Icon name="save" size={14} />Сохранить изменения
@@ -215,10 +250,10 @@ export function PlannedView({
             )}
             <button
               className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleArrive() } }}
+              onClick={runPrimary}
               disabled={advancing}
             >
-              <Icon name="arrowRight" size={14} />Зафиксировать прибытие
+              <Icon name={status === 'planned' ? 'arrowRight' : 'check'} size={14} />{primaryLabel}
             </button>
           </div>
           {showBlockReasons && blockReasons.length > 0 && (
@@ -229,7 +264,7 @@ export function PlannedView({
         </div>
       </div>
 
-      <ReceiptStepper status="planned" ops={detail.ops} style={{ marginTop: -10 }} />
+      <ReceiptStepper status={status} ops={detail.ops} style={{ marginTop: -10 }} />
 
       {metaError && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
@@ -250,35 +285,48 @@ export function PlannedView({
                   <input className="input" value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
                 </div>
                 <div>
-                  <label className="field-label">
-                    <span>Поставщик</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <Combobox
-                    value={suppliers.find((s) => s.name === supplierName)?.id ?? ''}
-                    placeholder="Поиск поставщика…"
-                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                    onChange={(v) => {
-                      const found = suppliers.find((s) => s.id === String(v ?? ''))
-                      setSupplierName(found?.name ?? '')
-                      markDirty()
-                    }}
-                    clearable
-                  />
+                  <label className="field-label"><span>Рейс</span></label>
+                  {doc.trip_id ? (
+                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                      style={{ width: '100%', justifyContent: 'flex-start' }}>
+                      <Icon name="truckIn" size={13} />{doc.trip_number}
+                    </button>
+                  ) : (
+                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Дата прибытия <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
                   </label>
-                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  {canEditPlan ? (
+                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                  ) : (
+                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  )}
                 </div>
                 <div>
                   <label className="field-label">
-                    <span>Стоимость логистики, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    <span>Дата прибытия (факт){status === 'planned' && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
+                    {hasTrip
+                      ? <span className="text-xs faint">из рейса</span>
+                      : null}
                   </label>
-                  <input className="input" type="number" min={0} placeholder="0" value={logisticsCost}
-                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }} />
+                  {hasTrip ? (
+                    <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                  ) : (
+                    <DatePicker value={actualArrivalDate} onChange={setActualArrivalDate} />
+                  )}
                 </div>
+                {showCosts && (
+                  <div>
+                    <label className="field-label">
+                      <span>Стоимость логистики для клиента, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
+                    </label>
+                    <input className="input" type="number" min={0} placeholder="0" value={logisticsCost}
+                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }} />
+                  </div>
+                )}
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label className="field-label">
                     <span>Комментарий</span>
@@ -304,9 +352,11 @@ export function PlannedView({
               <span className="card-head-title">Товары к приемке</span>
               <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
               <div className="flex-1" />
-              <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
-                <Icon name="plus" size={12} />Добавить строку
-              </button>
+              {status === 'planned' && (
+                <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
+                  <Icon name="plus" size={12} />Добавить строку
+                </button>
+              )}
             </CardHead>
             {lines.length === 0 ? (
               <div className="empty">

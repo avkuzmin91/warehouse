@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from psycopg.errors import IntegrityConstraintViolation
+from psycopg import IntegrityError
 
 from config import (
     PRODUCT_LIST_SORT_COLUMNS,
@@ -55,7 +55,7 @@ from .service import (
     _resolve_actuality_filter,
     _row_to_product_item,
     _ci_substring_like_param,
-    _sku_taken_globally_except_product,
+    _sku_taken_for_client_except_product,
     _soft_delete_variants_for_product,
     _sync_product_variants_from_request,
     _product_type_flags,
@@ -69,6 +69,7 @@ def list_products(
     admin=Depends(get_current_admin),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
     name: str | None = Query(None),
     sku: str | None = Query(None),
     type_id: str | None = Query(None),
@@ -81,6 +82,10 @@ def list_products(
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
+    if search is not None and str(search).strip():
+        like = _ci_substring_like_param(str(search))
+        conds.append("(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?)")
+        params.extend([like, like])
     if name is not None and str(name).strip():
         conds.append("fold_ci(p.name) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))
@@ -237,10 +242,14 @@ async def create_product(
         if requires_color and not parsed.colors:
             raise HTTPException(status_code=400, detail="Для этого типа товара выберите хотя бы один цвет")
         cid = _require_active_client(connection, inner.client_id)
+        sku_base = _normalize_sku(inner.sku_base)
+        if _sku_taken_for_client_except_product(connection, sku_base, cid, None):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
         variant_rows = _build_variant_rows_for_create(
             connection,
             requires_size=requires_size,
-            sku_base=inner.sku_base,
+            sku_base=sku_base,
+            client_id=cid,
             color_ids=parsed.colors,
             dimensions=parsed.dimensions,
         )
@@ -254,18 +263,18 @@ async def create_product(
                 INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, image_url, gallery_json, is_active, created_at, creator_id)
                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
                 """,
-                (pid, _normalize_name(inner.name), tid, cid, _normalize_sku(inner.sku_base), preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
+                (pid, _normalize_name(inner.name), tid, cid, sku_base, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
             )
             for vr in variant_rows:
                 connection.execute(
                     """
-                    INSERT INTO product_variants (id, product_id, color_id, size_id, length, width, height, sku, images_json, is_active, created_at, is_deleted)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+                    INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, length, width, height, sku, images_json, is_active, created_at, is_deleted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
                     """,
-                    (str(uuid4()), pid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], vr["images_json"], now),
+                    (str(uuid4()), pid, cid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], vr["images_json"], now),
                 )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=400, detail="Базовый штрих-код или SKU варианта уже существует") from exc
     return MessageResponse(message="Создано")
@@ -276,7 +285,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
     now = _now()
     with get_connection() as connection:
         meta = connection.execute(
-            "SELECT COALESCE(is_deleted, 0) AS del, sku, type_id FROM products WHERE id = ?",
+            "SELECT COALESCE(is_deleted, 0) AS del, sku, type_id, client_id FROM products WHERE id = ?",
             (item_id,),
         ).fetchone()
         if not meta:
@@ -284,6 +293,8 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         is_del = bool(meta["del"])
         cur_sku = str(meta["sku"])
         cur_type = str(meta["type_id"])
+        cur_client_id = str(meta["client_id"]) if meta["client_id"] else None
+        target_client_id = cur_client_id
         if is_del and payload.is_deleted is not False:
             if any([payload.name, payload.type_id, payload.client_id, payload.is_active, payload.sku_base, payload.image_urls]):
                 raise HTTPException(status_code=400, detail="Товар удалён. Восстановите его перед редактированием.")
@@ -307,21 +318,26 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
             if str(payload.client_id).strip() == "":
                 fields.append("client_id = ?")
                 values.append(None)
+                target_client_id = None
             else:
                 cid = _optional_active_client(connection, payload.client_id)
                 fields.append("client_id = ?")
                 values.append(cid)
+                target_client_id = cid
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
         if payload.sku_base is not None:
             new_sku = _normalize_sku(payload.sku_base)
+            if target_client_id is not None and _sku_taken_for_client_except_product(connection, new_sku, target_client_id, item_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
             if new_sku != cur_sku:
-                if _sku_taken_globally_except_product(connection, new_sku, item_id):
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят")
-                _rebase_variant_skus_for_new_product_base(connection, product_id=item_id, old_base_sku=cur_sku, new_base_sku=new_sku, updated_at=now)
+                _rebase_variant_skus_for_new_product_base(connection, product_id=item_id, old_base_sku=cur_sku, new_base_sku=new_sku, updated_at=now, client_id=target_client_id)
                 fields.append("sku = ?")
                 values.append(new_sku)
+        elif target_client_id is not None and target_client_id != cur_client_id:
+            if _sku_taken_for_client_except_product(connection, cur_sku, target_client_id, item_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
         if payload.image_urls is not None:
             urls = [str(u).strip() for u in payload.image_urls if str(u).strip()]
             fields.append("gallery_json = ?")
@@ -334,10 +350,15 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         values.extend([now, admin["id"], item_id])
         try:
             connection.execute(f"UPDATE products SET {', '.join(fields)} WHERE id = ?", tuple(values))
+            if target_client_id != cur_client_id:
+                connection.execute(
+                    "UPDATE product_variants SET client_id = ?, updated_at = ? WHERE product_id = ?",
+                    (target_client_id, now, item_id),
+                )
             if payload.is_deleted is True:
                 _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=400, detail="Базовый штрих-код или SKU варианта уже существует") from exc
     msg = "Обновлено"
@@ -474,7 +495,7 @@ def patch_product_variants(item_id: str, payload: ProductVariantsPatchRequest, a
                 (_now(), admin["id"], item_id),
             )
             connection.commit()
-        except IntegrityConstraintViolation as exc:
+        except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят") from exc
     return MessageResponse(message="Варианты сохранены")

@@ -31,6 +31,7 @@ from modules.shipments.schemas import (
     ShipmentOpItem,
 )
 from modules.shipments.service import advance_shipment, next_doc_number, normalize_cargo_type
+from security import can_view_costs, ensure_cost_access
 
 router = APIRouter(tags=["shipments"])
 
@@ -43,6 +44,8 @@ def _now() -> str:
 
 @router.post("/shipments")
 def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
+    if body.logistics_cost is not None:
+        ensure_cost_access(user)
     uid = str(user["id"])
     now = _now()
     doc_id = str(uuid4())
@@ -132,6 +135,7 @@ def list_shipments(
     overdue:   bool = Query(False),
     user=Depends(_get_manager),
 ):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
@@ -186,7 +190,7 @@ def list_shipments(
                 LEFT JOIN shipment_lines l ON l.doc_id = d.id
                 WHERE {where}
                 GROUP BY d.id
-                ORDER BY d.created_at DESC
+                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
@@ -200,7 +204,7 @@ def list_shipments(
             client_name=r["client_name"],
             destination=r["destination"],
             carrier=r["carrier"],
-            logistics_cost=float(r["logistics_cost"]) if r.get("logistics_cost") is not None else None,
+            logistics_cost=float(r["logistics_cost"]) if show_costs and r.get("logistics_cost") is not None else None,
             ship_date=r["ship_date"],
             status=str(r["status"]),
             status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
@@ -218,6 +222,7 @@ def list_shipments(
 
 @router.get("/shipments/{doc_id}", response_model=ShipmentDetailResponse)
 def get_shipment(doc_id: str, user=Depends(_get_manager)):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -271,7 +276,7 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
         client_name=row["client_name"],
         destination=row["destination"],
         carrier=row["carrier"],
-        logistics_cost=float(row["logistics_cost"]) if row.get("logistics_cost") is not None else None,
+        logistics_cost=float(row["logistics_cost"]) if show_costs and row.get("logistics_cost") is not None else None,
         ship_date=row["ship_date"],
         comment=row["comment"],
         status=str(row["status"]),
@@ -298,6 +303,8 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         fields = body.model_dump(exclude_unset=True)
+        if "logistics_cost" in fields:
+            ensure_cost_access(user)
         if "comment" in fields:
             fields["comment"] = (fields["comment"] or "").strip() or None
         if "cargo_type" in fields:

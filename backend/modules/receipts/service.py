@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from config import (
     RECEIPT_OP_ARRIVAL_FIX,
+    RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_LINE_QC_COMPLETE,
     RECEIPT_OP_LINE_QC_REOPEN,
     RECEIPT_OP_PLAN_FIX,
@@ -139,6 +140,8 @@ def list_receipts_aggregated(
     sku: str | None,
     date_from: str | None,
     date_to: str | None,
+    unlinked_to_trip: bool,
+    available_for_trip_id: str | None,
     statuses_all: frozenset[str],
 ) -> tuple[int, list[dict]]:
     """Агрегирующий запрос для списка поступлений — без N+1.
@@ -156,7 +159,7 @@ def list_receipts_aggregated(
         conds.append("d.client_id = ?")
         params.append(client_id.strip())
     if overdue:
-        conds.append("d.status IN ('planned', 'on_review')")
+        conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
         conds.append("d.arrival_date < ?")
         params.append(today)
     elif status and status in statuses_all:
@@ -178,6 +181,17 @@ def list_receipts_aggregated(
     if date_to:
         conds.append("d.arrival_date <= ?")
         params.append(date_to)
+    if available_for_trip_id and str(available_for_trip_id).strip():
+        conds.append(
+            "NOT EXISTS (SELECT 1 FROM trip_lines tl"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id != ?)"
+        )
+        params.append(str(available_for_trip_id).strip())
+    elif unlinked_to_trip:
+        conds.append(
+            "NOT EXISTS (SELECT 1 FROM trip_lines tl"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0)"
+        )
 
     where = " AND ".join(conds)
 
@@ -196,6 +210,7 @@ def list_receipts_aggregated(
         f"""
         SELECT
             d.id, d.doc_number, d.client_id, d.supplier_name, d.arrival_date,
+            d.actual_arrival_date,
             d.comment, d.status, d.zone_id, d.zone_name, d.ttn, d.logistics_cost,
             d.created_at, d.created_by,
             MAX(cl.name) AS client_name,
@@ -225,7 +240,7 @@ def list_receipts_aggregated(
         LEFT JOIN receipt_lines l ON l.doc_id = d.id
         WHERE {where}
         GROUP BY d.id
-        ORDER BY d.arrival_date DESC, d.created_at DESC
+        ORDER BY COALESCE(d.actual_arrival_date, d.arrival_date) DESC, d.created_at DESC
         LIMIT ? OFFSET ?
         """,
         params + [limit, offset],
@@ -250,7 +265,7 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
-    if current == "planned" and next_status == "on_review":
+    if next_status == "on_review":
         missing = connection.execute(
             """
             SELECT COUNT(*) AS cnt
@@ -267,6 +282,7 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
 
     op_type = (
         RECEIPT_OP_PLAN_FIX if next_status == "planned" else
+        RECEIPT_OP_INTAKE_START if next_status == "on_intake" else
         RECEIPT_OP_ARRIVAL_FIX if next_status == "on_review" else
         RECEIPT_OP_QC_COMPLETE
     )

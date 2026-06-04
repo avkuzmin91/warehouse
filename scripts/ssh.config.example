@@ -1,0 +1,18 @@
+# Скопируйте блоки в ~/.ssh/config (Windows: %USERPROFILE%\.ssh\config).
+# Ключ и пользователь — как в GitHub Secrets SSH_USER / SSH_PRIVATE_KEY (Deploy workflow).
+#
+# После правок: ssh wms-prod hostname
+
+Host pack wms wms-prod wms-production
+    HostName YOUR_VPS_IP
+    User YOUR_SSH_USER
+    IdentityFile ~/.ssh/YOUR_PRIVATE_KEY
+    ServerAliveInterval 60
+    ServerAliveCountMax 120
+
+Host wms-test wms-staging
+    HostName YOUR_VPS_IP
+    User YOUR_SSH_USER
+    IdentityFile ~/.ssh/YOUR_PRIVATE_KEY
+    ServerAliveInterval 60
+    ServerAliveCountMax 120

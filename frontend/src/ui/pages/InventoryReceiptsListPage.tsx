@@ -336,7 +336,7 @@ export function InventoryReceiptsListPage() {
                       </Td>
                       <Td>
                         <span style={overdue ? { color: 'var(--c-danger)', fontWeight: 500 } : { color: 'var(--c-text-subtle)' }}>
-                          {fmtDate(item.arrival_date)}
+                          {fmtDate(item.actual_arrival_date ?? item.arrival_date)}
                         </span>
                       </Td>
                       <Td className="num">{item.sku_count}</Td>

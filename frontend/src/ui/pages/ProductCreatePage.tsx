@@ -28,7 +28,7 @@ function parseNum(s: string): number {
 function mapServerError(msg: string): string {
   const l = msg.toLowerCase()
   if (l.includes('штрих-код') || l.includes('sku') || l.includes('unique') || l.includes('duplicate')) {
-    return 'Штрих-код или SKU варианта уже занят в системе. Укажите другой SKU.'
+    return 'Штрих-код или SKU варианта уже занят у выбранного клиента. Укажите другой SKU.'
   }
   return msg
 }

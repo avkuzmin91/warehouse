@@ -10,6 +10,7 @@ import { Avatar, getInitials } from '../primitives/Avatar'
 import { Badge } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
+import { canManageUsers } from '../../utils/access'
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
@@ -38,10 +39,6 @@ const ROLE_FILTERS = [
   { role: 'user', label: 'Без доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const
-
-function hasAdminAccess(role: string | undefined) {
-  return role === 'admin' || role === 'manager' || role === 'warehouse_manager'
-}
 
 interface RoleMenuProps {
   currentRole: string
@@ -259,7 +256,7 @@ export function UsersPage() {
 
   useEffect(() => {
     if (userLoading) return
-    if (!hasAdminAccess(user?.role)) {
+    if (!canManageUsers(user)) {
       setLoading(false)
       return
     }
@@ -309,7 +306,7 @@ export function UsersPage() {
     )
   }
 
-  if (!hasAdminAccess(user?.role)) {
+  if (!canManageUsers(user)) {
     return <AccessDeniedPage />
   }
 

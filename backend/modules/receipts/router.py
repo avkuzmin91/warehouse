@@ -17,13 +17,14 @@ from config import (
     RECEIPT_OP_LINE_DELETE,
     RECEIPT_OP_LINE_QC_COMPLETE,
     RECEIPT_OP_LINE_QC_REOPEN,
+    RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_LINE_UPDATE,
-    RECEIPT_OP_PLAN_FIX,
     RECEIPT_OP_RECEIVING,
     RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_DRAFT,
+    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
@@ -31,8 +32,9 @@ from config import (
     RECEIPT_STATUSES_ALL,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_manager
+from modules.auth.service import get_current_manager, get_current_warehouse
 from modules.receipts.schemas import (
+    ReceiptActualArrivalUpdate,
     ReceiptArrivePayload,
     ReceiptDetailResponse,
     ReceiptDocCreate,
@@ -53,10 +55,12 @@ from modules.receipts.service import (
     list_receipts_aggregated,
     next_doc_number,
 )
+from security import can_view_costs, ensure_cost_access, ensure_planned_arrival_access
 
 router = APIRouter(tags=["receipts"])
 
 _get_manager = get_current_manager
+_get_warehouse = get_current_warehouse
 
 
 def _now() -> str:
@@ -87,12 +91,27 @@ def _validate_receipt_lines_have_storage(connection, doc_id: str) -> None:
         raise HTTPException(status_code=400, detail="Укажите зону хранения для каждой строки поступления")
 
 
+def _validate_receipt_line_has_color(line) -> None:
+    if not str(line.color_id or "").strip():
+        raise HTTPException(status_code=400, detail="Укажите цвет товара")
+
+
+def _receipt_op_comment_for_user(comment: str | None, user) -> str | None:
+    if comment and not can_view_costs(user) and "Стоимость логистики" in comment:
+        return "Изменена стоимость логистики"
+    return comment
+
+
 @router.post("/receipts")
 def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
+    if payload.logistics_cost is not None:
+        ensure_cost_access(user)
     uid = str(user["id"])
     cid = payload.client_id.strip()
     if not cid:
         raise HTTPException(status_code=400, detail="Укажите клиента")
+    for line in payload.lines:
+        _validate_receipt_line_has_color(line)
 
     with get_connection() as conn:
         client_row = conn.execute(
@@ -199,12 +218,12 @@ def receipts_summary(
             params,
         ).fetchall()
     total = len(rows)
-    active = sum(1 for r in rows if r["status"] == "on_review")
+    active = sum(1 for r in rows if r["status"] in ("on_intake", "on_review"))
     done = sum(1 for r in rows if r["status"] in ("done", "cancelled"))
     drafts = sum(1 for r in rows if r["status"] == "planned")
     overdue = sum(
         1 for r in rows
-        if r["status"] in ("planned", "on_review")
+        if r["status"] in ("planned", "on_intake", "on_review")
         and r["arrival_date"] and str(r["arrival_date"]) < today
     )
     return {"all": total, "active": active, "done": done, "drafts": drafts, "overdue": overdue}
@@ -221,13 +240,17 @@ def list_receipts(
     sku: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    unlinked_to_trip: bool = Query(False),
+    available_for_trip_id: str | None = Query(None),
     user=Depends(_get_manager),
 ):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         total, rows = list_receipts_aggregated(
             conn,
             page=page, limit=limit, client_id=client_id, status=status,
             overdue=overdue, search=search, sku=sku, date_from=date_from, date_to=date_to,
+            unlinked_to_trip=unlinked_to_trip, available_for_trip_id=available_for_trip_id,
             statuses_all=RECEIPT_STATUSES_ALL,
         )
     items = [
@@ -238,12 +261,13 @@ def list_receipts(
             client_name=r["client_name"],
             supplier_name=r["supplier_name"],
             arrival_date=r["arrival_date"],
+            actual_arrival_date=r["actual_arrival_date"],
             comment=r["comment"],
             status=str(r["status"]),
             zone_id=r["zone_id"],
             zone_name=r["zone_name"],
             ttn=r["ttn"],
-            logistics_cost=float(r["logistics_cost"] or 0),
+            logistics_cost=float(r["logistics_cost"] or 0) if show_costs else None,
             created_at=str(r["created_at"]),
             created_by=r["created_by"],
             sku_count=int(r["sku_count"] or 0),
@@ -259,9 +283,15 @@ def list_receipts(
 
 @router.get("/receipts/{doc_id}", response_model=ReceiptDetailResponse)
 def get_receipt(doc_id: str, user=Depends(_get_manager)):
+    show_costs = can_view_costs(user)
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT d.*, cl.name AS client_name FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.id = ? AND d.is_deleted = 0",
+            "SELECT d.*, cl.name AS client_name, tl.trip_id AS trip_id, t.trip_number AS trip_number "
+            "FROM receipt_docs d "
+            "LEFT JOIN clients cl ON cl.id = d.client_id "
+            "LEFT JOIN trip_lines tl ON tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 "
+            "LEFT JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+            "WHERE d.id = ? AND d.is_deleted = 0",
             (doc_id,),
         ).fetchone()
         if not doc_row:
@@ -314,7 +344,7 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
             op_type=str(op["op_type"]),
             qty=op["qty"],
             reason=op["reason"],
-            comment=op["comment"],
+            comment=_receipt_op_comment_for_user(op["comment"], user),
             created_at=str(op["created_at"]),
             created_by=op["created_by"],
             created_by_email=op["user_email"],
@@ -328,12 +358,15 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         client_name=doc_row["client_name"],
         supplier_name=doc_row["supplier_name"],
         arrival_date=doc_row["arrival_date"],
+        actual_arrival_date=doc_row["actual_arrival_date"],
         comment=doc_row["comment"],
         status=str(doc_row["status"]),
         zone_id=doc_row["zone_id"],
         zone_name=doc_row["zone_name"],
         ttn=doc_row["ttn"],
-        logistics_cost=float(doc_row["logistics_cost"] or 0),
+        logistics_cost=float(doc_row["logistics_cost"] or 0) if show_costs else None,
+        trip_id=doc_row["trip_id"],
+        trip_number=doc_row["trip_number"],
         created_at=str(doc_row["created_at"]),
         created_by=doc_row["created_by"],
         updated_at=doc_row["updated_at"],
@@ -343,6 +376,10 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
 
 @router.patch("/receipts/{doc_id}")
 def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_manager)):
+    if "logistics_cost" in payload.model_fields_set:
+        ensure_cost_access(user)
+    if "arrival_date" in payload.model_fields_set:
+        ensure_planned_arrival_access(user)
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
@@ -419,6 +456,57 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
     return {"message": "ok"}
 
 
+@router.patch("/receipts/{doc_id}/actual-arrival")
+def update_receipt_actual_arrival(doc_id: str, payload: ReceiptActualArrivalUpdate, user=Depends(_get_warehouse)):
+    """Факт прибытия поступления. Доступно складу, только если поступление НЕ привязано к рейсу.
+
+    У привязанного поступления факт управляется рейсом (копируется при разгрузке /
+    правке исполнения) — менять его в карточке поступления нельзя.
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        doc_row = conn.execute(
+            "SELECT status, actual_arrival_date FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc_row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(doc_row["status"]) in (RECEIPT_STATUS_DONE, RECEIPT_STATUS_CANCELLED):
+            raise HTTPException(status_code=400, detail="Завершённый документ нельзя изменять")
+
+        linked = conn.execute(
+            "SELECT 1 FROM trip_lines WHERE receipt_doc_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1", (doc_id,)
+        ).fetchone()
+        if linked:
+            raise HTTPException(status_code=400, detail="Дата прибытия (факт) управляется рейсом — измените её в рейсе")
+
+        new_val = (payload.actual_arrival_date or "").strip() or None
+        old_val = doc_row["actual_arrival_date"]
+        if (str(old_val).strip() if old_val is not None else "") == (new_val or ""):
+            return {"message": "ok"}
+
+        def _fmt(s) -> str:
+            if not s:
+                return "—"
+            try:
+                y, m, d = str(s).split("-")
+                return f"{d}.{m}.{y}"
+            except Exception:
+                return str(s)
+
+        now = _now()
+        conn.execute(
+            "UPDATE receipt_docs SET actual_arrival_date = ?, updated_at = ? WHERE id = ?",
+            (new_val, now, doc_id),
+        )
+        conn.execute(
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE,
+             f"Дата прибытия (факт): {_fmt(old_val)} → {_fmt(new_val)}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
 @router.post("/receipts/{doc_id}/lines")
 def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_manager)):
     uid = str(user["id"])
@@ -431,6 +519,7 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
         if str(doc_row["status"]) == RECEIPT_STATUS_DONE:
             raise HTTPException(status_code=400, detail="Нельзя добавить строку в завершённый документ")
 
+        _validate_receipt_line_has_color(payload)
         now = _now()
         line_id = str(uuid4())
         conn.execute(
@@ -470,15 +559,15 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
         status = str(doc_row["status"])
         if payload.planned_qty is not None and status not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
-        if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане' или 'На проверке'")
+        if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
+            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'Принят' или 'На проверке'")
         _zone_fields = {
             "storage_zone_id", "storage_zone_name",
             "good_zone_id", "good_zone_name",
             "defect_zone_id", "defect_zone_name",
         }
-        if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане' или 'На проверке'")
+        if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
+            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'Принят' или 'На проверке'")
         line_row = conn.execute(
             "SELECT id, planned_qty, accepted_qty, storage_zone_name, good_zone_name, defect_zone_name "
             "FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
@@ -715,8 +804,41 @@ def advance_receipt_status(doc_id: str, user=Depends(_get_manager)):
     return {"message": next_status}
 
 
+@router.post("/receipts/{doc_id}/intake")
+def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
+    """В плане → Принят: товар прибыл, начинается подсчёт количества.
+
+    Ручной триггер для поступлений без рейса; для рейсовых тот же переход делает
+    разгрузка рейса (см. modules/logistics).
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        doc_row = conn.execute(
+            "SELECT status, actual_arrival_date FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc_row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(doc_row["status"]) != RECEIPT_STATUS_PLANNED:
+            raise HTTPException(status_code=400, detail="Начать приёмку можно только из статуса 'В плане'")
+        if not str(doc_row["actual_arrival_date"] or "").strip():
+            raise HTTPException(status_code=400, detail="Укажите дату прибытия (факт)")
+        now = _now()
+        conn.execute(
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (RECEIPT_STATUS_ON_INTAKE, now, doc_id),
+        )
+        conn.execute(
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, RECEIPT_OP_INTAKE_START,
+             "В плане → Принят (начало приёмки)", now, uid),
+        )
+        conn.commit()
+    return {"message": RECEIPT_STATUS_ON_INTAKE}
+
+
 @router.post("/receipts/{doc_id}/arrive")
-def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_manager)):
+def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_warehouse)):
+    """Принят → На проверке: «Принять товары» — фиксирует принятое количество."""
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
@@ -724,14 +846,12 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        current = str(doc_row["status"])
-        if current not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
+        if str(doc_row["status"]) != RECEIPT_STATUS_ON_INTAKE:
             raise HTTPException(
                 status_code=400,
-                detail="Зафиксировать прибытие можно только из статуса 'Создание' или 'В плане'",
+                detail="Принять товары можно только из статуса 'Принят'",
             )
-        if current == RECEIPT_STATUS_PLANNED:
-            _validate_receipt_lines_have_storage(conn, doc_id)
+        _validate_receipt_lines_have_storage(conn, doc_id)
 
         line_rows = conn.execute(
             "SELECT id, product_sku, color_name, size_name FROM receipt_lines "
@@ -765,16 +885,10 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
             (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
         )
-        if current == RECEIPT_STATUS_DRAFT:
-            conn.execute(
-                "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, RECEIPT_OP_PLAN_FIX,
-                 "Создание → В плане (авто при фиксации прибытия)", now, uid),
-            )
         conn.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
-             "В плане → На проверке (фиксация прибытия)", now, uid),
+             "Принят → На проверке (товары приняты)", now, uid),
         )
         conn.commit()
     return {"message": RECEIPT_STATUS_ON_REVIEW}

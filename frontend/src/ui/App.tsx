@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthTabSync } from '../auth/AuthTabSync'
 import { authRoutes } from './routes/auth'
 import { inventoryRoutes } from './routes/inventory'
+import { logisticsRoutes } from './routes/logistics'
 import { cabinetRoutes } from './routes/cabinet'
 import { adminRoutes } from './routes/admin'
 import { AppLayout } from './layouts/AppLayout'
@@ -26,6 +27,7 @@ export function App() {
           <Route element={<AppLayout />}>
             {adminRoutes}
             {inventoryRoutes}
+            {logisticsRoutes}
             {cabinetRoutes}
           </Route>
           <Route path="*" element={<Navigate to="/auth" replace />} />

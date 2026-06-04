@@ -52,3 +52,7 @@ export function getInventoryCarriers(signal?: AbortSignal) {
 export function getInventoryUnloadingZones(signal?: AbortSignal) {
   return request<DictionaryItem[]>('/inventory/lookups/unloading-zones', { signal })
 }
+
+export function getInventoryVehicleTypes(signal?: AbortSignal) {
+  return request<DictionaryItem[]>('/inventory/lookups/vehicle-types', { signal })
+}

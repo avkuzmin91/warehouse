@@ -1,10 +1,11 @@
 import { useNavigate } from 'react-router-dom'
 import { Badge } from '../primitives/Badge'
 import { Card, CardBody, CardHead } from '../primitives/Card'
-import { EmptyState } from '../primitives/EmptyState'
 import { Icon } from '../primitives/Icon'
-import { KPI } from '../primitives/KPI'
 import { WarehouseMap } from '../widgets/WarehouseMap'
+import { MyTasksFeature } from '../features/home/MyTasksFeature'
+import { HomeKpiFeature } from '../features/home/HomeKpiFeature'
+import { PacmanPlaceholder } from '../features/home/PacmanPlaceholder'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('ru-RU', {
@@ -40,27 +41,11 @@ export function HomePage() {
         </div>
       </div>
 
-      <div className="kpi-grid">
-        <KPI label="Поступления" value="Отключено" />
-        <KPI label="Отгрузки" value="Отключено" />
-        <KPI label="Остатки" value="См. раздел" />
-        <KPI label="Аналитика" value="Отключена" />
-      </div>
+      <HomeKpiFeature />
 
       <div className="mt-20" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
         <div className="col gap-16">
-          <Card>
-            <CardHead>
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Аналитика отключена</div>
-            </CardHead>
-            <CardBody>
-              <EmptyState
-                title="Сводные графики недоступны"
-                sub="Раздел аналитики отключен. Для работы используйте поступления, отгрузки и текущие остатки."
-              />
-            </CardBody>
-          </Card>
+          <MyTasksFeature />
 
           <Card>
             <CardHead>
@@ -110,13 +95,10 @@ export function HomePage() {
           <Card>
             <CardHead>
               <Icon name="clock" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Лента событий недоступна</div>
+              <div className="card-head-title">Лента событий</div>
             </CardHead>
-            <CardBody>
-              <EmptyState
-                title="История событий не подключена"
-                sub="Моковая лента удалена, чтобы главная страница не показывала тестовые операции как реальные."
-              />
+            <CardBody style={{ padding: 0 }}>
+              <PacmanPlaceholder title="Лента событий" sub="Пакмен уже собирает события" />
             </CardBody>
           </Card>
         </div>

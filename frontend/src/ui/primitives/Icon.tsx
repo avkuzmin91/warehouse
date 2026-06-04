@@ -61,6 +61,13 @@ const paths: Record<string, React.ReactNode> = {
   building: <><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18"/><path d="M9 21V9"/><rect x="6" y="13" width="2" height="2"/><rect x="11" y="13" width="2" height="2"/><rect x="16" y="13" width="2" height="2"/><rect x="6" y="17" width="2" height="2"/><rect x="16" y="17" width="2" height="2"/><rect x="10" y="17" width="4" height="4"/></>,
   cart: <><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></>,
   menu: <><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>,
+  inbox: <><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></>,
+  forklift: <><path d="M5 17V7h6v7"/><path d="M11 14h4"/><path d="M15 4v10"/><path d="M15 14h5"/><circle cx="6.5" cy="19" r="1.6"/><circle cx="13" cy="19" r="1.6"/></>,
+  truckRoute: <><path d="M3 16V6h10v10"/><path d="M13 9h4l4 4v3h-8"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/><circle cx="5.5" cy="4" r="1.4"/><path d="M5.5 5.4v2"/><line x1="5" y1="11" x2="6" y2="11"/><line x1="8" y1="11" x2="9" y2="11"/></>,
+  dolly: <><path d="M5 3v12a2 2 0 0 0 2 2h2"/><path d="M5 3l1.4 4.2"/><rect x="9" y="6" width="8" height="5" rx="0.5"/><rect x="9" y="11" width="8" height="6" rx="0.5"/><path d="M13 6v2"/><circle cx="8" cy="20" r="1.6"/><circle cx="15" cy="20" r="1.6"/></>,
+  boxOut: <><path d="M3 8l4-4h6l4 4"/><path d="M3 8v9a2 2 0 0 0 2 2h6"/><path d="M17 8v3"/><path d="M9 4v4"/><line x1="3" y1="8" x2="17" y2="8"/><line x1="14" y1="16" x2="22" y2="16"/><polyline points="19 13 22 16 19 19"/></>,
+  ruble: <><path d="M8 21V4h5a4 4 0 0 1 0 8H6"/><path d="M6 16h8"/></>,
+  snow: <><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/><line x1="18.4" y1="5.6" x2="5.6" y2="18.4"/></>,
 }
 
 export type IconName = keyof typeof paths

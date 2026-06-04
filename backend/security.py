@@ -36,3 +36,37 @@ def ensure_manager_staff(user: Mapping[str, Any]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
         )
+
+
+def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
+    """Складские действия (приёмка, разгрузка рейса): кладовщик и менеджерский состав."""
+    if user["role"] not in ("warehouse_manager", "manager", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def can_view_costs(user: Mapping[str, Any]) -> bool:
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_cost_access(user: Mapping[str, Any]) -> None:
+    if not can_view_costs(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def can_edit_planned_arrival(user: Mapping[str, Any]) -> bool:
+    """Плановую дату прибытия правит менеджерский состав, но не кладовщик."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_planned_arrival_access(user: Mapping[str, Any]) -> None:
+    if not can_edit_planned_arrival(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
