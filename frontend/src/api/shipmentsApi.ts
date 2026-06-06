@@ -61,6 +61,8 @@ export type ShipmentLine = {
   shipped_qty:       number
   storage_zone_id:   string | null
   storage_zone_name: string | null
+  store_id:          string | null
+  store_name:        string | null
   files:             ShipmentLineFile[]
 }
 
@@ -98,6 +100,35 @@ export type ShipmentDetail = ShipmentListItem & {
 
 export type ShipmentListResponse = {
   items: ShipmentListItem[]
+  total: number
+  page:  number
+  limit: number
+}
+
+export type ShipmentLinesListItem = {
+  line_id:           string
+  doc_id:            string
+  doc_number:        string
+  cargo_type:        ShipmentCargoType
+  client_id:         string | null
+  client_name:       string | null
+  destination:       string | null
+  ship_date:         string | null
+  status:            ShipmentStatus
+  status_label:      string
+  product_id:        string
+  product_name:      string
+  product_sku:       string
+  color_name:        string | null
+  size_name:         string | null
+  qty:               number
+  shipped_qty:       number
+  storage_zone_name: string | null
+  store_name:        string | null
+}
+
+export type ShipmentLinesResponse = {
+  items: ShipmentLinesListItem[]
   total: number
   page:  number
   limit: number
@@ -143,6 +174,8 @@ export type ShipmentLineIn = {
   shipped_qty?:       number
   storage_zone_id?:   string | null
   storage_zone_name?: string | null
+  store_id?:          string | null
+  store_name?:        string | null
 }
 
 export type ShipmentDocCreate = {
@@ -188,6 +221,23 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
+}
+
+export function listShipmentLines(params: ShipmentListParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page)      sp.set('page', String(params.page))
+  if (params.limit)     sp.set('limit', String(params.limit))
+  if (params.status) {
+    sp.set('status', Array.isArray(params.status) ? params.status.join(',') : params.status)
+  }
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search)    sp.set('search', params.search)
+  if (params.sku)       sp.set('sku', params.sku)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to)   sp.set('date_to', params.date_to)
+  if (params.overdue)   sp.set('overdue', 'true')
+  const q = sp.toString()
+  return request<ShipmentLinesResponse>(`/shipments/lines${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getShipment(id: string) {

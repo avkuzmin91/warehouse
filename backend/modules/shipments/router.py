@@ -24,7 +24,7 @@ from config import (
     UPLOADS_DIR,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_manager
+from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
@@ -32,6 +32,8 @@ from modules.shipments.schemas import (
     ShipmentLineFile,
     ShipmentLineIn,
     ShipmentLineItem,
+    ShipmentLinesListItem,
+    ShipmentLinesResponse,
     ShipmentListItem,
     ShipmentListResponse,
     ShipmentOpItem,
@@ -42,6 +44,7 @@ from security import can_view_costs, ensure_cost_access
 router = APIRouter(tags=["shipments"])
 
 _get_manager = get_current_manager
+_get_viewer = get_current_shipment_viewer
 
 _ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
 _FILE_EDIT_ROLES = {"admin", "manager"}
@@ -69,6 +72,26 @@ def _fmt_date(value) -> str:
         return str(value)
 
 
+def _resolve_line_store(conn, client_id: str | None, store_id: str | None) -> tuple[str | None, str | None]:
+    if not store_id or not str(store_id).strip():
+        return None, None
+    if not client_id or not str(client_id).strip():
+        raise HTTPException(status_code=400, detail="Выберите клиента перед выбором магазина")
+    row = conn.execute(
+        """
+        SELECT id, name
+        FROM client_stores
+        WHERE id = ?
+          AND client_id = ?
+          AND COALESCE(is_deleted, 0) = 0
+        """,
+        (str(store_id).strip(), str(client_id).strip()),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=400, detail="Магазин не принадлежит клиенту отгрузки")
+    return str(row["id"]), str(row["name"])
+
+
 @router.post("/shipments")
 def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
     if body.logistics_cost is not None:
@@ -89,12 +112,15 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
              SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
+            store_id, store_name = _resolve_line_store(conn, body.client_id, line.store_id)
             conn.execute(
                 """INSERT INTO shipment_lines
-                   (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,qty,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                   (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
+                    qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
-                 line.color_id, line.color_name, line.size_id, line.size_name, line.qty, now),
+                 line.color_id, line.color_name, line.size_id, line.size_name, line.qty,
+                 line.shipped_qty, line.storage_zone_id, line.storage_zone_name, store_id, store_name, now),
             )
         conn.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
@@ -111,7 +137,7 @@ def shipments_summary(
     sku:       str | None = Query(None),
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
-    user=Depends(_get_manager),
+    user=Depends(_get_viewer),
 ):
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
@@ -161,7 +187,7 @@ def list_shipments(
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
     available_for_trip_id: str | None = Query(None),
-    user=Depends(_get_manager),
+    user=Depends(_get_viewer),
 ):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
@@ -254,8 +280,102 @@ def list_shipments(
     return ShipmentListResponse(items=items, total=total, page=page, limit=limit)
 
 
+@router.get("/shipments/lines", response_model=ShipmentLinesResponse)
+def list_shipment_lines(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    status:    str | None = Query(None),
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    sku:       str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    overdue:   bool = Query(False),
+    user=Depends(_get_viewer),
+):
+    with get_connection() as conn:
+        conds = ["d.is_deleted = 0", "l.is_deleted = 0"]
+        params: list = []
+        if status:
+            requested = [s.strip() for s in status.split(",") if s.strip()]
+            allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
+            if len(allowed) == 1:
+                conds.append("d.status = ?"); params.append(allowed[0])
+            elif len(allowed) > 1:
+                placeholders = ",".join("?" for _ in allowed)
+                conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
+        if overdue:
+            today = date.today().isoformat()
+            conds.append("d.status = ?"); params.append(SHIPMENT_STATUS_PACKING)
+            conds.append("d.ship_date IS NOT NULL")
+            conds.append("d.ship_date < ?"); params.append(today)
+        if client_id:
+            conds.append("d.client_id = ?"); params.append(client_id.strip())
+        if search:
+            s = f"%{search.strip()}%"
+            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            params += [s, s, s]
+        if sku:
+            s = f"%{sku.strip()}%"
+            conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
+            params += [s, s]
+        if date_from:
+            conds.append("d.ship_date >= ?"); params.append(date_from)
+        if date_to:
+            conds.append("d.ship_date <= ?"); params.append(date_to)
+        where = " AND ".join(conds)
+        total = int(conn.execute(
+            f"""SELECT COUNT(*) AS cnt
+                FROM shipment_lines l
+                JOIN shipment_docs d ON d.id = l.doc_id
+                WHERE {where}""",
+            params,
+        ).fetchone()["cnt"])
+        offset = (page - 1) * limit
+        rows = conn.execute(
+            f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
+                    l.product_id, l.product_name, l.product_sku,
+                    l.color_name, l.size_name, l.qty,
+                    COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
+                    d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
+                    d.ship_date, d.status
+                FROM shipment_lines l
+                JOIN shipment_docs d ON d.id = l.doc_id
+                WHERE {where}
+                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
+                LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+
+    items = [
+        ShipmentLinesListItem(
+            line_id=str(r["line_id"]),
+            doc_id=str(r["doc_id"]),
+            doc_number=str(r["doc_number"]),
+            cargo_type=normalize_cargo_type(r.get("cargo_type")),
+            client_id=r["client_id"],
+            client_name=r["client_name"],
+            destination=r["destination"],
+            ship_date=r["ship_date"],
+            status=str(r["status"]),
+            status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+            product_id=str(r["product_id"]),
+            product_name=str(r["product_name"]),
+            product_sku=str(r["product_sku"]),
+            color_name=r["color_name"],
+            size_name=r["size_name"],
+            qty=int(r["qty"] or 0),
+            shipped_qty=int(r["shipped_qty"] or 0),
+            storage_zone_name=r["storage_zone_name"],
+            store_name=r["store_name"],
+        )
+        for r in rows
+    ]
+    return ShipmentLinesResponse(items=items, total=total, page=page, limit=limit)
+
+
 @router.get("/shipments/{doc_id}", response_model=ShipmentDetailResponse)
-def get_shipment(doc_id: str, user=Depends(_get_manager)):
+def get_shipment(doc_id: str, user=Depends(_get_viewer)):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         row = conn.execute(
@@ -312,6 +432,8 @@ def get_shipment(doc_id: str, user=Depends(_get_manager)):
             shipped_qty=int(l["shipped_qty"] or 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
+            store_id=l["store_id"],
+            store_name=l["store_name"],
             files=files_by_line.get(str(l["id"]), []),
         )
         for l in lines_rows
@@ -359,7 +481,7 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
     uid = str(user["id"])
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, actual_ship_date FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, actual_ship_date, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -384,6 +506,11 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             f"UPDATE shipment_docs SET {sets}, updated_at = ? WHERE id = ?",
             list(fields.values()) + [now, doc_id],
         )
+        if "client_id" in fields and (row["client_id"] or "") != (fields["client_id"] or ""):
+            conn.execute(
+                "UPDATE shipment_lines SET store_id = NULL, store_name = NULL WHERE doc_id = ? AND is_deleted = 0",
+                (doc_id,),
+            )
         if "actual_ship_date" in fields:
             old_val = row["actual_ship_date"]
             new_val = fields["actual_ship_date"]
@@ -402,21 +529,22 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         line_id = str(uuid4())
+        store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
         conn.execute(
             """INSERT INTO shipment_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,
-                size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
-             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, now),
+             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name, now),
         )
         conn.commit()
     return {"message": line_id}
@@ -426,20 +554,21 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
 def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=Depends(_get_manager)):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Состав отгрузки нельзя менять после отправки")
+        store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
         conn.execute(
             """UPDATE shipment_lines SET
                product_id=?,product_name=?,product_sku=?,color_id=?,color_name=?,
-               size_id=?,size_name=?,qty=?,shipped_qty=?,storage_zone_id=?,storage_zone_name=?
+               size_id=?,size_name=?,qty=?,shipped_qty=?,storage_zone_id=?,storage_zone_name=?,store_id=?,store_name=?
                WHERE id=? AND doc_id=? AND is_deleted=0""",
             (body.product_id, body.product_name, body.product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
-             body.shipped_qty, body.storage_zone_id, body.storage_zone_name,
+             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name,
              line_id, doc_id),
         )
         conn.commit()

@@ -2,14 +2,14 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
-  getShipmentsSummary,
   advanceShipment,
   isShipmentOverdue,
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
 } from '../../api/shipmentsApi'
-import type { ShipmentListItem, ShipmentStatus, ShipmentsSummary } from '../../api/shipmentsApi'
+import type { ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
+import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -21,24 +21,19 @@ import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
 import { fmtDateShort as fmtDate } from '../../utils/format'
-import { useApi } from '../../hooks/useApi'
 import { useLookups } from '../../hooks/useLookups'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
+import { canEditShipments } from '../../utils/access'
 
 const PAGE_SIZE = 25
 
-type TabId = 'all' | 'overdue' | 'done' | 'planned'
+type ModeId = 'docs' | 'items'
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'all',     label: 'Все' },
-  { id: 'overdue', label: 'Просрочка' },
-  { id: 'done',    label: 'Завершённые' },
-  { id: 'planned', label: 'В плане' },
+const MODE_TABS: { id: ModeId; label: string }[] = [
+  { id: 'docs',  label: 'По документам' },
+  { id: 'items', label: 'По товарам' },
 ]
-
-const TAB_STATUS: Partial<Record<TabId, ShipmentStatus>> = {
-  planned: 'packing',
-}
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
   { status: 'draft',   label: 'Создание',  tone: '' },
@@ -64,8 +59,10 @@ function shipmentProgress(item: ShipmentListItem) {
 
 export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
+  const { user } = useCurrentUser()
+  const canEdit = canEditShipments(user)
 
-  const [tab] = useFilterParam('tab', 'all')
+  const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
@@ -85,30 +82,22 @@ export function InventoryShipmentsListPage() {
 
   const { clients } = useLookups()
 
-  const { data: summaryData } = useApi(
-    (signal) => getShipmentsSummary({
-      client_id: clientId || undefined,
-      search: search.trim() || undefined,
-      sku: skuFilter.trim() || undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, signal),
-    [clientId, search, skuFilter, dateFrom, dateTo, reloadTick],
-  )
-  const summary: ShipmentsSummary = summaryData ?? { all: 0, done: 0, packing: 0, overdue: 0 }
+  const isOverdueFilter = statusFilter === 'overdue'
+  const statusParam: ShipmentStatus | ShipmentStatus[] | undefined =
+    !statusFilter || isOverdueFilter
+      ? undefined
+      : statusFilter.includes(',')
+        ? (statusFilter.split(',') as ShipmentStatus[])
+        : (statusFilter as ShipmentStatus)
+  const overdueParam = isOverdueFilter || undefined
 
   useEffect(() => {
-    if (view !== 'table') return
+    if (mode !== 'docs' || view !== 'table') {
+      setInitialLoading(false)
+      return
+    }
     const ctrl = new AbortController()
     setLoading(true)
-    const isOverdueTab = tab === 'overdue' && !statusFilter
-    const isDoneTab = tab === 'done' && !statusFilter
-    const statusParam: ShipmentStatus | ShipmentStatus[] | undefined = statusFilter
-      ? statusFilter as ShipmentStatus
-      : isDoneTab
-        ? (['shipped', 'cancelled'] as ShipmentStatus[])
-        : TAB_STATUS[tab as TabId]
-
     listShipments({
       page, limit: PAGE_SIZE,
       search: search.trim() || undefined,
@@ -117,7 +106,7 @@ export function InventoryShipmentsListPage() {
       status: statusParam,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-      overdue: isOverdueTab ? true : undefined,
+      overdue: overdueParam,
     }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
@@ -131,13 +120,7 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [view, page, search, skuFilter, clientId, statusFilter, tab, dateFrom, dateTo, reloadTick])
-
-
-
-  function handleTabChange(t: TabId) {
-    setMany({ tab: t, status: '' })
-  }
+  }, [mode, view, page, search, skuFilter, clientId, statusFilter, dateFrom, dateTo, reloadTick])
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
@@ -148,14 +131,6 @@ export function InventoryShipmentsListPage() {
     } finally {
       setAdvancingId(null)
     }
-  }
-
-  function tabCount(id: TabId): number {
-    if (id === 'all')     return summary.all
-    if (id === 'overdue') return summary.overdue
-    if (id === 'done')    return summary.done
-    if (id === 'planned') return summary.packing
-    return 0
   }
 
   if (initialLoading) {
@@ -171,24 +146,28 @@ export function InventoryShipmentsListPage() {
   return (
     <ListPage
       title="Отгрузки"
-      subtitle={`Всего: ${total}`}
+      subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
         <>
-          <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
-            <button
-              className="btn ghost sm"
-              style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
-              onClick={() => setView('table')}
-            ><Icon name="list" size={13} />Список</button>
-            <button
-              className="btn ghost sm"
-              style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
-              onClick={() => setView('kanban')}
-            ><Icon name="grid" size={13} />Канбан</button>
-          </div>
-          <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
-            <Icon name="plus" size={14} />Новая отгрузка
-          </button>
+          {mode === 'docs' && (
+            <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
+              <button
+                className="btn ghost sm"
+                style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
+                onClick={() => setView('table')}
+              ><Icon name="list" size={13} />Список</button>
+              <button
+                className="btn ghost sm"
+                style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
+                onClick={() => setView('kanban')}
+              ><Icon name="grid" size={13} />Канбан</button>
+            </div>
+          )}
+          {canEdit && (
+            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
+              <Icon name="plus" size={14} />Новая отгрузка
+            </button>
+          )}
         </>
       }
       filters={
@@ -247,8 +226,10 @@ export function InventoryShipmentsListPage() {
             value={statusFilter}
             options={[
               { value: '', label: 'Все статусы' },
+              { value: 'overdue', label: 'Просрочка' },
               ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
+              { value: 'shipped,cancelled', label: 'Завершённые' },
             ]}
             onChange={(v) => setStatusFilter(v)}
           />
@@ -267,21 +248,32 @@ export function InventoryShipmentsListPage() {
         </FiltersBar>
       }
     >
-      {view === 'table' ? (
-        <>
-          <div className="tabs" style={{ marginBottom: 14 }}>
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                className={`tab${tab === t.id ? ' active' : ''}`}
-                onClick={() => handleTabChange(t.id)}
-              >
-                {t.label}
-                <span className="tab-count">{tabCount(t.id)}</span>
-              </button>
-            ))}
-          </div>
+      <div className="tabs" style={{ marginBottom: 14 }}>
+        {MODE_TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`tab${mode === t.id ? ' active' : ''}`}
+            onClick={() => setMode(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
+      {mode === 'items' ? (
+        <ShipmentLinesView
+          search={search}
+          sku={skuFilter}
+          clientId={clientId}
+          status={statusParam}
+          overdue={overdueParam}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          page={page}
+          onPage={setPage}
+        />
+      ) : view === 'table' ? (
+        <>
           <Table>
             <thead>
               <tr>
@@ -304,8 +296,8 @@ export function InventoryShipmentsListPage() {
               ) : items.length === 0 ? (
                 <tr><td colSpan={11}>
                   <EmptyState
-                    title={tab === 'overdue' ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
-                    sub={tab === 'all' ? 'Создайте первую отгрузку' : undefined}
+                    title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
+                    sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
                   />
                 </td></tr>
               ) : (
@@ -350,7 +342,7 @@ export function InventoryShipmentsListPage() {
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
                             {item.status_label}
                           </Badge>
-                          {ADVANCE_LABELS[item.status] && (
+                          {canEdit && ADVANCE_LABELS[item.status] && (
                             <button
                               className="btn ghost sm"
                               disabled={advancingId === item.id}

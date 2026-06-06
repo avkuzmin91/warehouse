@@ -9,6 +9,7 @@ from security import (
     FORBIDDEN_DETAIL,
     ensure_admin_account,
     ensure_manager_staff,
+    ensure_shipment_view_access,
 )
 
 
@@ -65,3 +66,30 @@ def test_ensure_manager_accepts_staff(role: str):
             "client_id": None,
         }
     )
+
+
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "shift_supervisor"])
+def test_ensure_shipment_view_accepts_shift_supervisor(role: str):
+    ensure_shipment_view_access(
+        {
+            "id": "1",
+            "email": "u@x",
+            "role": role,
+            "created_at": "",
+            "client_id": None,
+        }
+    )
+
+
+def test_ensure_manager_rejects_shift_supervisor():
+    with pytest.raises(HTTPException) as ctx:
+        ensure_manager_staff(
+            {
+                "id": "1",
+                "email": "u@x",
+                "role": "shift_supervisor",
+                "created_at": "",
+                "client_id": None,
+            }
+        )
+    assert ctx.value.status_code == 403

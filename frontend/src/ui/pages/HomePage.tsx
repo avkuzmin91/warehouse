@@ -6,6 +6,8 @@ import { WarehouseMap } from '../widgets/WarehouseMap'
 import { MyTasksFeature } from '../features/home/MyTasksFeature'
 import { HomeKpiFeature } from '../features/home/HomeKpiFeature'
 import { PacmanPlaceholder } from '../features/home/PacmanPlaceholder'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { canEditShipments } from '../../utils/access'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('ru-RU', {
@@ -25,6 +27,8 @@ const quickActions = [
 
 export function HomePage() {
   const navigate = useNavigate()
+  const { user } = useCurrentUser()
+  const canEdit = canEditShipments(user)
 
   return (
     <div className="page">
@@ -33,12 +37,14 @@ export function HomePage() {
           <div className="page-title">Сводка по складу MSK-01</div>
           <div className="page-subtitle">Сегодня · {formatDate()}</div>
         </div>
-        <div className="row gap-8">
-          <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
-            <Icon name="plus" size={14} />
-            Новое поступление
-          </button>
-        </div>
+        {canEdit && (
+          <div className="row gap-8">
+            <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
+              <Icon name="plus" size={14} />
+              Новое поступление
+            </button>
+          </div>
+        )}
       </div>
 
       <HomeKpiFeature />
@@ -65,32 +71,34 @@ export function HomePage() {
         </div>
 
         <div className="col gap-16">
-          <Card>
-            <CardHead>
-              <Icon name="sparkles" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Быстрые действия</div>
-            </CardHead>
-            <CardBody style={{ padding: 8 }}>
-              {quickActions.map((action) => (
-                <div
-                  key={action.label}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 6, cursor: 'pointer' }}
-                  onClick={() => navigate(action.to)}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--c-bg-hover)' }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = '' }}
-                >
-                  <div style={{ width: 30, height: 30, borderRadius: 6, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 30px' }}>
-                    <Icon name={action.icon} size={15} />
+          {canEdit && (
+            <Card>
+              <CardHead>
+                <Icon name="sparkles" size={15} style={{ color: 'var(--c-accent)' }} />
+                <div className="card-head-title">Быстрые действия</div>
+              </CardHead>
+              <CardBody style={{ padding: 8 }}>
+                {quickActions.map((action) => (
+                  <div
+                    key={action.label}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 6, cursor: 'pointer' }}
+                    onClick={() => navigate(action.to)}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--c-bg-hover)' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = '' }}
+                  >
+                    <div style={{ width: 30, height: 30, borderRadius: 6, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 30px' }}>
+                      <Icon name={action.icon} size={15} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{action.label}</div>
+                      <div className="text-xs subtle">{action.sub}</div>
+                    </div>
+                    <Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} />
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{action.label}</div>
-                    <div className="text-xs subtle">{action.sub}</div>
-                  </div>
-                  <Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} />
-                </div>
-              ))}
-            </CardBody>
-          </Card>
+                ))}
+              </CardBody>
+            </Card>
+          )}
 
           <Card>
             <CardHead>

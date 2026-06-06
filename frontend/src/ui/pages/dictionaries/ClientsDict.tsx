@@ -16,18 +16,43 @@ interface ClientsDictProps {
 export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictProps) {
   const [items, setItems] = useState<DictionaryItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadedOnce, setLoadedOnce] = useState(false)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     setLoading(true)
-    getClients({ page: 1, limit: 100 })
-      .then((res) => { setItems(res.items); onTotalLoaded(res.total); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [onTotalLoaded, refreshKey])
+    const timer = setTimeout(() => {
+      getClients({ page: 1, limit: 100, search: search.trim() || undefined })
+        .then((res) => {
+          setItems(res.items)
+          onTotalLoaded(res.total)
+          setLoadedOnce(true)
+          setLoading(false)
+        })
+        .catch(() => {
+          setItems([])
+          setLoading(false)
+        })
+    }, search ? 250 : 0)
+    return () => clearTimeout(timer)
+  }, [onTotalLoaded, refreshKey, search])
 
   return (
     <div className="t-wrap">
       <div className="card-head">
         <div className="card-head-title">Клиенты</div>
+        <div className="right row gap-8">
+          {loading && loadedOnce && <span className="text-xs subtle">Обновление...</span>}
+          <div className="topbar-search" style={{ minWidth: 220, height: 26 }}>
+            <Icon name="search" size={12} />
+            <input
+              style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 13, flex: 1 }}
+              placeholder="Поиск по клиенту..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
       </div>
       <table className="t">
         <thead>
@@ -42,13 +67,16 @@ export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictPr
           </tr>
         </thead>
         <tbody>
-          {loading ? (
+          {loading && !loadedOnce ? (
             <tr><td colSpan={4} style={{ textAlign: 'center', padding: 24 }}>
-              <span className="text-sm muted">Загрузка…</span>
+              <span className="text-sm muted">Загрузка...</span>
             </td></tr>
           ) : items.length === 0 ? (
             <tr><td colSpan={4} style={{ padding: 32 }}>
-              <EmptyState title="Клиенты не найдены" sub="Нажмите «Новый клиент» чтобы добавить первого" />
+              <EmptyState
+                title="Клиенты не найдены"
+                sub={search ? 'Попробуйте изменить текст поиска' : 'Нажмите «Новый клиент» чтобы добавить первого'}
+              />
             </td></tr>
           ) : (
             items.map((c) => (

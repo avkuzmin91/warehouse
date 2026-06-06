@@ -148,6 +148,27 @@ def test_shipment_list_returns_pagination(admin_client):
     assert data["page"] == 1
 
 
+def test_shipment_lines_view_returns_doc_line_rows(admin_client, client_id):
+    """Разрез «По товарам»: одна строка = позиция документа с данными дока."""
+    line = _fake_line()
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    doc_number = admin_client.get(f"/shipments/{doc_id}").json()["doc_number"]
+
+    r2 = admin_client.get(f"/shipments/lines?sku={line['product_sku']}&limit=200")
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    assert "items" in data and "total" in data
+    row = next(i for i in data["items"] if i["doc_id"] == doc_id)
+    assert row["doc_number"] == doc_number
+    assert row["product_sku"] == line["product_sku"]
+    assert row["product_name"] == line["product_name"]
+    assert row["qty"] == line["qty"]
+    assert row["status"] == "draft"
+    assert row["client_id"] == client_id
+
+
 def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
     payload = _make_shipment_payload(client_id)
     payload["logistics_cost"] = 54321

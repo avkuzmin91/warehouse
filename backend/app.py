@@ -22,6 +22,7 @@ from rate_limit.login_rate_limit import check_login_rate_limits, close_login_red
 
 from modules.auth.router import router as auth_router
 from modules.balances.router import router as balances_router
+from modules.cabinet.router import router as cabinet_router
 from modules.dashboard.router import router as dashboard_router
 from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
@@ -301,6 +302,7 @@ app.include_router(products_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(balances_router)
+app.include_router(cabinet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
 app.include_router(dashboard_router)

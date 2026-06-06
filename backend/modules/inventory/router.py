@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from dbconn import get_connection
-from modules.auth.service import get_current_manager
-from modules.dictionaries.schemas import DictionaryBaseItem
+from modules.auth.service import get_current_manager, get_current_shipment_viewer
+from modules.dictionaries.schemas import ClientStoreItem, DictionaryBaseItem
 
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+
+_get_lookup_viewer = get_current_shipment_viewer
 
 
 class InventoryProductTypeLookup(BaseModel):
@@ -67,55 +69,95 @@ def _active_dictionary_rows(table_name: str) -> list[DictionaryBaseItem]:
 
 
 @router.get("/lookups/clients", response_model=list[DictionaryBaseItem])
-def lookup_clients(user=Depends(get_current_manager)):
+def lookup_clients(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("clients")
 
 
+@router.get("/lookups/client-stores", response_model=list[ClientStoreItem])
+def lookup_client_stores(client_id: str | None = Query(None), user=Depends(_get_lookup_viewer)):
+    _ = user
+    if not client_id or not client_id.strip():
+        return []
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT s.id, s.client_id, s.name, s.is_active, COALESCE(s.is_deleted, 0) AS is_deleted,
+                   s.deleted_at, s.created_at, s.updated_at,
+                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+            FROM client_stores s
+            LEFT JOIN users creator ON creator.id = s.creator_id
+            LEFT JOIN users editor ON editor.id = s.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = s.deleted_by_id
+            WHERE s.client_id = ?
+              AND s.is_active = 1
+              AND COALESCE(s.is_deleted, 0) = 0
+            ORDER BY LOWER(s.name) ASC
+            """,
+            (client_id.strip(),),
+        ).fetchall()
+    return [
+        ClientStoreItem(
+            id=str(row["id"]),
+            client_id=str(row["client_id"]),
+            name=str(row["name"]),
+            is_active=bool(row["is_active"]),
+            is_deleted=bool(row["is_deleted"]),
+            deleted_at=row["deleted_at"],
+            deleted_by=row["deleted_by"],
+            created_at=str(row["created_at"]),
+            created_by=row["created_by"],
+            updated_at=row["updated_at"],
+            updated_by=row["updated_by"],
+        )
+        for row in rows
+    ]
+
+
 @router.get("/lookups/colors", response_model=list[DictionaryBaseItem])
-def lookup_colors(user=Depends(get_current_manager)):
+def lookup_colors(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("colors")
 
 
 @router.get("/lookups/sizes", response_model=list[DictionaryBaseItem])
-def lookup_sizes(user=Depends(get_current_manager)):
+def lookup_sizes(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("sizes")
 
 
 @router.get("/lookups/suppliers", response_model=list[DictionaryBaseItem])
-def lookup_suppliers(user=Depends(get_current_manager)):
+def lookup_suppliers(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("suppliers")
 
 
 @router.get("/lookups/warehouses", response_model=list[DictionaryBaseItem])
-def lookup_warehouses(user=Depends(get_current_manager)):
+def lookup_warehouses(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("warehouses")
 
 
 @router.get("/lookups/shipment-destinations", response_model=list[DictionaryBaseItem])
-def lookup_shipment_destinations(user=Depends(get_current_manager)):
+def lookup_shipment_destinations(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("warehouses")
 
 
 @router.get("/lookups/carriers", response_model=list[DictionaryBaseItem])
-def lookup_carriers(user=Depends(get_current_manager)):
+def lookup_carriers(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("carriers")
 
 
 @router.get("/lookups/vehicle-types", response_model=list[DictionaryBaseItem])
-def lookup_vehicle_types(user=Depends(get_current_manager)):
+def lookup_vehicle_types(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("vehicle_types")
 
 
 @router.get("/lookups/unloading-zones", response_model=list[DictionaryBaseItem])
-def lookup_unloading_zones(user=Depends(get_current_manager)):
+def lookup_unloading_zones(user=Depends(_get_lookup_viewer)):
     _ = user
     return _active_dictionary_rows("unloading_zones")
 

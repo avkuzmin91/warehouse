@@ -43,6 +43,7 @@ function taskSub(t: TaskItem): string {
 
 const ROLE_LABEL: Record<string, string> = {
   warehouse_manager: 'кладовщик',
+  shift_supervisor: 'начальник смены',
   manager: 'менеджер',
   admin: 'администратор',
   client: 'клиент',
@@ -63,6 +64,9 @@ function ageInfo(since: string | null): { label: string; overdue: boolean } {
 }
 
 function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean {
+  if (role === 'shift_supervisor') {
+    return false
+  }
   if (role === 'manager') {
     return task.kind === 'trip_cost'
   }

@@ -1,6 +1,13 @@
-import { useState, useEffect } from 'react'
-import { createDictionaryItem, updateDictionaryItem } from '../../../api/adminApi'
-import type { DictionaryItem } from '../../../api/domainTypes'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  createClientStore,
+  createDictionaryItem,
+  deleteClientStore,
+  getClientStores,
+  updateClientStore,
+  updateDictionaryItem,
+} from '../../../api/adminApi'
+import type { ClientStoreItem, DictionaryItem } from '../../../api/domainTypes'
 import { Drawer } from '../../feedback/Drawer'
 import { Field, Input } from '../../primitives/Input'
 import { Toggle } from '../../primitives/Checkbox'
@@ -14,18 +21,48 @@ interface ClientSheetProps {
   initial?: DictionaryItem | null
 }
 
+type StoreDraft = { name: string; is_active: boolean }
+
 export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSheetProps) {
   const [name, setName] = useState('')
   const [active, setActive] = useState(true)
+  const [stores, setStores] = useState<ClientStoreItem[]>([])
+  const [storeDrafts, setStoreDrafts] = useState<Record<string, StoreDraft>>({})
+  const [newStoreName, setNewStoreName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [storesLoading, setStoresLoading] = useState(false)
+  const [storeSavingId, setStoreSavingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [storeError, setStoreError] = useState<string | null>(null)
+
+  const loadStores = useCallback(async (clientId: string) => {
+    setStoresLoading(true)
+    setStoreError(null)
+    try {
+      const items = await getClientStores(clientId)
+      setStores(items)
+      setStoreDrafts(Object.fromEntries(items.map((store) => [
+        store.id,
+        { name: store.name, is_active: store.is_active },
+      ])))
+    } catch (e) {
+      setStoreError(e instanceof Error ? e.message : 'Ошибка загрузки магазинов')
+    } finally {
+      setStoresLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
     setName(initial?.name ?? '')
     setActive(initial?.is_active ?? true)
+    setStores([])
+    setStoreDrafts({})
+    setNewStoreName('')
     setError(null)
-  }, [open, initial])
+    setStoreError(null)
+    if (!isNew && initial?.id) void loadStores(initial.id)
+  }, [open, initial, isNew, loadStores])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Введите название клиента'); return }
@@ -47,13 +84,70 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
     }
   }
 
+  async function handleAddStore() {
+    if (!initial?.id) return
+    if (!newStoreName.trim()) { setStoreError('Введите название магазина'); return }
+    setStoreSavingId('new')
+    setStoreError(null)
+    try {
+      await createClientStore(initial.id, { name: newStoreName.trim(), is_active: true })
+      setNewStoreName('')
+      await loadStores(initial.id)
+    } catch (e) {
+      setStoreError(e instanceof Error ? e.message : 'Ошибка сохранения магазина')
+    } finally {
+      setStoreSavingId(null)
+    }
+  }
+
+  async function handleSaveStore(storeId: string) {
+    if (!initial?.id) return
+    const draft = storeDrafts[storeId]
+    if (!draft) return
+    if (!draft.name.trim()) { setStoreError('Введите название магазина'); return }
+    setStoreSavingId(storeId)
+    setStoreError(null)
+    try {
+      await updateClientStore(initial.id, storeId, {
+        name: draft.name.trim(),
+        is_active: draft.is_active,
+      })
+      await loadStores(initial.id)
+    } catch (e) {
+      setStoreError(e instanceof Error ? e.message : 'Ошибка сохранения магазина')
+    } finally {
+      setStoreSavingId(null)
+    }
+  }
+
+  async function handleDeleteStore(storeId: string) {
+    if (!initial?.id) return
+    setStoreSavingId(storeId)
+    setStoreError(null)
+    try {
+      await deleteClientStore(initial.id, storeId)
+      await loadStores(initial.id)
+    } catch (e) {
+      setStoreError(e instanceof Error ? e.message : 'Ошибка удаления магазина')
+    } finally {
+      setStoreSavingId(null)
+    }
+  }
+
+  function setStoreDraft(storeId: string, patch: Partial<StoreDraft>) {
+    setStoreDrafts((prev) => ({
+      ...prev,
+      [storeId]: { ...(prev[storeId] ?? { name: '', is_active: true }), ...patch },
+    }))
+  }
+
   return (
     <Drawer
       open={open}
       onClose={onClose}
       title={isNew ? 'Новый клиент' : (initial?.name ?? '')}
       subtitle={isNew ? 'Добавление клиента в систему' : 'Редактирование'}
-      width={440}
+      width={560}
       footer={
         <>
           <button className="btn" onClick={onClose} disabled={saving}>Отмена</button>
@@ -83,8 +177,101 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
         </div>
       </Field>
 
+      <div style={{ margin: '18px 0', height: 1, background: 'var(--c-border)' }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <Icon name="cart" size={15} style={{ color: 'var(--c-accent)' }} />
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Магазины</div>
+      </div>
+
+      {isNew ? (
+        <div style={{ padding: '12px 14px', background: 'var(--c-bg-sunken)', borderRadius: 6, color: 'var(--c-text-subtle)', fontSize: 12.5 }}>
+          Магазины можно добавить после создания клиента.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+            <Input
+              value={newStoreName}
+              onChange={(e) => setNewStoreName(e.target.value)}
+              placeholder="Например, WB ООО Ромашка"
+            />
+            <button
+              type="button"
+              className="btn sm"
+              onClick={handleAddStore}
+              disabled={storeSavingId === 'new' || storesLoading}
+            >
+              <Icon name="plus" size={12} />
+              Добавить
+            </button>
+          </div>
+
+          {storeError && <div style={{ color: 'var(--c-danger)', fontSize: 12.5 }}>{storeError}</div>}
+
+          {storesLoading ? (
+            <div className="t-sub">Загрузка магазинов…</div>
+          ) : stores.length === 0 ? (
+            <div style={{ padding: '12px 14px', background: 'var(--c-bg-sunken)', borderRadius: 6, color: 'var(--c-text-subtle)', fontSize: 12.5 }}>
+              У клиента пока нет магазинов.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {stores.map((store) => {
+                const draft = storeDrafts[store.id] ?? { name: store.name, is_active: store.is_active }
+                const dirty = draft.name !== store.name || draft.is_active !== store.is_active
+                const busy = storeSavingId === store.id
+                return (
+                  <div
+                    key={store.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto auto auto',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: 8,
+                      border: '1px solid var(--c-border)',
+                      borderRadius: 6,
+                      background: 'var(--c-bg-elev)',
+                    }}
+                  >
+                    <Input
+                      value={draft.name}
+                      onChange={(e) => setStoreDraft(store.id, { name: e.target.value })}
+                      disabled={busy}
+                    />
+                    <Toggle
+                      checked={draft.is_active}
+                      onChange={(v) => setStoreDraft(store.id, { is_active: v })}
+                    />
+                    <button
+                      type="button"
+                      className="btn ghost icon sm"
+                      title="Сохранить магазин"
+                      onClick={() => handleSaveStore(store.id)}
+                      disabled={!dirty || busy}
+                    >
+                      <Icon name="save" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost icon sm"
+                      title="Удалить магазин"
+                      onClick={() => handleDeleteStore(store.id)}
+                      disabled={busy}
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {!isNew && initial && (
-        <div style={{ padding: '12px 14px', background: 'var(--c-bg-sunken)', borderRadius: 6 }}>
+        <div style={{ padding: '12px 14px', background: 'var(--c-bg-sunken)', borderRadius: 6, marginTop: 18 }}>
           <div className="text-xs subtle" style={{ marginBottom: 6 }}>МЕТА</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, fontSize: 12.5 }}>
             <span className="muted">Создано</span>

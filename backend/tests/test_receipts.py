@@ -211,6 +211,29 @@ def _insert_receipt_with_cost(client_id: str, logistics_cost: float) -> str:
     return doc_id
 
 
+def test_receipt_lines_view_returns_doc_line_rows(admin_client, client_id):
+    """Разрез «По товарам»: одна строка = позиция документа с данными дока."""
+    line = _make_receipt_line(7)
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [line]
+    created = admin_client.post("/receipts", json=payload)
+    assert created.status_code == 200, created.text
+    doc_id = created.json()["message"]
+    doc_number = admin_client.get(f"/receipts/{doc_id}").json()["doc"]["doc_number"]
+
+    r = admin_client.get(f"/receipts/lines?sku={line['product_sku']}&limit=200")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "items" in data and "total" in data
+    row = next(i for i in data["items"] if i["doc_id"] == doc_id)
+    assert row["doc_number"] == doc_number
+    assert row["product_sku"] == line["product_sku"]
+    assert row["product_name"] == line["product_name"]
+    assert row["planned_qty"] == 7
+    assert row["status"] == "draft"
+    assert row["client_id"] == client_id
+
+
 def test_warehouse_receipt_costs_are_hidden_and_readonly(warehouse_client, client_id):
     doc_id = _insert_receipt_with_cost(client_id, 12345)
 

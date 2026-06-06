@@ -122,6 +122,32 @@ export type ReceiptListResponse = {
   limit: number
 }
 
+export type ReceiptLinesListItem = {
+  line_id: string
+  doc_id: string
+  doc_number: string
+  client_id: string
+  client_name: string | null
+  arrival_date: string | null
+  actual_arrival_date: string | null
+  status: ReceiptStatus
+  product_id: string
+  product_name: string
+  product_sku: string
+  color_name: string | null
+  size_name: string | null
+  planned_qty: number
+  accepted_qty: number | null
+  storage_zone_name: string | null
+}
+
+export type ReceiptLinesResponse = {
+  items: ReceiptLinesListItem[]
+  total: number
+  page: number
+  limit: number
+}
+
 export type ReceiptLineInput = {
   product_id: string
   product_name: string
@@ -219,6 +245,21 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getReceiptLines(params: ReceiptListParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.status) sp.set('status', params.status)
+  if (params.overdue) sp.set('overdue', 'true')
+  if (params.search) sp.set('search', params.search)
+  if (params.sku) sp.set('sku', params.sku)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to) sp.set('date_to', params.date_to)
+  const q = sp.toString()
+  return request<ReceiptLinesResponse>(`/receipts/lines${q ? `?${q}` : ''}`, { signal })
 }
 
 function normalizeReceiptQcStatus(status: string): ReceiptQcStatus {

@@ -2,13 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   getReceipts,
-  getReceiptsSummary,
   RECEIPT_STATUS_LABELS,
   RECEIPT_STATUS_ORDER,
   receiptStatusTone,
   isReceiptOverdue,
 } from '../../api/receiptsApi'
-import type { ReceiptListItem, ReceiptStatus, ReceiptsSummary } from '../../api/receiptsApi'
+import type { ReceiptListItem, ReceiptStatus } from '../../api/receiptsApi'
+import { ReceiptLinesView } from '../features/inventory/ReceiptLinesView'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -20,27 +20,17 @@ import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
 import { fmtDate } from '../../utils/format'
-import { useApi } from '../../hooks/useApi'
 import { useLookups } from '../../hooks/useLookups'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
-type TabId = 'all' | 'active' | 'overdue' | 'done' | 'drafts'
+type ModeId = 'docs' | 'items'
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'all', label: 'Все' },
-  { id: 'active', label: 'В работе' },
-  { id: 'overdue', label: 'Просрочка' },
-  { id: 'done', label: 'Завершённые' },
-  { id: 'drafts', label: 'В плане' },
+const MODE_TABS: { id: ModeId; label: string }[] = [
+  { id: 'docs',  label: 'По документам' },
+  { id: 'items', label: 'По товарам' },
 ]
-
-const TAB_STATUS: Partial<Record<TabId, ReceiptStatus>> = {
-  active: 'on_review',
-  done: 'done',
-  drafts: 'planned',
-}
 
 const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] = [
   { status: 'planned',   label: 'В плане',      tone: 'info' },
@@ -51,7 +41,7 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
 
-  const [tab] = useFilterParam('tab', 'all')
+  const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
@@ -71,33 +61,28 @@ export function InventoryReceiptsListPage() {
 
   const { clients } = useLookups()
 
-  const { data: summaryData } = useApi(
-    (signal) => getReceiptsSummary({
-      client_id: clientId || undefined,
-      search: search.trim() || undefined,
-      sku: skuFilter.trim() || undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, signal),
-    [clientId, search, skuFilter, dateFrom, dateTo, retryTick],
-  )
-  const summary: ReceiptsSummary = summaryData ?? { all: 0, active: 0, done: 0, drafts: 0, overdue: 0 }
+  const isOverdueFilter = statusFilter === 'overdue'
+  const statusParam: ReceiptStatus | undefined =
+    !statusFilter || isOverdueFilter ? undefined : (statusFilter as ReceiptStatus)
+  const overdueParam = isOverdueFilter || undefined
 
   useEffect(() => {
-    if (view !== 'table') return
+    if (mode !== 'docs' || view !== 'table') {
+      setInitialLoading(false)
+      return
+    }
     const ctrl = new AbortController()
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     setLoading(true)
     setLoadError(null)
-    const effectiveStatus = statusFilter || TAB_STATUS[tab as TabId]
     getReceipts({
       page,
       limit: PAGE_SIZE,
       search: search.trim() || undefined,
       sku: skuFilter.trim() || undefined,
       client_id: clientId || undefined,
-      status: effectiveStatus as ReceiptStatus | undefined,
-      overdue: tab === 'overdue' && !statusFilter ? true : undefined,
+      status: statusParam,
+      overdue: overdueParam,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }, ctrl.signal).then((res) => {
@@ -121,16 +106,11 @@ export function InventoryReceiptsListPage() {
       ctrl.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [view, page, search, skuFilter, clientId, statusFilter, tab, dateFrom, dateTo, retryTick, initialLoading])
-
-
-  function handleTabChange(t: TabId) {
-    // Меняем tab + сбрасываем status за один вызов setSearchParams
-    setMany({ tab: t, status: '' })
-  }
+  }, [mode, view, page, search, skuFilter, clientId, statusFilter, dateFrom, dateTo, retryTick, initialLoading])
 
   const STATUS_OPTIONS = [
     { value: '', label: 'Все статусы' },
+    { value: 'overdue', label: 'Просрочка' },
     ...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft').map((s) => ({ value: s, label: RECEIPT_STATUS_LABELS[s] })),
   ]
 
@@ -148,21 +128,23 @@ export function InventoryReceiptsListPage() {
   return (
     <ListPage
       title="Поступления"
-      subtitle={`Всего: ${total}`}
+      subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
         <>
-          <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
-            <button
-              className="btn ghost sm"
-              style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
-              onClick={() => setView('table')}
-            ><Icon name="list" size={13} />Список</button>
-            <button
-              className="btn ghost sm"
-              style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
-              onClick={() => setView('kanban')}
-            ><Icon name="grid" size={13} />Канбан</button>
-          </div>
+          {mode === 'docs' && (
+            <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
+              <button
+                className="btn ghost sm"
+                style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
+                onClick={() => setView('table')}
+              ><Icon name="list" size={13} />Список</button>
+              <button
+                className="btn ghost sm"
+                style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
+                onClick={() => setView('kanban')}
+              ><Icon name="grid" size={13} />Канбан</button>
+            </div>
+          )}
           <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
             <Icon name="plus" size={14} />Новое поступление
           </button>
@@ -240,21 +222,32 @@ export function InventoryReceiptsListPage() {
         </FiltersBar>
       }
     >
-      {view === 'table' ? (
-        <>
-          <div className="tabs" style={{ marginBottom: 14 }}>
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                className={`tab${tab === t.id ? ' active' : ''}`}
-                onClick={() => handleTabChange(t.id)}
-              >
-                {t.label}
-                <span className="tab-count">{summary[t.id as keyof ReceiptsSummary]}</span>
-              </button>
-            ))}
-          </div>
+      <div className="tabs" style={{ marginBottom: 14 }}>
+        {MODE_TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`tab${mode === t.id ? ' active' : ''}`}
+            onClick={() => setMode(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
+      {mode === 'items' ? (
+        <ReceiptLinesView
+          search={search}
+          sku={skuFilter}
+          clientId={clientId}
+          status={statusParam}
+          overdue={overdueParam}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          page={page}
+          onPage={setPage}
+        />
+      ) : view === 'table' ? (
+        <>
           <Table>
             <thead>
               <tr>
@@ -292,9 +285,9 @@ export function InventoryReceiptsListPage() {
                   <td colSpan={10}>
                     <EmptyState
                       title="Документов нет"
-                      sub={tab === 'overdue' ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
+                      sub={isOverdueFilter ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
                       action={
-                        tab === 'all' ? (
+                        !statusFilter ? (
                           <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
                             <Icon name="plus" size={14} />Новое поступление
                           </button>

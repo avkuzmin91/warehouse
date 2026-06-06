@@ -249,6 +249,85 @@ def list_receipts_aggregated(
     return total, [dict(r) for r in rows]
 
 
+def list_receipt_lines(
+    connection,
+    *,
+    page: int,
+    limit: int,
+    client_id: str | None,
+    status: str | None,
+    overdue: bool,
+    search: str | None,
+    sku: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    statuses_all: frozenset[str],
+) -> tuple[int, list[dict]]:
+    """Плоский список позиций поступлений (разрез «По товарам»): одна строка = строка документа."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+
+    conds = ["d.is_deleted = 0", "l.is_deleted = 0"]
+    params: list = []
+
+    if client_id:
+        conds.append("d.client_id = ?")
+        params.append(client_id.strip())
+    if overdue:
+        conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
+        conds.append("d.arrival_date < ?")
+        params.append(today)
+    elif status and status in statuses_all:
+        conds.append("d.status = ?")
+        params.append(status)
+    if search:
+        s = f"%{search.strip()}%"
+        conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
+        params += [s, s]
+    if sku:
+        s = f"%{sku.strip()}%"
+        conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
+        params += [s, s]
+    if date_from:
+        conds.append("d.arrival_date >= ?")
+        params.append(date_from)
+    if date_to:
+        conds.append("d.arrival_date <= ?")
+        params.append(date_to)
+
+    where = " AND ".join(conds)
+
+    total_row = connection.execute(
+        f"""SELECT COUNT(*) AS cnt
+            FROM receipt_lines l
+            JOIN receipt_docs d ON d.id = l.doc_id
+            LEFT JOIN clients cl ON cl.id = d.client_id
+            WHERE {where}""",
+        params,
+    ).fetchone()
+    total = int(total_row["cnt"]) if total_row else 0
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        f"""SELECT
+                l.id AS line_id, l.doc_id,
+                l.product_id, l.product_name, l.product_sku,
+                l.color_name, l.size_name,
+                l.planned_qty, l.accepted_qty, l.storage_zone_name,
+                d.doc_number, d.client_id, d.arrival_date, d.actual_arrival_date, d.status,
+                cl.name AS client_name
+            FROM receipt_lines l
+            JOIN receipt_docs d ON d.id = l.doc_id
+            LEFT JOIN clients cl ON cl.id = d.client_id
+            WHERE {where}
+            ORDER BY COALESCE(d.actual_arrival_date, d.arrival_date) DESC, d.created_at DESC, l.created_at
+            LIMIT ? OFFSET ?""",
+        params + [limit, offset],
+    ).fetchall()
+
+    return total, [dict(r) for r in rows]
+
+
 def advance_receipt(connection, doc_id: str, user_id: str) -> str:
     """Переводит документ на следующий статус по цепочке. Возвращает новый статус."""
     doc_row = connection.execute(

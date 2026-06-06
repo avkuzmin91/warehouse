@@ -4,6 +4,7 @@
  */
 import { request, requestForm } from './http'
 import type {
+  ClientStoreItem,
   DictionaryItem,
   DictionaryListQueryParams,
   DictionaryListResponse,
@@ -26,7 +27,7 @@ export function getUsers() {
   return request<UserListItem[]>('/users')
 }
 
-export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'client') {
+export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'client') {
   return request<{ message: string }>(`/users/${userId}/role`, {
     method: 'PATCH',
     body: JSON.stringify({ role }),
@@ -222,6 +223,35 @@ export function updateDictionaryItem(
   return request<{ message: string }>(`/${kind}/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+export function getClientStores(clientId: string, includeDeleted = false) {
+  const q = includeDeleted ? '?include_deleted=true' : ''
+  return request<ClientStoreItem[]>(`/clients/${clientId}/stores${q}`)
+}
+
+export function createClientStore(clientId: string, payload: { name: string; is_active: boolean }) {
+  return request<{ message: string }>(`/clients/${clientId}/stores`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateClientStore(
+  clientId: string,
+  storeId: string,
+  payload: { name?: string; is_active?: boolean; is_deleted?: boolean },
+) {
+  return request<{ message: string }>(`/clients/${clientId}/stores/${storeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteClientStore(clientId: string, storeId: string) {
+  return request<{ message: string }>(`/clients/${clientId}/stores/${storeId}`, {
+    method: 'DELETE',
   })
 }
 

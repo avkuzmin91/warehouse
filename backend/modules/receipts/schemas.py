@@ -185,3 +185,29 @@ class ReceiptListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class ReceiptLinesListItem(BaseModel):
+    line_id: str
+    doc_id: str
+    doc_number: str
+    client_id: str
+    client_name: str | None = None
+    arrival_date: str | None = None
+    actual_arrival_date: str | None = None
+    status: str
+    product_id: str
+    product_name: str
+    product_sku: str
+    color_name: str | None = None
+    size_name: str | None = None
+    planned_qty: int
+    accepted_qty: int | None = None
+    storage_zone_name: str | None = None
+
+
+class ReceiptLinesResponse(BaseModel):
+    items: list[ReceiptLinesListItem]
+    total: int
+    page: int
+    limit: int

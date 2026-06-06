@@ -43,6 +43,8 @@ from modules.receipts.schemas import (
     ReceiptLineAdd,
     ReceiptLineQcComplete,
     ReceiptLineResponse,
+    ReceiptLinesListItem,
+    ReceiptLinesResponse,
     ReceiptLineUpdate,
     ReceiptListItem,
     ReceiptListResponse,
@@ -52,6 +54,7 @@ from modules.receipts.schemas import (
 from modules.receipts.service import (
     advance_receipt,
     compute_state,
+    list_receipt_lines,
     list_receipts_aggregated,
     next_doc_number,
 )
@@ -279,6 +282,50 @@ def list_receipts(
         for r in rows
     ]
     return ReceiptListResponse(items=items, total=total, page=page, limit=limit)
+
+
+@router.get("/receipts/lines", response_model=ReceiptLinesResponse)
+def list_receipt_lines_view(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=200),
+    client_id: str | None = Query(None),
+    status: str | None = Query(None),
+    overdue: bool = Query(False),
+    search: str | None = Query(None),
+    sku: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    user=Depends(_get_manager),
+):
+    with get_connection() as conn:
+        total, rows = list_receipt_lines(
+            conn,
+            page=page, limit=limit, client_id=client_id, status=status,
+            overdue=overdue, search=search, sku=sku, date_from=date_from, date_to=date_to,
+            statuses_all=RECEIPT_STATUSES_ALL,
+        )
+    items = [
+        ReceiptLinesListItem(
+            line_id=str(r["line_id"]),
+            doc_id=str(r["doc_id"]),
+            doc_number=str(r["doc_number"]),
+            client_id=str(r["client_id"]),
+            client_name=r["client_name"],
+            arrival_date=r["arrival_date"],
+            actual_arrival_date=r["actual_arrival_date"],
+            status=str(r["status"]),
+            product_id=str(r["product_id"]),
+            product_name=str(r["product_name"]),
+            product_sku=str(r["product_sku"]),
+            color_name=r["color_name"],
+            size_name=r["size_name"],
+            planned_qty=int(r["planned_qty"] or 0),
+            accepted_qty=int(r["accepted_qty"]) if r["accepted_qty"] is not None else None,
+            storage_zone_name=r["storage_zone_name"],
+        )
+        for r in rows
+    ]
+    return ReceiptLinesResponse(items=items, total=total, page=page, limit=limit)
 
 
 @router.get("/receipts/{doc_id}", response_model=ReceiptDetailResponse)
