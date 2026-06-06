@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { getUsers, updateUserRole, updateUserClient, getClients } from '../../api/adminApi'
+import { getUsers, updateUserRole, updateUserClient } from '../../api/adminApi'
 import type { DictionaryItem, UserListItem } from '../../api/domainTypes'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { useLookups } from '../../hooks/useLookups'
 import { useToast } from '../feedback/Toast'
 import { ListPage } from '../layouts/ListPage'
 import { AccessDeniedPage } from './AccessDeniedPage'
@@ -18,17 +19,19 @@ const ROLE_LABELS: Record<string, string> = {
   user: 'Без доступа',
   client: 'Клиент',
   warehouse_manager: 'Кладовщик',
+  shift_supervisor: 'Начальник смены',
 }
 
 const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> = {
   admin: 'accent',
   manager: 'info',
   warehouse_manager: 'info',
+  shift_supervisor: 'warning',
   client: 'success',
   user: '',
 }
 
-const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'client'] as const
+const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'client'] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
 const ROLE_FILTERS = [
@@ -36,6 +39,7 @@ const ROLE_FILTERS = [
   { role: 'admin', label: 'Администраторы', icon: 'shield' },
   { role: 'manager', label: 'Менеджеры', icon: 'star' },
   { role: 'warehouse_manager', label: 'Кладовщики', icon: 'archive' },
+  { role: 'shift_supervisor', label: 'Начальники смены', icon: 'user' },
   { role: 'user', label: 'Без доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const
@@ -247,8 +251,8 @@ function ClientMenu({ currentClientId, currentClientName, clients, onSelect, dis
 export function UsersPage() {
   const { user, loading: userLoading } = useCurrentUser()
   const toast = useToast()
+  const { clients } = useLookups()
   const [users, setUsers] = useState<UserListItem[]>([])
-  const [clients, setClients] = useState<DictionaryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -281,17 +285,7 @@ export function UsersPage() {
       }
     }
 
-    async function loadClients() {
-      try {
-        const response = await getClients({ limit: 200, sort: 'name_asc' })
-        if (!cancelled) setClients(response.items)
-      } catch {
-        if (!cancelled) setClients([])
-      }
-    }
-
     loadUsers()
-    loadClients()
 
     return () => {
       cancelled = true
@@ -370,7 +364,7 @@ export function UsersPage() {
         />
       )}
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, marginBottom: 16 }}>
         {ROLE_FILTERS.map(({ role, label, icon }) => {
           const isActive = roleFilter === role
           return (

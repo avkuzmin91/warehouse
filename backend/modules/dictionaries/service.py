@@ -16,6 +16,9 @@ from config import (
 from dbconn import get_connection
 
 from .schemas import (
+    ClientStoreCreateRequest,
+    ClientStoreItem,
+    ClientStoreUpdateRequest,
     DictionaryBaseItem,
     DictionaryCreateRequest,
     DictionaryListResponse,
@@ -118,6 +121,22 @@ def _dict_row_to_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
         id=row["id"],
         name=row["name"],
         color_hex=row.get("color_hex"),
+        is_active=bool(row["is_active"]),
+        is_deleted=bool(row["is_deleted"]),
+        deleted_at=row["deleted_at"],
+        deleted_by=row["deleted_by"],
+        created_at=row["created_at"],
+        created_by=row["created_by"],
+        updated_at=row["updated_at"],
+        updated_by=row["updated_by"],
+    )
+
+
+def _client_store_row_to_item(row: Mapping[str, Any]) -> ClientStoreItem:
+    return ClientStoreItem(
+        id=row["id"],
+        client_id=row["client_id"],
+        name=row["name"],
         is_active=bool(row["is_active"]),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
@@ -278,6 +297,120 @@ def update_dictionary_item(
 
 def delete_dictionary_item(table_name: str, item_id: str, admin_id: str) -> MessageResponse:
     return update_dictionary_item(table_name, item_id, DictionaryUpdateRequest(is_deleted=True), admin_id)
+
+
+def _ensure_client_exists(connection: Any, client_id: str) -> None:
+    row = connection.execute(
+        "SELECT id FROM clients WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (client_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Клиент не найден")
+
+
+def list_client_stores(client_id: str, *, include_deleted: bool = False) -> list[ClientStoreItem]:
+    with get_connection() as connection:
+        _ensure_client_exists(connection, client_id)
+        cond = "" if include_deleted else "AND COALESCE(s.is_deleted, 0) = 0"
+        rows = connection.execute(
+            f"""
+            SELECT s.id, s.client_id, s.name, s.is_active, COALESCE(s.is_deleted, 0) AS is_deleted,
+                   s.deleted_at, s.created_at, s.updated_at,
+                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+            FROM client_stores s
+            LEFT JOIN users creator ON creator.id = s.creator_id
+            LEFT JOIN users editor ON editor.id = s.updated_by_id
+            LEFT JOIN users deleter ON deleter.id = s.deleted_by_id
+            WHERE s.client_id = ? {cond}
+            ORDER BY COALESCE(s.is_deleted, 0) ASC, LOWER(s.name) ASC
+            """,
+            (client_id,),
+        ).fetchall()
+    return [_client_store_row_to_item(row) for row in rows]
+
+
+def create_client_store(client_id: str, payload: ClientStoreCreateRequest, creator_id: str) -> MessageResponse:
+    store_id = str(uuid4())
+    name = _normalize_name(payload.name)
+    with get_connection() as connection:
+        _ensure_client_exists(connection, client_id)
+        try:
+            connection.execute(
+                """
+                INSERT INTO client_stores (id, client_id, name, is_active, created_at, creator_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (store_id, client_id, name, 1 if payload.is_active else 0, _now(), creator_id),
+            )
+            connection.commit()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Магазин с таким названием уже есть у клиента",
+            ) from exc
+    return MessageResponse(message=store_id)
+
+
+def update_client_store(
+    client_id: str, store_id: str, payload: ClientStoreUpdateRequest, editor_id: str
+) -> MessageResponse:
+    now = _now()
+    with get_connection() as connection:
+        _ensure_client_exists(connection, client_id)
+        meta = connection.execute(
+            "SELECT COALESCE(is_deleted, 0) AS del FROM client_stores WHERE id = ? AND client_id = ?",
+            (store_id, client_id),
+        ).fetchone()
+        if not meta:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Магазин не найден")
+        is_del = bool(meta["del"])
+        if is_del and payload.is_deleted is not False:
+            if payload.name is not None or payload.is_active is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Магазин удалён. Восстановите его перед редактированием.",
+                )
+            if payload.is_deleted is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Магазин удалён")
+
+        fields: list[str] = []
+        values: list[object] = []
+        if payload.is_deleted is True:
+            fields.extend(["is_deleted = 1", "deleted_at = ?", "deleted_by_id = ?"])
+            values.extend([now, editor_id])
+        elif payload.is_deleted is False:
+            fields.extend(["is_deleted = 0", "deleted_at = NULL", "deleted_by_id = NULL"])
+        if payload.name is not None:
+            fields.append("name = ?")
+            values.append(_normalize_name(payload.name))
+        if payload.is_active is not None:
+            fields.append("is_active = ?")
+            values.append(1 if payload.is_active else 0)
+        if not fields:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет данных для обновления")
+        fields.extend(["updated_at = ?", "updated_by_id = ?"])
+        values.extend([now, editor_id, store_id, client_id])
+        try:
+            connection.execute(
+                f"UPDATE client_stores SET {', '.join(fields)} WHERE id = ? AND client_id = ?",
+                tuple(values),
+            )
+            connection.commit()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Магазин с таким названием уже есть у клиента",
+            ) from exc
+    msg = "Обновлено"
+    if payload.is_deleted is True:
+        msg = "Удалено"
+    elif payload.is_deleted is False:
+        msg = "Восстановлено"
+    return MessageResponse(message=msg)
+
+
+def delete_client_store(client_id: str, store_id: str, admin_id: str) -> MessageResponse:
+    return update_client_store(client_id, store_id, ClientStoreUpdateRequest(is_deleted=True), admin_id)
 
 
 def list_dictionary_items_page(

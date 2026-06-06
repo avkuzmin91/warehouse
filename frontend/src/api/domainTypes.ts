@@ -12,6 +12,20 @@ export type DictionaryItem = {
   updated_by: string | null
 }
 
+export type ClientStoreItem = {
+  id: string
+  client_id: string
+  name: string
+  is_active: boolean
+  is_deleted?: boolean
+  deleted_at?: string | null
+  deleted_by?: string | null
+  created_at: string
+  created_by: string | null
+  updated_at: string | null
+  updated_by: string | null
+}
+
 export type ProductTypeDictionaryItem = DictionaryItem & {
   requires_color: boolean
   requires_size: boolean
@@ -33,13 +47,13 @@ export type SizeItem = {
 export type UserListItem = {
   id: string
   email: string
-  role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager'
+  role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager' | 'shift_supervisor'
   created_at: string
   client_id?: string | null
   client_name?: string | null
 }
 
-export type AssignableUserRole = 'user' | 'manager' | 'client'
+export type AssignableUserRole = 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'client'
 
 export type RecordActualityFilterItem = {
   id: string

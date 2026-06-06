@@ -1,8 +1,13 @@
 import { request } from './http'
-import type { DictionaryItem, InventoryProductLookup, InventoryProductTypeLookup } from './domainTypes'
+import type { ClientStoreItem, DictionaryItem, InventoryProductLookup, InventoryProductTypeLookup } from './domainTypes'
 
 export function getInventoryClients(signal?: AbortSignal) {
   return request<DictionaryItem[]>('/inventory/lookups/clients', { signal })
+}
+
+export function getInventoryClientStores(clientId: string | null | undefined, signal?: AbortSignal) {
+  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
+  return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q}`, { signal })
 }
 
 export function getInventoryColors(signal?: AbortSignal) {

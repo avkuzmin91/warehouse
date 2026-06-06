@@ -26,7 +26,9 @@ from config import (
 from dbconn import get_connection
 from security import (
     ensure_admin_account,
+    ensure_dashboard_access,
     ensure_manager_staff,
+    ensure_shipment_view_access,
     ensure_warehouse_staff,
     user_client_id_opt,
 )
@@ -245,6 +247,16 @@ def get_current_admin(user=Depends(get_current_user)):
 
 def get_current_manager(user=Depends(get_current_user)):
     ensure_manager_staff(user)
+    return user
+
+
+def get_current_shipment_viewer(user=Depends(get_current_user)):
+    ensure_shipment_view_access(user)
+    return user
+
+
+def get_current_dashboard_user(user=Depends(get_current_user)):
+    ensure_dashboard_access(user)
     return user
 
 

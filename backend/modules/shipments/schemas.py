@@ -15,6 +15,8 @@ class ShipmentLineIn(BaseModel):
     shipped_qty:       int = Field(ge=0, default=0)
     storage_zone_id:   str | None = None
     storage_zone_name: str | None = None
+    store_id:          str | None = None
+    store_name:        str | None = None
 
 
 class ShipmentDocCreate(BaseModel):
@@ -62,6 +64,8 @@ class ShipmentLineItem(BaseModel):
     shipped_qty:       int
     storage_zone_id:   str | None
     storage_zone_name: str | None
+    store_id:          str | None
+    store_name:        str | None
     files:             list[ShipmentLineFile] = []
 
 
@@ -87,6 +91,35 @@ class ShipmentListItem(BaseModel):
 
 class ShipmentListResponse(BaseModel):
     items: list[ShipmentListItem]
+    total: int
+    page:  int
+    limit: int
+
+
+class ShipmentLinesListItem(BaseModel):
+    line_id:           str
+    doc_id:            str
+    doc_number:        str
+    cargo_type:        str
+    client_id:         str | None
+    client_name:       str | None
+    destination:       str | None
+    ship_date:         str | None
+    status:            str
+    status_label:      str
+    product_id:        str
+    product_name:      str
+    product_sku:       str
+    color_name:        str | None
+    size_name:         str | None
+    qty:               int
+    shipped_qty:       int
+    storage_zone_name: str | None
+    store_name:        str | None
+
+
+class ShipmentLinesResponse(BaseModel):
+    items: list[ShipmentLinesListItem]
     total: int
     page:  int
     limit: int

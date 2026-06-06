@@ -19,6 +19,8 @@ import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, S
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { getBalances, getBalancesByZone } from '../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem } from '../../../api/balancesApi'
+import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
+import type { ClientStoreItem } from '../../../api/domainTypes'
 import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
@@ -29,11 +31,12 @@ import { Tooltip } from '../../primitives/Tooltip'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { useToast } from '../../feedback/Toast'
 import { Drawer } from '../../feedback/Drawer'
+import { Modal } from '../../feedback/Modal'
 import { DatePicker } from '../../primitives/DatePicker'
 import { AutoGrowTextarea, Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles } from '../../../utils/access'
+import { canViewCosts, canEditShipmentFiles, canEditShipments } from '../../../utils/access'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
@@ -41,13 +44,31 @@ import { CargoTypeDisplay } from './components/CargoTypeDisplay'
 import { OpEntry } from './components/OpEntry'
 import { lineAvailable } from './shared/opLabels'
 import { Table, Td } from '../../data/Table'
+import { Combobox } from '../../data/Combobox'
+import type { ComboboxOption } from '../../data/Combobox'
 import { LineIdentityCell } from '../../features/inventory/receiptDetail/components/LineIdentityCell'
 import { ZoneCell } from '../../features/inventory/receiptDetail/components/ZoneCell'
 
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
-type LineDraft = { qty: number; shippedQty: number; zoneId: string; zoneName: string | null }
+type LineDraft = {
+  qty: number
+  shippedQty: number
+  zoneId: string
+  zoneName: string | null
+  storeId: string
+  storeName: string | null
+}
 type ZoneChoice = { id: string; name: string; sub?: string }
+type StoreChoice = { id: string; name: string }
 type ReadinessCheck = { ok: boolean; label: string; error: string }
+type LineFilePreview = {
+  file: ShipmentLineFile
+  productName: string
+  sku: string
+  colorName: string | null
+  sizeName: string | null
+  qty: number
+}
 
 export function InventoryShipmentDetailPage() {
   const { docId } = useParams<{ docId: string }>()
@@ -56,6 +77,7 @@ export function InventoryShipmentDetailPage() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canEdit = canEditShipments(user)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -63,8 +85,10 @@ export function InventoryShipmentDetailPage() {
   const [showBlockReasons, setShowBlockReasons] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [filePreview, setFilePreview] = useState<LineFilePreview | null>(null)
   const [balances, setBalances] = useState<BalanceItem[]>([])
   const [zoneBalances, setZoneBalances] = useState<BalanceZoneItem[]>([])
+  const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [uploadingLines, setUploadingLines] = useState<Record<string, boolean>>({})
@@ -133,11 +157,11 @@ export function InventoryShipmentDetailPage() {
   const status = doc?.status as ShipmentStatus | undefined
   const isPlanned = status === 'packing'
   const isDraft = status === 'draft'
-  const canDelete = isDraft || isPlanned
-  const canEditPlan = isDraft || isPlanned
-  const canEditShipped = isPlanned
-  const canEditInfo = isDraft || isPlanned
-  const canEditActualShipDate = isPlanned
+  const canDelete = canEdit && (isDraft || isPlanned)
+  const canEditPlan = canEdit && (isDraft || isPlanned)
+  const canEditShipped = canEdit && isPlanned
+  const canEditInfo = canEdit && (isDraft || isPlanned)
+  const canEditActualShipDate = canEdit && isPlanned
     && (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager')
   const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped'
 
@@ -170,6 +194,18 @@ export function InventoryShipmentDetailPage() {
   }, [loadBalances])
 
   useEffect(() => {
+    if (!shipmentClientId) {
+      setClientStores([])
+      return
+    }
+    const controller = new AbortController()
+    getInventoryClientStores(shipmentClientId, controller.signal)
+      .then(setClientStores)
+      .catch(() => setClientStores([]))
+    return () => controller.abort()
+  }, [shipmentClientId])
+
+  useEffect(() => {
     if (!doc) {
       setDrafts({})
       return
@@ -182,6 +218,8 @@ export function InventoryShipmentDetailPage() {
           shippedQty: line.shipped_qty,
           zoneId:     line.storage_zone_id ?? '',
           zoneName:   line.storage_zone_name ?? null,
+          storeId:    line.store_id ?? '',
+          storeName:  line.store_name ?? null,
         }
       }
       return next
@@ -216,6 +254,8 @@ export function InventoryShipmentDetailPage() {
       shippedQty: line.shipped_qty,
       zoneId:     line.storage_zone_id ?? '',
       zoneName:   line.storage_zone_name ?? null,
+      storeId:    line.store_id ?? '',
+      storeName:  line.store_name ?? null,
     }
   }
 
@@ -245,6 +285,14 @@ export function InventoryShipmentDetailPage() {
       }))
   }
 
+  function getLineStoreOptions(line: ShipmentLine): StoreChoice[] {
+    const options = clientStores.map((store) => ({ id: store.id, name: store.name }))
+    if (line.store_id && !options.some((store) => store.id === line.store_id)) {
+      options.unshift({ id: line.store_id, name: line.store_name ?? line.store_id })
+    }
+    return options
+  }
+
   function setDraftQty(lineId: string, value: number) {
     setDrafts((prev) => ({
       ...prev,
@@ -266,12 +314,21 @@ export function InventoryShipmentDetailPage() {
     }))
   }
 
+  function setDraftStore(lineId: string, storeId: string, storeName: string | null) {
+    setDrafts((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], storeId, storeName },
+    }))
+  }
+
   const hasUnsavedLineChanges = editableLines.some((line) => {
     const d = getDraft(line)
     return d.qty !== line.qty
       || d.shippedQty !== line.shipped_qty
       || d.zoneId !== (line.storage_zone_id ?? '')
       || d.zoneName !== (line.storage_zone_name ?? null)
+      || d.storeId !== (line.store_id ?? '')
+      || d.storeName !== (line.store_name ?? null)
   })
 
   const infoLogisticsNumber = Number(infoLogisticsCost)
@@ -357,6 +414,8 @@ export function InventoryShipmentDetailPage() {
         qty,
         storage_zone_id:   zoneId,
         storage_zone_name: zoneName,
+        store_id:          null,
+        store_name:        null,
       })
       await refreshAfterLineChange()
       setShowPicker(false)
@@ -380,6 +439,8 @@ export function InventoryShipmentDetailPage() {
         shipped_qty:       draft.shippedQty,
         storage_zone_id:   draft.zoneId || null,
         storage_zone_name: draft.zoneName,
+        store_id:          draft.storeId || null,
+        store_name:        draft.storeName,
       })
       await refreshAfterLineChange()
     } catch (e) {
@@ -395,6 +456,7 @@ export function InventoryShipmentDetailPage() {
       const d = getDraft(line)
       return d.qty !== line.qty || d.shippedQty !== line.shipped_qty
         || d.zoneId !== (line.storage_zone_id ?? '') || d.zoneName !== (line.storage_zone_name ?? null)
+        || d.storeId !== (line.store_id ?? '') || d.storeName !== (line.store_name ?? null)
     })
     for (const line of changed) {
       await handleSaveQty(line)
@@ -424,15 +486,20 @@ export function InventoryShipmentDetailPage() {
     })
   }
 
-  async function handleUploadFile(lineId: string, file: File) {
+  async function handleUploadFile(lineId: string, files: File[]) {
     if (!docId) return
-    const invalid = validateLineFile(file)
-    if (invalid) { toast(invalid, 'error'); return }
+    if (files.length === 0) return
+    for (const file of files) {
+      const invalid = validateLineFile(file)
+      if (invalid) { toast(`${file.name}: ${invalid}`, 'error'); return }
+    }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
     try {
-      await uploadShipmentLineFile(docId, lineId, file)
+      for (const file of files) {
+        await uploadShipmentLineFile(docId, lineId, file)
+      }
       await load()
-      toast('Файл прикреплён', 'success')
+      toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка загрузки файла', 'error')
     } finally {
@@ -545,17 +612,17 @@ export function InventoryShipmentDetailPage() {
               <Icon name="layers" size={14} />Журнал
               {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
             </button>
-            {status === 'draft' && (
+            {canEdit && status === 'draft' && (
               <button className="btn ghost" disabled={acting} onClick={() => act(() => deleteShipment(docId!), '/inventory/shipments')}>
                 <Icon name="trash" size={14} />Удалить
               </button>
             )}
-            {status === 'draft' && (
+            {canEdit && status === 'draft' && (
               <button className="btn primary" disabled={acting} onClick={handleAdvanceClick}>
                 <Icon name="arrowRight" size={14} />Запланировать
               </button>
             )}
-            {isPlanned && (
+            {canEdit && isPlanned && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
@@ -565,7 +632,7 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            {isPlanned && (
+            {canEdit && isPlanned && (
               <button className="btn primary" disabled={acting} onClick={handleAdvanceClick}>
                 <Icon name="arrowRight" size={14} />Отгрузить
               </button>
@@ -748,9 +815,12 @@ export function InventoryShipmentDetailPage() {
                 getDraft={getDraft}
                 getAvailable={getDraftAvailable}
                 getZoneOptions={getLineZoneOptions}
+                getStoreOptions={getLineStoreOptions}
+                onPreviewFile={setFilePreview}
                 onQty={setDraftQty}
                 onShippedQty={setDraftShippedQty}
                 onZone={setDraftZone}
+                onStore={setDraftStore}
                 onDelete={handleDeleteLine}
                 onUploadFile={handleUploadFile}
                 onReplaceFile={handleReplaceFile}
@@ -866,6 +936,11 @@ export function InventoryShipmentDetailPage() {
         />
       )}
 
+      <ShipmentFilePreviewModal
+        preview={filePreview}
+        onClose={() => setFilePreview(null)}
+      />
+
     </div>
   )
 }
@@ -906,6 +981,11 @@ function isPdf(mime: string | null, filename: string): boolean {
   return filename.split('.').pop()?.toLowerCase() === 'pdf' || mime === 'application/pdf'
 }
 
+function isImageFile(mime: string | null, filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  return ['png', 'jpg', 'jpeg'].includes(ext) || (mime?.startsWith('image/') ?? false)
+}
+
 function fileTypeIcon(mime: string | null, filename: string): 'filePdf' | 'fileImg' {
   return isPdf(mime, filename) ? 'filePdf' : 'fileImg'
 }
@@ -922,14 +1002,212 @@ function shortName(name: string, max = 16): string {
   return `${base}…${ext}`
 }
 
+function printFile(url: string) {
+  const frame = document.createElement('iframe')
+  let cleaned = false
+  let cleanupTimer: number | undefined
+
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    if (cleanupTimer != null) window.clearTimeout(cleanupTimer)
+    window.setTimeout(() => frame.remove(), 500)
+  }
+
+  frame.style.position = 'fixed'
+  frame.style.right = '0'
+  frame.style.bottom = '0'
+  frame.style.width = '1px'
+  frame.style.height = '1px'
+  frame.style.border = '0'
+  frame.style.opacity = '0'
+  frame.style.pointerEvents = 'none'
+  frame.src = url
+  frame.onload = () => {
+    window.setTimeout(() => {
+      const printWindow = frame.contentWindow
+      if (!printWindow) {
+        cleanup()
+        return
+      }
+
+      const cleanupAfterDialog = () => {
+        window.setTimeout(cleanup, 1000)
+      }
+
+      printWindow.addEventListener('afterprint', cleanupAfterDialog, { once: true })
+      window.addEventListener('focus', cleanupAfterDialog, { once: true })
+      cleanupTimer = window.setTimeout(cleanup, 120000)
+
+      printWindow.focus()
+      printWindow.print()
+    }, 700)
+  }
+  document.body.appendChild(frame)
+}
+
+function fitWidthPreviewUrl(url: string): string {
+  const [base] = url.split('#')
+  return `${base}#zoom=page-width&view=FitH`
+}
+
+function ShipmentFilePreviewModal({ preview, onClose }: {
+  preview: LineFilePreview | null
+  onClose: () => void
+}) {
+  const file = preview?.file
+  const url = file ? resolvePublicUploadSrc(file.url) : ''
+  const isPdfFile = file ? isPdf(file.mime_type, file.filename) : false
+  const isImage = file ? isImageFile(file.mime_type, file.filename) : false
+  const previewUrl = isPdfFile ? fitWidthPreviewUrl(url) : url
+
+  return (
+    <Modal
+      open={!!preview}
+      onClose={onClose}
+      title={file?.filename ?? 'Файл'}
+      subtitle={preview ? `${preview.productName} · ${preview.sku}` : undefined}
+      width={1040}
+      footer={(
+        <>
+          <a
+            className="btn ghost"
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Icon name="eye" size={14} />Открыть отдельно
+          </a>
+          <button className="btn primary" disabled={!file} onClick={() => printFile(url)}>
+            <Icon name="print" size={14} />Печать
+          </button>
+        </>
+      )}
+    >
+      {preview && file && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 240px', gap: 16, minHeight: 520 }}>
+          <div
+            style={{
+              minHeight: 520,
+              border: '1px solid var(--c-border)',
+              borderRadius: 'var(--r-lg)',
+              background: 'var(--c-bg-sunken)',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {isPdfFile ? (
+              <iframe
+                title={file.filename}
+                src={previewUrl}
+                style={{ width: '100%', height: 520, border: 0, background: 'var(--c-bg-elev)' }}
+              />
+            ) : isImage ? (
+              <img
+                src={url}
+                alt={file.filename}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: 520,
+                  objectFit: 'contain',
+                }}
+              />
+            ) : (
+              <div style={{ color: 'var(--c-text-subtle)', fontSize: 13 }}>Предпросмотр недоступен</div>
+            )}
+          </div>
+
+          <div
+            style={{
+              border: '1px solid var(--c-border)',
+              borderRadius: 'var(--r-lg)',
+              background: 'var(--c-bg-elev)',
+              padding: 14,
+              alignSelf: 'start',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 'var(--r-md)',
+                  background: isPdfFile ? 'var(--c-danger-bg)' : 'var(--c-accent-bg)',
+                  color: fileTypeColor(file.mime_type, file.filename),
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Icon name={fileTypeIcon(file.mime_type, file.filename)} size={17} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  ШК к отгрузке
+                </div>
+                <div className="text-xs subtle">{isPdfFile ? 'PDF' : 'Изображение'}</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10 }}>
+              <PreviewMeta label="Товар" value={preview.productName} />
+              <PreviewMeta label="SKU" value={preview.sku} mono />
+              <PreviewMeta label="Цвет" value={preview.colorName || '—'} />
+              <PreviewMeta label="Размер" value={preview.sizeName || '—'} />
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: '12px 14px',
+                  borderRadius: 'var(--r-lg)',
+                  background: 'var(--c-accent-bg)',
+                  border: '1px solid var(--c-accent-border)',
+                }}
+              >
+                <div style={{ fontSize: 11.5, color: 'var(--c-accent-text)', marginBottom: 3 }}>План к печати</div>
+                <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-accent-text)' }}>
+                  {preview.qty.toLocaleString('ru-RU')} шт
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function PreviewMeta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginBottom: 2 }}>{label}</div>
+      <div
+        className={mono ? 'mono' : undefined}
+        style={{
+          fontSize: 13,
+          fontWeight: 500,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
 function LineFilesCell({
-  lineId, files, canEdit, uploading, onUpload, onReplace, onDelete,
+  lineId, files, canEdit, uploading, previewMeta, onPreview, onUpload, onReplace, onDelete,
 }: {
   lineId: string
   files: ShipmentLineFile[]
   canEdit: boolean
   uploading: boolean
-  onUpload: (lineId: string, file: File) => void
+  previewMeta: Omit<LineFilePreview, 'file'>
+  onPreview: (preview: LineFilePreview) => void
+  onUpload: (lineId: string, files: File[]) => void
   onReplace: (lineId: string, oldFileId: string, file: File) => void
   onDelete: (lineId: string, fileId: string) => void
 }) {
@@ -947,11 +1225,15 @@ function LineFilesCell({
     inputRef.current?.click()
   }
 
+  function previewFile(file: ShipmentLineFile) {
+    onPreview({ ...previewMeta, file })
+  }
+
   function handleInputChange(e: { target: HTMLInputElement }) {
-    const f = e.target.files?.[0]
-    if (f) {
-      if (replaceTargetRef.current) onReplace(lineId, replaceTargetRef.current, f)
-      else onUpload(lineId, f)
+    const selected = Array.from(e.target.files ?? [])
+    if (selected.length > 0) {
+      if (replaceTargetRef.current) onReplace(lineId, replaceTargetRef.current, selected[0])
+      else onUpload(lineId, selected)
     }
     replaceTargetRef.current = null
     e.target.value = ''
@@ -961,8 +1243,8 @@ function LineFilesCell({
     e.preventDefault()
     setDragOver(false)
     if (!canEdit) return
-    const f = e.dataTransfer.files?.[0]
-    if (f) onUpload(lineId, f)
+    const dropped = Array.from(e.dataTransfer.files ?? [])
+    if (dropped.length > 0) onUpload(lineId, dropped)
   }
 
   const updatePopPosition = useCallback(() => {
@@ -997,6 +1279,7 @@ function LineFilesCell({
       ref={inputRef}
       type="file"
       accept=".pdf,.png,.jpg,.jpeg"
+      multiple
       style={{ display: 'none' }}
       onChange={handleInputChange}
     />
@@ -1075,9 +1358,11 @@ function LineFilesCell({
           <>
             <a
               href={resolvePublicUploadSrc(single.url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                previewFile(single)
+              }}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
                 textDecoration: 'none', color: 'var(--c-text)',
@@ -1101,6 +1386,16 @@ function LineFilesCell({
                 opacity: hover ? 1 : 0, transition: 'opacity 120ms ease',
                 pointerEvents: hover ? 'auto' : 'none',
               }}>
+                <button
+                  type="button"
+                  title="Прикрепить ещё файл"
+                  disabled={uploading}
+                  onClick={(e) => { e.stopPropagation(); pickFile(null) }}
+                  className="btn ghost icon sm"
+                  style={{ width: 22, height: 22, color: 'var(--c-accent)' }}
+                >
+                  <Icon name="importFile" size={12} />
+                </button>
                 <button
                   type="button"
                   title="Заменить файл"
@@ -1148,8 +1443,11 @@ function LineFilesCell({
             >
               <a
                 href={resolvePublicUploadSrc(f.url)}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault()
+                  setPopoverOpen(false)
+                  previewFile(f)
+                }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1,
                   textDecoration: 'none', color: 'var(--c-text)',
@@ -1209,6 +1507,36 @@ function LineFilesCell({
 const groupBorder = '1px solid var(--c-border)'
 const tintShipped = 'var(--c-bg-sunken)'
 
+function StoreCell({
+  value,
+  stores,
+  onChange,
+  disabled,
+  readonly,
+  readonlyLabel,
+}: {
+  value: string
+  stores: StoreChoice[]
+  onChange: (storeId: string) => void
+  disabled?: boolean
+  readonly?: boolean
+  readonlyLabel?: string | null
+}) {
+  if (readonly) return <span className="t-sub">{readonlyLabel || '—'}</span>
+  return (
+    <div className="store-cell-combobox">
+      <Combobox
+        value={value || null}
+        placeholder="Без магазина"
+        options={stores.map((store): ComboboxOption => ({ value: store.id, label: store.name }))}
+        onChange={(v) => onChange(String(v ?? ''))}
+        disabled={disabled}
+        clearable
+      />
+    </div>
+  )
+}
+
 type ShipmentLinesTableProps = {
   lines:           EditableShipmentLine[]
   cargoType:       ShipmentCargoType
@@ -1222,32 +1550,36 @@ type ShipmentLinesTableProps = {
   getDraft:        (line: ShipmentLine) => LineDraft
   getAvailable:    (line: ShipmentLine) => number
   getZoneOptions:  (line: ShipmentLine) => ZoneChoice[]
+  getStoreOptions: (line: ShipmentLine) => StoreChoice[]
+  onPreviewFile:   (preview: LineFilePreview) => void
   onQty:           (lineId: string, v: number) => void
   onShippedQty:    (lineId: string, v: number) => void
   onZone:          (lineId: string, zoneId: string, zoneName: string | null) => void
+  onStore:         (lineId: string, storeId: string, storeName: string | null) => void
   onDelete:        (lineId: string) => void
-  onUploadFile:    (lineId: string, file: File) => void
+  onUploadFile:    (lineId: string, files: File[]) => void
   onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile:    (lineId: string, fileId: string) => void
 }
 
 function ShipmentLinesTable({
   lines, cargoType, canEditPlan, canEditShipped, canDelete, canAttachFiles,
-  acting, saving, uploadingLines, getDraft, getAvailable, getZoneOptions,
-  onQty, onShippedQty, onZone, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
+  acting, saving, uploadingLines, getDraft, getAvailable, getZoneOptions, getStoreOptions,
+  onPreviewFile, onQty, onShippedQty, onZone, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
 }: ShipmentLinesTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
   const showZone = cargoType === 'good' || cargoType === 'defect'
   // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Файлы | Действие
-  const colCount = 2 + (showZone ? 2 : 1) + 1 + (canDelete ? 1 : 0)
+  const colCount = 3 + (showZone ? 2 : 1) + 1 + (canDelete ? 1 : 0)
 
   return (
     <Table>
       <thead>
         <tr>
           <th rowSpan={2}>Товар</th>
+          <th rowSpan={2} style={{ width: 180 }}>Магазин</th>
           <th rowSpan={2} style={{ width: 110, textAlign: 'right' }}>План</th>
           <th rowSpan={2} style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
@@ -1277,6 +1609,7 @@ function ShipmentLinesTable({
           const available = getAvailable(line)
           const visibleAvailable = canEditShipped ? available : line.available
           const zoneOptions = getZoneOptions(line)
+          const storeOptions = getStoreOptions(line)
           const overAvailable = canEditShipped && draft.shippedQty > available
           const isSaving = saving[line.id] ?? false
 
@@ -1294,6 +1627,19 @@ function ShipmentLinesTable({
                     доступно {visibleAvailable}
                   </div>
                 )}
+              </Td>
+              <Td>
+                <StoreCell
+                  value={draft.storeId}
+                  stores={storeOptions}
+                  onChange={(storeId) => {
+                    const store = storeOptions.find((item) => item.id === storeId)
+                    onStore(line.id, storeId, store?.name ?? null)
+                  }}
+                  disabled={acting || isSaving}
+                  readonly={!canEditPlan}
+                  readonlyLabel={line.store_name}
+                />
               </Td>
               <Td className="num">
                 {canEditPlan ? (
@@ -1313,6 +1659,14 @@ function ShipmentLinesTable({
                   files={line.files ?? []}
                   canEdit={canAttachFiles}
                   uploading={uploadingLines[line.id] ?? false}
+                  previewMeta={{
+                    productName: line.product_name,
+                    sku: line.product_sku,
+                    colorName: line.color_name,
+                    sizeName: line.size_name,
+                    qty: line.qty,
+                  }}
+                  onPreview={onPreviewFile}
                   onUpload={onUploadFile}
                   onReplace={onReplaceFile}
                   onDelete={onDeleteFile}

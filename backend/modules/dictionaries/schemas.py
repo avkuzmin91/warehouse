@@ -35,6 +35,31 @@ class DictionaryUpdateRequest(BaseModel):
     is_deleted: bool | None = None
 
 
+class ClientStoreItem(BaseModel):
+    id: str
+    client_id: str
+    name: str
+    is_active: bool
+    is_deleted: bool = False
+    deleted_at: str | None = None
+    deleted_by: str | None = None
+    created_at: str
+    created_by: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class ClientStoreCreateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    is_active: bool = True
+
+
+class ClientStoreUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+
+
 class ProductTypeCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     is_active: bool = False

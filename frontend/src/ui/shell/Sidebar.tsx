@@ -23,6 +23,11 @@ const OPS_NAV: NavItem[] = [
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]
 
+const SHIFT_SUPERVISOR_NAV: NavItem[] = [
+  { to: '/home', icon: 'home', label: 'Главная' },
+  { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
+]
+
 const ADMIN_NAV: NavItem[] = [
   { to: '/analytics', icon: 'chart', label: 'Аналитика' },
   { to: '/dictionaries', icon: 'book', label: 'Справочники' },
@@ -45,6 +50,7 @@ const ROLE_LABELS: Record<string, string> = {
   manager: 'Менеджер',
   user: 'Без доступа',
   warehouse_manager: 'Кладовщик',
+  shift_supervisor: 'Начальник смены',
   client: 'Клиент',
 }
 
@@ -58,6 +64,7 @@ interface SidebarProps {
 export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const navigate = useNavigate()
   const isClient = user?.role === 'client'
+  const isShiftSupervisor = user?.role === 'shift_supervisor'
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
 
@@ -127,6 +134,9 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
       ) : (
         <>
           {!collapsed && <div className="sidebar-section">Склад</div>}
+          {isShiftSupervisor && SHIFT_SUPERVISOR_NAV.map((item) => (
+            <NavItem key={item.to} {...item} collapsed={collapsed} />
+          ))}
           {hasStaffAccess && OPS_NAV.map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}

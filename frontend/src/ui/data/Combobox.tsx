@@ -90,7 +90,7 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
     setOpen(true)
     setQuery('')
     setHighlighted(0)
-    setTimeout(() => inputRef.current?.focus(), 10)
+    setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 10)
   }
 
   const handleSelect = (opt: ComboboxOption) => {

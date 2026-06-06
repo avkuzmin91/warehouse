@@ -6,6 +6,9 @@ from config import CLIENT_LIST_SORT_COLUMNS, COLOR_LIST_SORT_COLUMNS, SIZE_LIST_
 from modules.auth.service import get_current_admin
 
 from .schemas import (
+    ClientStoreCreateRequest,
+    ClientStoreItem,
+    ClientStoreUpdateRequest,
     DictionaryBaseItem,
     DictionaryCreateRequest,
     DictionaryListResponse,
@@ -23,16 +26,20 @@ from .schemas import (
 )
 from .service import (
     create_dictionary_item,
+    create_client_store,
     create_product_type,
     create_size,
+    delete_client_store,
     delete_dictionary_item,
     get_dictionary_item,
     get_product_type_item,
     get_size_item,
     list_dictionary_items_page,
+    list_client_stores,
     list_product_types_page,
     list_sizes_page,
     update_dictionary_item,
+    update_client_store,
     update_product_type,
     update_size,
     _normalize_date_yyyy_mm_dd,
@@ -80,6 +87,36 @@ def list_clients(
 @router.post("/clients", response_model=MessageResponse)
 def create_client(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("clients", payload, admin["id"])
+
+
+@router.get("/clients/{client_id}/stores", response_model=list[ClientStoreItem])
+def list_client_store_items(
+    client_id: str,
+    admin=Depends(get_current_admin),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    return list_client_stores(client_id, include_deleted=include_deleted)
+
+
+@router.post("/clients/{client_id}/stores", response_model=MessageResponse)
+def create_client_store_item(client_id: str, payload: ClientStoreCreateRequest, admin=Depends(get_current_admin)):
+    return create_client_store(client_id, payload, admin["id"])
+
+
+@router.patch("/clients/{client_id}/stores/{store_id}", response_model=MessageResponse)
+def update_client_store_item(
+    client_id: str,
+    store_id: str,
+    payload: ClientStoreUpdateRequest,
+    admin=Depends(get_current_admin),
+):
+    return update_client_store(client_id, store_id, payload, admin["id"])
+
+
+@router.delete("/clients/{client_id}/stores/{store_id}", response_model=MessageResponse)
+def delete_client_store_item(client_id: str, store_id: str, admin=Depends(get_current_admin)):
+    return delete_client_store(client_id, store_id, admin["id"])
 
 
 @router.get("/clients/{item_id}", response_model=DictionaryBaseItem)

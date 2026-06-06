@@ -1,13 +1,8 @@
-import { DetailPage } from '../../layouts/DetailPage'
-import { EmptyState } from '../../primitives/EmptyState'
+import { useParams } from 'react-router-dom'
+import { CabinetProductViewFeature } from '../../features/cabinet/CabinetProductViewFeature'
 
 export function CabinetProductViewPage() {
-  return (
-    <DetailPage title="Товар клиента" subtitle="Раздел временно отключен" backTo="/cabinet/products">
-      <EmptyState
-        title="Карточка товара в личном кабинете недоступна"
-        sub="Клиентский портал отключен. Просмотр и управление товарами доступны в основном справочнике."
-      />
-    </DetailPage>
-  )
+  const { id } = useParams<{ id: string }>()
+  if (!id) return null
+  return <CabinetProductViewFeature productId={id} />
 }
