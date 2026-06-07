@@ -79,15 +79,8 @@ function progressLabel(item: OperationalPlanItem): string {
   return `${noun}: ${progress.toLocaleString('ru-RU')} / ${item.total_qty.toLocaleString('ru-RU')}`
 }
 
-function progressWidth(item: OperationalPlanItem): string {
-  if (item.total_qty <= 0) return '0%'
-  const value = Math.max(0, Math.min(100, ((item.progress_qty ?? 0) / item.total_qty) * 100))
-  return `${value}%`
-}
-
-function PlanRow({ item, showException = false }: { item: OperationalPlanItem; showException?: boolean }) {
+function PlanRow({ item }: { item: OperationalPlanItem }) {
   const navigate = useNavigate()
-  const icon: IconName = item.type === 'receipt' ? 'truckIn' : 'boxOut'
 
   return (
     <button
@@ -95,11 +88,10 @@ function PlanRow({ item, showException = false }: { item: OperationalPlanItem; s
       onClick={() => navigate(itemPath(item))}
       style={{
         width: '100%',
-        display: 'grid',
-        gridTemplateColumns: '32px minmax(0, 1fr) auto',
-        gap: 10,
+        display: 'flex',
+        gap: 8,
         alignItems: 'center',
-        padding: '10px 12px',
+        padding: '8px 10px',
         border: 0,
         borderTop: '1px solid var(--c-border)',
         background: 'transparent',
@@ -110,22 +102,7 @@ function PlanRow({ item, showException = false }: { item: OperationalPlanItem; s
       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-bg-hover)' }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
     >
-      <span
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 7,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: item.overdue ? 'var(--c-danger-bg)' : 'var(--c-accent-bg)',
-          color: item.overdue ? 'var(--c-danger)' : 'var(--c-accent)',
-        }}
-      >
-        <Icon name={icon} size={16} />
-      </span>
-
-      <span style={{ minWidth: 0 }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
           <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{item.doc_number}</span>
           <span
@@ -141,38 +118,19 @@ function PlanRow({ item, showException = false }: { item: OperationalPlanItem; s
             {itemTitle(item)}
           </span>
         </span>
-        <span className="t-sub" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, fontSize: 12 }}>
+        <span className="t-sub" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontSize: 12, minWidth: 0 }}>
           <Icon name="calendar" size={12} />
           {fmtDate(item.date)}
           <span>·</span>
           <span>{item.sku_count} SKU</span>
           <span>·</span>
           <span>{item.total_qty.toLocaleString('ru-RU')} шт</span>
+          <span>·</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{progressLabel(item)}</span>
         </span>
-        {showException && item.exception ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, color: 'var(--c-danger)', fontSize: 12.5, fontWeight: 500 }}>
-            <Icon name="alert" size={13} />
-            {item.exception}
-          </span>
-        ) : (
-          <span style={{ display: 'block', marginTop: 7 }}>
-            <span style={{ display: 'block', height: 5, borderRadius: 99, background: 'var(--c-bg-sunken)', overflow: 'hidden' }}>
-              <span
-                style={{
-                  display: 'block',
-                  width: progressWidth(item),
-                  height: '100%',
-                  borderRadius: 99,
-                  background: item.overdue ? 'var(--c-danger)' : 'var(--c-accent)',
-                }}
-              />
-            </span>
-            <span className="t-sub" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>{progressLabel(item)}</span>
-          </span>
-        )}
       </span>
 
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <Badge tone={statusTone(item)}>{statusLabel(item)}</Badge>
         <Badge tone={PRIORITY_TONE[item.priority]}>{PRIORITY_LABEL[item.priority]}</Badge>
       </span>
@@ -185,17 +143,15 @@ function PlanColumn({
   icon,
   items,
   empty,
-  showException = false,
 }: {
   title: string
   icon: IconName
   items: OperationalPlanItem[]
   empty: string
-  showException?: boolean
 }) {
   return (
     <div style={{ minWidth: 0, border: '1px solid var(--c-border)', borderRadius: 7, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'var(--c-bg-sunken)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--c-bg-sunken)' }}>
         <Icon name={icon} size={15} style={{ color: 'var(--c-accent)' }} />
         <span style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-text-subtle)' }}>{items.length}</span>
@@ -204,7 +160,7 @@ function PlanColumn({
         <div className="t-sub" style={{ padding: 14, fontSize: 13 }}>{empty}</div>
       ) : (
         items.map((item) => (
-          <PlanRow key={`${item.type}-${item.id}-${showException ? item.exception : 'plan'}`} item={item} showException={showException} />
+          <PlanRow key={`${item.type}-${item.id}`} item={item} />
         ))
       )}
     </div>
@@ -212,7 +168,7 @@ function PlanColumn({
 }
 
 export function OperationalPlanFeature() {
-  const { data, loading, error } = useApi((signal) => getOperationalPlan({ limit: 6, horizon_days: 7 }, signal), [])
+  const { data, loading, error } = useApi((signal) => getOperationalPlan({ limit: 4, horizon_days: 7 }, signal), [])
 
   return (
     <Card>
@@ -233,7 +189,7 @@ export function OperationalPlanFeature() {
         ) : error ? (
           <div className="t-sub" style={{ padding: 6 }}>Не удалось загрузить операционный план</div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
             <PlanColumn
               title="Поступления"
               icon="truckIn"
@@ -245,13 +201,6 @@ export function OperationalPlanFeature() {
               icon="boxOut"
               items={data?.shipments ?? []}
               empty="Нет отгрузок в ближайшем плане"
-            />
-            <PlanColumn
-              title="Исключения"
-              icon="alert"
-              items={data?.exceptions ?? []}
-              empty="Критичных отклонений нет"
-              showException
             />
           </div>
         )}
