@@ -417,24 +417,14 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             LEFT JOIN colors col ON col.id = v.color_id
             LEFT JOIN sizes sz ON sz.id = v.size_id
             LEFT JOIN (
-                SELECT l.product_id, l.color_id, l.size_id,
-                       SUM(COALESCE((
-                           SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ? ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ?)
-                           )
-                       ), 0)) AS good_in,
-                       SUM(COALESCE((
-                           SELECT COALESCE(
-                               (SELECT o2.qty FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ? ORDER BY o2.created_at DESC LIMIT 1),
-                               (SELECT SUM(o2.qty) FROM receipt_ops o2 WHERE o2.line_id = l.id AND o2.op_type = ?)
-                           )
-                       ), 0)) AS defect_in
-                FROM receipt_lines l
-                JOIN receipt_docs d ON d.id = l.doc_id
-                WHERE l.product_id = ? AND l.is_deleted = 0
-                  AND d.is_deleted = 0 AND d.status IN (?, ?)
-                GROUP BY l.product_id, l.color_id, l.size_id
+                SELECT product_id, color_id, size_id,
+                       SUM(CASE WHEN to_status='good'   THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_status='good'   THEN qty ELSE 0 END) AS good_in,
+                       SUM(CASE WHEN to_status='defect' THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_status='defect' THEN qty ELSE 0 END) AS defect_in
+                FROM zone_relocations
+                WHERE product_id = ?
+                GROUP BY product_id, color_id, size_id
             ) b ON b.product_id = v.product_id AND b.color_id IS NOT DISTINCT FROM v.color_id AND b.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
                 SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_good
@@ -452,13 +442,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             ORDER BY LOWER(v.sku) ASC
             """,
             (
-                RECEIPT_OP_RECEIVING_CORRECTION,
-                RECEIPT_OP_RECEIVING,
-                RECEIPT_OP_DEFECT_CORRECTION,
-                RECEIPT_OP_DEFECT_FIX,
                 item_id,
-                RECEIPT_STATUS_DONE,
-                RECEIPT_STATUS_ON_REVIEW,
                 item_id,
                 SHIPMENT_STATUS_SHIPPED,
                 SHIPMENT_CARGO_GOOD,

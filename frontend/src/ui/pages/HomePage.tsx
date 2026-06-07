@@ -5,6 +5,7 @@ import { Icon } from '../primitives/Icon'
 import { WarehouseMap } from '../widgets/WarehouseMap'
 import { MyTasksFeature } from '../features/home/MyTasksFeature'
 import { HomeKpiFeature } from '../features/home/HomeKpiFeature'
+import { OperationalPlanFeature } from '../features/home/OperationalPlanFeature'
 import { PacmanPlaceholder } from '../features/home/PacmanPlaceholder'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { canEditShipments } from '../../utils/access'
@@ -51,6 +52,8 @@ export function HomePage() {
 
       <div className="mt-20" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
         <div className="col gap-16">
+          <OperationalPlanFeature />
+
           <MyTasksFeature />
 
           <Card>

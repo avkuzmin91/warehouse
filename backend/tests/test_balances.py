@@ -20,10 +20,6 @@ if not os.environ.get("DATABASE_URL"):
 from dbconn import get_connection
 from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
 
-# Эти тесты строят инвентарь через старый QC-поток поступления (receiving/defect_fix).
-# В новой модели good/defect рождаются конвертацией при упаковке — будут переписаны в подэтапе 4.
-_SKIP_OLD_QC = pytest.mark.skip(reason="Переписать под упаковочный QC (подэтап 4)")
-
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -90,24 +86,33 @@ def _insert_receipt_line(conn, doc_id: str, product_id: str, color_id: str | Non
     return line_id
 
 
-def _insert_receiving_op(conn, doc_id: str, line_id: str, qty: int) -> None:
-    """Вставляет receipt_ops с op_type=receiving."""
+def _insert_conversion(conn, client_id: str, product_ids, to_status: str, qty: int, zone_id: str | None = None) -> None:
+    """QC-конвертация в журнале: on_review→good|defect (как при упаковке). Источник good/defect."""
+    pid, color_id, size_id = product_ids
     conn.execute(
-        """INSERT INTO receipt_ops
-           (id, doc_id, line_id, op_type, qty, created_at, created_by)
-           VALUES (?, ?, ?, 'receiving', ?, NOW(), 'test')""",
-        (str(uuid.uuid4()), doc_id, line_id, qty),
+        """INSERT INTO zone_relocations
+           (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
+            client_id, status, from_status, to_status, from_zone_id, to_zone_id, qty, created_at)
+           VALUES (?, ?, 'Test Product', 'TST-SKU', ?, 'Red', ?, NULL,
+                   ?, ?, 'on_review', ?, ?, ?, ?, NOW())""",
+        (str(uuid.uuid4()), pid, color_id, size_id, client_id, to_status, to_status, zone_id, zone_id, qty),
     )
 
 
-def _insert_defect_op(conn, doc_id: str, line_id: str, qty: int) -> None:
-    """Вставляет receipt_ops с op_type=defect_fix."""
-    conn.execute(
-        """INSERT INTO receipt_ops
-           (id, doc_id, line_id, op_type, qty, created_at, created_by)
-           VALUES (?, ?, ?, 'defect_fix', ?, NOW(), 'test')""",
-        (str(uuid.uuid4()), doc_id, line_id, qty),
-    )
+def _seed_received(conn, client_id: str, product_ids, accepted: int, zone_id: str | None = None) -> tuple[str, str]:
+    """Принятое поступление (done): accepted_qty → остаток on_review в зоне."""
+    pid, color_id, size_id = product_ids
+    doc = _insert_receipt(conn, client_id, "done")
+    line = _insert_receipt_line(conn, doc, pid, color_id, size_id, planned_qty=accepted, accepted_qty=accepted)
+    if zone_id:
+        conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone_id, line))
+    return doc, line
+
+
+def _seed_good(conn, client_id: str, product_ids, qty: int, zone_id: str | None = None) -> None:
+    """Готовый годный остаток: приёмка accepted=qty + конвертация on_review→good."""
+    _seed_received(conn, client_id, product_ids, qty, zone_id)
+    _insert_conversion(conn, client_id, product_ids, "good", qty, zone_id)
 
 
 def _insert_shipment(conn, client_id: str, cargo_type: str, status: str) -> str:
@@ -173,74 +178,65 @@ def _cleanup_test_docs(client_id: str) -> None:
             conn.execute("DELETE FROM shipment_lines WHERE doc_id = ?", (r["id"],))
             conn.execute("DELETE FROM shipment_ops WHERE doc_id = ?", (r["id"],))
         conn.execute("DELETE FROM shipment_docs WHERE client_id = ?", (client_id,))
+        conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (client_id,))
         conn.commit()
 
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 
-@_SKIP_OLD_QC
 def test_balance_increases_after_receipt_accepted(admin_client, client_id, product_ids):
-    """Принятый товар (статус on_review) отражается в балансах как good."""
-    pid, color_id, size_id = product_ids
-    good_qty = 42
+    """Принятый товар попадает в остаток как on_review (good/defect появятся при упаковке)."""
+    pid, _color_id, _size_id = product_ids
+    qty = 42
 
     with get_connection() as conn:
-        doc_id = _insert_receipt(conn, client_id, "on_review")
-        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, good_qty)
-        _insert_receiving_op(conn, doc_id, line_id, good_qty)
+        _seed_received(conn, client_id, product_ids, qty)
         conn.commit()
 
     try:
         r = admin_client.get(f"/balances?client_id={client_id}")
         assert r.status_code == 200, r.text
-        items = r.json()["items"]
-        matched = [i for i in items if i["product_id"] == pid]
-        assert matched, f"Товар {pid} не найден в балансах: {items}"
-        assert matched[0]["good"] == good_qty
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
+        assert matched, f"Товар {pid} не найден в балансах"
+        assert matched[0]["on_review"] == qty
+        assert matched[0]["good"] == 0
         assert matched[0]["defect"] == 0
     finally:
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_balance_includes_defect_qty(admin_client, client_id, product_ids):
-    """Принятый брак отражается в поле defect."""
-    pid, color_id, size_id = product_ids
+    """Упаковка делит на годный/брак: конвертации on_review→good/defect."""
+    pid, _color_id, _size_id = product_ids
     good_qty = 10
     defect_qty = 5
 
     with get_connection() as conn:
-        doc_id = _insert_receipt(conn, client_id, "done")
-        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, good_qty + defect_qty)
-        _insert_receiving_op(conn, doc_id, line_id, good_qty)
-        _insert_defect_op(conn, doc_id, line_id, defect_qty)
+        _seed_received(conn, client_id, product_ids, good_qty + defect_qty)
+        _insert_conversion(conn, client_id, product_ids, "good", good_qty)
+        _insert_conversion(conn, client_id, product_ids, "defect", defect_qty)
         conn.commit()
 
     try:
         r = admin_client.get(f"/balances?client_id={client_id}")
         assert r.status_code == 200, r.text
-        items = r.json()["items"]
-        matched = [i for i in items if i["product_id"] == pid]
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
         assert matched, f"Товар {pid} не найден в балансах"
         assert matched[0]["good"] == good_qty
         assert matched[0]["defect"] == defect_qty
+        assert matched[0]["on_review"] == 0
     finally:
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_balance_decreases_after_shipment_shipped(admin_client, client_id, product_ids):
-    """После отгрузки (status=shipped) баланс уменьшается."""
+    """После отгрузки (status=shipped) годный остаток уменьшается."""
     pid, color_id, size_id = product_ids
-    received_qty = 20
+    good_qty = 20
     shipped_qty = 8
 
     with get_connection() as conn:
-        # Принимаем товар
-        r_doc = _insert_receipt(conn, client_id, "done")
-        r_line = _insert_receipt_line(conn, r_doc, pid, color_id, size_id, received_qty)
-        _insert_receiving_op(conn, r_doc, r_line, received_qty)
-        # Отгружаем часть
+        _seed_good(conn, client_id, product_ids, good_qty)
         s_doc = _insert_shipment(conn, client_id, "good", "shipped")
         _insert_shipment_line(conn, s_doc, pid, color_id, size_id, shipped_qty)
         conn.commit()
@@ -248,15 +244,13 @@ def test_balance_decreases_after_shipment_shipped(admin_client, client_id, produ
     try:
         r = admin_client.get(f"/balances?client_id={client_id}")
         assert r.status_code == 200, r.text
-        items = r.json()["items"]
-        matched = [i for i in items if i["product_id"] == pid]
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
         assert matched, f"Товар {pid} не найден в балансах"
-        assert matched[0]["good"] == received_qty - shipped_qty
+        assert matched[0]["good"] == good_qty - shipped_qty
     finally:
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_product_variant_stock_uses_actual_shipped_qty_like_balances(
     admin_client,
     client_id,
@@ -274,17 +268,9 @@ def test_product_variant_stock_uses_actual_shipped_qty_like_balances(
 
     with get_connection() as conn:
         variant_id = _insert_product_variant(conn, pid, color_id, size_id)
-        r_doc = _insert_receipt(conn, client_id, "done")
-        r_line = _insert_receipt_line(
-            conn,
-            r_doc,
-            pid,
-            color_id,
-            size_id,
-            received_good_qty + received_defect_qty,
-        )
-        _insert_receiving_op(conn, r_doc, r_line, received_good_qty)
-        _insert_defect_op(conn, r_doc, r_line, received_defect_qty)
+        _seed_received(conn, client_id, product_ids, received_good_qty + received_defect_qty)
+        _insert_conversion(conn, client_id, product_ids, "good", received_good_qty)
+        _insert_conversion(conn, client_id, product_ids, "defect", received_defect_qty)
         s_good_doc = _insert_shipment(conn, client_id, "good", "shipped")
         _insert_shipment_line(
             conn,
@@ -334,18 +320,14 @@ def test_product_variant_stock_uses_actual_shipped_qty_like_balances(
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_balance_unchanged_for_packing_shipment(admin_client, client_id, product_ids):
     """Отгрузка в статусе packing (не shipped) не уменьшает баланс."""
     pid, color_id, size_id = product_ids
-    received_qty = 15
+    good_qty = 15
     reserved_qty = 10  # в отгрузке, но ещё не отправлена
 
     with get_connection() as conn:
-        r_doc = _insert_receipt(conn, client_id, "done")
-        r_line = _insert_receipt_line(conn, r_doc, pid, color_id, size_id, received_qty)
-        _insert_receiving_op(conn, r_doc, r_line, received_qty)
-        # Отгрузка в статусе packing — не должна влиять на баланс
+        _seed_good(conn, client_id, product_ids, good_qty)
         s_doc = _insert_shipment(conn, client_id, "good", "packing")
         _insert_shipment_line(conn, s_doc, pid, color_id, size_id, reserved_qty)
         conn.commit()
@@ -353,27 +335,22 @@ def test_balance_unchanged_for_packing_shipment(admin_client, client_id, product
     try:
         r = admin_client.get(f"/balances?client_id={client_id}")
         assert r.status_code == 200, r.text
-        items = r.json()["items"]
-        matched = [i for i in items if i["product_id"] == pid]
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
         assert matched, f"Товар {pid} не найден в балансах"
-        # Балансы должны остаться полными — packing не вычитается
-        assert matched[0]["good"] == received_qty
+        assert matched[0]["good"] == good_qty  # packing не вычитается
     finally:
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_on_review_remainder_uses_accepted_qty(admin_client, client_id, product_ids):
-    """Остаток «на проверке» = «Принят» минус уже разнесённый годный/брак (не план)."""
-    pid, color_id, size_id = product_ids
-    planned_qty = 30   # информационный план
+    """Остаток «на проверке» = «Принят» минус разнесённый упаковкой good/defect."""
+    pid, _color_id, _size_id = product_ids
     accepted_qty = 25  # фактически принято при прибытии
-    good_qty = 10      # уже разнесено на QC
+    good_qty = 10      # упаковано как годный
 
     with get_connection() as conn:
-        doc_id = _insert_receipt(conn, client_id, "on_review")
-        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, planned_qty, accepted_qty)
-        _insert_receiving_op(conn, doc_id, line_id, good_qty)
+        _seed_received(conn, client_id, product_ids, accepted_qty)
+        _insert_conversion(conn, client_id, product_ids, "good", good_qty)
         conn.commit()
 
     try:
@@ -382,8 +359,7 @@ def test_on_review_remainder_uses_accepted_qty(admin_client, client_id, product_
         matched = [i for i in r.json()["items"] if i["product_id"] == pid]
         assert matched, "Товар не найден в балансах"
         assert matched[0]["good"] == good_qty
-        # Остаток на проверке считается от «Принят» (25), а не «План» (30): 25 - 10 = 15.
-        assert matched[0]["on_review"] == accepted_qty - good_qty
+        assert matched[0]["on_review"] == accepted_qty - good_qty  # 25 - 10 = 15
     finally:
         _cleanup_test_docs(client_id)
 
@@ -394,8 +370,7 @@ def test_balance_not_counted_for_draft_receipt(admin_client, client_id, product_
 
     with get_connection() as conn:
         doc_id = _insert_receipt(conn, client_id, "planned")
-        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, 50)
-        _insert_receiving_op(conn, doc_id, line_id, 50)
+        _insert_receipt_line(conn, doc_id, pid, color_id, size_id, 50, accepted_qty=50)
         conn.commit()
 
     try:
@@ -416,15 +391,10 @@ def _zone_good(items, location_id) -> int:
 
 
 def _seed_good_in_zone(conn, client_id, product_ids, zone_id, qty) -> None:
-    pid, color_id, size_id = product_ids
-    doc = _insert_receipt(conn, client_id, "done")
-    line = _insert_receipt_line(conn, doc, pid, color_id, size_id, planned_qty=qty, accepted_qty=qty)
-    _insert_receiving_op(conn, doc, line, qty)
-    conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone_id, line))
+    _seed_good(conn, client_id, product_ids, qty, zone_id)
     conn.commit()
 
 
-@_SKIP_OLD_QC
 def test_relocation_moves_good_between_zones(admin_client, client_id, product_ids):
     pid, color_id, size_id = product_ids
     zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
@@ -450,7 +420,6 @@ def test_relocation_moves_good_between_zones(admin_client, client_id, product_id
         _cleanup_test_docs(client_id)
 
 
-@_SKIP_OLD_QC
 def test_relocation_appears_in_journal(admin_client, client_id, product_ids):
     pid, color_id, size_id = product_ids
     zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())

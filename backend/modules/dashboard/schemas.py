@@ -13,3 +13,33 @@ class DashboardTodayStats(BaseModel):
 class DashboardTodayResponse(BaseModel):
     today: DashboardTodayStats
     yesterday: DashboardTodayStats
+
+
+class OperationalPlanItem(BaseModel):
+    type: str
+    id: str
+    doc_number: str
+    status: str
+    date: str | None = None
+    date_kind: str
+    client_name: str | None = None
+    destination: str | None = None
+    sku_count: int
+    total_qty: int
+    progress_qty: int | None = None
+    overdue: bool
+    priority: str
+    exception: str | None = None
+
+
+class OperationalPlanTotals(BaseModel):
+    receipts: int
+    shipments: int
+    overdue: int
+
+
+class OperationalPlanResponse(BaseModel):
+    receipts: list[OperationalPlanItem]
+    shipments: list[OperationalPlanItem]
+    exceptions: list[OperationalPlanItem]
+    totals: OperationalPlanTotals
