@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from config import (
     RECEIPT_OP_DEFECT_FIX,
@@ -99,30 +99,44 @@ def _priority(doc_date, today: date, *, active: bool = False) -> str:
     return "upcoming"
 
 
-def _priority_rank(item: dict) -> tuple[int, str, str]:
-    ranks = {
-        "overdue": 0,
-        "today": 1,
-        "active": 2,
-        "upcoming": 3,
-        "no_date": 4,
-    }
-    return (ranks.get(str(item["priority"]), 9), str(item["date"] or "9999-12-31"), str(item["doc_number"]))
+def _count_operational_receipts(connection, *, today: date, overdue_only: bool = False) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*) AS cnt
+        FROM receipt_docs d
+        WHERE COALESCE(d.is_deleted, 0) = 0
+          AND d.status IN (?, ?)
+          AND d.arrival_date IS NOT NULL
+          AND d.arrival_date {'<' if overdue_only else '<='} ?
+        """,
+        (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, today.isoformat()),
+    ).fetchone()
+    return int(row["cnt"] if row else 0)
 
 
-def _exception(item: dict) -> str | None:
-    if item["priority"] == "overdue":
-        return "Просрочен плановый срок"
-    if item["priority"] == "no_date":
-        return "Не указана плановая дата"
-    if item["type"] == "shipment" and item["priority"] == "today" and int(item["progress_qty"] or 0) == 0:
-        return "Сегодня к отгрузке, упаковка не начата"
-    return None
+def _count_operational_shipments(connection, *, today: date, overdue_only: bool = False) -> int:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*) AS cnt
+        FROM shipment_docs d
+        WHERE COALESCE(d.is_deleted, 0) = 0
+          AND d.status = ?
+          AND d.ship_date IS NOT NULL
+          AND d.ship_date {'<' if overdue_only else '<='} ?
+        """,
+        (SHIPMENT_STATUS_PACKING, today.isoformat()),
+    ).fetchone()
+    return int(row["cnt"] if row else 0)
 
 
-def operational_plan(connection, *, limit: int, horizon_days: int, today: date | None = None) -> dict:
+def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, today: date | None = None) -> dict:
     today = today or date.today()
-    horizon = today + timedelta(days=horizon_days)
+    receipt_total = _count_operational_receipts(connection, today=today)
+    shipment_total = _count_operational_shipments(connection, today=today)
+    overdue_total = (
+        _count_operational_receipts(connection, today=today, overdue_only=True)
+        + _count_operational_shipments(connection, today=today, overdue_only=True)
+    )
 
     receipt_rows = connection.execute(
         """
@@ -135,10 +149,13 @@ def operational_plan(connection, *, limit: int, horizon_days: int, today: date |
         LEFT JOIN receipt_lines l ON l.doc_id = d.id
         WHERE COALESCE(d.is_deleted, 0) = 0
           AND d.status IN (?, ?)
-          AND (d.arrival_date IS NULL OR d.arrival_date <= ?)
+          AND d.arrival_date IS NOT NULL
+          AND d.arrival_date <= ?
         GROUP BY d.id, cl.name
+        ORDER BY d.arrival_date ASC, d.created_at ASC, d.doc_number ASC
+        LIMIT ?
         """,
-        (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, horizon.isoformat()),
+        (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, today.isoformat(), receipts_limit),
     ).fetchall()
     receipts = [
         {
@@ -178,13 +195,16 @@ def operational_plan(connection, *, limit: int, horizon_days: int, today: date |
         LEFT JOIN shipment_lines l ON l.doc_id = d.id
         WHERE COALESCE(d.is_deleted, 0) = 0
           AND d.status = ?
-          AND (d.ship_date IS NULL OR d.ship_date <= ?)
+          AND d.ship_date IS NOT NULL
+          AND d.ship_date <= ?
         GROUP BY d.id
+        ORDER BY d.ship_date ASC, d.created_at ASC, d.doc_number ASC
+        LIMIT ?
         """,
         (
             RECEIPT_STATUS_ON_REVIEW, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT,
             RECEIPT_STATUS_ON_REVIEW, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT,
-            SHIPMENT_STATUS_PACKING, horizon.isoformat(),
+            SHIPMENT_STATUS_PACKING, today.isoformat(), shipments_limit,
         ),
     ).fetchall()
     shipments = [
@@ -207,23 +227,13 @@ def operational_plan(connection, *, limit: int, horizon_days: int, today: date |
         for r in shipment_rows
     ]
 
-    receipts.sort(key=_priority_rank)
-    shipments.sort(key=_priority_rank)
-
-    exceptions = []
-    for item in [*receipts, *shipments]:
-        exception = _exception(item)
-        if exception:
-            exceptions.append({**item, "exception": exception})
-    exceptions.sort(key=_priority_rank)
-
     return {
-        "receipts": receipts[:limit],
-        "shipments": shipments[:limit],
-        "exceptions": exceptions[:limit],
+        "receipts": receipts,
+        "shipments": shipments,
+        "exceptions": [],
         "totals": {
-            "receipts": len(receipts),
-            "shipments": len(shipments),
-            "overdue": sum(1 for item in [*receipts, *shipments] if item["overdue"]),
+            "receipts": receipt_total,
+            "shipments": shipment_total,
+            "overdue": overdue_total,
         },
     }

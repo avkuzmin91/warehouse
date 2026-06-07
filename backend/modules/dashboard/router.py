@@ -30,10 +30,10 @@ def dashboard_today(user=Depends(get_current_dashboard_user)):
 
 @router.get("/dashboard/operational-plan", response_model=OperationalPlanResponse)
 def dashboard_operational_plan(
-    limit: int = Query(8, ge=1, le=20),
-    horizon_days: int = Query(7, ge=0, le=31),
+    receipts_limit: int = Query(20, ge=1, le=100),
+    shipments_limit: int = Query(20, ge=1, le=100),
     user=Depends(get_current_dashboard_user),
 ):
     with get_connection() as conn:
-        data = operational_plan(conn, limit=limit, horizon_days=horizon_days)
+        data = operational_plan(conn, receipts_limit=receipts_limit, shipments_limit=shipments_limit)
     return OperationalPlanResponse(**data)

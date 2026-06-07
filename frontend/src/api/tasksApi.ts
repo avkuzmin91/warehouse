@@ -26,8 +26,11 @@ export type TasksResponse = {
   total: number
 }
 
-export function getMyTasks(signal?: AbortSignal) {
-  return request<TasksResponse>('/tasks', { signal })
+export function getMyTasks(params: { limit?: number } = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.limit) sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<TasksResponse>(`/tasks${q ? `?${q}` : ''}`, { signal })
 }
 
 export function taskLink(task: TaskItem): string {

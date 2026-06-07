@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getOperationalPlan } from '../../../api/dashboardApi'
 import type { OperationalPlanItem } from '../../../api/dashboardApi'
@@ -32,6 +33,8 @@ const PRIORITY_LABEL: Record<OperationalPlanItem['priority'], string> = {
   upcoming: 'В плане',
   no_date: 'Без даты',
 }
+
+const PLAN_PAGE_SIZE = 20
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -142,19 +145,29 @@ function PlanColumn({
   title,
   icon,
   items,
+  total,
   empty,
+  loading,
+  onLoadMore,
 }: {
   title: string
   icon: IconName
   items: OperationalPlanItem[]
+  total: number
   empty: string
+  loading: boolean
+  onLoadMore: () => void
 }) {
+  const remaining = Math.max(total - items.length, 0)
+
   return (
     <div style={{ minWidth: 0, border: '1px solid var(--c-border)', borderRadius: 7, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--c-bg-sunken)' }}>
         <Icon name={icon} size={15} style={{ color: 'var(--c-accent)' }} />
         <span style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-text-subtle)' }}>{items.length}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-text-subtle)' }}>
+          {items.length}/{total}
+        </span>
       </div>
       {items.length === 0 ? (
         <div className="t-sub" style={{ padding: 14, fontSize: 13 }}>{empty}</div>
@@ -163,19 +176,37 @@ function PlanColumn({
           <PlanRow key={`${item.type}-${item.id}`} item={item} />
         ))
       )}
+      {remaining > 0 && (
+        <div style={{ padding: 8, borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)' }}>
+          <button
+            type="button"
+            className="btn ghost sm"
+            disabled={loading}
+            onClick={onLoadMore}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            Ещё {Math.min(PLAN_PAGE_SIZE, remaining)}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
 export function OperationalPlanFeature() {
-  const { data, loading, error } = useApi((signal) => getOperationalPlan({ limit: 4, horizon_days: 7 }, signal), [])
+  const [receiptsLimit, setReceiptsLimit] = useState(PLAN_PAGE_SIZE)
+  const [shipmentsLimit, setShipmentsLimit] = useState(PLAN_PAGE_SIZE)
+  const { data, loading, error } = useApi(
+    (signal) => getOperationalPlan({ receipts_limit: receiptsLimit, shipments_limit: shipmentsLimit }, signal),
+    [receiptsLimit, shipmentsLimit],
+  )
 
   return (
     <Card>
       <CardHead>
         <Icon name="calendar" size={15} style={{ color: 'var(--c-accent)' }} />
         <div className="card-head-title">Операционный план</div>
-        {!loading && data && (
+        {data && (
           <div className="right row gap-8">
             <Badge tone="info">{data.totals.receipts} поступл.</Badge>
             <Badge tone="info">{data.totals.shipments} отгр.</Badge>
@@ -184,23 +215,29 @@ export function OperationalPlanFeature() {
         )}
       </CardHead>
       <CardBody style={{ padding: 12 }}>
-        {loading ? (
+        {loading && !data ? (
           <div className="t-sub" style={{ padding: 6 }}>Загрузка…</div>
-        ) : error ? (
+        ) : error && !data ? (
           <div className="t-sub" style={{ padding: 6 }}>Не удалось загрузить операционный план</div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
             <PlanColumn
               title="Поступления"
               icon="truckIn"
               items={data?.receipts ?? []}
-              empty="Нет поступлений в ближайшем плане"
+              total={data?.totals.receipts ?? 0}
+              empty="Нет поступлений на сегодня и ранее"
+              loading={loading}
+              onLoadMore={() => setReceiptsLimit((value) => value + PLAN_PAGE_SIZE)}
             />
             <PlanColumn
               title="Отгрузки"
               icon="boxOut"
               items={data?.shipments ?? []}
-              empty="Нет отгрузок в ближайшем плане"
+              total={data?.totals.shipments ?? 0}
+              empty="Нет отгрузок на сегодня и ранее"
+              loading={loading}
+              onLoadMore={() => setShipmentsLimit((value) => value + PLAN_PAGE_SIZE)}
             />
           </div>
         )}
