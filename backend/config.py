@@ -81,8 +81,8 @@ RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
 RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_PLANNED:   RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_INTAKE: RECEIPT_STATUS_ON_REVIEW,
-    RECEIPT_STATUS_ON_REVIEW: RECEIPT_STATUS_DONE,
+    # on_intake → done выполняет «Принять товары» (/arrive): весь принятый товар
+    # попадает в остаток как on_review (статус инвентаря, не документа). QC перенесён в упаковку.
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
@@ -165,6 +165,8 @@ SHIPMENT_CARGO_DEFECT = "defect"
 
 # Типы операций журнала отгрузок
 SHIPMENT_OP_DOC_UPDATE = "doc_update"
+SHIPMENT_OP_PACK            = "pack"
+SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)

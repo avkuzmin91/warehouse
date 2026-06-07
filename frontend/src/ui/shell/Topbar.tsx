@@ -10,6 +10,7 @@ const ROUTE_LABELS: Record<string, string[]> = {
   '/inventory/shipments': ['Склад', 'Отгрузки'],
   '/inventory/shipments/new': ['Склад', 'Отгрузки', 'Новая'],
   '/inventory/balances': ['Склад', 'Остатки'],
+  '/inventory/packing': ['Склад', 'Упаковка'],
   '/analytics': ['Аналитика'],
   '/dictionaries': ['Справочники'],
   '/dictionaries/users': ['Управление', 'Пользователи'],

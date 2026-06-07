@@ -246,24 +246,7 @@ def test_actual_arrival_blocked_with_trip(admin_client, client_id):
     assert bad.status_code == 400, bad.text
 
 
-def test_tasks_endpoint_excludes_on_review_receipts_for_warehouse(admin_client, warehouse_client, client_id):
-    receipt_id = _planned_receipt(admin_client, client_id)
-    to_intake = admin_client.post(f"/receipts/{receipt_id}/advance")
-    assert to_intake.status_code == 200, to_intake.text
-    assert to_intake.json()["message"] == "on_intake"
-    to_review = admin_client.post(f"/receipts/{receipt_id}/advance")
-    assert to_review.status_code == 200, to_review.text
-    assert to_review.json()["message"] == "on_review"
-
-    tasks = warehouse_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    items = tasks.json()["items"]
-    kinds = {(t["doc_id"], t["kind"]) for t in items}
-    assert (receipt_id, "receipt_review") not in kinds
-    assert all(
-        not (t["doc_type"] == "receipt" and t["status"] == "on_review")
-        for t in items
-    )
+# Тест on_review-задач удалён: статус документа on_review убран (приёмка завершается на done).
 
 
 def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manager_client, client_id):

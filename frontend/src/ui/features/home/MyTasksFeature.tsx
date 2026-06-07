@@ -13,6 +13,8 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   trip_cost: 'ruble',
   receipt_intake: 'inbox',
   receipt_review: 'check',
+  shipment_pack: 'boxOut',
+  shipment_move_out: 'forklift',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -21,6 +23,8 @@ const KIND_LABEL: Record<TaskKind, string> = {
   trip_cost: 'Уточнить стоимость',
   receipt_intake: 'Принять товары',
   receipt_review: 'Проверить поступление',
+  shipment_pack: 'Упаковать отгрузку',
+  shipment_move_out: 'Вывезти из зоны упаковки',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -29,6 +33,7 @@ const STATUS_SUB: Record<string, string> = {
   costing: 'Уточнение стоимости',
   on_intake: 'Принят',
   on_review: 'На проверке',
+  packing: 'Упаковка по плану',
 }
 
 function taskTitle(t: TaskItem): string {
@@ -36,9 +41,15 @@ function taskTitle(t: TaskItem): string {
   return KIND_LABEL[t.kind] ?? t.title
 }
 
+const DOC_TYPE_SUB: Record<TaskItem['doc_type'], string> = {
+  trip: 'Рейс',
+  receipt: 'Поступление',
+  shipment: 'Отгрузка',
+}
+
 function taskSub(t: TaskItem): string {
   if (t.status === 'unloading' && isOutbound(t.direction)) return 'Идёт погрузка'
-  return STATUS_SUB[t.status] ?? (t.doc_type === 'trip' ? 'Рейс' : 'Поступление')
+  return STATUS_SUB[t.status] ?? DOC_TYPE_SUB[t.doc_type]
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -65,7 +76,7 @@ function ageInfo(since: string | null): { label: string; overdue: boolean } {
 
 function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean {
   if (role === 'shift_supervisor') {
-    return false
+    return task.doc_type === 'shipment'
   }
   if (role === 'manager') {
     return task.kind === 'trip_cost'

@@ -464,7 +464,7 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             ("vehicle_number", "Гос. номер"),
             ("cost_estimate", "Стоимость логистики (план)"),
             ("transport_ordered_at", "Транспорт заказан"),
-            ("eta", "Плановое прибытие"),
+            ("eta", "Плановое отправление" if outbound else "Плановое прибытие"),
         ]
         missing = [label for col, label in required if doc_row[col] in (None, "")]
         if missing:
@@ -473,6 +473,8 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             raise HTTPException(
                 status_code=400,
                 detail=(
+                    "Плановое отправление не может быть раньше заказа транспорта"
+                    if outbound else
                     "Плановое прибытие не может быть раньше заказа транспорта"
                 ),
             )

@@ -285,7 +285,7 @@ export type TripLexicon = {
   arrivalLabel: string       // «Прибытие»
   unloadStartLabel: string   // «Начало разгрузки» | «Начало погрузки»
   unloadEndLabel: string     // «Окончание разгрузки» | «Окончание погрузки»
-  etaLabel: string           // «Плановое прибытие»
+  etaLabel: string           // «Плановое отправление» | «Плановое прибытие»
   finishAction: string       // «Завершить разгрузку» | «Завершить погрузку»
   arrivedAction: string      // «Машина приехала» | «Машина прибыла»
   progressTitle: string      // «Идёт разгрузка» | «Идёт погрузка»
@@ -304,7 +304,7 @@ export function tripLexicon(direction: string | null | undefined): TripLexicon {
         arrivalLabel: 'Прибытие',
         unloadStartLabel: 'Начало погрузки',
         unloadEndLabel: 'Окончание погрузки',
-        etaLabel: 'Плановое прибытие',
+        etaLabel: 'Плановое отправление',
         finishAction: 'Завершить погрузку',
         arrivedAction: 'Машина прибыла',
         progressTitle: 'Идёт погрузка',

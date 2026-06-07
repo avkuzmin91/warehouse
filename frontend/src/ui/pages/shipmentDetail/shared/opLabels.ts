@@ -8,6 +8,8 @@ export const OP_LABELS: Record<string, string> = {
   advance: 'Переход на следующий этап',
   revert: 'Возврат на предыдущий этап',
   cancel: 'Аннулирован',
+  pack: 'Упаковка',
+  pack_correction: 'Коррекция упаковки',
 }
 
 export const OP_ICONS: Record<string, string> = {
@@ -16,6 +18,8 @@ export const OP_ICONS: Record<string, string> = {
   advance: 'arrowRight',
   revert: 'arrowLeft',
   cancel: 'x',
+  pack: 'boxOut',
+  pack_correction: 'boxOut',
 }
 
 export const OP_TONES: Record<string, string> = {
@@ -24,6 +28,8 @@ export const OP_TONES: Record<string, string> = {
   advance: 'success',
   revert: 'warning',
   cancel: 'danger',
+  pack: 'accent',
+  pack_correction: 'warning',
 }
 
 /**

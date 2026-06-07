@@ -29,7 +29,8 @@ export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
 
 export type ShipmentCargoType = 'good' | 'defect'
 
-export type ShipmentOpType = 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update'
+export type ShipmentOpType =
+  | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'pack' | 'pack_correction'
 
 export type ShipmentOp = {
   id:               string
@@ -59,6 +60,10 @@ export type ShipmentLine = {
   size_name:         string | null
   qty:               number
   shipped_qty:       number
+  packed_qty:        number
+  packed_good:       number
+  packed_defect:     number
+  review_in_packing: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
   store_id:          string | null
@@ -81,7 +86,9 @@ export type ShipmentListItem = {
   sku_count:      number
   total_qty:      number
   total_shipped_qty?: number
+  total_packed_qty?: number
   lines_with_shipped_qty?: number
+  lines_with_packed_qty?: number
   lines_with_zone?: number
   created_at:     string
 }
@@ -123,6 +130,7 @@ export type ShipmentLinesListItem = {
   size_name:         string | null
   qty:               number
   shipped_qty:       number
+  packed_qty:        number
   storage_zone_name: string | null
   store_name:        string | null
 }
@@ -172,6 +180,7 @@ export type ShipmentLineIn = {
   size_name?:         string | null
   qty:                number
   shipped_qty?:       number
+  packed_qty?:        number
   storage_zone_id?:   string | null
   storage_zone_name?: string | null
   store_id?:          string | null
@@ -262,6 +271,20 @@ export function updateShipmentLine(docId: string, lineId: string, line: Shipment
 
 export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
+}
+
+export function packShipmentLine(docId: string, lineId: string, delta: number, kind: 'good' | 'defect') {
+  return request<{ message: string; packed_good: number; packed_defect: number }>(
+    `/shipments/${docId}/lines/${lineId}/pack`,
+    { method: 'POST', body: JSON.stringify({ delta, kind }) },
+  )
+}
+
+export function moveShipmentLineToPacking(docId: string, lineId: string, qty: number, fromZoneId?: string | null) {
+  return request<{ message: string; moved: number }>(
+    `/shipments/${docId}/lines/${lineId}/move-to-packing`,
+    { method: 'POST', body: JSON.stringify({ qty, from_zone_id: fromZoneId ?? null }) },
+  )
 }
 
 export function advanceShipment(id: string) {

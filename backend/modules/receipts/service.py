@@ -344,26 +344,9 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
-    if next_status == "on_review":
-        missing = connection.execute(
-            """
-            SELECT COUNT(*) AS cnt
-            FROM receipt_lines
-            WHERE doc_id = ?
-              AND is_deleted = 0
-              AND NULLIF(TRIM(COALESCE(storage_zone_id, '')), '') IS NULL
-            """,
-            (doc_id,),
-        ).fetchone()
-        if int(missing["cnt"] if missing else 0) > 0:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail="Укажите зону хранения для каждой строки поступления")
-
     op_type = (
         RECEIPT_OP_PLAN_FIX if next_status == "planned" else
-        RECEIPT_OP_INTAKE_START if next_status == "on_intake" else
-        RECEIPT_OP_ARRIVAL_FIX if next_status == "on_review" else
-        RECEIPT_OP_QC_COMPLETE
+        RECEIPT_OP_INTAKE_START
     )
 
     now = _now()

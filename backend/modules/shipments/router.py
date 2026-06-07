@@ -24,7 +24,12 @@ from config import (
     UPLOADS_DIR,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_manager, get_current_shipment_viewer
+from modules.auth.service import (
+    get_current_manager,
+    get_current_packer,
+    get_current_shipment_viewer,
+    get_current_warehouse,
+)
 from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
@@ -32,19 +37,29 @@ from modules.shipments.schemas import (
     ShipmentLineFile,
     ShipmentLineIn,
     ShipmentLineItem,
+    ShipmentLinePackPayload,
     ShipmentLinesListItem,
     ShipmentLinesResponse,
     ShipmentListItem,
     ShipmentListResponse,
+    ShipmentMoveToPackingPayload,
     ShipmentOpItem,
 )
-from modules.shipments.service import advance_shipment, next_doc_number, normalize_cargo_type
+from modules.shipments.service import (
+    advance_shipment,
+    move_line_to_packing,
+    next_doc_number,
+    normalize_cargo_type,
+    pack_shipment_line,
+)
 from security import can_view_costs, ensure_cost_access
 
 router = APIRouter(tags=["shipments"])
 
 _get_manager = get_current_manager
 _get_viewer = get_current_shipment_viewer
+_get_packer = get_current_packer
+_get_warehouse = get_current_warehouse
 
 _ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
 _FILE_EDIT_ROLES = {"admin", "manager"}
@@ -240,9 +255,19 @@ def list_shipments(
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                     COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
+                    COALESCE((
+                        SELECT SUM(CASE
+                            WHEN zr.from_status='on_review' AND zr.to_status IN ('good','defect') THEN zr.qty
+                            WHEN zr.to_status='on_review' AND zr.from_status IN ('good','defect') THEN -zr.qty
+                            ELSE 0 END)
+                        FROM zone_relocations zr
+                        JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
+                        WHERE sl2.doc_id = d.id
+                    ), 0) AS total_packed_qty,
                     COUNT(l.id) FILTER (
                         WHERE l.is_deleted=0 AND COALESCE(l.shipped_qty, 0) > 0
                     ) AS lines_with_shipped_qty,
+                    0 AS lines_with_packed_qty,
                     COUNT(l.id) FILTER (
                         WHERE l.is_deleted=0 AND l.storage_zone_id IS NOT NULL
                     ) AS lines_with_zone
@@ -271,7 +296,9 @@ def list_shipments(
             sku_count=int(r["sku_count"] or 0),
             total_qty=int(r["total_qty"] or 0),
             total_shipped_qty=int(r["total_shipped_qty"] or 0),
+            total_packed_qty=int(r["total_packed_qty"] or 0),
             lines_with_shipped_qty=int(r["lines_with_shipped_qty"] or 0),
+            lines_with_packed_qty=int(r["lines_with_packed_qty"] or 0),
             lines_with_zone=int(r["lines_with_zone"] or 0),
             created_at=str(r["created_at"]),
         )
@@ -336,7 +363,8 @@ def list_shipment_lines(
             f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
                     l.product_id, l.product_name, l.product_sku,
                     l.color_name, l.size_name, l.qty,
-                    COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
+                    COALESCE(l.shipped_qty, 0) AS shipped_qty,
+                    COALESCE(l.packed_qty, 0) AS packed_qty, l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
                 FROM shipment_lines l
@@ -366,6 +394,7 @@ def list_shipment_lines(
             size_name=r["size_name"],
             qty=int(r["qty"] or 0),
             shipped_qty=int(r["shipped_qty"] or 0),
+            packed_qty=int(r["packed_qty"] or 0),
             storage_zone_name=r["storage_zone_name"],
             store_name=r["store_name"],
         )
@@ -404,6 +433,28 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
                WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
             (doc_id,),
         ).fetchall()
+        packed_rows = conn.execute(
+            """SELECT shipment_line_id,
+                  COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='good'   THEN qty
+                                    WHEN from_status='good'   AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='defect' THEN qty
+                                    WHEN from_status='defect' AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS defect
+               FROM zone_relocations
+               WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
+               GROUP BY shipment_line_id""",
+            (doc_id,),
+        ).fetchall()
+        packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
+
+        review_in_packing: dict[str, int] = {}
+        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
+            from modules.balances.service import get_available_in_zone, get_packing_zone
+            pk_id, _pk_name = get_packing_zone(conn)
+            for l in lines_rows:
+                review_in_packing[str(l["id"])] = get_available_in_zone(
+                    conn, product_id=str(l["product_id"]), color_id=l["color_id"], size_id=l["size_id"],
+                    client_id=row["client_id"], zone_id=pk_id, status="on_review",
+                )
 
     files_by_line: dict[str, list[ShipmentLineFile]] = {}
     for f in files_rows:
@@ -430,6 +481,10 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             size_name=l["size_name"],
             qty=int(l["qty"]),
             shipped_qty=int(l["shipped_qty"] or 0),
+            packed_qty=int(l["packed_qty"] or 0),
+            packed_good=packed_by_line.get(str(l["id"]), (0, 0))[0],
+            packed_defect=packed_by_line.get(str(l["id"]), (0, 0))[1],
+            review_in_packing=review_in_packing.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
             store_id=l["store_id"],
@@ -573,6 +628,22 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         )
         conn.commit()
     return {"message": "ok"}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/pack")
+def pack_line(doc_id: str, line_id: str, body: ShipmentLinePackPayload, user=Depends(_get_packer)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        packed = pack_shipment_line(conn, doc_id, line_id, body.delta, body.kind, uid)
+    return {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/move-to-packing")
+def move_to_packing(doc_id: str, line_id: str, body: ShipmentMoveToPackingPayload, user=Depends(_get_warehouse)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        moved = move_line_to_packing(conn, doc_id, line_id, body.qty, body.from_zone_id, uid)
+    return {"message": "ok", "moved": moved}
 
 
 @router.delete("/shipments/{doc_id}/lines/{line_id}")

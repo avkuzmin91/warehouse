@@ -729,6 +729,8 @@ def delete_receipt(doc_id: str, user=Depends(_get_manager)):
 
 @router.post("/receipts/{doc_id}/ops")
 def record_receipt_op(doc_id: str, payload: ReceiptOpRecord, user=Depends(_get_manager)):
+    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
+    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
     uid = str(user["id"])
     if payload.op_type not in {
         RECEIPT_OP_RECEIVING,
@@ -773,6 +775,8 @@ def complete_receipt_line(
     body: ReceiptLineQcComplete | None = None,
     user=Depends(_get_manager),
 ):
+    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
+    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
@@ -819,6 +823,8 @@ def complete_receipt_line(
 
 @router.post("/receipts/{doc_id}/lines/{line_id}/qc-reopen")
 def reopen_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
+    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
+    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
@@ -930,15 +936,15 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
 
         conn.execute(
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
+            (RECEIPT_STATUS_DONE, now, doc_id),
         )
         conn.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, RECEIPT_OP_ARRIVAL_FIX,
-             "Принят → На проверке (товары приняты)", now, uid),
+             "Принят → Завершён (товары приняты, на проверке)", now, uid),
         )
         conn.commit()
-    return {"message": RECEIPT_STATUS_ON_REVIEW}
+    return {"message": RECEIPT_STATUS_DONE}
 
 
 @router.post("/receipts/{doc_id}/cancel")

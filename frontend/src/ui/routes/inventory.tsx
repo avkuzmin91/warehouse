@@ -25,6 +25,9 @@ const InventoryShipmentCreatePage = lazy(() =>
 const InventoryShipmentDetailPage = lazy(() =>
   import('../pages/InventoryShipmentDetailPage').then((m) => ({ default: m.InventoryShipmentDetailPage })),
 )
+const InventoryPackingPage = lazy(() =>
+  import('../pages/InventoryPackingPage').then((m) => ({ default: m.InventoryPackingPage })),
+)
 export const inventoryRoutes = [
   <Route key="inventory-home" path="/inventory" element={<InventoryHomePage />} />,
   <Route key="inventory-balances" path="/inventory/balances" element={<InventoryBalancesPage />} />,
@@ -36,4 +39,6 @@ export const inventoryRoutes = [
   <Route key="inventory-shipments" path="/inventory/shipments" element={<InventoryShipmentsListPage />} />,
   <Route key="inventory-shipments-new" path="/inventory/shipments/new" element={<InventoryShipmentCreatePage />} />,
   <Route key="inventory-shipments-id" path="/inventory/shipments/:docId" element={<InventoryShipmentDetailPage />} />,
+
+  <Route key="inventory-packing" path="/inventory/packing" element={<InventoryPackingPage />} />,
 ]

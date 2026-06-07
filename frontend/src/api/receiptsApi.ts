@@ -420,8 +420,10 @@ export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   cancelled: 'Аннулирован',
 }
 
+// Поток поступления завершается на приёмке: on_review больше не статус документа
+// (остаётся только как статус инвентаря). Старые done-документы отображаются корректно.
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_intake', 'on_review', 'done',
+  'draft', 'planned', 'on_intake', 'done',
 ]
 
 export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {

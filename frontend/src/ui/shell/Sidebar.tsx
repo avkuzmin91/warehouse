@@ -20,11 +20,13 @@ const OPS_NAV: NavItem[] = [
   { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
+  { to: '/inventory/packing', icon: 'forklift', label: 'Упаковка' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]
 
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
+  { to: '/inventory/packing', icon: 'forklift', label: 'Упаковка' },
   { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
 ]
 

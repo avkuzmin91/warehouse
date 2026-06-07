@@ -54,11 +54,28 @@ def _warehouse_user_row():
     }
 
 
+class _RoleClient(TestClient):
+    """TestClient, привязанный к роли.
+
+    Переустанавливает свой override get_current_user перед каждым запросом
+    (все HTTP-методы httpx проходят через request()). Это позволяет держать
+    в одном тесте сразу несколько клиентов с разными ролями — иначе они
+    перетирали бы единый app.dependency_overrides на общем app.
+    """
+
+    def __init__(self, app, user_row: dict):
+        super().__init__(app)
+        self._user_row = user_row
+
+    def request(self, *args, **kwargs):
+        app.dependency_overrides[get_current_user] = lambda: dict(self._user_row)
+        return super().request(*args, **kwargs)
+
+
 @pytest.fixture
 def admin_client():
     """TestClient с авторизацией администратора (dependency override)."""
-    app.dependency_overrides[get_current_user] = lambda: _admin_user_row()
-    with TestClient(app) as c:
+    with _RoleClient(app, _admin_user_row()) as c:
         yield c
     app.dependency_overrides.clear()
 
@@ -66,8 +83,7 @@ def admin_client():
 @pytest.fixture
 def manager_client():
     """TestClient с авторизацией менеджера (dependency override)."""
-    app.dependency_overrides[get_current_user] = lambda: _manager_user_row()
-    with TestClient(app) as c:
+    with _RoleClient(app, _manager_user_row()) as c:
         yield c
     app.dependency_overrides.clear()
 
@@ -75,8 +91,7 @@ def manager_client():
 @pytest.fixture
 def warehouse_client():
     """TestClient с авторизацией кладовщика (dependency override)."""
-    app.dependency_overrides[get_current_user] = lambda: _warehouse_user_row()
-    with TestClient(app) as c:
+    with _RoleClient(app, _warehouse_user_row()) as c:
         yield c
     app.dependency_overrides.clear()
 

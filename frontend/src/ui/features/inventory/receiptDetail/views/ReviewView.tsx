@@ -42,7 +42,7 @@ type Props = {
   advancing: boolean
 }
 
-export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advancing }: Props) {
+export function ReviewView({ docId, detail, onReload, onAdvance, advancing }: Props) {
   const navigate = useNavigate()
   const { doc, lines, ops } = detail
 
@@ -233,11 +233,6 @@ export function ReviewView({ docId, detail, onReload, onAdvance, onReopen, advan
             <Icon name="layers" size={14} />Журнал
             {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
           </button>
-          {isReadonly && (
-            <button className="btn ghost" onClick={onReopen} disabled={advancing}>
-              <Icon name="arrowLeft" size={14} />Вернуть на проверку
-            </button>
-          )}
           {!isReadonly && (
             <div className="detail-actions">
               <div className="detail-actions-row">

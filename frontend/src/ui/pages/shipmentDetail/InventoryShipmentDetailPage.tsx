@@ -36,12 +36,13 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { AutoGrowTextarea, Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles, canEditShipments } from '../../../utils/access'
+import { canViewCosts, canEditShipmentFiles, canEditShipments, canPackShipments } from '../../../utils/access'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
 import { CargoTypeDisplay } from './components/CargoTypeDisplay'
 import { OpEntry } from './components/OpEntry'
+import { PackingPanel } from './components/PackingPanel'
 import { lineAvailable } from './shared/opLabels'
 import { Table, Td } from '../../data/Table'
 import { Combobox } from '../../data/Combobox'
@@ -78,6 +79,7 @@ export function InventoryShipmentDetailPage() {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const canEdit = canEditShipments(user)
+  const canPack = canPackShipments(user)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -778,6 +780,25 @@ export function InventoryShipmentDetailPage() {
               </div>
             )}
           </div>
+
+          {isPlanned && canPack && doc.lines.length > 0 && (
+            <PackingPanel
+              docId={doc.id}
+              lines={doc.lines}
+              disabled={acting}
+              canMove={canEdit}
+              canPack={canPack}
+              onPreviewFile={(file, line) => setFilePreview({
+                file,
+                productName: line.product_name,
+                sku: line.product_sku,
+                colorName: line.color_name,
+                sizeName: line.size_name,
+                qty: line.qty,
+              })}
+              onReload={load}
+            />
+          )}
 
           <div className="card">
             <div className="card-head">
@@ -1570,6 +1591,7 @@ function ShipmentLinesTable({
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + getDraft(l).shippedQty, 0)
+  const packedTotal = lines.reduce((s, l) => s + l.packed_good + l.packed_defect, 0)
   const showZone = cargoType === 'good' || cargoType === 'defect'
   // cols: Товар | План | [Отгружено Кол-во | Отгружено Из места] | Файлы | Действие
   const colCount = 3 + (showZone ? 2 : 1) + 1 + (canDelete ? 1 : 0)
@@ -1674,14 +1696,27 @@ function ShipmentLinesTable({
               </Td>
               <Td className="num" style={{ background: tintShipped, borderLeft: groupBorder }}>
                 {canEditPlan ? (
-                  <NumberStep
-                    value={draft.shippedQty}
-                    onChange={(v) => onShippedQty(line.id, v)}
-                    min={0}
-                    warning={overAvailable}
-                    disabled={acting || isSaving || !canEditShipped}
-                    width={100}
-                  />
+                  <>
+                    <NumberStep
+                      value={draft.shippedQty}
+                      onChange={(v) => onShippedQty(line.id, v)}
+                      min={0}
+                      warning={overAvailable}
+                      disabled={acting || isSaving || !canEditShipped}
+                      width={100}
+                    />
+                    {canEditShipped && line.packed_good > 0 && draft.shippedQty !== line.packed_good && (
+                      <button
+                        className="btn ghost sm"
+                        style={{ marginTop: 4, fontSize: 11, padding: '1px 6px' }}
+                        disabled={acting || isSaving}
+                        title="Подставить упакованное годное количество"
+                        onClick={() => onShippedQty(line.id, line.packed_good)}
+                      >
+                        годных {line.packed_good}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <span className="mono" style={{ fontWeight: 500 }}>{line.shipped_qty}</span>
                 )}
@@ -1730,6 +1765,9 @@ function ShipmentLinesTable({
               <span style={{ color: 'var(--c-text-subtle)' }}>{skuCount} SKU</span>
               <span style={{ color: 'var(--c-text-subtle)' }}>
                 План <b className="mono" style={{ color: 'var(--c-text)' }}>{planTotal}</b>
+              </span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>
+                Упаковано <b className="mono" style={{ color: 'var(--c-text)' }}>{packedTotal}</b>
               </span>
               <span style={{ color: 'var(--c-text-subtle)' }}>
                 Отгружено <b className="mono" style={{ color: 'var(--c-text)' }}>{shippedTotal}</b>
