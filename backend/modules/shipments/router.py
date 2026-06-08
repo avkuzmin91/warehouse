@@ -581,7 +581,7 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
     uid = str(user["id"])
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, actual_ship_date, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, actual_ship_date, priority_rank, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -619,6 +619,16 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                     "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
                     (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
                      f"Дата отгрузки (факт): {_fmt_date(old_val)} → {_fmt_date(new_val)}", now, uid),
+                )
+        if "priority_rank" in fields:
+            old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
+            new_rank = fields["priority_rank"]
+            if old_rank != new_rank:
+                old_label = f"#{old_rank}" if old_rank is not None else "без приоритета"
+                new_label = f"#{new_rank}" if new_rank is not None else "без приоритета"
+                conn.execute(
+                    "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                    (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE, f"Приоритет отгрузки: {old_label} → {new_label}", now, uid),
                 )
         conn.commit()
     return {"message": "ok"}

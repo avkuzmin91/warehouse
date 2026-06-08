@@ -198,6 +198,7 @@ export type ShipmentDocCreate = {
 }
 
 export type ShipmentDocUpdate = Omit<ShipmentDocCreate, 'lines'> & {
+  priority_rank?: number | null
   actual_ship_date?: string | null
 }
 
@@ -260,7 +261,7 @@ export function updateShipment(id: string, body: ShipmentDocUpdate) {
 }
 
 export function updateShipmentPriority(id: string, priorityRank: number | null) {
-  return request<{ message: string }>(`/shipments/${id}/priority`, {
+  return request<{ message: string }>(`/shipments/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ priority_rank: priorityRank }),
   })

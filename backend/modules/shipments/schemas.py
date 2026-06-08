@@ -49,6 +49,7 @@ class ShipmentDocUpdate(BaseModel):
     carrier:         str | None = None
     logistics_cost:  float | None = None
     ship_date:       str | None = None
+    priority_rank:   int | None = Field(default=None, ge=1, le=999)
     actual_ship_date: str | None = None
     comment:         str | None = None
 
