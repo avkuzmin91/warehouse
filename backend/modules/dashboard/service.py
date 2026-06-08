@@ -197,9 +197,9 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
           AND d.ship_date <= ?
         GROUP BY d.id
         ORDER BY
+          d.ship_date ASC,
           CASE WHEN d.priority_rank IS NULL THEN 1 ELSE 0 END,
           d.priority_rank ASC NULLS LAST,
-          d.ship_date ASC,
           d.created_at ASC,
           d.doc_number ASC
         LIMIT ?

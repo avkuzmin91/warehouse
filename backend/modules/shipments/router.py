@@ -70,11 +70,10 @@ _FILE_FINAL_STATUSES = {SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED}
 
 def _shipment_priority_order(alias: str = "d") -> str:
     return (
+        f"{alias}.ship_date DESC NULLS LAST, "
         f"CASE WHEN {alias}.priority_rank IS NULL THEN 1 ELSE 0 END, "
         f"{alias}.priority_rank ASC NULLS LAST, "
-        f"{alias}.ship_date ASC NULLS LAST, "
-        f"{alias}.created_at ASC, "
-        f"{alias}.doc_number ASC"
+        f"{alias}.created_at DESC"
     )
 
 

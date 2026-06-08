@@ -30,6 +30,12 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
   const current = shipment.priority_rank ? String(shipment.priority_rank) : ''
   const dirty = draft.trim() !== current
   const editable = canEdit && shipment.status === 'packing'
+  const previewRank = (() => {
+    const raw = draft.trim()
+    if (!raw) return null
+    const parsed = Number(raw)
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : null
+  })()
 
   async function save() {
     const raw = draft.trim()
@@ -85,6 +91,7 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
 
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={stop}>
+      {previewRank && <Badge tone="warning">{priorityText(previewRank)}</Badge>}
       <input
         className="input sm mono"
         type="number"
