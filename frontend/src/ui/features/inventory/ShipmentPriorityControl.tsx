@@ -1,6 +1,8 @@
 import { useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { updateShipmentPriority, type ShipmentListItem } from '../../../api/shipmentsApi'
 import { useToast } from '../../feedback/Toast'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { canEditShipmentPriority } from '../../../utils/access'
 import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 
@@ -20,6 +22,7 @@ function priorityText(priorityRank: number | null): string {
 
 export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: ShipmentPriorityControlProps) {
   const toast = useToast()
+  const { user } = useCurrentUser()
   const [draft, setDraft] = useState(shipment.priority_rank ? String(shipment.priority_rank) : '')
   const [saving, setSaving] = useState(false)
 
@@ -29,7 +32,7 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
 
   const current = shipment.priority_rank ? String(shipment.priority_rank) : ''
   const dirty = draft.trim() !== current
-  const editable = canEdit && shipment.status === 'packing'
+  const editable = canEdit && canEditShipmentPriority(user) && shipment.status === 'packing'
   const previewRank = (() => {
     const raw = draft.trim()
     if (!raw) return null

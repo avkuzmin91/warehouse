@@ -37,7 +37,7 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { AutoGrowTextarea, Field, Input } from '../../primitives/Input'
 import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles, canEditShipments, canPackShipments } from '../../../utils/access'
+import { canViewCosts, canEditShipmentFiles, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../utils/access'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
@@ -80,6 +80,7 @@ export function InventoryShipmentDetailPage() {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const canEdit = canEditShipments(user)
+  const canEditPriority = canEditShipmentPriority(user)
   const canPack = canPackShipments(user)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -604,7 +605,7 @@ export function InventoryShipmentDetailPage() {
             </Badge>
             <ShipmentPriorityControl
               shipment={doc}
-              canEdit={canEdit}
+              canEdit={canEditPriority}
               onSaved={(priorityRank) => setDoc((prev) => prev ? { ...prev, priority_rank: priorityRank } : prev)}
             />
             <span className="detail-meta">

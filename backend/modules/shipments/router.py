@@ -54,7 +54,7 @@ from modules.shipments.service import (
     normalize_cargo_type,
     pack_shipment_line,
 )
-from security import can_view_costs, ensure_cost_access
+from security import can_view_costs, ensure_cost_access, ensure_shipment_priority_access
 
 router = APIRouter(tags=["shipments"])
 
@@ -546,6 +546,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
 def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Depends(_get_manager)):
     now = _now()
     uid = str(user["id"])
+    ensure_shipment_priority_access(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -590,6 +591,8 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
         fields = body.model_dump(exclude_unset=True)
         if "logistics_cost" in fields:
             ensure_cost_access(user)
+        if "priority_rank" in fields:
+            ensure_shipment_priority_access(user)
         if "actual_ship_date" in fields:
             if status != SHIPMENT_STATUS_PACKING:
                 raise HTTPException(status_code=400, detail="Дату отгрузки (факт) можно менять только в статусе «В плане»")

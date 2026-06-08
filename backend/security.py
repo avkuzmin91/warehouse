@@ -72,6 +72,18 @@ def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
 
+def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_shipment_priority_access(user: Mapping[str, Any]) -> None:
+    if not can_edit_shipment_priority(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def ensure_cost_access(user: Mapping[str, Any]) -> None:
     if not can_view_costs(user):
         raise HTTPException(

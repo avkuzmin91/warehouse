@@ -16,6 +16,10 @@ export function canEditShipmentFiles(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }
 
+export function canEditShipmentPriority(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+}
+
 export function canEditShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
 }
