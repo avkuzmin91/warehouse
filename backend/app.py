@@ -52,6 +52,10 @@ def _ensure_runtime_schema() -> None:
                 ADD COLUMN IF NOT EXISTS actual_arrival_date TEXT
         """)
         conn.execute("""
+            ALTER TABLE IF EXISTS shipment_docs
+                ADD COLUMN IF NOT EXISTS priority_rank INTEGER
+        """)
+        conn.execute("""
             ALTER TABLE IF EXISTS colors
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
