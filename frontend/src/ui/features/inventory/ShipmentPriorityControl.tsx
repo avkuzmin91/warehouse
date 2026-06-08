@@ -23,22 +23,19 @@ function priorityText(priorityRank: number | null): string {
 export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: ShipmentPriorityControlProps) {
   const toast = useToast()
   const { user } = useCurrentUser()
+  const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [draft, setDraft] = useState(shipment.priority_rank ? String(shipment.priority_rank) : '')
   const [saving, setSaving] = useState(false)
 
+  const current = shipment.priority_rank ? String(shipment.priority_rank) : ''
+
   useEffect(() => {
-    setDraft(shipment.priority_rank ? String(shipment.priority_rank) : '')
+    setDraft(current)
+    setMode('view')
   }, [shipment.id, shipment.priority_rank])
 
-  const current = shipment.priority_rank ? String(shipment.priority_rank) : ''
-  const dirty = draft.trim() !== current
   const editable = canEdit && canEditShipmentPriority(user) && shipment.status === 'packing'
-  const previewRank = (() => {
-    const raw = draft.trim()
-    if (!raw) return null
-    const parsed = Number(raw)
-    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : null
-  })()
+  const dirty = draft.trim() !== current
 
   async function save() {
     const raw = draft.trim()
@@ -50,9 +47,9 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
     setSaving(true)
     try {
       await updateShipmentPriority(shipment.id, parsed)
-      setDraft(parsed === null ? '' : String(parsed))
       toast(parsed === null ? 'Приоритет снят' : `Приоритет ${priorityText(parsed)} сохранён`, 'success')
       onSaved(parsed)
+      setMode('view')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения приоритета', 'error')
     } finally {
@@ -60,28 +57,15 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
     }
   }
 
-  async function clearPriority() {
-    setSaving(true)
-    try {
-      await updateShipmentPriority(shipment.id, null)
-      setDraft('')
-      toast('Приоритет снят', 'success')
-      onSaved(null)
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Ошибка сохранения приоритета', 'error')
-    } finally {
-      setSaving(false)
-    }
+  function cancel() {
+    setDraft(current)
+    setMode('view')
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     e.stopPropagation()
-    if (e.key === 'Enter' && dirty && !saving) {
-      void save()
-    }
-    if (e.key === 'Escape') {
-      setDraft(current)
-    }
+    if (e.key === 'Enter' && dirty && !saving) void save()
+    if (e.key === 'Escape') cancel()
   }
 
   if (!editable) {
@@ -92,9 +76,38 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
     )
   }
 
+  if (mode === 'view') {
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={stop}>
+        {shipment.priority_rank ? (
+          <>
+            <Badge tone="warning">{priorityText(shipment.priority_rank)}</Badge>
+            <button
+              type="button"
+              className="btn ghost sm icon"
+              title="Изменить приоритет"
+              onClick={() => setMode('edit')}
+            >
+              <Icon name="edit" size={13} />
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="btn ghost sm"
+            title="Указать приоритет в очереди отгрузок"
+            onClick={() => setMode('edit')}
+            style={{ color: 'var(--c-text-subtle)', height: 28 }}
+          >
+            <Icon name="plus" size={12} /> приоритет
+          </button>
+        )}
+      </span>
+    )
+  }
+
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={stop}>
-      {previewRank && <Badge tone="warning">{priorityText(previewRank)}</Badge>}
       <input
         className="input sm mono"
         type="number"
@@ -103,6 +116,7 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
         value={draft}
         placeholder="—"
         title="Приоритет в очереди отгрузок"
+        autoFocus
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
         style={{ width: 58, height: 28, textAlign: 'center', padding: '0 6px' }}
@@ -116,17 +130,15 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
       >
         <Icon name={saving ? 'refresh' : 'check'} size={13} style={saving ? { animation: 'spin 0.7s linear infinite' } : undefined} />
       </button>
-      {shipment.priority_rank && (
-        <button
-          type="button"
-          className="btn ghost sm icon"
-          title="Снять приоритет"
-          disabled={saving}
-          onClick={() => void clearPriority()}
-        >
-          <Icon name="x" size={12} />
-        </button>
-      )}
+      <button
+        type="button"
+        className="btn ghost sm icon"
+        title="Отмена"
+        disabled={saving}
+        onClick={cancel}
+      >
+        <Icon name="x" size={12} />
+      </button>
     </span>
   )
 }

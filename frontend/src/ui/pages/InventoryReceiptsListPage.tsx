@@ -255,20 +255,19 @@ export function InventoryReceiptsListPage() {
                 <th style={{ width: 150 }}>Номер</th>
                 <th>Клиент</th>
                 <th style={{ width: 120 }}>Дата прибытия</th>
-                <th style={{ width: 70, textAlign: 'right' }}>SKU</th>
                 <th style={{ width: 100, textAlign: 'right' }}>План</th>
                 <th style={{ width: 100, textAlign: 'right' }}>Факт</th>
                 <th style={{ width: 130 }}>Статус</th>
-                <th style={{ width: 160 }}>Проверка</th>
+                <th style={{ width: 160 }}>Принято</th>
                 <th style={{ width: 28 }} />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={10} />
+                <SkeletonRows rows={8} cols={9} />
               ) : loadError ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={9}>
                     <EmptyState
                       title="Не удалось загрузить документы"
                       sub={loadError}
@@ -282,7 +281,7 @@ export function InventoryReceiptsListPage() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={9}>
                     <EmptyState
                       title="Документов нет"
                       sub={isOverdueFilter ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
@@ -332,7 +331,6 @@ export function InventoryReceiptsListPage() {
                           {fmtDate(item.actual_arrival_date ?? item.arrival_date)}
                         </span>
                       </Td>
-                      <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_planned.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{item.total_accepted_qty.toLocaleString('ru-RU')}</Td>
                       <Td>

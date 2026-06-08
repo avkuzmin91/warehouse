@@ -58,6 +58,7 @@ export function PlannedView({
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
 
   const hasTrip = !!doc.trip_id
+  const awaitingTrip = status === 'planned' && hasTrip
   const actualDirty = actualArrivalDate !== (doc.actual_arrival_date ?? '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -212,6 +213,7 @@ export function PlannedView({
 
   const primaryLabel = status === 'planned' ? 'Начать приёмку' : 'Принять товары'
   function runPrimary() {
+    if (awaitingTrip) return
     if (blockReasons.length > 0) { setShowBlockReasons(true); return }
     if (status === 'planned') void handleStartIntake()
     else void handleArrive()
@@ -251,15 +253,31 @@ export function PlannedView({
             <button
               className="btn primary"
               onClick={runPrimary}
-              disabled={advancing}
+              disabled={advancing || awaitingTrip}
+              title={awaitingTrip ? `Приёмка начнётся при разгрузке рейса ${doc.trip_number}` : undefined}
             >
               <Icon name={status === 'planned' ? 'arrowRight' : 'check'} size={14} />{primaryLabel}
             </button>
           </div>
-          {showBlockReasons && blockReasons.length > 0 && (
+          {awaitingTrip ? (
             <div className="block-reasons">
-              {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
+              <div>
+                · Приёмка начнётся автоматически при разгрузке рейса{' '}
+                <button
+                  className="btn ghost sm"
+                  style={{ padding: '0 4px' }}
+                  onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                >
+                  {doc.trip_number}
+                </button>
+              </div>
             </div>
+          ) : (
+            showBlockReasons && blockReasons.length > 0 && (
+              <div className="block-reasons">
+                {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
+              </div>
+            )
           )}
         </div>
       </div>
