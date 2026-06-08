@@ -94,32 +94,17 @@ RECEIPT_STATUS_RU: dict[str, str] = {
     RECEIPT_STATUS_CANCELLED: "Аннулирован",
 }
 
-# Типы операций журнала поступлений
+# Типы операций журнала поступлений (QC убран — годность определяется при упаковке)
 RECEIPT_OP_DOC_CREATE          = "doc_create"
 RECEIPT_OP_DOC_UPDATE          = "doc_update"
 RECEIPT_OP_LINE_ADD            = "line_add"
 RECEIPT_OP_LINE_UPDATE         = "line_update"
 RECEIPT_OP_LINE_DELETE         = "line_delete"
-RECEIPT_OP_RECEIVING           = "receiving"
-RECEIPT_OP_RECEIVING_CORRECTION = "receiving_correction"
-RECEIPT_OP_DEFECT_FIX          = "defect_fix"
-RECEIPT_OP_DEFECT_CORRECTION   = "defect_correction"
-RECEIPT_OP_QC_COMPLETE         = "qc_complete"
-RECEIPT_OP_LINE_QC_COMPLETE    = "line_qc_complete"
-RECEIPT_OP_LINE_QC_REOPEN      = "line_qc_reopen"
 RECEIPT_OP_PLAN_FIX            = "plan_fix"
 RECEIPT_OP_INTAKE_START        = "intake_start"
 RECEIPT_OP_ARRIVAL_FIX         = "arrival_fix"
 RECEIPT_OP_ARRIVAL_ACCEPT      = "arrival_accept"
 RECEIPT_OP_CANCEL              = "cancel"
-
-RECEIPT_OP_TYPES_ALL: frozenset[str] = frozenset({
-    RECEIPT_OP_DOC_CREATE, RECEIPT_OP_DOC_UPDATE,
-    RECEIPT_OP_LINE_ADD, RECEIPT_OP_LINE_UPDATE,
-    RECEIPT_OP_ARRIVAL_FIX, RECEIPT_OP_ARRIVAL_ACCEPT, RECEIPT_OP_RECEIVING,
-    RECEIPT_OP_DEFECT_FIX, RECEIPT_OP_QC_COMPLETE,
-    RECEIPT_OP_LINE_QC_COMPLETE, RECEIPT_OP_LINE_QC_REOPEN,
-})
 
 # Статусы line-уровня (QC)
 RECEIPT_LINE_QC_STATUS_PENDING   = "pending"

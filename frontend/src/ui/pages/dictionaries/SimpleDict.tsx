@@ -3,6 +3,7 @@ import {
   fetchSimpleDictionaryPage,
   fetchProductTypesPage,
   getSizes,
+  setUnloadingZonePacking,
 } from '../../../api/adminApi'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import type { DictionaryTypeId } from './types'
@@ -11,6 +12,11 @@ import { Badge } from '../../primitives/Badge'
 import { Checkbox } from '../../primitives/Checkbox'
 import { Avatar, getInitials } from '../../primitives/Avatar'
 import { EmptyState } from '../../primitives/EmptyState'
+import { useToast } from '../../feedback/Toast'
+
+function isPackingZone(item: AnyDictItem): boolean {
+  return 'is_packing_zone' in item && !!item.is_packing_zone
+}
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
@@ -44,6 +50,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
   const [loading, setLoading] = useState(true)
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [search, setSearch] = useState('')
+  const toast = useToast()
 
   const load = useCallback(async (q: string) => {
     setLoading(true)
@@ -96,6 +103,16 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
       setLoading(false)
     }
   }, [typeId, onTotalLoaded])
+
+  async function handleSetPacking(id: string) {
+    try {
+      await setUnloadingZonePacking(id)
+      await load(search)
+      toast('Зона упаковки назначена', 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Ошибка', 'error')
+    }
+  }
 
   useEffect(() => {
     setSearch('')
@@ -169,6 +186,9 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                       <span>{item.name}</span>
                     </div>
                   ) : item.name}
+                  {isPackingZone(item) && (
+                    <Badge tone="info" style={{ marginLeft: 8 }}>Зона упаковки</Badge>
+                  )}
                 </td>
                 <td className="text-sm muted">{formatDate(item.created_at)}</td>
                 <td>
@@ -184,7 +204,17 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   </Badge>
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  <button className="btn ghost icon sm"><Icon name="more" size={14} /></button>
+                  {typeId === 'unloading-zones' && !isPackingZone(item) ? (
+                    <button
+                      className="btn ghost sm"
+                      title="Сделать зоной упаковки"
+                      onClick={() => void handleSetPacking(item.id)}
+                    >
+                      <Icon name="forklift" size={13} />Зона упаковки
+                    </button>
+                  ) : (
+                    <button className="btn ghost icon sm"><Icon name="more" size={14} /></button>
+                  )}
                 </td>
               </tr>
             ))

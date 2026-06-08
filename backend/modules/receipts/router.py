@@ -9,18 +9,12 @@ from config import (
     RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_CANCEL,
-    RECEIPT_OP_DEFECT_CORRECTION,
-    RECEIPT_OP_DEFECT_FIX,
     RECEIPT_OP_DOC_CREATE,
     RECEIPT_OP_DOC_UPDATE,
     RECEIPT_OP_LINE_ADD,
     RECEIPT_OP_LINE_DELETE,
-    RECEIPT_OP_LINE_QC_COMPLETE,
-    RECEIPT_OP_LINE_QC_REOPEN,
     RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_LINE_UPDATE,
-    RECEIPT_OP_RECEIVING,
-    RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_DRAFT,
@@ -41,14 +35,12 @@ from modules.receipts.schemas import (
     ReceiptDocResponse,
     ReceiptDocUpdate,
     ReceiptLineAdd,
-    ReceiptLineQcComplete,
     ReceiptLineResponse,
     ReceiptLinesListItem,
     ReceiptLinesResponse,
     ReceiptLineUpdate,
     ReceiptListItem,
     ReceiptListResponse,
-    ReceiptOpRecord,
     ReceiptOpResponse,
 )
 from modules.receipts.service import (
@@ -276,8 +268,6 @@ def list_receipts(
             sku_count=int(r["sku_count"] or 0),
             total_planned=int(r["total_planned"] or 0),
             total_accepted_qty=int(r["total_accepted_qty"] or 0),
-            total_accepted=int(r["total_accepted"] or 0),
-            total_defect=int(r["total_defect"] or 0),
         )
         for r in rows
     ]
@@ -355,7 +345,6 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
             (doc_id,),
         ).fetchall()
 
-    state_by_line = {l["id"]: l for l in state["lines"]}
     lines_out = [
         ReceiptLineResponse(
             id=str(lr["id"]),
@@ -369,16 +358,8 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
             size_name=lr["size_name"],
             storage_zone_id=lr["storage_zone_id"],
             storage_zone_name=lr["storage_zone_name"],
-            good_zone_id=lr["good_zone_id"],
-            good_zone_name=lr["good_zone_name"],
-            defect_zone_id=lr["defect_zone_id"],
-            defect_zone_name=lr["defect_zone_name"],
             planned_qty=int(lr["planned_qty"]),
             accepted_qty=int(lr["accepted_qty"]) if lr["accepted_qty"] is not None else None,
-            accepted=state_by_line.get(str(lr["id"]), {}).get("accepted", 0),
-            defect=state_by_line.get(str(lr["id"]), {}).get("defect", 0),
-            ops_count=state_by_line.get(str(lr["id"]), {}).get("ops_count", 0),
-            qc_status=str(state_by_line.get(str(lr["id"]), {}).get("qc_status", "pending")),
             created_at=str(lr["created_at"]),
         )
         for lr in lines_rows
@@ -608,15 +589,11 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
         if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
             raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'Принят' или 'На проверке'")
-        _zone_fields = {
-            "storage_zone_id", "storage_zone_name",
-            "good_zone_id", "good_zone_name",
-            "defect_zone_id", "defect_zone_name",
-        }
+        _zone_fields = {"storage_zone_id", "storage_zone_name"}
         if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
             raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'Принят' или 'На проверке'")
         line_row = conn.execute(
-            "SELECT id, planned_qty, accepted_qty, storage_zone_name, good_zone_name, defect_zone_name "
+            "SELECT id, planned_qty, accepted_qty, storage_zone_name "
             "FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
@@ -652,18 +629,6 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
             new_zone_display = new_zone or "—"
             if old_zone != new_zone_display:
                 comments.append(f"Место (на проверке): {old_zone} → {new_zone_display}")
-        for prefix, label in (("good_zone", "Место (годный)"), ("defect_zone", "Место (брак)")):
-            if f"{prefix}_id" in provided_fields:
-                updates.append(f"{prefix}_id = ?")
-                params.append((getattr(payload, f"{prefix}_id") or "").strip() or None)
-            if f"{prefix}_name" in provided_fields:
-                old_zone = str(line_row[f"{prefix}_name"] or "").strip() or "—"
-                new_zone = (getattr(payload, f"{prefix}_name") or "").strip() or None
-                updates.append(f"{prefix}_name = ?")
-                params.append(new_zone)
-                new_zone_display = new_zone or "—"
-                if old_zone != new_zone_display:
-                    comments.append(f"{label}: {old_zone} → {new_zone_display}")
 
         if updates:
             params.append(line_id)
@@ -727,126 +692,8 @@ def delete_receipt(doc_id: str, user=Depends(_get_manager)):
     return {"message": "ok"}
 
 
-@router.post("/receipts/{doc_id}/ops")
-def record_receipt_op(doc_id: str, payload: ReceiptOpRecord, user=Depends(_get_manager)):
-    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
-    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
-    uid = str(user["id"])
-    if payload.op_type not in {
-        RECEIPT_OP_RECEIVING,
-        RECEIPT_OP_DEFECT_FIX,
-        RECEIPT_OP_RECEIVING_CORRECTION,
-        RECEIPT_OP_DEFECT_CORRECTION,
-    }:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unsupported op_type: {RECEIPT_OP_RECEIVING} | {RECEIPT_OP_DEFECT_FIX} | "
-                f"{RECEIPT_OP_RECEIVING_CORRECTION} | {RECEIPT_OP_DEFECT_CORRECTION}"
-            ),
-        )
-    with get_connection() as conn:
-        doc_row = conn.execute(
-            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc_row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
-            raise HTTPException(status_code=400, detail="Операцию можно записывать только в статусе 'on_review'")
-        line_row = conn.execute(
-            "SELECT id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-            (payload.line_id, doc_id),
-        ).fetchone()
-        if not line_row:
-            raise HTTPException(status_code=400, detail="Строка не найдена в этом документе")
-        now = _now()
-        conn.execute(
-            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,reason,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, payload.line_id, payload.op_type, payload.qty,
-             payload.reason, payload.comment, now, uid),
-        )
-        conn.commit()
-    return {"message": "ok"}
-
-
-@router.post("/receipts/{doc_id}/lines/{line_id}/qc-complete")
-def complete_receipt_line(
-    doc_id: str, line_id: str,
-    body: ReceiptLineQcComplete | None = None,
-    user=Depends(_get_manager),
-):
-    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
-    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
-    uid = str(user["id"])
-    now = _now()
-    with get_connection() as conn:
-        doc_row = conn.execute(
-            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc_row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
-            raise HTTPException(status_code=400, detail="QC можно выполнить только в статусе 'on_review'")
-        line_row = conn.execute(
-            "SELECT id, good_zone_id, defect_zone_id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-            (line_id, doc_id),
-        ).fetchone()
-        if not line_row:
-            raise HTTPException(status_code=404, detail="Строка не найдена")
-
-        # Эффективные accepted/defect: из body если переданы, иначе из текущего состояния журнала.
-        line_state = next((l for l in compute_state(conn, doc_id)["lines"] if l["id"] == line_id), {})
-        eff_accepted = body.accepted if (body and body.accepted is not None) else int(line_state.get("accepted", 0))
-        eff_defect = body.defect if (body and body.defect is not None) else int(line_state.get("defect", 0))
-        if eff_accepted > 0 and not (line_row["good_zone_id"] or "").strip():
-            raise HTTPException(status_code=400, detail="Укажите место хранения годного товара")
-        if eff_defect > 0 and not (line_row["defect_zone_id"] or "").strip():
-            raise HTTPException(status_code=400, detail="Укажите место хранения брака")
-
-        if body and body.accepted is not None and body.accepted >= 0:
-            conn.execute(
-                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, line_id, RECEIPT_OP_RECEIVING_CORRECTION, body.accepted, "QC корректировка", now, uid),
-            )
-        if body and body.defect is not None and body.defect >= 0:
-            conn.execute(
-                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, line_id, RECEIPT_OP_DEFECT_CORRECTION, body.defect, "QC корректировка брака", now, uid),
-            )
-        conn.execute(
-            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_COMPLETE, "Строка проверена", now, uid),
-        )
-        conn.commit()
-    return {"message": "ok"}
-
-
-@router.post("/receipts/{doc_id}/lines/{line_id}/qc-reopen")
-def reopen_receipt_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
-    # ЛЕГАСИ (итерация 2 — удалить): QC поступления убран, годность определяется при упаковке.
-    raise HTTPException(status_code=410, detail="QC поступления отключён — годность определяется при упаковке")
-    uid = str(user["id"])
-    now = _now()
-    with get_connection() as conn:
-        doc_row = conn.execute(
-            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc_row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT_STATUS_ON_REVIEW:
-            raise HTTPException(status_code=400, detail="Переоткрыть строку можно только в статусе 'on_review'")
-        line_row = conn.execute(
-            "SELECT id FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-            (line_id, doc_id),
-        ).fetchone()
-        if not line_row:
-            raise HTTPException(status_code=404, detail="Строка не найдена")
-        conn.execute(
-            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, line_id, RECEIPT_OP_LINE_QC_REOPEN, "Строка возвращена на проверку", now, uid),
-        )
-        conn.commit()
-    return {"message": "ok"}
+# QC поступления удалён (Итерация 2): годность/брак определяются при упаковке отгрузки.
+# Были эндпоинты /receipts/{id}/ops, /qc-complete, /qc-reopen.
 
 
 @router.post("/receipts/{doc_id}/advance")
@@ -971,26 +818,4 @@ def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
     return {"message": RECEIPT_STATUS_CANCELLED}
 
 
-@router.post("/receipts/{doc_id}/reopen")
-def reopen_receipt(doc_id: str, user=Depends(_get_manager)):
-    uid = str(user["id"])
-    with get_connection() as conn:
-        doc_row = conn.execute(
-            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc_row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(doc_row["status"]) != RECEIPT_STATUS_DONE:
-            raise HTTPException(status_code=400, detail="Вернуть на проверку можно только завершённый документ")
-        now = _now()
-        conn.execute(
-            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT_STATUS_ON_REVIEW, now, doc_id),
-        )
-        conn.execute(
-            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, RECEIPT_OP_DOC_UPDATE,
-             "Завершён → На проверке (возврат на проверку)", now, uid),
-        )
-        conn.commit()
-    return {"message": RECEIPT_STATUS_ON_REVIEW}
+# Эндпоинт /receipts/{id}/reopen удалён: статус документа on_review убран (приёмка завершается на done).

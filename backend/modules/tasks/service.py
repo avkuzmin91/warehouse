@@ -107,8 +107,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                    COALESCE(SUM(l.qty), 0) AS plan,
                    COALESCE((
                        SELECT SUM(CASE
-                           WHEN zr.from_status='on_review' AND zr.to_status IN ('good','defect') THEN zr.qty
-                           WHEN zr.to_status='on_review' AND zr.from_status IN ('good','defect') THEN -zr.qty
+                           WHEN zr.to_status IN ('good','defect')   THEN zr.qty
+                           WHEN zr.from_status IN ('good','defect') THEN -zr.qty
                            ELSE 0 END)
                        FROM zone_relocations zr
                        JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id

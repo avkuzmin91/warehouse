@@ -38,6 +38,7 @@ from .service import (
     list_client_stores,
     list_product_types_page,
     list_sizes_page,
+    set_packing_zone,
     update_dictionary_item,
     update_client_store,
     update_product_type,
@@ -316,6 +317,12 @@ def update_unloading_zone(item_id: str, payload: DictionaryUpdateRequest, admin=
 @router.delete("/unloading-zones/{item_id}", response_model=MessageResponse)
 def delete_unloading_zone(item_id: str, admin=Depends(get_current_admin)):
     return delete_dictionary_item("unloading_zones", item_id, admin["id"])
+
+
+@router.post("/unloading-zones/{item_id}/set-packing", response_model=MessageResponse)
+def set_unloading_zone_packing(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return set_packing_zone(item_id)
 
 
 # ── Warehouses ────────────────────────────────────────────────────────────────

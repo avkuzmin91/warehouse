@@ -257,8 +257,8 @@ def list_shipments(
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
                     COALESCE((
                         SELECT SUM(CASE
-                            WHEN zr.from_status='on_review' AND zr.to_status IN ('good','defect') THEN zr.qty
-                            WHEN zr.to_status='on_review' AND zr.from_status IN ('good','defect') THEN -zr.qty
+                            WHEN zr.to_status IN ('good','defect')   THEN zr.qty
+                            WHEN zr.from_status IN ('good','defect') THEN -zr.qty
                             ELSE 0 END)
                         FROM zone_relocations zr
                         JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -363,8 +363,7 @@ def list_shipment_lines(
             f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
                     l.product_id, l.product_name, l.product_sku,
                     l.color_name, l.size_name, l.qty,
-                    COALESCE(l.shipped_qty, 0) AS shipped_qty,
-                    COALESCE(l.packed_qty, 0) AS packed_qty, l.storage_zone_name, l.store_name,
+                    COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
                 FROM shipment_lines l
@@ -394,7 +393,6 @@ def list_shipment_lines(
             size_name=r["size_name"],
             qty=int(r["qty"] or 0),
             shipped_qty=int(r["shipped_qty"] or 0),
-            packed_qty=int(r["packed_qty"] or 0),
             storage_zone_name=r["storage_zone_name"],
             store_name=r["store_name"],
         )
@@ -435,10 +433,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='good'   THEN qty
-                                    WHEN from_status='good'   AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS good,
-                  COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='defect' THEN qty
-                                    WHEN from_status='defect' AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS defect
+                  COALESCE(SUM(CASE WHEN to_status='good'   THEN qty WHEN from_status='good'   THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_status='defect' THEN qty WHEN from_status='defect' THEN -qty ELSE 0 END), 0) AS defect
                FROM zone_relocations
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
                GROUP BY shipment_line_id""",
@@ -446,14 +442,14 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
 
-        review_in_packing: dict[str, int] = {}
+        available_for_pack: dict[str, int] = {}
         if str(row["status"]) == SHIPMENT_STATUS_PACKING:
             from modules.balances.service import get_available_in_zone, get_packing_zone
             pk_id, _pk_name = get_packing_zone(conn)
             for l in lines_rows:
-                review_in_packing[str(l["id"])] = get_available_in_zone(
+                available_for_pack[str(l["id"])] = get_available_in_zone(
                     conn, product_id=str(l["product_id"]), color_id=l["color_id"], size_id=l["size_id"],
-                    client_id=row["client_id"], zone_id=pk_id, status="on_review",
+                    client_id=row["client_id"], zone_id=pk_id, status="on_packing",
                 )
 
     files_by_line: dict[str, list[ShipmentLineFile]] = {}
@@ -481,10 +477,9 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             size_name=l["size_name"],
             qty=int(l["qty"]),
             shipped_qty=int(l["shipped_qty"] or 0),
-            packed_qty=int(l["packed_qty"] or 0),
             packed_good=packed_by_line.get(str(l["id"]), (0, 0))[0],
             packed_defect=packed_by_line.get(str(l["id"]), (0, 0))[1],
-            review_in_packing=review_in_packing.get(str(l["id"]), 0),
+            available_for_pack=available_for_pack.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
             store_id=l["store_id"],

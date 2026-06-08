@@ -187,9 +187,12 @@ def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
 
-    tasks = admin_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    kinds = {(t["doc_id"], t["kind"]) for t in tasks.json()["items"]}
+    # Прямой вызов сервиса: API /tasks отдаёт топ-20, что зависит от объёма БД.
+    from dbconn import get_connection
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as conn:
+        items = list_my_tasks(conn, user={"role": "admin"})
+    kinds = {(t["doc_id"], t["kind"]) for t in items}
     # рейс в costing → задача менеджеру; поступление в on_intake → задача кладовщику
     assert (trip_id, "trip_cost") in kinds
     assert (receipt_id, "receipt_intake") in kinds
@@ -256,9 +259,10 @@ def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manag
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
 
-    tasks = manager_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    items = tasks.json()["items"]
+    from dbconn import get_connection
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as conn:
+        items = list_my_tasks(conn, user={"role": "manager"})
     assert (trip_id, "trip_cost") in {(t["doc_id"], t["kind"]) for t in items}
     assert all(t["kind"] == "trip_cost" for t in items)
 

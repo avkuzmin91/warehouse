@@ -106,7 +106,9 @@ def test_shift_supervisor_cannot_edit_lines(api, client_id):
 
 def test_shift_supervisor_sees_packing_task(api, client_id):
     doc_id, _ = _create_packing_doc(api, client_id)
-    _as(_SHIFT)
-    tasks = api.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_pack" for t in tasks.json()["items"])
+    # Прямой вызов сервиса: API /tasks отдаёт топ-20, что зависит от объёма БД.
+    from dbconn import get_connection
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as conn:
+        tasks = list_my_tasks(conn, user={"role": "shift_supervisor"})
+    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_pack" for t in tasks)

@@ -92,10 +92,10 @@ def _insert_conversion(conn, client_id: str, product_ids, to_status: str, qty: i
     conn.execute(
         """INSERT INTO zone_relocations
            (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
-            client_id, status, from_status, to_status, from_zone_id, to_zone_id, qty, created_at)
+            client_id, from_status, to_status, from_zone_id, to_zone_id, qty, created_at)
            VALUES (?, ?, 'Test Product', 'TST-SKU', ?, 'Red', ?, NULL,
-                   ?, ?, 'on_review', ?, ?, ?, ?, NOW())""",
-        (str(uuid.uuid4()), pid, color_id, size_id, client_id, to_status, to_status, zone_id, zone_id, qty),
+                   ?, 'on_review', ?, ?, ?, ?, NOW())""",
+        (str(uuid.uuid4()), pid, color_id, size_id, client_id, to_status, zone_id, zone_id, qty),
     )
 
 
@@ -460,6 +460,54 @@ def test_relocation_over_available_returns_400(admin_client, client_id, product_
             "status": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 100,
         })
         assert r.status_code == 400, r.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_moves_on_review_between_zones(admin_client, client_id, product_ids):
+    """#1: товар «на проверке» можно перемещать между местами хранения."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, accepted=12, zone_id=zone_a)
+        conn.commit()
+    try:
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert sum(i["qty"] for i in items if i["status"] == "on_review" and i["location_id"] == zone_a) == 12
+
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "status": "on_review", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 5,
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        rev = lambda z: sum(i["qty"] for i in items if i["status"] == "on_review" and i["location_id"] == z)
+        assert rev(zone_a) == 7 and rev(zone_b) == 5
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_requires_source_zone(admin_client, client_id, product_ids):
+    """#3: перемещение без указания источника отклоняется."""
+    pid, color_id, size_id = product_ids
+    zone_b = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good(conn, client_id, product_ids, 5)
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "status": "good", "from_zone_id": None, "to_zone_id": zone_b, "qty": 3,
+        })
+        assert r.status_code == 400, r.text
+        assert "откуда" in r.json()["detail"]
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))

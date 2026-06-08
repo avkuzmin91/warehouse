@@ -7,6 +7,7 @@ class DictionaryBaseItem(BaseModel):
     id: str
     name: str
     color_hex: str | None = None
+    is_packing_zone: bool = False
     is_active: bool
     is_deleted: bool = False
     deleted_at: str | None = None

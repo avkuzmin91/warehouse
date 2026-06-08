@@ -342,13 +342,12 @@ export function InventoryReceiptsListPage() {
                       </Td>
                       <Td>
                         {(() => {
-                          const processed = item.total_accepted + item.total_defect
-                          const pct = item.total_accepted_qty > 0 ? Math.min(100, Math.round(processed / item.total_accepted_qty * 100)) : 0
-                          const isActive = item.status === 'on_review' || item.status === 'done'
+                          const pct = item.total_planned > 0 ? Math.min(100, Math.round(item.total_accepted_qty / item.total_planned * 100)) : 0
+                          const isActive = item.status === 'done'
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           return (
                             <div style={{ minWidth: 120 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
                                   <div style={{
                                     height: '100%', borderRadius: 3,
@@ -361,12 +360,6 @@ export function InventoryReceiptsListPage() {
                                   {pct}%
                                 </span>
                               </div>
-                              {item.total_defect > 0 && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: 'var(--c-warning)', fontWeight: 500 }}>
-                                  <Icon name="alert" size={10} />
-                                  <span>{item.total_defect} брак</span>
-                                </div>
-                              )}
                             </div>
                           )
                         })()}
@@ -505,12 +498,6 @@ function KanbanColumn({ col, filters, onNavigate }: {
                   <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Факт: {item.total_accepted_qty}</span>
                   <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
                   <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                  {item.total_defect > 0 && (
-                    <>
-                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                      <span style={{ fontSize: 12, color: 'var(--c-warning)', fontWeight: 500 }}>брак: {item.total_defect}</span>
-                    </>
-                  )}
                 </div>
               </div>
             )

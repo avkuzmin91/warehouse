@@ -18,6 +18,7 @@ class BalanceItem(BaseModel):
     good: int
     defect: int
     on_review: int
+    on_packing: int = 0
     total: int
     docs_count: int
 
@@ -59,7 +60,7 @@ class ZoneRelocationCreate(BaseModel):
     size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
-    status: Literal["good", "defect"]
+    status: Literal["good", "defect", "on_review"]
     from_zone_id: str | None = None
     to_zone_id: str | None = None
     qty: int = Field(ge=1)

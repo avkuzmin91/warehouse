@@ -41,6 +41,18 @@ def _as(row):
 def client_id():
     cid = make_client_id()
     yield cid
+    # Чистим созданные документы, чтобы не засорять dev-БД (cleanup_client удаляет только клиента).
+    with get_connection() as conn:
+        for r in conn.execute("SELECT id FROM receipt_docs WHERE client_id = ?", (cid,)).fetchall():
+            conn.execute("DELETE FROM receipt_ops WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (r["id"],))
+        conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (cid,))
+        for r in conn.execute("SELECT id FROM shipment_docs WHERE client_id = ?", (cid,)).fetchall():
+            conn.execute("DELETE FROM shipment_lines WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM shipment_ops WHERE doc_id = ?", (r["id"],))
+        conn.execute("DELETE FROM shipment_docs WHERE client_id = ?", (cid,))
+        conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (cid,))
+        conn.commit()
     cleanup_client(cid)
 
 
@@ -49,13 +61,13 @@ def _position():
 
 
 def _balance(client_id, pos):
-    """(good, defect, on_review) по позиции из API-расчёта."""
+    """(good, defect, on_review, on_packing) по позиции из расчёта остатков."""
     with get_connection() as c:
         bs = get_balances(c, page=1, limit=10000, client_id=client_id, search=None, only_positive=False, has_defect=False)
     for i in bs.items:
         if i.product_id == pos["product_id"] and i.color_id == pos["color_id"] and i.size_id == pos["size_id"]:
-            return i.good, i.defect, i.on_review
-    return 0, 0, 0
+            return i.good, i.defect, i.on_review, i.on_packing
+    return 0, 0, 0, 0
 
 
 def _zone_qty(client_id, pos, zone_id, status):
@@ -105,7 +117,7 @@ def test_full_flow_receipt_to_packing_qc(api, client_id):
         packing_id, _ = get_packing_zone(c)
 
     _receive(api, client_id, pos, 100, intake_zone)
-    assert _balance(client_id, pos) == (0, 0, 100)
+    assert _balance(client_id, pos) == (0, 0, 100, 0)
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 100
 
     doc_id, line_id = _packing_shipment(api, client_id, pos, 100)
@@ -115,13 +127,13 @@ def test_full_flow_receipt_to_packing_qc(api, client_id):
     blocked = api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"delta": 10, "kind": "good"})
     assert blocked.status_code == 400, blocked.text
 
-    # Кладовщик перемещает 100 в зону упаковки (FIFO из приёмки).
+    # Кладовщик перемещает 100 в зону упаковки → статус on_packing.
     _as(_WH)
     mv = api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 100})
     assert mv.status_code == 200, mv.text
-    assert _zone_qty(client_id, pos, packing_id, "on_review") == 100
+    assert _zone_qty(client_id, pos, packing_id, "on_packing") == 100
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 0
-    assert _balance(client_id, pos) == (0, 0, 100)  # сумма on_review не изменилась
+    assert _balance(client_id, pos) == (0, 0, 0, 100)  # on_review → on_packing
 
     # Начальник смены: 97 годных, 3 брак.
     _as(_SHIFT)
@@ -131,10 +143,10 @@ def test_full_flow_receipt_to_packing_qc(api, client_id):
     assert d.status_code == 200, d.text
     assert d.json()["packed_good"] == 97 and d.json()["packed_defect"] == 3
 
-    assert _balance(client_id, pos) == (97, 3, 0)
+    assert _balance(client_id, pos) == (97, 3, 0, 0)
     assert _zone_qty(client_id, pos, packing_id, "good") == 97
     assert _zone_qty(client_id, pos, packing_id, "defect") == 3
-    assert _zone_qty(client_id, pos, packing_id, "on_review") == 0
+    assert _zone_qty(client_id, pos, packing_id, "on_packing") == 0
 
 
 def test_pack_cannot_exceed_plan(api, client_id):
@@ -162,7 +174,15 @@ def test_pack_correction_returns_to_review(api, client_id):
     corr = api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"delta": -2, "kind": "good"})
     assert corr.status_code == 200, corr.text
     assert corr.json()["packed_good"] == 4
-    assert _balance(client_id, pos) == (4, 0, 6)
+    # 10 принято → на упаковку → 6 годных, коррекция −2 вернула 2 в on_packing: good 4, on_packing 6.
+    assert _balance(client_id, pos) == (4, 0, 0, 6)
+
+
+def _tasks(role: str):
+    """Полный список задач роли (минуя API-лимит /tasks=20, чтобы не зависеть от объёма БД)."""
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as c:
+        return list_my_tasks(c, user={"role": role})
 
 
 def test_packing_handoff_tasks(api, client_id):
@@ -172,12 +192,8 @@ def test_packing_handoff_tasks(api, client_id):
     doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
 
     # Пока не упаковано: задача упаковки у начальника смены, у кладовщика вывоза нет.
-    _as(_SHIFT)
-    t = api.get("/tasks").json()["items"]
-    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in t)
-    _as(_WH)
-    t = api.get("/tasks").json()["items"]
-    assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_move_out" for x in t)
+    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in _tasks("shift_supervisor"))
+    assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_move_out" for x in _tasks("warehouse_manager"))
 
     _as(_WH)
     api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
@@ -185,12 +201,8 @@ def test_packing_handoff_tasks(api, client_id):
     api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"delta": 10, "kind": "good"})
 
     # Упаковано целиком: у кладовщика появилась задача вывоза, у начальника смены упаковки нет.
-    _as(_WH)
-    t = api.get("/tasks").json()["items"]
-    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_move_out" for x in t)
-    _as(_SHIFT)
-    t = api.get("/tasks").json()["items"]
-    assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in t)
+    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_move_out" for x in _tasks("warehouse_manager"))
+    assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in _tasks("shift_supervisor"))
 
 
 def test_ship_good_after_packing(api, client_id):
@@ -205,7 +217,7 @@ def test_ship_good_after_packing(api, client_id):
     api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
     _as(_SHIFT)
     api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"delta": 10, "kind": "good"})
-    assert _balance(client_id, pos) == (10, 0, 0)
+    assert _balance(client_id, pos) == (10, 0, 0, 0)
 
     # Отгрузка годного из зоны упаковки.
     _as(_ADMIN)
@@ -219,7 +231,7 @@ def test_ship_good_after_packing(api, client_id):
     assert upd.status_code == 200, upd.text
     adv = api.post(f"/shipments/{doc_id}/advance")  # packing → shipped
     assert adv.status_code == 200 and adv.json()["message"] == "shipped", adv.text
-    assert _balance(client_id, pos) == (0, 0, 0)
+    assert _balance(client_id, pos) == (0, 0, 0, 0)
 
 
 def test_move_to_packing_requires_warehouse_role(api, client_id):

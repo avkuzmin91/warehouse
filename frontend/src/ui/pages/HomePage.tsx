@@ -50,13 +50,10 @@ export function HomePage() {
 
       <HomeKpiFeature />
 
-      <div className="mt-20" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16 }}>
-        <MyTasksFeature />
-        <OperationalPlanFeature />
-      </div>
-
-      <div className="mt-20" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+      <div className="mt-20" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(320px, 1fr)', gap: 16 }}>
         <div className="col gap-16">
+          <MyTasksFeature />
+
           <Card>
             <CardHead>
               <Icon name="map" size={15} style={{ color: 'var(--c-accent)' }} />
@@ -103,6 +100,8 @@ export function HomePage() {
               </CardBody>
             </Card>
           )}
+
+          <OperationalPlanFeature />
 
           <Card>
             <CardHead>

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date
 
 from config import (
-    RECEIPT_OP_DEFECT_FIX,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PLANNED,
@@ -47,16 +46,15 @@ def _accepted_qty_on(connection, day: date) -> int:
 
 
 def _defect_qty_on(connection, day: date) -> int:
-    """Браков зафиксировано по поступлениям с датой прибытия = день."""
+    """Брака выявлено за день (при упаковке): нетто-конвертации в статус defect."""
     row = connection.execute(
         """
-        SELECT COALESCE(SUM(o.qty), 0) AS total
-        FROM receipt_docs d
-        JOIN receipt_ops o ON o.doc_id = d.id AND o.op_type = ?
-        WHERE COALESCE(d.is_deleted, 0) = 0
-          AND d.arrival_date = ?
+        SELECT COALESCE(SUM(CASE WHEN to_status = 'defect'   THEN qty
+                                 WHEN from_status = 'defect' THEN -qty ELSE 0 END), 0) AS total
+        FROM zone_relocations
+        WHERE created_at LIKE ?
         """,
-        (RECEIPT_OP_DEFECT_FIX, day.isoformat()),
+        (day.isoformat() + "%",),
     ).fetchone()
     return int(row["total"] if row else 0)
 

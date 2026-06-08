@@ -60,10 +60,9 @@ export type ShipmentLine = {
   size_name:         string | null
   qty:               number
   shipped_qty:       number
-  packed_qty:        number
   packed_good:       number
   packed_defect:     number
-  review_in_packing: number
+  available_for_pack: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
   store_id:          string | null
@@ -130,7 +129,6 @@ export type ShipmentLinesListItem = {
   size_name:         string | null
   qty:               number
   shipped_qty:       number
-  packed_qty:        number
   storage_zone_name: string | null
   store_name:        string | null
 }
@@ -180,7 +178,6 @@ export type ShipmentLineIn = {
   size_name?:         string | null
   qty:                number
   shipped_qty?:       number
-  packed_qty?:        number
   storage_zone_id?:   string | null
   storage_zone_name?: string | null
   store_id?:          string | null

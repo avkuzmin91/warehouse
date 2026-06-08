@@ -214,7 +214,7 @@ def move_line_to_packing(connection, doc_id: str, line_id: str, qty: int, from_z
             color_id=line["color_id"], color_name=line["color_name"],
             size_id=line["size_id"], size_name=line["size_name"],
             client_id=client_id, client_name=None,
-            from_status="on_review", to_status="on_review",
+            from_status="on_review", to_status="on_packing",
             from_zone_id=zone_id, from_zone_name=zone_name,
             to_zone_id=packing_id, to_zone_name=packing_name,
             qty=take, user_id=user_id, shipment_line_id=line_id,
@@ -232,10 +232,8 @@ def line_packed_breakdown(connection, line_id: str) -> dict:
     """
     row = connection.execute(
         """SELECT
-              COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='good'   THEN qty
-                                WHEN from_status='good'   AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS good,
-              COALESCE(SUM(CASE WHEN from_status='on_review' AND to_status='defect' THEN qty
-                                WHEN from_status='defect' AND to_status='on_review' THEN -qty ELSE 0 END), 0) AS defect
+              COALESCE(SUM(CASE WHEN to_status='good'   THEN qty WHEN from_status='good'   THEN -qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN to_status='defect' THEN qty WHEN from_status='defect' THEN -qty ELSE 0 END), 0) AS defect
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
     ).fetchone()
@@ -281,20 +279,20 @@ def pack_shipment_line(connection, doc_id: str, line_id: str, delta: int, kind: 
             raise HTTPException(status_code=400, detail=f"Упаковано не должно превышать план ({plan_qty} шт.)")
         avail = get_available_in_zone(
             connection, product_id=str(line["product_id"]), color_id=line["color_id"],
-            size_id=line["size_id"], client_id=client_id, zone_id=packing_id, status="on_review",
+            size_id=line["size_id"], client_id=client_id, zone_id=packing_id, status="on_packing",
         )
         if avail < delta:
             raise HTTPException(
                 status_code=400,
-                detail=f"Недостаточно товара «на проверке» в зоне упаковки (доступно {avail}, нужно {delta})",
+                detail=f"Недостаточно товара на упаковке (доступно {avail}, нужно {delta}) — переместите в зону упаковки",
             )
-        from_status, to_status = "on_review", kind
+        from_status, to_status = "on_packing", kind
         move_qty = delta
     else:
         move_qty = -delta
         if packed[kind] < move_qty:
             raise HTTPException(status_code=400, detail=f"Нельзя списать больше упакованного ({packed[kind]} шт.)")
-        from_status, to_status = kind, "on_review"
+        from_status, to_status = kind, "on_packing"
 
     insert_inventory_move(
         connection,

@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getOperationalPlan } from '../../../api/dashboardApi'
 import type { OperationalPlanItem } from '../../../api/dashboardApi'
@@ -34,7 +33,7 @@ const PRIORITY_LABEL: Record<OperationalPlanItem['priority'], string> = {
   no_date: 'Без даты',
 }
 
-const PLAN_PAGE_SIZE = 20
+const PLAN_PREVIEW_LIMIT = 3
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -74,12 +73,6 @@ function statusTone(item: OperationalPlanItem): BadgeTone {
     return receiptStatusTone(item.status as ReceiptStatus) as BadgeTone
   }
   return (SHIPMENT_STATUS_TONES[item.status as ShipmentStatus] ?? '') as BadgeTone
-}
-
-function progressLabel(item: OperationalPlanItem): string {
-  const progress = item.progress_qty ?? 0
-  const noun = item.type === 'receipt' ? 'принято' : 'упаковано'
-  return `${noun}: ${progress.toLocaleString('ru-RU')} / ${item.total_qty.toLocaleString('ru-RU')}`
 }
 
 function PlanRow({ item }: { item: OperationalPlanItem }) {
@@ -125,11 +118,7 @@ function PlanRow({ item }: { item: OperationalPlanItem }) {
           <Icon name="calendar" size={12} />
           {fmtDate(item.date)}
           <span>·</span>
-          <span>{item.sku_count} SKU</span>
-          <span>·</span>
           <span>{item.total_qty.toLocaleString('ru-RU')} шт</span>
-          <span>·</span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{progressLabel(item)}</span>
         </span>
       </span>
 
@@ -147,16 +136,12 @@ function PlanColumn({
   items,
   total,
   empty,
-  loading,
-  onLoadMore,
 }: {
   title: string
   icon: IconName
   items: OperationalPlanItem[]
   total: number
   empty: string
-  loading: boolean
-  onLoadMore: () => void
 }) {
   const remaining = Math.max(total - items.length, 0)
 
@@ -178,15 +163,7 @@ function PlanColumn({
       )}
       {remaining > 0 && (
         <div style={{ padding: 8, borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)' }}>
-          <button
-            type="button"
-            className="btn ghost sm"
-            disabled={loading}
-            onClick={onLoadMore}
-            style={{ width: '100%', justifyContent: 'center' }}
-          >
-            Ещё {Math.min(PLAN_PAGE_SIZE, remaining)}
-          </button>
+          <div className="t-sub" style={{ textAlign: 'center', fontSize: 12 }}>Ещё {remaining} в плане</div>
         </div>
       )}
     </div>
@@ -194,18 +171,16 @@ function PlanColumn({
 }
 
 export function OperationalPlanFeature() {
-  const [receiptsLimit, setReceiptsLimit] = useState(PLAN_PAGE_SIZE)
-  const [shipmentsLimit, setShipmentsLimit] = useState(PLAN_PAGE_SIZE)
   const { data, loading, error } = useApi(
-    (signal) => getOperationalPlan({ receipts_limit: receiptsLimit, shipments_limit: shipmentsLimit }, signal),
-    [receiptsLimit, shipmentsLimit],
+    (signal) => getOperationalPlan({ receipts_limit: PLAN_PREVIEW_LIMIT, shipments_limit: PLAN_PREVIEW_LIMIT }, signal),
+    [],
   )
 
   return (
     <Card>
       <CardHead>
         <Icon name="calendar" size={15} style={{ color: 'var(--c-accent)' }} />
-        <div className="card-head-title">Операционный план</div>
+        <div className="card-head-title">Операционный план сегодня и ранее</div>
         {data && (
           <div className="right row gap-8">
             <Badge tone="info">{data.totals.receipts} поступл.</Badge>
@@ -222,22 +197,18 @@ export function OperationalPlanFeature() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
             <PlanColumn
-              title="Поступления"
-              icon="truckIn"
-              items={data?.receipts ?? []}
-              total={data?.totals.receipts ?? 0}
-              empty="Нет поступлений на сегодня и ранее"
-              loading={loading}
-              onLoadMore={() => setReceiptsLimit((value) => value + PLAN_PAGE_SIZE)}
-            />
-            <PlanColumn
               title="Отгрузки"
               icon="boxOut"
               items={data?.shipments ?? []}
               total={data?.totals.shipments ?? 0}
               empty="Нет отгрузок на сегодня и ранее"
-              loading={loading}
-              onLoadMore={() => setShipmentsLimit((value) => value + PLAN_PAGE_SIZE)}
+            />
+            <PlanColumn
+              title="Поступления"
+              icon="truckIn"
+              items={data?.receipts ?? []}
+              total={data?.totals.receipts ?? 0}
+              empty="Нет поступлений на сегодня и ранее"
             />
           </div>
         )}

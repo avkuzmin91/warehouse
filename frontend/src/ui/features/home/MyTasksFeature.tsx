@@ -62,7 +62,7 @@ const ROLE_LABEL: Record<string, string> = {
   user: '—',
 }
 
-const TASK_PAGE_SIZE = 20
+const TASK_PAGE_SIZE = 7
 
 // Возраст задачи из `since`. Без срока в /tasks «просрочкой» считаем ожидание дольше суток.
 function ageInfo(since: string | null): { label: string; overdue: boolean } {
@@ -179,7 +179,19 @@ export function MyTasksFeature() {
                   style={{ width: '100%', justifyContent: 'center' }}
                 >
                   <Icon name="chevDown" size={14} />
-                  Ещё {Math.min(TASK_PAGE_SIZE, totalCount - loadedCount)}
+                  Показать ещё {Math.min(TASK_PAGE_SIZE, totalCount - loadedCount)}
+                </button>
+              </div>
+            )}
+            {limit > TASK_PAGE_SIZE && (
+              <div style={{ padding: '0 16px 10px' }}>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() => setLimit(TASK_PAGE_SIZE)}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  Свернуть до 7
                 </button>
               </div>
             )}

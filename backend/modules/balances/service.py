@@ -61,7 +61,9 @@ def get_balances(
                    SUM(CASE WHEN to_status='defect' THEN qty ELSE 0 END)
                      - SUM(CASE WHEN from_status='defect' THEN qty ELSE 0 END) AS conv_defect,
                    SUM(CASE WHEN to_status='on_review' THEN qty ELSE 0 END)
-                     - SUM(CASE WHEN from_status='on_review' THEN qty ELSE 0 END) AS net_review
+                     - SUM(CASE WHEN from_status='on_review' THEN qty ELSE 0 END) AS net_review,
+                   SUM(CASE WHEN to_status='on_packing' THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_status='on_packing' THEN qty ELSE 0 END) AS net_packing
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
         ),
@@ -89,6 +91,7 @@ def get_balances(
             GREATEST(0, COALESCE(c.conv_good, 0)   - COALESCE(sg.shipped_good, 0))   AS good,
             GREATEST(0, COALESCE(c.conv_defect, 0) - COALESCE(sd.shipped_defect, 0)) AS defect,
             GREATEST(0, a.accepted + COALESCE(c.net_review, 0)) AS on_review,
+            GREATEST(0, COALESCE(c.net_packing, 0)) AS on_packing,
             a.docs_count
         FROM accepted a
         LEFT JOIN conv c
@@ -110,7 +113,7 @@ def get_balances(
 
     where_parts = []
     if only_positive:
-        where_parts.append("(good + defect + on_review) > 0")
+        where_parts.append("(good + defect + on_review + on_packing) > 0")
     if has_defect:
         where_parts.append("defect > 0")
     where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
@@ -121,7 +124,7 @@ def get_balances(
         SELECT *, COUNT(*) OVER() AS _total_count
         FROM ({agg_query}) a
         {where_clause}
-        ORDER BY (good + defect + on_review) DESC, product_name, color_name, size_name
+        ORDER BY (good + defect + on_review + on_packing) DESC, product_name, color_name, size_name
         LIMIT ? OFFSET ?
         """,
         line_params + [limit, offset],
@@ -143,7 +146,8 @@ def get_balances(
             good=int(row["good"] or 0),
             defect=int(row["defect"] or 0),
             on_review=int(row["on_review"] or 0),
-            total=int(row["good"] or 0) + int(row["defect"] or 0) + int(row["on_review"] or 0),
+            on_packing=int(row["on_packing"] or 0),
+            total=int(row["good"] or 0) + int(row["defect"] or 0) + int(row["on_review"] or 0) + int(row["on_packing"] or 0),
             docs_count=int(row["docs_count"] or 0),
         )
         for row in rows
@@ -255,6 +259,10 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id, loc_id FROM accepted_inflow
             UNION SELECT product_id, client_id, color_id, size_id, loc_id FROM gain WHERE status = 'on_review'
             UNION SELECT product_id, client_id, color_id, size_id, loc_id FROM lose WHERE status = 'on_review'
+        ),
+        packing_locs AS (
+            SELECT product_id, client_id, color_id, size_id, loc_id FROM gain WHERE status = 'on_packing'
+            UNION SELECT product_id, client_id, color_id, size_id, loc_id FROM lose WHERE status = 'on_packing'
         )
         SELECT x.loc_id AS location_id, 'good' AS status,
                pm.product_id, pm.product_sku, pm.client_id, pm.color_id, pm.size_id,
@@ -289,6 +297,17 @@ def get_balances_by_zone(
         LEFT JOIN accepted_inflow ai ON {_term_join('ai')}
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.status = 'on_review'
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.status = 'on_review'
+
+        UNION ALL
+
+        SELECT x.loc_id, 'on_packing',
+               pm.product_id, pm.product_sku, pm.client_id, pm.color_id, pm.size_id,
+               pm.product_name, pm.client_name, pm.color_name, pm.size_name,
+               GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0))
+        FROM packing_locs x
+        JOIN position_meta pm ON {pos_join}
+        LEFT JOIN gain gi ON {_term_join('gi')} AND gi.status = 'on_packing'
+        LEFT JOIN lose lo ON {_term_join('lo')} AND lo.status = 'on_packing'
     """
 
     rows = connection.execute(
@@ -377,11 +396,11 @@ def insert_inventory_move(
     connection.execute(
         """INSERT INTO zone_relocations
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-            client_id,client_name,status,from_status,to_status,
+            client_id,client_name,from_status,to_status,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
-         client_id, client_name, to_status, from_status, to_status,
+         client_id, client_name, from_status, to_status,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id),
     )
@@ -456,6 +475,12 @@ def get_available_in_zone(
         lose = _move_sum("from_status", "on_review", "from_zone_id")
         return max(0, inflow + gain - lose)
 
+    if status == "on_packing":
+        # Только через перемещения (нет accepted-прихода, нет отгрузки).
+        gain = _move_sum("to_status", "on_packing", "to_zone_id")
+        lose = _move_sum("from_status", "on_packing", "from_zone_id")
+        return max(0, gain - lose)
+
     return 0
 
 
@@ -527,11 +552,13 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
 
     from fastapi import HTTPException
 
-    if payload.status not in ("good", "defect"):
-        raise HTTPException(status_code=400, detail="Перемещать можно только годный или брак")
+    if payload.status not in ("good", "defect", "on_review"):
+        raise HTTPException(status_code=400, detail="Перемещать можно только годный, брак или товар на проверке")
 
     from_id = (payload.from_zone_id or "").strip() or None
     to_id = (payload.to_zone_id or "").strip() or None
+    if not from_id:
+        raise HTTPException(status_code=400, detail="Укажите место, откуда перемещаете товар")
     if from_id == to_id:
         raise HTTPException(status_code=400, detail="Выберите другое место назначения")
 
@@ -560,12 +587,12 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
     connection.execute(
         """INSERT INTO zone_relocations
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-            client_id,client_name,status,from_status,to_status,
+            client_id,client_name,from_status,to_status,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), payload.product_id, payload.product_name, payload.product_sku,
          payload.color_id, payload.color_name, payload.size_id, payload.size_name,
-         payload.client_id, payload.client_name, payload.status, payload.status, payload.status,
+         payload.client_id, payload.client_name, payload.status, payload.status,
          from_id, _zone_name(from_id), to_id, _zone_name(to_id), payload.qty,
          (payload.comment or "").strip() or None, now, user_id),
     )
@@ -612,7 +639,7 @@ def list_zone_relocations(
             id=str(row["id"]),
             created_at=str(row["created_at"]),
             created_by_email=row["created_by_email"],
-            status=str(row["status"]),
+            status=str(row["to_status"]),
             product_name=row["product_name"],
             product_sku=row["product_sku"],
             color_name=row["color_name"],

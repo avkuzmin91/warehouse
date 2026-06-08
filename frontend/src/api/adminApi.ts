@@ -129,6 +129,10 @@ export function getSimpleDictionaryById(apiPath: string, id: string) {
   return request<DictionaryItem>(`${path}/${id}`)
 }
 
+export function setUnloadingZonePacking(id: string) {
+  return request<{ message: string }>(`/unloading-zones/${id}/set-packing`, { method: 'POST' })
+}
+
 export function createSimpleDictionaryItem(
   apiPath: string,
   payload: { name: string; is_active: boolean; color_hex?: string | null },

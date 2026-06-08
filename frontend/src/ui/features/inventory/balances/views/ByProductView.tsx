@@ -48,7 +48,8 @@ export function ByProductView() {
     const goodQty = items.reduce((s, i) => s + i.good, 0)
     const defectQty = items.reduce((s, i) => s + i.defect, 0)
     const onReviewQty = items.reduce((s, i) => s + i.on_review, 0)
-    return { totalQty, goodQty, defectQty, onReviewQty }
+    const onPackingQty = items.reduce((s, i) => s + (i.on_packing ?? 0), 0)
+    return { totalQty, goodQty, defectQty, onReviewQty, onPackingQty }
   }, [items])
 
   return (
@@ -112,6 +113,7 @@ export function ByProductView() {
         <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
         <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
         <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
+        <KPI label="На упаковке" value={kpi.onPackingQty.toLocaleString('ru-RU')} valueColor="var(--c-info, #3b82f6)" unit="шт" />
       </div>
 
       <Table>
@@ -122,14 +124,15 @@ export function ByProductView() {
             <th style={{ textAlign: 'right', width: 90 }}>Годный</th>
             <th style={{ textAlign: 'right', width: 80 }}>Брак</th>
             <th style={{ textAlign: 'right', width: 100 }}>На проверке</th>
+            <th style={{ textAlign: 'right', width: 100 }}>На упаковке</th>
             <th style={{ textAlign: 'right', width: 90, borderLeft: '2px solid var(--c-border)' }}>Всего</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={6} />
+            <SkeletonRows rows={8} cols={7} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
+            <tr><td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
           ) : (
             items.map((item, i) => (
               <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${i}`}>
@@ -154,6 +157,12 @@ export function ByProductView() {
                 <Td className="num">
                   {item.on_review > 0
                     ? <span style={{ color: 'var(--c-accent)', fontWeight: 500 }}>{item.on_review.toLocaleString('ru-RU')}</span>
+                    : <span style={{ color: 'var(--c-text-faint)' }}>0</span>
+                  }
+                </Td>
+                <Td className="num">
+                  {(item.on_packing ?? 0) > 0
+                    ? <span style={{ color: 'var(--c-info, #3b82f6)', fontWeight: 500 }}>{item.on_packing.toLocaleString('ru-RU')}</span>
                     : <span style={{ color: 'var(--c-text-faint)' }}>0</span>
                   }
                 </Td>

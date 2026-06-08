@@ -13,7 +13,6 @@ class ShipmentLineIn(BaseModel):
     size_name:         str | None = None
     qty:               int = Field(ge=1)
     shipped_qty:       int = Field(ge=0, default=0)
-    packed_qty:        int = Field(ge=0, default=0)
     storage_zone_id:   str | None = None
     storage_zone_name: str | None = None
     store_id:          str | None = None
@@ -73,10 +72,9 @@ class ShipmentLineItem(BaseModel):
     size_name:         str | None
     qty:               int
     shipped_qty:       int
-    packed_qty:        int = 0
     packed_good:       int = 0
     packed_defect:     int = 0
-    review_in_packing: int = 0
+    available_for_pack: int = 0
     storage_zone_id:   str | None
     storage_zone_name: str | None
     store_id:          str | None
@@ -131,7 +129,6 @@ class ShipmentLinesListItem(BaseModel):
     size_name:         str | None
     qty:               int
     shipped_qty:       int
-    packed_qty:        int = 0
     storage_zone_name: str | None
     store_name:        str | None
 

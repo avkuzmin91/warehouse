@@ -27,12 +27,14 @@ const STATUS_LABELS: Record<BalanceZoneStatus, string> = {
   good: 'Годный',
   defect: 'Брак',
   on_review: 'На проверке',
+  on_packing: 'На упаковке',
 }
 
 const STATUS_TONE: Record<BalanceZoneStatus, BadgeTone> = {
   good: 'success',
   defect: 'warning',
   on_review: 'accent',
+  on_packing: 'info',
 }
 
 export function ByZoneView() {
@@ -81,7 +83,7 @@ export function ByZoneView() {
         size_name:    reloc.size_name,
         client_id:    reloc.client_id,
         client_name:  reloc.client_name,
-        status:       reloc.status as 'good' | 'defect',
+        status:       reloc.status as 'good' | 'defect' | 'on_review',
         from_zone_id: reloc.location_id,
         to_zone_id:   toZoneId,
         qty:          relocQty,
@@ -143,7 +145,8 @@ export function ByZoneView() {
     const goodQty = filteredItems.reduce((sum, item) => sum + (item.status === 'good' ? item.qty : 0), 0)
     const defectQty = filteredItems.reduce((sum, item) => sum + (item.status === 'defect' ? item.qty : 0), 0)
     const onReviewQty = filteredItems.reduce((sum, item) => sum + (item.status === 'on_review' ? item.qty : 0), 0)
-    return { totalQty: goodQty + defectQty + onReviewQty, goodQty, defectQty, onReviewQty }
+    const onPackingQty = filteredItems.reduce((sum, item) => sum + (item.status === 'on_packing' ? item.qty : 0), 0)
+    return { totalQty: goodQty + defectQty + onReviewQty + onPackingQty, goodQty, defectQty, onReviewQty, onPackingQty }
   }, [filteredItems])
 
   return (
@@ -181,6 +184,7 @@ export function ByZoneView() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'on_review', label: STATUS_LABELS.on_review },
+              { value: 'on_packing', label: STATUS_LABELS.on_packing },
               { value: 'good', label: STATUS_LABELS.good },
               { value: 'defect', label: STATUS_LABELS.defect },
             ]}
@@ -206,6 +210,7 @@ export function ByZoneView() {
         <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
         <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
         <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
+        <KPI label="На упаковке" value={kpi.onPackingQty.toLocaleString('ru-RU')} valueColor="var(--c-info, #3b82f6)" unit="шт" />
       </div>
 
       {loading ? (
@@ -254,7 +259,7 @@ export function ByZoneView() {
                         {item.qty.toLocaleString('ru-RU')}
                       </Td>
                       <Td>
-                        {(item.status === 'good' || item.status === 'defect') && (
+                        {(item.status === 'good' || item.status === 'defect' || item.status === 'on_review') && (
                           <button
                             className="btn ghost icon sm"
                             title="Переместить в другое место"

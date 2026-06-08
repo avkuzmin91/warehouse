@@ -13,6 +13,7 @@ export type BalanceItem = {
   good: number
   defect: number
   on_review: number
+  on_packing: number
   total: number
   docs_count: number
 }
@@ -33,7 +34,7 @@ export type BalanceListResponse = {
   limit: number
 }
 
-export type BalanceZoneStatus = 'good' | 'defect' | 'on_review'
+export type BalanceZoneStatus = 'good' | 'defect' | 'on_review' | 'on_packing'
 
 export type BalanceZoneItem = {
   location_id:   string | null
@@ -92,7 +93,7 @@ export type ZoneRelocationPayload = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
-  status:        'good' | 'defect'
+  status:        'good' | 'defect' | 'on_review'
   from_zone_id:  string | null
   to_zone_id:    string | null
   qty:           number

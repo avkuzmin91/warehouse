@@ -97,8 +97,8 @@ export function PackingPanel({ docId, lines, disabled, canMove, canPack, onPrevi
                 </Td>
                 <Td className="num"><span className="mono" style={{ fontWeight: 500 }}>{line.qty}</span></Td>
                 <Td className="num">
-                  <span className="mono" style={{ color: line.review_in_packing > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
-                    {line.review_in_packing}
+                  <span className="mono" style={{ color: line.available_for_pack > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
+                    {line.available_for_pack}
                   </span>
                 </Td>
                 <Td className="num">

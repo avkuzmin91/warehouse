@@ -110,7 +110,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
         <Brand size={22} />
         {!collapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="sidebar-brand-text">Pack-men</div>
+            <div className="sidebar-brand-text">Pack-Men</div>
             <div className="sidebar-brand-sub">
               {isClient ? 'Кабинет клиента' : 'WMS'}
             </div>
