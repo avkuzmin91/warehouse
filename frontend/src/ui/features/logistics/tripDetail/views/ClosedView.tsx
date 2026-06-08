@@ -71,7 +71,7 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode 
       <div className="split-360">
         <div className="col gap-16">
           <Panel icon="map" title="Планирование транспорта">
-            <div className="form-grid-2">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
               <ReadRow label={lex.routeLabel}>{doc.origin_name ?? '—'}</ReadRow>
               <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
               <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
@@ -86,7 +86,7 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode 
           </Panel>
 
           <Panel icon="forklift" title="Исполнение на складе">
-            <div className="form-grid-2">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
               <ReadRow label={lex.arrivalLabel} mono>{fmtDateTime(doc.arrived_at)}</ReadRow>
               <ReadRow label={lex.unloadStartLabel} mono>{fmtDateTime(doc.unload_started_at ?? doc.arrived_at)}</ReadRow>
               <ReadRow label={lex.unloadEndLabel} mono>{fmtDateTime(doc.unload_finished_at)}</ReadRow>

@@ -289,21 +289,18 @@ export function InventoryShipmentsListPage() {
                 <th style={{ width: 120 }}>Номер</th>
                 <th style={{ width: 110 }}>Приор.</th>
                 <th>Клиент</th>
-                <th>Назначение</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
-                <th style={{ textAlign: 'right', width: 60 }}>SKU</th>
                 <th style={{ textAlign: 'right', width: 80 }}>План</th>
                 <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
-                <th style={{ width: 130 }}>Перевозчик</th>
                 <th style={{ width: 130 }}>Статус</th>
                 <th style={{ width: 150 }}>Выполнение</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={12} />
+                <SkeletonRows rows={8} cols={9} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={12}>
+                <tr><td colSpan={9}>
                   <EmptyState
                     title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
                     sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
@@ -345,14 +342,11 @@ export function InventoryShipmentsListPage() {
                         />
                       </Td>
                       <Td>{item.client_name ?? '—'}</Td>
-                      <Td className="t-sub">{item.destination ?? '—'}</Td>
                       <Td className="mono" style={overdue ? { color: 'var(--c-danger)', fontWeight: 500 } : {}}>
                         {fmtDate(item.ship_date)}
                       </Td>
-                      <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
-                      <Td>{item.carrier ?? '—'}</Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
