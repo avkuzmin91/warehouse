@@ -134,6 +134,13 @@ export function InventoryShipmentsListPage() {
     }
   }
 
+  function handlePrioritySaved(id: string, priorityRank: number | null) {
+    setItems((prev) => prev.map((item) => (
+      item.id === id ? { ...item, priority_rank: priorityRank } : item
+    )))
+    setReloadTick((t) => t + 1)
+  }
+
   if (initialLoading) {
     return (
       <ListPage title="Отгрузки">
@@ -334,7 +341,7 @@ export function InventoryShipmentsListPage() {
                         <ShipmentPriorityControl
                           shipment={item}
                           canEdit={canEdit}
-                          onSaved={() => setReloadTick((t) => t + 1)}
+                          onSaved={(priorityRank) => handlePrioritySaved(item.id, priorityRank)}
                         />
                       </Td>
                       <Td>{item.client_name ?? '—'}</Td>

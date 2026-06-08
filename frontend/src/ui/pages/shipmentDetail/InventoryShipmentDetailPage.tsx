@@ -22,6 +22,7 @@ import type { BalanceItem, BalanceZoneItem } from '../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../api/domainTypes'
 import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
+import { ShipmentPriorityControl } from '../../features/inventory/ShipmentPriorityControl'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
@@ -601,6 +602,11 @@ export function InventoryShipmentDetailPage() {
             <Badge tone={SHIPMENT_STATUS_TONES[status!] as BadgeTone} dot>
               {SHIPMENT_STATUS_LABELS[status!]}
             </Badge>
+            <ShipmentPriorityControl
+              shipment={doc}
+              canEdit={canEdit}
+              onSaved={(priorityRank) => setDoc((prev) => prev ? { ...prev, priority_rank: priorityRank } : prev)}
+            />
             <span className="detail-meta">
               {doc.doc_number} · {doc.client_name ?? '—'}
             </span>

@@ -7,7 +7,7 @@ import { Icon } from '../../primitives/Icon'
 type ShipmentPriorityControlProps = {
   shipment: Pick<ShipmentListItem, 'id' | 'status' | 'priority_rank'>
   canEdit: boolean
-  onSaved: () => void
+  onSaved: (priorityRank: number | null) => void
 }
 
 function stop(e: MouseEvent<HTMLElement>) {
@@ -41,8 +41,9 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
     setSaving(true)
     try {
       await updateShipmentPriority(shipment.id, parsed)
+      setDraft(parsed === null ? '' : String(parsed))
       toast(parsed === null ? 'Приоритет снят' : `Приоритет ${priorityText(parsed)} сохранён`, 'success')
-      onSaved()
+      onSaved(parsed)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения приоритета', 'error')
     } finally {
@@ -56,7 +57,7 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
       await updateShipmentPriority(shipment.id, null)
       setDraft('')
       toast('Приоритет снят', 'success')
-      onSaved()
+      onSaved(null)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения приоритета', 'error')
     } finally {
