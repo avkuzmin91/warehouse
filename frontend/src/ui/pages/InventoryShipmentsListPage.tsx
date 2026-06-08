@@ -10,6 +10,7 @@ import {
 } from '../../api/shipmentsApi'
 import type { ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
 import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
+import { ShipmentPriorityControl } from '../features/inventory/ShipmentPriorityControl'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -279,6 +280,7 @@ export function InventoryShipmentsListPage() {
               <tr>
                 <th style={{ width: 22 }} />
                 <th style={{ width: 120 }}>Номер</th>
+                <th style={{ width: 110 }}>Приор.</th>
                 <th>Клиент</th>
                 <th>Назначение</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
@@ -292,9 +294,9 @@ export function InventoryShipmentsListPage() {
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={11} />
+                <SkeletonRows rows={8} cols={12} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={11}>
+                <tr><td colSpan={12}>
                   <EmptyState
                     title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
                     sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
@@ -327,6 +329,13 @@ export function InventoryShipmentsListPage() {
                             просрочена
                           </div>
                         )}
+                      </Td>
+                      <Td>
+                        <ShipmentPriorityControl
+                          shipment={item}
+                          canEdit={canEdit}
+                          onSaved={() => setReloadTick((t) => t + 1)}
+                        />
                       </Td>
                       <Td>{item.client_name ?? '—'}</Td>
                       <Td className="t-sub">{item.destination ?? '—'}</Td>
@@ -498,6 +507,7 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                   <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+                  {item.priority_rank && <Badge tone="warning">#{item.priority_rank}</Badge>}
                   {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
                   <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
                     {fmtDate(item.ship_date)}

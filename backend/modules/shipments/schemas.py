@@ -53,6 +53,10 @@ class ShipmentDocUpdate(BaseModel):
     comment:         str | None = None
 
 
+class ShipmentPriorityUpdate(BaseModel):
+    priority_rank: int | None = Field(default=None, ge=1, le=999)
+
+
 class ShipmentLineFile(BaseModel):
     id:         str
     filename:   str
@@ -92,6 +96,7 @@ class ShipmentListItem(BaseModel):
     carrier:      str | None
     logistics_cost: float | None
     ship_date:    str | None
+    priority_rank: int | None = None
     status:       str
     status_label: str
     sku_count:    int
@@ -159,6 +164,7 @@ class ShipmentDetailResponse(BaseModel):
     carrier:      str | None
     logistics_cost: float | None
     ship_date:    str | None
+    priority_rank: int | None = None
     actual_ship_date: str | None = None
     comment:      str | None
     status:       str

@@ -30,7 +30,7 @@ export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
 export type ShipmentCargoType = 'good' | 'defect'
 
 export type ShipmentOpType =
-  | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'pack' | 'pack_correction'
+  | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update' | 'pack' | 'pack_correction'
 
 export type ShipmentOp = {
   id:               string
@@ -80,6 +80,7 @@ export type ShipmentListItem = {
   carrier:        string | null
   logistics_cost: number | null
   ship_date:      string | null
+  priority_rank:  number | null
   status:         ShipmentStatus
   status_label:   string
   sku_count:      number
@@ -256,6 +257,13 @@ export function createShipment(body: ShipmentDocCreate) {
 
 export function updateShipment(id: string, body: ShipmentDocUpdate) {
   return request<{ message: string }>(`/shipments/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function updateShipmentPriority(id: string, priorityRank: number | null) {
+  return request<{ message: string }>(`/shipments/${id}/priority`, {
+    method: 'PATCH',
+    body: JSON.stringify({ priority_rank: priorityRank }),
+  })
 }
 
 export function addShipmentLine(docId: string, line: ShipmentLineIn) {

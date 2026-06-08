@@ -29,6 +29,7 @@ class OperationalPlanItem(BaseModel):
     progress_qty: int | None = None
     overdue: bool
     priority: str
+    priority_rank: int | None = None
     exception: str | None = None
 
 

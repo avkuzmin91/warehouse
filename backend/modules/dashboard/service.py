@@ -177,7 +177,7 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
 
     shipment_rows = connection.execute(
         """
-        SELECT d.id, d.doc_number, d.status, d.ship_date, d.client_name, d.destination,
+        SELECT d.id, d.doc_number, d.status, d.ship_date, d.priority_rank, d.client_name, d.destination,
                COUNT(l.id) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0) AS sku_count,
                COALESCE(SUM(l.qty) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0), 0) AS total_qty,
                COALESCE((
@@ -196,7 +196,12 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
           AND d.ship_date IS NOT NULL
           AND d.ship_date <= ?
         GROUP BY d.id
-        ORDER BY d.ship_date ASC, d.created_at ASC, d.doc_number ASC
+        ORDER BY
+          CASE WHEN d.priority_rank IS NULL THEN 1 ELSE 0 END,
+          d.priority_rank ASC NULLS LAST,
+          d.ship_date ASC,
+          d.created_at ASC,
+          d.doc_number ASC
         LIMIT ?
         """,
         (
@@ -220,6 +225,7 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
             "progress_qty": int(r["progress_qty"] or 0),
             "overdue": bool(r["ship_date"] and str(r["ship_date"]) < today.isoformat()),
             "priority": _priority(r["ship_date"], today, active=False),
+            "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             "exception": None,
         }
         for r in shipment_rows

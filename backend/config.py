@@ -150,6 +150,7 @@ SHIPMENT_CARGO_DEFECT = "defect"
 
 # Типы операций журнала отгрузок
 SHIPMENT_OP_DOC_UPDATE = "doc_update"
+SHIPMENT_OP_PRIORITY_UPDATE = "priority_update"
 SHIPMENT_OP_PACK            = "pack"
 SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 

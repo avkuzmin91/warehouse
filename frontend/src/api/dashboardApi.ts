@@ -28,6 +28,7 @@ export type OperationalPlanItem = {
   progress_qty: number | null
   overdue: boolean
   priority: 'overdue' | 'today' | 'active' | 'upcoming' | 'no_date'
+  priority_rank: number | null
   exception: string | null
 }
 

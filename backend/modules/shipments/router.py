@@ -13,6 +13,7 @@ from config import (
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
     SHIPMENT_OP_DOC_UPDATE,
+    SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_REVERT_TRANSITIONS,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
@@ -44,6 +45,7 @@ from modules.shipments.schemas import (
     ShipmentListResponse,
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
+    ShipmentPriorityUpdate,
 )
 from modules.shipments.service import (
     advance_shipment,
@@ -64,6 +66,16 @@ _get_warehouse = get_current_warehouse
 _ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
 _FILE_EDIT_ROLES = {"admin", "manager"}
 _FILE_FINAL_STATUSES = {SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED}
+
+
+def _shipment_priority_order(alias: str = "d") -> str:
+    return (
+        f"CASE WHEN {alias}.priority_rank IS NULL THEN 1 ELSE 0 END, "
+        f"{alias}.priority_rank ASC NULLS LAST, "
+        f"{alias}.ship_date ASC NULLS LAST, "
+        f"{alias}.created_at ASC, "
+        f"{alias}.doc_number ASC"
+    )
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
@@ -208,6 +220,7 @@ def list_shipments(
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
+        use_priority_order = overdue
         if available_for_trip_id and available_for_trip_id.strip():
             conds.append(
                 "NOT EXISTS (SELECT 1 FROM trip_lines tl"
@@ -220,6 +233,8 @@ def list_shipments(
             allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
             if len(allowed) == 1:
                 conds.append("d.status = ?"); params.append(allowed[0])
+                if allowed[0] == SHIPMENT_STATUS_PACKING:
+                    use_priority_order = True
             elif len(allowed) > 1:
                 placeholders = ",".join("?" for _ in allowed)
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
@@ -250,6 +265,7 @@ def list_shipments(
             f"SELECT COUNT(*) AS cnt FROM shipment_docs d WHERE {where}", params
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
+        order_by = _shipment_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
         rows = conn.execute(
             f"""SELECT d.*,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
@@ -275,7 +291,7 @@ def list_shipments(
                 LEFT JOIN shipment_lines l ON l.doc_id = d.id
                 WHERE {where}
                 GROUP BY d.id
-                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC
+                ORDER BY {order_by}
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
@@ -291,6 +307,7 @@ def list_shipments(
             carrier=r["carrier"],
             logistics_cost=float(r["logistics_cost"]) if show_costs and r.get("logistics_cost") is not None else None,
             ship_date=r["ship_date"],
+            priority_rank=int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             status=str(r["status"]),
             status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
             sku_count=int(r["sku_count"] or 0),
@@ -509,6 +526,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         carrier=row["carrier"],
         logistics_cost=float(row["logistics_cost"]) if show_costs and row.get("logistics_cost") is not None else None,
         ship_date=row["ship_date"],
+        priority_rank=int(row["priority_rank"]) if row.get("priority_rank") is not None else None,
         actual_ship_date=row.get("actual_ship_date"),
         comment=row["comment"],
         status=str(row["status"]),
@@ -523,6 +541,38 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         sku_count=len(lines),
         total_qty=sum(l.qty for l in lines),
     )
+
+
+@router.patch("/shipments/{doc_id}/priority")
+def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Depends(_get_manager)):
+    now = _now()
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED):
+            raise HTTPException(status_code=400, detail="Нельзя менять приоритет завершённой или аннулированной отгрузки")
+
+        old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
+        new_rank = body.priority_rank
+        if old_rank == new_rank:
+            return {"message": "ok"}
+
+        conn.execute(
+            "UPDATE shipment_docs SET priority_rank = ?, updated_at = ? WHERE id = ?",
+            (new_rank, now, doc_id),
+        )
+        old_label = f"#{old_rank}" if old_rank is not None else "без приоритета"
+        new_label = f"#{new_rank}" if new_rank is not None else "без приоритета"
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE, f"Приоритет отгрузки: {old_label} → {new_label}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
 
 
 @router.patch("/shipments/{doc_id}")

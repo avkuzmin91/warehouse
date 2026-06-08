@@ -17,22 +17,6 @@ import { Card, CardBody, CardHead } from '../../primitives/Card'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 
-const PRIORITY_TONE: Record<OperationalPlanItem['priority'], BadgeTone> = {
-  overdue: 'danger',
-  today: 'warning',
-  active: 'info',
-  upcoming: '',
-  no_date: 'warning',
-}
-
-const PRIORITY_LABEL: Record<OperationalPlanItem['priority'], string> = {
-  overdue: 'Просрочено',
-  today: 'Сегодня',
-  active: 'В работе',
-  upcoming: 'В плане',
-  no_date: 'Без даты',
-}
-
 const PLAN_PREVIEW_LIMIT = 3
 
 function todayIso(): string {
@@ -100,7 +84,9 @@ function PlanRow({ item }: { item: OperationalPlanItem }) {
     >
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-          <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{item.doc_number}</span>
+          {item.type === 'shipment' && item.priority_rank && (
+            <Badge tone="warning">#{item.priority_rank}</Badge>
+          )}
           <span
             style={{
               minWidth: 0,
@@ -124,7 +110,6 @@ function PlanRow({ item }: { item: OperationalPlanItem }) {
 
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <Badge tone={statusTone(item)}>{statusLabel(item)}</Badge>
-        <Badge tone={PRIORITY_TONE[item.priority]}>{PRIORITY_LABEL[item.priority]}</Badge>
       </span>
     </button>
   )
@@ -136,13 +121,16 @@ function PlanColumn({
   items,
   total,
   empty,
+  morePath,
 }: {
   title: string
   icon: IconName
   items: OperationalPlanItem[]
   total: number
   empty: string
+  morePath: string
 }) {
+  const navigate = useNavigate()
   const remaining = Math.max(total - items.length, 0)
 
   return (
@@ -163,7 +151,14 @@ function PlanColumn({
       )}
       {remaining > 0 && (
         <div style={{ padding: 8, borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)' }}>
-          <div className="t-sub" style={{ textAlign: 'center', fontSize: 12 }}>Ещё {remaining} в плане</div>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => navigate(morePath)}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            Ещё {remaining} в плане
+          </button>
         </div>
       )}
     </div>
@@ -180,12 +175,11 @@ export function OperationalPlanFeature() {
     <Card>
       <CardHead>
         <Icon name="calendar" size={15} style={{ color: 'var(--c-accent)' }} />
-        <div className="card-head-title">Операционный план сегодня и ранее</div>
+        <div className="card-head-title">Операционный план</div>
         {data && (
           <div className="right row gap-8">
             <Badge tone="info">{data.totals.receipts} поступл.</Badge>
             <Badge tone="info">{data.totals.shipments} отгр.</Badge>
-            {data.totals.overdue > 0 && <Badge tone="danger" dot>{data.totals.overdue} просрочено</Badge>}
           </div>
         )}
       </CardHead>
@@ -202,6 +196,7 @@ export function OperationalPlanFeature() {
               items={data?.shipments ?? []}
               total={data?.totals.shipments ?? 0}
               empty="Нет отгрузок на сегодня и ранее"
+              morePath="/inventory/shipments"
             />
             <PlanColumn
               title="Поступления"
@@ -209,6 +204,7 @@ export function OperationalPlanFeature() {
               items={data?.receipts ?? []}
               total={data?.totals.receipts ?? 0}
               empty="Нет поступлений на сегодня и ранее"
+              morePath="/inventory/receipts"
             />
           </div>
         )}
