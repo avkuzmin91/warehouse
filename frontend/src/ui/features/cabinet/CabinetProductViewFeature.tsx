@@ -60,6 +60,7 @@ export function CabinetProductViewFeature({ productId }: Props) {
                   <Info label="Тип" value={product.type_name ?? '—'} />
                   <Info label="Вариантов" value={product.variant_count.toLocaleString('ru-RU')} />
                   <Info label="Вес" value={product.weight_grams == null ? '—' : `${product.weight_grams.toLocaleString('ru-RU')} г`} />
+                  <Info label="На паллете" value={product.items_per_pallet == null ? '—' : product.items_per_pallet.toLocaleString('ru-RU')} />
                 </div>
               </div>
             </CardBody>

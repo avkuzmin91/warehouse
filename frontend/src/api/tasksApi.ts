@@ -8,7 +8,7 @@ export type TaskKind =
   | 'receipt_review'
   | 'shipment_move_in'
   | 'shipment_pack'
-  | 'shipment_ship'
+  | 'shipment_relocate'
 
 export type TaskItem = {
   kind: TaskKind

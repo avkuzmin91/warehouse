@@ -291,6 +291,7 @@ export function createProduct(payload: {
       type_id: string
       sku_base: string
       weight_grams?: number | null
+      items_per_pallet?: number | null
       client_id: string
       is_active: boolean
     }
@@ -320,6 +321,7 @@ export function updateProduct(
     is_deleted?: boolean
     sku_base?: string
     weight_grams?: number | null
+    items_per_pallet?: number | null
     image_urls?: string[]
   },
 ) {

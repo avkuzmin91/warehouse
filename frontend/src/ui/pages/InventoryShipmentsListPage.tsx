@@ -37,11 +37,12 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
 ]
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
-  { status: 'draft',       label: 'Создание',    tone: '' },
-  { status: 'packing',     label: 'В плане',     tone: 'info' },
-  { status: 'on_packing',  label: 'На упаковке', tone: 'info' },
-  { status: 'on_shipping', label: 'На отгрузке', tone: 'info' },
-  { status: 'shipped',     label: 'Завершён',    tone: 'success' },
+  { status: 'draft',         label: 'Создание',     tone: '' },
+  { status: 'packing',       label: 'В плане',      tone: 'info' },
+  { status: 'on_packing',    label: 'На упаковке',  tone: 'info' },
+  { status: 'relocating',    label: 'Перемещение',  tone: 'info' },
+  { status: 'awaiting_trip', label: 'Ожидает рейс', tone: 'warning' },
+  { status: 'shipped',       label: 'Завершён',     tone: 'success' },
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {

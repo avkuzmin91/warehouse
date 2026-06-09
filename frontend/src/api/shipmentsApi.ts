@@ -1,42 +1,46 @@
 import { request, requestForm } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'on_shipping' | 'shipped' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'shipped' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
-  draft:       'Создание',
-  packing:     'В плане',
-  on_packing:  'На упаковке',
-  on_shipping: 'На отгрузке',
-  shipped:     'Завершён',
-  cancelled:   'Аннулирован',
+  draft:         'Создание',
+  packing:       'В плане',
+  on_packing:    'На упаковке',
+  relocating:    'Перемещение',
+  awaiting_trip: 'Ожидает рейс',
+  shipped:       'Завершён',
+  cancelled:     'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
-  draft:       'Создан',
-  packing:     'Передан на упаковку',
-  on_packing:  'Упакован',
-  on_shipping: 'Отгружен',
-  shipped:     'Завершён',
-  cancelled:   'Аннулирован',
+  draft:         'Создан',
+  packing:       'Передан на упаковку',
+  on_packing:    'Упакован',
+  relocating:    'Передан кладовщику',
+  awaiting_trip: 'Готов к рейсу',
+  shipped:       'Завершён',
+  cancelled:     'Аннулирован',
 }
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
-  draft:       '',
-  packing:     'info',
-  on_packing:  'info',
-  on_shipping: 'info',
-  shipped:     'success',
-  cancelled:   'danger',
+  draft:         '',
+  packing:       'info',
+  on_packing:    'info',
+  relocating:    'info',
+  awaiting_trip: 'warning',
+  shipped:       'success',
+  cancelled:     'danger',
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'on_packing', 'on_shipping', 'shipped',
+  'draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip', 'shipped',
 ]
 
 export type ShipmentCargoType = 'good' | 'defect'
 
 export type ShipmentOpType =
-  | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update' | 'pack' | 'pack_correction'
+  | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
+  | 'pack' | 'pack_correction' | 'move_return' | 'relocate'
 
 export type ShipmentOp = {
   id:               string
@@ -342,6 +346,20 @@ export function returnShipmentLineFromPacking(docId: string, lineId: string, qty
 
 export function advanceShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, { method: 'POST' })
+}
+
+export type ShipmentRelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }
+export type ShipmentRelocateLine = {
+  line_id: string
+  good:    ShipmentRelocateAllocation[]
+  defect:  ShipmentRelocateAllocation[]
+}
+
+export function finishShipmentRelocation(id: string, lines: ShipmentRelocateLine[]) {
+  return request<{ message: string }>(`/shipments/${id}/finish-relocation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+  })
 }
 
 export function revertShipment(id: string) {

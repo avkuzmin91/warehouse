@@ -119,6 +119,12 @@ def _advance(api, doc_id, role=_ADMIN):
     return api.post(f"/shipments/{doc_id}/advance")
 
 
+def _finish_relocation(api, doc_id, lines, role=_WH):
+    """«Готово к рейсу»: разложить упакованный годный/брак по местам под заданной ролью."""
+    _as(role)
+    return api.post(f"/shipments/{doc_id}/finish-relocation", json={"lines": lines})
+
+
 def test_full_flow_receipt_to_packing_qc(api, client_id):
     pos = _position()
     intake_zone = str(uuid.uuid4())
@@ -264,10 +270,11 @@ def test_multizone_transfer_via_allocations(api, client_id):
     assert _balance(client_id, pos) == (0, 0, 0, 10)
 
 
-def test_leftover_pool_returns_to_review_on_ship(api, client_id):
-    """Нерешённый пул on_packing при отгрузке возвращается в on_review."""
+def test_leftover_pool_returns_to_review_on_finish_relocation(api, client_id):
+    """Нерешённый пул on_packing при «Готово к рейсу» возвращается в on_review."""
     pos = _position()
     intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
     with get_connection() as c:
         packing_id, _ = get_packing_zone(c)
     _receive(api, client_id, pos, 10, intake_zone)
@@ -277,14 +284,18 @@ def test_leftover_pool_returns_to_review_on_ship(api, client_id):
     _advance(api, doc_id, _WH)  # packing → on_packing
     _as(_SHIFT)
     api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 6, "packed_date": _TODAY})  # пул 4 не разобран
-    _advance(api, doc_id, _SHIFT)  # on_packing → on_shipping
-    _advance(api, doc_id, _WH)     # on_shipping → shipped
+    _advance(api, doc_id, _SHIFT)  # on_packing → relocating
 
-    ship_line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    assert ship_line["shipped_qty"] == 6
-    # Отгружено 6 годных; 4 из пула вернулись в on_review (в зоне упаковки).
-    assert _balance(client_id, pos) == (0, 0, 4, 0)
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 6}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+
+    # 6 годных переехали в место хранения (остаются в остатках), 4 из пула вернулись в on_review.
+    assert _balance(client_id, pos) == (6, 0, 4, 0)
+    assert _zone_qty(client_id, pos, good_zone, "good") == 6
     assert _zone_qty(client_id, pos, packing_id, "on_review") == 4
+    assert _zone_qty(client_id, pos, packing_id, "good") == 0
 
 
 def test_return_from_packing_restores_source_zones(api, client_id):
@@ -450,16 +461,17 @@ def test_packing_handoff_tasks(api, client_id):
 
     _as(_SHIFT)
     api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
-    _advance(api, doc_id, _SHIFT)  # on_packing → on_shipping
+    _advance(api, doc_id, _SHIFT)  # on_packing → relocating
 
-    # «На отгрузке»: кладовщику — отгрузить; у начальника смены упаковки нет.
-    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_ship" for x in _tasks("warehouse_manager"))
+    # «Перемещение»: кладовщику — разложить по местам; у начальника смены упаковки нет.
+    assert any(x["doc_id"] == doc_id and x["kind"] == "shipment_relocate" for x in _tasks("warehouse_manager"))
     assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in _tasks("shift_supervisor"))
 
 
-def test_ship_good_after_packing(api, client_id):
+def test_relocate_good_after_packing(api, client_id):
     pos = _position()
     intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
     with get_connection() as c:
         packing_id, _ = get_packing_zone(c)
 
@@ -472,25 +484,26 @@ def test_ship_good_after_packing(api, client_id):
     api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
     assert _balance(client_id, pos) == (10, 0, 0, 0)
 
-    # Передача на отгрузку, затем «Отгрузить»: shipped_qty = упакованный годный, место = зона упаковки.
-    adv1 = _advance(api, doc_id, _SHIFT)  # on_packing → on_shipping
-    assert adv1.status_code == 200 and adv1.json()["message"] == "on_shipping", adv1.text
-    adv2 = _advance(api, doc_id, _WH)  # on_shipping → shipped
-    assert adv2.status_code == 200 and adv2.json()["message"] == "shipped", adv2.text
+    # Передать кладовщику, затем «Готово к рейсу»: товар переезжает в место хранения, без списания.
+    adv1 = _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    assert adv1.status_code == 200 and adv1.json()["message"] == "relocating", adv1.text
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
 
-    ship_line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    assert ship_line["shipped_qty"] == 10
-    assert ship_line["storage_zone_id"] == packing_id
-    assert _balance(client_id, pos) == (0, 0, 0, 0)
+    # Не списано: 10 годных остаются в остатках, но уже в выбранном месте, не в зоне упаковки.
+    assert _balance(client_id, pos) == (10, 0, 0, 0)
+    assert _zone_qty(client_id, pos, good_zone, "good") == 10
+    assert _zone_qty(client_id, pos, packing_id, "good") == 0
 
 
-def test_ship_partial_lines_does_not_require_zero_shipped_line(api, client_id):
+def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
     pos1 = _position()
     pos2 = _position()
     zone1 = str(uuid.uuid4())
     zone2 = str(uuid.uuid4())
-    with get_connection() as c:
-        packing_id, _ = get_packing_zone(c)
+    good_zone = str(uuid.uuid4())
 
     _receive(api, client_id, pos1, 5, zone1)
     _receive(api, client_id, pos2, 7, zone2)
@@ -516,17 +529,16 @@ def test_ship_partial_lines_does_not_require_zero_shipped_line(api, client_id):
     _as(_SHIFT)
     pack = api.post(f"/shipments/{doc_id}/lines/{line1_id}/pack", json={"good_delta": 5, "packed_date": _TODAY})
     assert pack.status_code == 200, pack.text
-    adv1 = _advance(api, doc_id, _SHIFT)  # on_packing → on_shipping
-    assert adv1.status_code == 200 and adv1.json()["message"] == "on_shipping", adv1.text
+    adv1 = _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    assert adv1.status_code == 200 and adv1.json()["message"] == "relocating", adv1.text
 
-    adv2 = _advance(api, doc_id, _WH)  # on_shipping → shipped
-    assert adv2.status_code == 200 and adv2.json()["message"] == "shipped", adv2.text
-    detail = api.get(f"/shipments/{doc_id}").json()
-    shipped = {line["product_sku"]: line for line in detail["lines"]}
-    assert shipped["SKU-1"]["shipped_qty"] == 5
-    assert shipped["SKU-1"]["storage_zone_id"] == packing_id
-    assert shipped["SKU-2"]["shipped_qty"] == 0
-    assert _balance(client_id, pos1) == (0, 0, 0, 0)
+    # Линия 2 ничего не упаковала — её можно не указывать в раскладке.
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line1_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 5}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    assert _zone_qty(client_id, pos1, good_zone, "good") == 5
+    assert _balance(client_id, pos1) == (5, 0, 0, 0)
     assert _balance(client_id, pos2) == (0, 0, 7, 0)
 
 

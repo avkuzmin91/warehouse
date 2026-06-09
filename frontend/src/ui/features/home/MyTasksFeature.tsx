@@ -16,7 +16,7 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   receipt_review: 'check',
   shipment_move_in: 'forklift',
   shipment_pack: 'boxOut',
-  shipment_ship: 'truckOut',
+  shipment_relocate: 'forklift',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -27,7 +27,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   receipt_review: 'Проверить поступление',
   shipment_move_in: 'Передать на упаковку',
   shipment_pack: 'Упаковать',
-  shipment_ship: 'Отгрузить',
+  shipment_relocate: 'Разложить по местам',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -38,7 +38,8 @@ const STATUS_SUB: Record<string, string> = {
   on_review: 'На проверке',
   packing: 'В плане',
   on_packing: 'На упаковке',
-  on_shipping: 'На отгрузке',
+  relocating: 'Перемещение',
+  awaiting_trip: 'Ожидает рейс',
 }
 
 function taskTitle(t: TaskItem): string {

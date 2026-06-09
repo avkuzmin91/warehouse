@@ -10,6 +10,7 @@ class ProductItem(BaseModel):
     type_name: str | None = None
     sku_base: str
     weight_grams: int | None = None
+    items_per_pallet: int | None = None
     requires_color: bool = False
     requires_size: bool = False
     client_id: str | None = None
@@ -39,6 +40,7 @@ class ProductCreateInner(BaseModel):
     sku_base: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     weight_grams: int | None = Field(default=None, ge=0)
+    items_per_pallet: int | None = Field(default=None, ge=0)
     is_active: bool = True
 
 
@@ -56,6 +58,7 @@ class ProductUpdateRequest(BaseModel):
     is_deleted: bool | None = None
     sku_base: str | None = Field(default=None, min_length=1)
     weight_grams: int | None = Field(default=None, ge=0)
+    items_per_pallet: int | None = Field(default=None, ge=0)
     image_urls: list[str] | None = None
 
 

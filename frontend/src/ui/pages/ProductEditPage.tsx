@@ -38,6 +38,13 @@ function parseOptionalWeight(s: string): number | null {
   return Number.isFinite(n) ? Math.round(n) : null
 }
 
+function parseOptionalInteger(s: string): number | null {
+  const trimmed = s.trim()
+  if (!trimmed) return null
+  const n = Number(trimmed.replace(',', '.'))
+  return Number.isFinite(n) ? Math.round(n) : null
+}
+
 function emptyRow(requiresSize: boolean): ProductVariantWriteItem {
   return {
     id: null,
@@ -93,6 +100,7 @@ export function ProductEditPage() {
   const [name, setName] = useState('')
   const [skuBase, setSkuBase] = useState('')
   const [weightGrams, setWeightGrams] = useState('')
+  const [itemsPerPallet, setItemsPerPallet] = useState('')
   const [clientId, setClientId] = useState<string | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -126,6 +134,7 @@ export function ProductEditPage() {
         setName(p.name)
         setSkuBase(p.sku_base)
         setWeightGrams(p.weight_grams != null ? String(p.weight_grams) : '')
+        setItemsPerPallet(p.items_per_pallet != null ? String(p.items_per_pallet) : '')
         setClientId(p.client_id)
         setIsActive(p.is_active)
         setImages((p.image_urls ?? []).map((url) => ({ kind: 'url', previewUrl: url, serverUrl: url })))
@@ -241,6 +250,7 @@ export function ProductEditPage() {
       name: name.trim(),
       sku_base: skuBase.trim(),
       weight_grams: parseOptionalWeight(weightGrams),
+      items_per_pallet: parseOptionalInteger(itemsPerPallet),
       client_id: clientId,
       is_active: isActive,
       image_urls,
@@ -512,6 +522,18 @@ export function ProductEditPage() {
                   value={weightGrams}
                   disabled={busy}
                   onChange={(e) => setWeightGrams(e.target.value)}
+                  style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
+                />
+              </Field>
+              <Field label="Количество товаров на паллете">
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={itemsPerPallet}
+                  disabled={busy}
+                  onChange={(e) => setItemsPerPallet(e.target.value)}
                   style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                 />
               </Field>

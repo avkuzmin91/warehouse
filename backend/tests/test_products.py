@@ -172,3 +172,70 @@ def test_product_sku_stays_unique_inside_client_on_update(admin_client):
             conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
             conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
             conn.commit()
+
+
+def test_product_items_per_pallet_roundtrip(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-pallet-{suffix}"
+    client_id = f"client-pallet-{suffix}"
+    sku = f"PALLET-SKU-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type Pallet {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Pallet {suffix}"),
+        )
+        conn.commit()
+
+    create_payload = {
+        "meta": json.dumps({
+            "product": {
+                "name": f"Product Pallet {suffix}",
+                "type_id": type_id,
+                "sku_base": sku,
+                "client_id": client_id,
+                "weight_grams": 120,
+                "items_per_pallet": 48,
+                "is_active": True,
+            },
+            "colors": [],
+            "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+        }),
+    }
+
+    try:
+        created = admin_client.post("/products", data=create_payload)
+        assert created.status_code == 200, created.text
+
+        listed = admin_client.get(f"/products?search={sku}&limit=100")
+        assert listed.status_code == 200, listed.text
+        items = listed.json()["items"]
+        assert len(items) == 1
+        product_id = items[0]["id"]
+        assert items[0]["items_per_pallet"] == 48
+
+        detail = admin_client.get(f"/products/{product_id}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["items_per_pallet"] == 48
+
+        updated = admin_client.patch(f"/products/{product_id}", json={"items_per_pallet": None})
+        assert updated.status_code == 200, updated.text
+
+        detail_after_update = admin_client.get(f"/products/{product_id}")
+        assert detail_after_update.status_code == 200, detail_after_update.text
+        assert detail_after_update.json()["items_per_pallet"] is None
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE sku = ?)", (sku,))
+            conn.execute("DELETE FROM products WHERE sku = ?", (sku,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()

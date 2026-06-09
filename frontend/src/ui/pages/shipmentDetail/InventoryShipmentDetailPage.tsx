@@ -40,6 +40,7 @@ import { fmtDateLong } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
 import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../utils/access'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { useLookups } from '../../../hooks/useLookups'
 import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../../features/inventory/shared/NumberStep'
 import { CargoTypeDisplay } from './components/CargoTypeDisplay'
@@ -52,6 +53,7 @@ import { LineIdentityCell } from '../../features/inventory/receiptDetail/compone
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
+import { RelocationPanel } from './components/RelocationPanel'
 
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
 type LineDraft = {
@@ -76,6 +78,7 @@ export function InventoryShipmentDetailPage() {
   const confirm = useConfirm()
   const toast = useToast()
   const { user } = useCurrentUser()
+  const { unloadingZones } = useLookups()
   const showCosts = canViewCosts(user)
   const canEdit = canEditShipments(user)
   const canEditPlanning = canEditShipmentPlanning(user)
@@ -166,23 +169,26 @@ export function InventoryShipmentDetailPage() {
   const isDraft = status === 'draft'
   const isPacking = status === 'packing'
   const isOnPacking = status === 'on_packing'
-  const isOnShipping = status === 'on_shipping'
+  const isRelocating = status === 'relocating'
+  const isAwaitingTrip = status === 'awaiting_trip'
   // Состав и план редактируются до передачи на упаковку (черновик и «В плане»).
   const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
   const canEditPlan = canEditPlanning && editableComposition
   const canEditInfo = canEditPlanning && editableComposition
-  const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при «Отгрузить»
+  const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при отправке рейса
   const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped'
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   const canReturnPacking = canPack && (isPacking || isOnPacking)
+  // «Готово к рейсу» — кладовщик (canEdit = warehouse_manager) в статусе «Перемещение».
+  const canRelocate = canEdit && isRelocating
 
-  // Главное действие шага: метка/иконка/право зависят от статуса.
+  // Главное действие шага: метка/иконка/право зависят от статуса. «Готово к рейсу»
+  // (relocating) не здесь — у него своя кнопка в панели раскладки по местам.
   const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut'; show: boolean } | null =
-    isDraft        ? { label: 'Запланировать',        icon: 'arrowRight', show: canEdit }
-      : isPacking    ? { label: 'Передать на упаковку',  icon: 'forklift',   show: canEdit }
-      : isOnPacking  ? { label: 'Передать на отгрузку',  icon: 'arrowRight', show: canPack }
-      : isOnShipping ? { label: 'Отгрузить',             icon: 'truckOut',   show: canEdit }
+    isDraft       ? { label: 'Запланировать',       icon: 'arrowRight', show: canEdit }
+      : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   show: canEdit }
+      : isOnPacking ? { label: 'Передать кладовщику',  icon: 'forklift',   show: canPack }
       : null
 
   const shipmentClientId = doc?.client_id ?? null
@@ -667,6 +673,12 @@ export function InventoryShipmentDetailPage() {
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
+      {isAwaitingTrip && (
+        <Alert tone="warning" style={{ marginBottom: 16 }}>
+          Товар разложен по местам хранения. Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.
+        </Alert>
+      )}
+
       <div className={showReadiness ? 'split-360' : undefined}>
         <div className="col gap-16">
           <div className="card">
@@ -881,6 +893,16 @@ export function InventoryShipmentDetailPage() {
           />
         )}
       </div>
+
+      {isRelocating && (
+        <RelocationPanel
+          docId={docId!}
+          lines={doc.lines}
+          zoneOptions={unloadingZones}
+          canEdit={canRelocate}
+          onDone={refreshAfterLineChange}
+        />
+      )}
 
       <Drawer
         open={opsDrawerOpen}
@@ -1571,11 +1593,10 @@ function ShipmentLinesTable({
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
   const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
   const packedTotal = lines.reduce((s, l) => s + l.packed_good + l.packed_defect, 0)
-  const shippedTotal = lines.reduce((s, l) => s + l.shipped_qty, 0)
   const showTransfer = status === 'packing'
   const showPacking = status === 'on_packing'
-  const showShipped = status === 'on_shipping' || status === 'shipped'
-  const colCount = 6 + (showTransfer ? 1 : 0) + (showPacking ? 3 : 0) + (showShipped ? 2 : 0)
+  const showResult = status === 'relocating' || status === 'awaiting_trip' || status === 'shipped'
+  const colCount = 6 + (showTransfer ? 1 : 0) + (showPacking ? 3 : 0) + (showResult ? 1 : 0)
 
   return (
     <Table>
@@ -1595,11 +1616,8 @@ function ShipmentLinesTable({
               <th style={{ width: 300 }}>Действия упаковки</th>
             </>
           )}
-          {showShipped && (
-            <>
-              <th style={{ width: 110, textAlign: 'right' }}>Отгружено, шт.</th>
-              <th style={{ width: 150 }}>Из места</th>
-            </>
+          {showResult && (
+            <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>
           )}
           <th style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
@@ -1719,15 +1737,12 @@ function ShipmentLinesTable({
                 </>
               )}
 
-              {showShipped && (
-                <>
-                  <Td className="num">
-                    <span className="num" style={{ fontWeight: 500 }}>{line.shipped_qty}</span>
-                  </Td>
-                  <Td>
-                    <span className="t-sub">{line.storage_zone_name || '—'}</span>
-                  </Td>
-                </>
+              {showResult && (
+                <Td className="num">
+                  <span className="num" style={{ fontWeight: 600, color: 'var(--c-success)' }}>{line.packed_good}</span>
+                  <span style={{ color: 'var(--c-text-faint)' }}> / </span>
+                  <span className="num" style={{ fontWeight: 600, color: line.packed_defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{line.packed_defect}</span>
+                </Td>
               )}
 
               <Td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
@@ -1784,14 +1799,9 @@ function ShipmentLinesTable({
                   На упаковке <b className="num" style={{ color: 'var(--c-text)' }}>{poolTotal}</b>
                 </span>
               )}
-              {(showPacking || showShipped) && (
+              {(showPacking || showResult) && (
                 <span style={{ color: 'var(--c-text-subtle)' }}>
                   Упаковано <b className="num" style={{ color: 'var(--c-text)' }}>{packedTotal}</b>
-                </span>
-              )}
-              {showShipped && (
-                <span style={{ color: 'var(--c-text-subtle)' }}>
-                  Отгружено <b className="num" style={{ color: 'var(--c-text)' }}>{shippedTotal}</b>
                 </span>
               )}
             </div>

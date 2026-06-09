@@ -60,6 +60,7 @@ def list_cabinet_products(
     rows = connection.execute(
         f"""
         SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
+               p.items_per_pallet,
                COALESCE(pt.requires_color, 0) AS requires_color,
                COALESCE(pt.requires_size, 0) AS requires_size,
                p.client_id, c.name AS client_name,
@@ -87,6 +88,7 @@ def get_cabinet_product(connection, *, client_id: str, product_id: str) -> Produ
     row = connection.execute(
         """
         SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
+               p.items_per_pallet,
                COALESCE(pt.requires_color, 0) AS requires_color,
                COALESCE(pt.requires_size, 0) AS requires_size,
                p.client_id, c.name AS client_name,
