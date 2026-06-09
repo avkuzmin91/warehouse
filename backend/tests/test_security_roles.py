@@ -9,6 +9,7 @@ from security import (
     FORBIDDEN_DETAIL,
     ensure_admin_account,
     ensure_manager_staff,
+    ensure_packing_access,
     ensure_shipment_priority_access,
     ensure_shipment_view_access,
 )
@@ -113,6 +114,35 @@ def test_ensure_shipment_priority_accepts_managers(role: str):
 def test_ensure_shipment_priority_rejects_non_managers(role: str):
     with pytest.raises(HTTPException) as ctx:
         ensure_shipment_priority_access(
+            {
+                "id": "1",
+                "email": "u@x",
+                "role": role,
+                "created_at": "",
+                "client_id": None,
+            }
+        )
+    assert ctx.value.status_code == 403
+    assert ctx.value.detail == FORBIDDEN_DETAIL
+
+
+@pytest.mark.parametrize("role", ["admin", "manager", "shift_supervisor"])
+def test_ensure_packing_accepts_qc_roles(role: str):
+    ensure_packing_access(
+        {
+            "id": "1",
+            "email": "u@x",
+            "role": role,
+            "created_at": "",
+            "client_id": None,
+        }
+    )
+
+
+@pytest.mark.parametrize("role", ["warehouse_manager", "user", "client"])
+def test_ensure_packing_rejects_warehouse_and_plain_roles(role: str):
+    with pytest.raises(HTTPException) as ctx:
+        ensure_packing_access(
             {
                 "id": "1",
                 "email": "u@x",

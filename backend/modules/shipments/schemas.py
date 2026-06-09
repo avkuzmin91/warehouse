@@ -20,13 +20,69 @@ class ShipmentLineIn(BaseModel):
 
 
 class ShipmentLinePackPayload(BaseModel):
-    delta: int
-    kind: str = "good"  # 'good' | 'defect'
+    good_delta:   int = Field(ge=0, default=0)
+    defect_delta: int = Field(ge=0, default=0)
+    packed_date:  str  # YYYY-MM-DD — бизнес-дата упаковки
+
+
+class ShipmentPackingEntry(BaseModel):
+    id:               str
+    packed_date:      str | None = None
+    good:             int
+    defect:           int
+    created_at:       str
+    created_by:       str | None = None
+    created_by_email: str | None = None
+    reversed:         bool = False
+
+
+class ShipmentPackingResponse(BaseModel):
+    plan:               int
+    available_for_pack: int
+    packed_good:        int
+    packed_defect:      int
+    entries:            list[ShipmentPackingEntry]
+
+
+class ShipmentMoveAllocation(BaseModel):
+    from_zone_id: str | None = None
+    qty: int = Field(ge=1)
 
 
 class ShipmentMoveToPackingPayload(BaseModel):
-    qty: int = Field(ge=1)
+    # Явная разбивка по зонам-источникам. Каждая аллокация — сколько и откуда взять.
+    allocations: list[ShipmentMoveAllocation] | None = None
+    # Back-compat одиночного перемещения: qty (+ опц. from_zone_id). from_zone_id=None — FIFO по местам.
+    qty: int | None = Field(default=None, ge=1)
     from_zone_id: str | None = None
+
+    def to_allocations(self) -> list[ShipmentMoveAllocation]:
+        if self.allocations:
+            return self.allocations
+        if self.qty is not None:
+            return [ShipmentMoveAllocation(from_zone_id=self.from_zone_id, qty=self.qty)]
+        return []
+
+
+class ShipmentReturnFromPackingPayload(BaseModel):
+    # None — вернуть весь нерешённый пул строки.
+    qty: int | None = Field(default=None, ge=1)
+
+
+class ShipmentRelocateAllocation(BaseModel):
+    zone_id:   str
+    zone_name: str | None = None
+    qty:       int = Field(ge=1)
+
+
+class ShipmentRelocateLine(BaseModel):
+    line_id: str
+    good:    list[ShipmentRelocateAllocation] = []
+    defect:  list[ShipmentRelocateAllocation] = []
+
+
+class ShipmentFinishRelocationPayload(BaseModel):
+    lines: list[ShipmentRelocateLine] = []
 
 
 class ShipmentDocCreate(BaseModel):

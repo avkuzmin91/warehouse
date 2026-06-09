@@ -1,30 +1,36 @@
 import { request, requestForm } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'shipped' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'on_shipping' | 'shipped' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
-  draft:     'Создание',
-  packing:   'В плане',
-  shipped:   'Завершён',
-  cancelled: 'Аннулирован',
+  draft:       'Создание',
+  packing:     'В плане',
+  on_packing:  'На упаковке',
+  on_shipping: 'На отгрузке',
+  shipped:     'Завершён',
+  cancelled:   'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
-  draft:     'Создан',
-  packing:   'Отгружен',
-  shipped:   'Завершён',
-  cancelled: 'Аннулирован',
+  draft:       'Создан',
+  packing:     'Передан на упаковку',
+  on_packing:  'Упакован',
+  on_shipping: 'Отгружен',
+  shipped:     'Завершён',
+  cancelled:   'Аннулирован',
 }
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
-  draft:     '',
-  packing:   'info',
-  shipped:   'success',
-  cancelled: 'danger',
+  draft:       '',
+  packing:     'info',
+  on_packing:  'info',
+  on_shipping: 'info',
+  shipped:     'success',
+  cancelled:   'danger',
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'shipped',
+  'draft', 'packing', 'on_packing', 'on_shipping', 'shipped',
 ]
 
 export type ShipmentCargoType = 'good' | 'defect'
@@ -279,17 +285,58 @@ export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
 
-export function packShipmentLine(docId: string, lineId: string, delta: number, kind: 'good' | 'defect') {
+export type PackingPayload = { good_delta?: number; defect_delta?: number; packed_date: string }
+
+export function recordPacking(docId: string, lineId: string, payload: PackingPayload) {
   return request<{ message: string; packed_good: number; packed_defect: number }>(
     `/shipments/${docId}/lines/${lineId}/pack`,
-    { method: 'POST', body: JSON.stringify({ delta, kind }) },
+    { method: 'POST', body: JSON.stringify(payload) },
   )
 }
 
-export function moveShipmentLineToPacking(docId: string, lineId: string, qty: number, fromZoneId?: string | null) {
+export type ShipmentPackingEntry = {
+  id:               string
+  packed_date:      string | null
+  good:             number
+  defect:           number
+  created_at:       string
+  created_by:       string | null
+  created_by_email: string | null
+  reversed:         boolean
+}
+
+export type ShipmentPackingResponse = {
+  plan:               number
+  available_for_pack: number
+  packed_good:        number
+  packed_defect:      number
+  entries:            ShipmentPackingEntry[]
+}
+
+export function getLinePacking(docId: string, lineId: string, signal?: AbortSignal) {
+  return request<ShipmentPackingResponse>(`/shipments/${docId}/lines/${lineId}/packing`, { signal })
+}
+
+export function reversePackingEntry(docId: string, lineId: string, entryId: string) {
+  return request<{ message: string; packed_good: number; packed_defect: number }>(
+    `/shipments/${docId}/lines/${lineId}/packing/${entryId}/reverse`,
+    { method: 'POST' },
+  )
+}
+
+export type ShipmentMoveAllocation = { from_zone_id: string | null; qty: number }
+
+export function moveShipmentLineToPacking(docId: string, lineId: string, allocations: ShipmentMoveAllocation[]) {
   return request<{ message: string; moved: number }>(
     `/shipments/${docId}/lines/${lineId}/move-to-packing`,
-    { method: 'POST', body: JSON.stringify({ qty, from_zone_id: fromZoneId ?? null }) },
+    { method: 'POST', body: JSON.stringify({ allocations }) },
+  )
+}
+
+export function returnShipmentLineFromPacking(docId: string, lineId: string, qty?: number) {
+  return request<{ message: string; returned: number }>(
+    `/shipments/${docId}/lines/${lineId}/return-from-packing`,
+    { method: 'POST', body: JSON.stringify({ qty: qty ?? null }) },
   )
 }
 

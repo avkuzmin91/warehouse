@@ -6,8 +6,9 @@ export type TaskKind =
   | 'trip_cost'
   | 'receipt_intake'
   | 'receipt_review'
+  | 'shipment_move_in'
   | 'shipment_pack'
-  | 'shipment_move_out'
+  | 'shipment_ship'
 
 export type TaskItem = {
   kind: TaskKind

@@ -76,6 +76,7 @@ export function InventoryShipmentCreatePage() {
   const readyChecks = [
     { ok: !!clientId, error: 'Выберите клиента' },
     { ok: !!shipDate, error: 'Укажите дату отгрузки' },
+    { ok: comment.trim() !== '', error: 'Заполните техническое задание' },
     ...(showCosts ? [{ ok: logisticsCostFilled, error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: !hasOverflow, error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
@@ -282,10 +283,10 @@ export function InventoryShipmentCreatePage() {
                     />
                   </Field>
                 )}
-                <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <Field label="Техническое задание" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                   <AutoGrowTextarea
                     minRows={3}
-                    placeholder="Примечание для команды склада"
+                    placeholder="Опишите задачу для команды склада"
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     style={{ resize: 'vertical', minHeight: 76 }}
@@ -320,7 +321,6 @@ export function InventoryShipmentCreatePage() {
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ width: 180 }}>Магазин</th>
-                    <th style={{ textAlign: 'right', width: 90 }}>Доступно</th>
                     <th style={{ textAlign: 'right', width: 160 }}>План отгрузки</th>
                     <th style={{ width: 124, textAlign: 'center' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
@@ -355,7 +355,6 @@ export function InventoryShipmentCreatePage() {
                             />
                           </div>
                         </td>
-                        <td className="num" style={{ color: 'var(--c-success)', fontWeight: 500 }}>{l.available}</td>
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                             <NumberStep value={l.qty} onChange={(v) => updateQty(l._key, v)} />
@@ -392,7 +391,6 @@ export function InventoryShipmentCreatePage() {
                     <td colSpan={3} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
                       Итого: {lines.length} SKU
                     </td>
-                    <td />
                     <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
                     <td />
                     <td />

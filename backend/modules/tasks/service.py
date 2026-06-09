@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import date
+
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
+    SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_RELOCATING,
     TRIP_DIRECTION_OUTBOUND,
     TRIP_STATUS_AWAITING_ARRIVAL,
     TRIP_STATUS_COSTING,
@@ -99,43 +103,35 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             })
 
     if ROLE_SHIFT in visible_roles or ROLE_WAREHOUSE in visible_roles:
-        # Хэндофф упаковки: пока не упаковано целиком — задача начальнику смены (shipment_pack);
-        # как только good+defect = план — задача кладовщику вывезти из зоны упаковки (shipment_move_out).
+        # Задача отгрузки — прямая функция статуса:
+        #   «В плане» (+срок наступил) → кладовщик передаёт на упаковку;
+        #   «На упаковке»              → начальник смены разбивает годный/брак;
+        #   «Перемещение»              → кладовщик раскладывает по местам к рейсу.
+        today = date.today().isoformat()
         shipment_rows = connection.execute(
-            """
-            SELECT d.id, d.doc_number, d.status, d.updated_at, d.created_at,
-                   COALESCE(SUM(l.qty), 0) AS plan,
-                   COALESCE((
-                       SELECT SUM(CASE
-                           WHEN zr.to_status IN ('good','defect')   THEN zr.qty
-                           WHEN zr.from_status IN ('good','defect') THEN -zr.qty
-                           ELSE 0 END)
-                       FROM zone_relocations zr
-                       JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
-                       WHERE sl2.doc_id = d.id
-                   ), 0) AS packed
-            FROM shipment_docs d
-            LEFT JOIN shipment_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
-            WHERE COALESCE(d.is_deleted, 0) = 0 AND d.status = ?
-            GROUP BY d.id
-            """,
-            (SHIPMENT_STATUS_PACKING,),
+            "SELECT id, doc_number, status, ship_date, updated_at, created_at FROM shipment_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?)",
+            (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING),
         ).fetchall()
         for r in shipment_rows:
-            plan = int(r["plan"] or 0)
-            packed = int(r["packed"] or 0)
-            full = plan > 0 and packed >= plan
-            since = r["updated_at"] or r["created_at"]
-            base = {
+            status = str(r["status"])
+            if status == SHIPMENT_STATUS_PACKING:
+                ship_date = r["ship_date"]
+                if not ship_date or str(ship_date) > today:
+                    continue  # срок передачи на упаковку ещё не наступил
+                task_role, kind, title = ROLE_WAREHOUSE, "shipment_move_in", f"Передать на упаковку {r['doc_number']}"
+            elif status == SHIPMENT_STATUS_ON_PACKING:
+                task_role, kind, title = ROLE_SHIFT, "shipment_pack", f"Упаковать {r['doc_number']}"
+            else:  # SHIPMENT_STATUS_RELOCATING
+                task_role, kind, title = ROLE_WAREHOUSE, "shipment_relocate", f"Разложить по местам {r['doc_number']}"
+            if task_role not in visible_roles:
+                continue
+            tasks.append({
+                "kind": kind, "title": title,
                 "doc_type": "shipment", "doc_id": str(r["id"]),
-                "doc_number": str(r["doc_number"]), "status": str(r["status"]), "since": since,
-            }
-            if not full and ROLE_SHIFT in visible_roles:
-                tasks.append({**base, "kind": "shipment_pack", "role": ROLE_SHIFT,
-                              "title": f"Упаковать отгрузку {r['doc_number']}"})
-            if full and ROLE_WAREHOUSE in visible_roles:
-                tasks.append({**base, "kind": "shipment_move_out", "role": ROLE_WAREHOUSE,
-                              "title": f"Вывезти из зоны упаковки {r['doc_number']}"})
+                "doc_number": str(r["doc_number"]), "status": status,
+                "role": task_role, "since": r["updated_at"] or r["created_at"],
+            })
 
     tasks.sort(key=lambda t: (t["since"] or ""))
     return tasks

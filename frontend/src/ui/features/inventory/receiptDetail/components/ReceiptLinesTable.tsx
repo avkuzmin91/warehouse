@@ -104,9 +104,9 @@ export function ReceiptLinesTable(props: Props) {
               background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5 }}>
               <span style={{ fontWeight: 700 }}>Итого</span>
               <span style={{ color: 'var(--c-text-subtle)' }}>{skuCount} SKU</span>
-              <span style={{ color: 'var(--c-text-subtle)' }}>План <b className="mono" style={{ color: 'var(--c-text)' }}>{planTotal}</b></span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>План <b className="num" style={{ color: 'var(--c-text)' }}>{planTotal}</b></span>
               {showAccepted && (
-                <span style={{ color: 'var(--c-text-subtle)' }}>Принято <b className="mono" style={{ color: 'var(--c-text)' }}>{acceptedTotal}</b></span>
+                <span style={{ color: 'var(--c-text-subtle)' }}>Принято <b className="num" style={{ color: 'var(--c-text)' }}>{acceptedTotal}</b></span>
               )}
             </div>
           </td>

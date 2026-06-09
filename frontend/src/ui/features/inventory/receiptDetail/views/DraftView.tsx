@@ -338,11 +338,11 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
             </CardHead>
             <div className="totals-grid">
               <span className="key">SKU</span>
-              <span className="val mono">{totalSku}</span>
+              <span className="val num">{totalSku}</span>
               <span className="key">Строк</span>
-              <span className="val mono">{lines.length}</span>
+              <span className="val num">{lines.length}</span>
               <span className="key">План, шт</span>
-              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
+              <span className="val num" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
             </div>
           </Card>
         </div>

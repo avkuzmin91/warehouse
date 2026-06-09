@@ -383,12 +383,15 @@ def insert_inventory_move(
     to_zone_id: str | None, to_zone_name: str | None,
     qty: int, user_id: str | None,
     shipment_line_id: str | None = None, comment: str | None = None,
+    packed_date: str | None = None, pack_entry_id: str | None = None,
+    reverses_id: str | None = None,
 ) -> None:
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
     Покрывает перемещение (from_status=to_status), подготовку к упаковке
     (on_review→on_review со сменой зоны) и QC-конвертацию (on_review→good/defect).
     Легаси-колонка status = to_status (для NOT NULL до итерации 2).
+    packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки.
     """
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -397,12 +400,14 @@ def insert_inventory_move(
         """INSERT INTO zone_relocations
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
             client_id,client_name,from_status,to_status,
-            from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
+            packed_date,pack_entry_id,reverses_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_status, to_status,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
-         datetime.now(UTC).isoformat(), user_id, shipment_line_id),
+         datetime.now(UTC).isoformat(), user_id, shipment_line_id,
+         packed_date, pack_entry_id, reverses_id),
     )
 
 

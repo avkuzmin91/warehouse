@@ -26,7 +26,7 @@ def client_id():
 def _packing_shipment(admin_client, client_id: str) -> str:
     r = admin_client.post("/shipments", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
-        "destination": "Москва", "ship_date": "2026-06-10", "lines": [],
+        "destination": "Москва", "ship_date": "2026-06-10", "comment": "ТЗ", "lines": [],
     })
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]

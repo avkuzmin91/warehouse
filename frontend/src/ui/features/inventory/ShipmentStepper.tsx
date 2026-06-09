@@ -9,27 +9,20 @@ import type { ShipmentOp, ShipmentStatus } from '../../../api/shipmentsApi'
 
 function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, string>> {
   const ts: Partial<Record<ShipmentStatus, string>> = {}
-  const advances: string[] = []
 
+  // Комментарий advance-операции — «<from> → <to>» с кодами статусов; берём целевой код.
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
     if (op.op_type !== 'advance') continue
 
     const comment = op.comment ?? ''
-    if (comment.includes('→ shipped') || comment.includes('-> shipped')) {
-      ts.shipped = op.created_at
-    } else if (comment.includes('→ packing') || comment.includes('-> packing')) {
-      ts.packing = op.created_at
-    } else {
-      advances.push(op.created_at)
+    for (const s of SHIPMENT_STATUS_ORDER) {
+      if (s === 'draft') continue
+      if (!ts[s] && (comment.includes(`→ ${s}`) || comment.includes(`-> ${s}`))) {
+        ts[s] = op.created_at
+      }
     }
   }
-
-  const advanceTargets: ShipmentStatus[] = ['packing', 'shipped']
-  advances.forEach((at, i) => {
-    const key = advanceTargets[i]
-    if (key && !ts[key]) ts[key] = at
-  })
 
   return ts
 }

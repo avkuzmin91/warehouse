@@ -124,7 +124,7 @@ export function ReviewView({ detail }: Props) {
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
               <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Принято, ед.</span>
               <span style={{ fontSize: 13 }}>
-                <b className="mono">{arrivedUnits}</b>
+                <b className="num">{arrivedUnits}</b>
                 <span style={{ color: 'var(--c-text-subtle)' }}> / {plannedUnits}</span>
                 <span style={{ marginLeft: 8, fontWeight: 600, color: acceptedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)' }}>{acceptedPct}%</span>
               </span>

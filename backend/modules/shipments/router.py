@@ -12,6 +12,7 @@ from config import (
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
+    SHIPMENT_CANCELLABLE_STATUSES,
     SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_REVERT_TRANSITIONS,
@@ -35,6 +36,7 @@ from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
     ShipmentDocUpdate,
+    ShipmentFinishRelocationPayload,
     ShipmentLineFile,
     ShipmentLineIn,
     ShipmentLineItem,
@@ -45,16 +47,25 @@ from modules.shipments.schemas import (
     ShipmentListResponse,
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
+    ShipmentPackingEntry,
+    ShipmentPackingResponse,
     ShipmentPriorityUpdate,
+    ShipmentReturnFromPackingPayload,
 )
 from modules.shipments.service import (
     advance_shipment,
+    finish_relocation,
+    line_on_packing_qty,
+    line_packed_breakdown,
+    list_packing_entries,
     move_line_to_packing,
     next_doc_number,
     normalize_cargo_type,
-    pack_shipment_line,
+    record_packing,
+    return_line_from_packing,
+    reverse_packing_entry,
 )
-from security import can_view_costs, ensure_cost_access, ensure_shipment_priority_access
+from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
 router = APIRouter(tags=["shipments"])
 
@@ -458,15 +469,10 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
 
-        available_for_pack: dict[str, int] = {}
-        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
-            from modules.balances.service import get_available_in_zone, get_packing_zone
-            pk_id, _pk_name = get_packing_zone(conn)
-            for l in lines_rows:
-                available_for_pack[str(l["id"])] = get_available_in_zone(
-                    conn, product_id=str(l["product_id"]), color_id=l["color_id"], size_id=l["size_id"],
-                    client_id=row["client_id"], zone_id=pk_id, status="on_packing",
-                )
+        available_for_pack = {
+            str(l["id"]): line_on_packing_qty(conn, str(l["id"]))
+            for l in lines_rows
+        }
 
     files_by_line: dict[str, list[ShipmentLineFile]] = {}
     for f in files_rows:
@@ -579,6 +585,9 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
 def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_manager)):
     now = _now()
     uid = str(user["id"])
+    fields = body.model_dump(exclude_unset=True)
+    if fields:
+        ensure_shipment_planning_access(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status, actual_ship_date, priority_rank, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -588,7 +597,6 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
         status = str(row["status"])
         if status not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
-        fields = body.model_dump(exclude_unset=True)
         if "logistics_cost" in fields:
             ensure_cost_access(user)
         if "priority_rank" in fields:
@@ -638,6 +646,7 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
 
 @router.post("/shipments/{doc_id}/lines")
 def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manager)):
+    ensure_shipment_planning_access(user)
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
@@ -664,6 +673,7 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
 
 @router.patch("/shipments/{doc_id}/lines/{line_id}")
 def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=Depends(_get_manager)):
+    ensure_shipment_planning_access(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -691,20 +701,59 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
 def pack_line(doc_id: str, line_id: str, body: ShipmentLinePackPayload, user=Depends(_get_packer)):
     uid = str(user["id"])
     with get_connection() as conn:
-        packed = pack_shipment_line(conn, doc_id, line_id, body.delta, body.kind, uid)
+        packed = record_packing(conn, doc_id, line_id, body.good_delta, body.defect_delta, body.packed_date, uid)
+    return {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+
+
+@router.get("/shipments/{doc_id}/lines/{line_id}/packing", response_model=ShipmentPackingResponse)
+def get_line_packing(doc_id: str, line_id: str, user=Depends(_get_viewer)):
+    with get_connection() as conn:
+        line = conn.execute(
+            "SELECT qty FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        packed = line_packed_breakdown(conn, line_id)
+        return ShipmentPackingResponse(
+            plan=int(line["qty"] or 0),
+            available_for_pack=line_on_packing_qty(conn, line_id),
+            packed_good=packed["good"],
+            packed_defect=packed["defect"],
+            entries=[ShipmentPackingEntry(**e) for e in list_packing_entries(conn, line_id)],
+        )
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/packing/{entry_id}/reverse")
+def reverse_line_packing(doc_id: str, line_id: str, entry_id: str, user=Depends(_get_packer)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        packed = reverse_packing_entry(conn, doc_id, line_id, entry_id, uid)
     return {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/move-to-packing")
 def move_to_packing(doc_id: str, line_id: str, body: ShipmentMoveToPackingPayload, user=Depends(_get_warehouse)):
     uid = str(user["id"])
+    allocations = body.to_allocations()
+    if not allocations:
+        raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
     with get_connection() as conn:
-        moved = move_line_to_packing(conn, doc_id, line_id, body.qty, body.from_zone_id, uid)
+        moved = move_line_to_packing(conn, doc_id, line_id, allocations, uid)
     return {"message": "ok", "moved": moved}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/return-from-packing")
+def return_from_packing(doc_id: str, line_id: str, body: ShipmentReturnFromPackingPayload, user=Depends(_get_warehouse)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        returned = return_line_from_packing(conn, doc_id, line_id, uid, body.qty)
+    return {"message": "ok", "returned": returned}
 
 
 @router.delete("/shipments/{doc_id}/lines/{line_id}")
 def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
+    ensure_shipment_planning_access(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -722,10 +771,19 @@ def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/shipments/{doc_id}/advance")
-def advance_shipment_status(doc_id: str, user=Depends(_get_manager)):
+def advance_shipment_status(doc_id: str, user=Depends(_get_viewer)):
+    uid = str(user["id"])
+    role = str(user["role"])
+    with get_connection() as conn:
+        next_status = advance_shipment(conn, doc_id, uid, role)
+    return {"message": next_status}
+
+
+@router.post("/shipments/{doc_id}/finish-relocation")
+def finish_shipment_relocation(doc_id: str, body: ShipmentFinishRelocationPayload, user=Depends(_get_warehouse)):
     uid = str(user["id"])
     with get_connection() as conn:
-        next_status = advance_shipment(conn, doc_id, uid)
+        next_status = finish_relocation(conn, doc_id, body.lines, uid)
     return {"message": next_status}
 
 
@@ -739,8 +797,8 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
-            raise HTTPException(status_code=400, detail="Нельзя отменить отправленный документ")
+        if str(row["status"]) not in SHIPMENT_CANCELLABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Аннулировать можно только до передачи на упаковку")
         conn.execute(
             "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
             (SHIPMENT_STATUS_CANCELLED, now, doc_id),

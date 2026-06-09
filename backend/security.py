@@ -51,8 +51,8 @@ def ensure_dashboard_access(user: Mapping[str, Any]) -> None:
 
 
 def ensure_packing_access(user: Mapping[str, Any]) -> None:
-    """Внесение факта упаковки: менеджерский состав, кладовщик и начальник смены."""
-    if user["role"] not in ("manager", "admin", "warehouse_manager", "shift_supervisor"):
+    """Внесение результата упаковки: менеджерский состав и начальник смены."""
+    if user["role"] not in ("manager", "admin", "shift_supervisor"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -76,8 +76,20 @@ def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
 
+def can_edit_shipment_planning(user: Mapping[str, Any]) -> bool:
+    return user["role"] in ("admin", "manager")
+
+
 def ensure_shipment_priority_access(user: Mapping[str, Any]) -> None:
     if not can_edit_shipment_priority(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def ensure_shipment_planning_access(user: Mapping[str, Any]) -> None:
+    if not can_edit_shipment_planning(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,

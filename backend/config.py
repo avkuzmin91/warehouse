@@ -114,29 +114,57 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # Отгрузки (shipment_*)
 # ---------------------------------------------------------------------------
 
-SHIPMENT_STATUS_DRAFT     = "draft"
-SHIPMENT_STATUS_PACKING   = "packing"
-SHIPMENT_STATUS_SHIPPED   = "shipped"
-SHIPMENT_STATUS_CANCELLED = "cancelled"
+SHIPMENT_STATUS_DRAFT         = "draft"
+SHIPMENT_STATUS_PACKING       = "packing"
+SHIPMENT_STATUS_ON_PACKING    = "on_packing"
+SHIPMENT_STATUS_RELOCATING    = "relocating"
+SHIPMENT_STATUS_AWAITING_TRIP = "awaiting_trip"
+SHIPMENT_STATUS_SHIPPED       = "shipped"
+SHIPMENT_STATUS_CANCELLED     = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_ON_PACKING,
+    SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_CANCELLED,
 ]
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:     "Создание",
-    SHIPMENT_STATUS_PACKING:   "В плане",
-    SHIPMENT_STATUS_SHIPPED:   "Завершён",
-    SHIPMENT_STATUS_CANCELLED: "Аннулирован",
+    SHIPMENT_STATUS_DRAFT:         "Создание",
+    SHIPMENT_STATUS_PACKING:       "В плане",
+    SHIPMENT_STATUS_ON_PACKING:    "На упаковке",
+    SHIPMENT_STATUS_RELOCATING:    "Перемещение",
+    SHIPMENT_STATUS_AWAITING_TRIP: "Ожидает рейс",
+    SHIPMENT_STATUS_SHIPPED:       "Завершён",
+    SHIPMENT_STATUS_CANCELLED:     "Аннулирован",
 }
 
+# Плановые переходы через /advance. relocating → awaiting_trip не здесь: его делает
+# отдельный эндпоинт «Готово к рейсу» (перемещение по местам). awaiting_trip → shipped —
+# при отправке привязанного рейса (логистика), тоже вне /advance.
 SHIPMENT_TRANSITIONS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_PACKING:    SHIPMENT_STATUS_ON_PACKING,
+    SHIPMENT_STATUS_ON_PACKING: SHIPMENT_STATUS_RELOCATING,
 }
+
+# Роли, которым разрешён переход НА данный статус (целевой статус → роли).
+# В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
+# начальник смены упаковал годный/брак и передаёт кладовщику.
+SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_manager"}),
+    SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager"}),
+    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor"}),
+}
+
+# Аннулировать можно только до передачи на упаковку включительно.
+SHIPMENT_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_PACKING,
+})
 
 SHIPMENT_REVERT_TRANSITIONS: dict[str, str] = {}
 
@@ -153,6 +181,8 @@ SHIPMENT_OP_DOC_UPDATE = "doc_update"
 SHIPMENT_OP_PRIORITY_UPDATE = "priority_update"
 SHIPMENT_OP_PACK            = "pack"
 SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
+SHIPMENT_OP_MOVE_RETURN     = "move_return"
+SHIPMENT_OP_RELOCATE        = "relocate"
 
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
