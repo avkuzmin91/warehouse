@@ -6,14 +6,38 @@ import {
   updateProductType,
   createSize,
   updateSize,
+  fetchSimpleDictionaryPage,
+  setUnloadingZonePacking,
+  setUnloadingZoneShipping,
 } from '../../../api/adminApi'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import { Drawer } from '../../feedback/Drawer'
+import { useConfirm } from '../../feedback/ConfirmDialog'
+import { useToast } from '../../feedback/Toast'
 import { Field, Input } from '../../primitives/Input'
 import { Toggle } from '../../primitives/Checkbox'
+import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
+
+type ZoneRoleKey = 'packing' | 'shipping'
+
+const ZONE_ROLES: {
+  key: ZoneRoleKey
+  label: string
+  instrumental: string
+  icon: 'forklift' | 'truckOut'
+  tone: 'info' | 'warning'
+  assign: (id: string) => Promise<{ message: string }>
+}[] = [
+  { key: 'packing', label: 'Зона упаковки', instrumental: 'зоной упаковки', icon: 'forklift', tone: 'info', assign: setUnloadingZonePacking },
+  { key: 'shipping', label: 'Зона отгрузки', instrumental: 'зоной отгрузки', icon: 'truckOut', tone: 'warning', assign: setUnloadingZoneShipping },
+]
+
+function zoneHasRole(zone: DictionaryItem, key: ZoneRoleKey): boolean {
+  return key === 'packing' ? !!zone.is_packing_zone : !!zone.is_shipping_zone
+}
 
 const DEFAULT_COLOR_HEX = '#1a1a18'
 
@@ -55,6 +79,13 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
   const [reqSize, setReqSize] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [zones, setZones] = useState<DictionaryItem[]>([])
+  const [roleFlags, setRoleFlags] = useState<Record<ZoneRoleKey, boolean>>({ packing: false, shipping: false })
+  const [assigning, setAssigning] = useState(false)
+  const confirm = useConfirm()
+  const toast = useToast()
+
+  const isZoneEdit = apiType === 'unloading-zones' && !isNew && !!initial
 
   useEffect(() => {
     if (!open) return
@@ -71,7 +102,46 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
       setReqColor(false)
       setReqSize(false)
     }
+    setRoleFlags({
+      packing: !!initial && 'is_packing_zone' in initial && !!initial.is_packing_zone,
+      shipping: !!initial && 'is_shipping_zone' in initial && !!initial.is_shipping_zone,
+    })
   }, [open, initial, apiType])
+
+  useEffect(() => {
+    if (!open || apiType !== 'unloading-zones' || isNew) return
+    fetchSimpleDictionaryPage('/unloading-zones', 'name', { page: 1, limit: 100 })
+      .then((res) => setZones(res.items))
+      .catch(() => setZones([]))
+  }, [open, apiType, isNew])
+
+  async function handleAssignRole(role: (typeof ZONE_ROLES)[number]) {
+    if (!initial) return
+    const holder = zones.find((z) => z.id !== initial.id && zoneHasRole(z, role.key))
+    const ok = await confirm({
+      title: `Назначить ${role.instrumental}?`,
+      body: holder
+        ? `Роль «${role.label}» перейдёт с места «${holder.name}» на «${initial.name}».`
+        : `Место «${initial.name}» станет ${role.instrumental}.`,
+      confirmLabel: 'Назначить',
+    })
+    if (!ok) return
+    setAssigning(true)
+    try {
+      await role.assign(initial.id)
+      setRoleFlags((prev) => ({ ...prev, [role.key]: true }))
+      setZones((prev) => prev.map((z) => ({
+        ...z,
+        [role.key === 'packing' ? 'is_packing_zone' : 'is_shipping_zone']: z.id === initial.id,
+      })))
+      toast(`${role.label} назначена`, 'success')
+      onSaved()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Введите значение'); return }
@@ -176,6 +246,42 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           </div>
         </div>
       </Field>
+
+      {isZoneEdit && initial && (
+        <Field label="Роли зоны" help="Каждая роль назначена только одному месту хранения">
+          <div className="col gap-8" style={{ padding: '10px 12px', background: 'var(--c-bg-sunken)', borderRadius: 6 }}>
+            {ZONE_ROLES.map((role) => {
+              const holder = zones.find((z) => z.id !== initial.id && zoneHasRole(z, role.key))
+              return (
+                <div key={role.key} className="row gap-8" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div className="row gap-8" style={{ fontSize: 13, fontWeight: 500 }}>
+                      <Icon name={role.icon} size={13} />
+                      {role.label}
+                    </div>
+                    <div className="text-xs subtle">
+                      {roleFlags[role.key]
+                        ? 'Чтобы снять роль, назначьте её другому месту'
+                        : holder ? `Сейчас: ${holder.name}` : 'Не назначена'}
+                    </div>
+                  </div>
+                  {roleFlags[role.key] ? (
+                    <Badge tone={role.tone}>Назначена</Badge>
+                  ) : (
+                    <button
+                      className="btn ghost sm"
+                      disabled={assigning}
+                      onClick={() => void handleAssignRole(role)}
+                    >
+                      Назначить
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </Field>
+      )}
 
       {!isNew && initial && (
         <div style={{ padding: '12px 14px', background: 'var(--c-bg-sunken)', borderRadius: 6 }}>
