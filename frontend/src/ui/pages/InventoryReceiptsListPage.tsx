@@ -341,7 +341,7 @@ export function InventoryReceiptsListPage() {
                       </Td>
                       <Td>
                         {(() => {
-                          const pct = item.total_planned > 0 ? Math.min(100, Math.round(item.total_accepted_qty / item.total_planned * 100)) : 0
+                          const pct = item.total_planned > 0 ? Math.min(100, Math.floor(item.total_accepted_qty / item.total_planned * 100)) : 0
                           const isActive = item.status === 'done'
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           return (

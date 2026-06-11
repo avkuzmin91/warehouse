@@ -96,7 +96,7 @@ export function ReceiptLinesView({ search, sku, clientId, status, overdue, dateF
                 <Td>
                   {(() => {
                     const accepted = it.accepted_qty ?? 0
-                    const pct = it.planned_qty > 0 ? Math.min(100, Math.round(accepted / it.planned_qty * 100)) : 0
+                    const pct = it.planned_qty > 0 ? Math.min(100, Math.floor(accepted / it.planned_qty * 100)) : 0
                     if (it.status !== 'done') return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                     return (
                       <div style={{ minWidth: 120 }}>
