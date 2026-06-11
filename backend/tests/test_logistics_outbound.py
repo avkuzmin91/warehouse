@@ -13,6 +13,7 @@ import pytest
 if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
+from dbconn import get_connection
 from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
 
 
@@ -34,6 +35,17 @@ def _packing_shipment(admin_client, client_id: str) -> str:
     assert adv.status_code == 200, adv.text
     assert adv.json()["message"] == "packing"
     return doc_id
+
+
+def _force_status(doc_id: str, status: str) -> None:
+    """Тестовый шорткат: проставить статус отгрузки напрямую.
+
+    Полный путь до «Ожидает рейс» (приёмка → упаковка → раскладка по местам)
+    покрыт в test_packing_qc; здесь нас интересует только каскад/гейт рейса.
+    """
+    with get_connection() as conn:
+        conn.execute("UPDATE shipment_docs SET status = ? WHERE id = ?", (status, doc_id))
+        conn.commit()
 
 
 def _handoff_ready_outbound(admin_client, shipment_id: str) -> str:
@@ -77,6 +89,9 @@ def test_outbound_full_flow_cascades_shipment_to_shipped(admin_client, client_id
     arrival = admin_client.post(f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"})
     assert arrival.json()["message"] == "unloading"
 
+    # Кладовщик подготовил отгрузку к рейсу («Ожидает рейс») — теперь погрузку можно завершить.
+    _force_status(shipment_id, "awaiting_trip")
+
     unload = admin_client.post(f"/trips/{trip_id}/unload", json={
         "load_factor": "full",
         "unload_started_at": "2026-06-10T07:35",
@@ -85,7 +100,7 @@ def test_outbound_full_flow_cascades_shipment_to_shipped(admin_client, client_id
     assert unload.status_code == 200, unload.text
     assert unload.json()["message"] == "costing"
 
-    # Каскад: привязанная отгрузка packing → shipped, факт. дата отправления проставлена.
+    # Каскад: привязанная отгрузка awaiting_trip → shipped, факт. дата отправления проставлена.
     ship = admin_client.get(f"/shipments/{shipment_id}").json()
     assert ship["status"] == "shipped"
     assert ship["actual_ship_date"] == "2026-06-10"
@@ -95,6 +110,35 @@ def test_outbound_full_flow_cascades_shipment_to_shipped(admin_client, client_id
     close = admin_client.post(f"/trips/{trip_id}/close")
     assert close.status_code == 200, close.text
     assert close.json()["message"] == "closed"
+
+
+def test_outbound_unload_blocked_until_shipments_awaiting_trip(admin_client, client_id):
+    shipment_id = _packing_shipment(admin_client, client_id)
+    trip_id = _handoff_ready_outbound(admin_client, shipment_id)
+
+    assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+    assert admin_client.post(
+        f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"}
+    ).json()["message"] == "unloading"
+
+    # Отгрузка ещё «В плане» — завершить погрузку нельзя.
+    blocked = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
+    assert blocked.status_code == 400, blocked.text
+    assert "не готовы к рейсу" in blocked.json()["detail"]
+
+    # Рейс остался в погрузке, отгрузка не отправлена.
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
+    assert admin_client.get(f"/shipments/{shipment_id}").json()["status"] == "packing"
+
+    # Готовим к рейсу — погрузку можно завершить, отгрузка уходит в shipped.
+    _force_status(shipment_id, "awaiting_trip")
+    ok = admin_client.post(f"/trips/{trip_id}/unload", json={
+        "load_factor": "full",
+        "unload_started_at": "2026-06-10T07:35",
+        "unload_finished_at": "2026-06-10T08:10",
+    })
+    assert ok.status_code == 200, ok.text
+    assert admin_client.get(f"/shipments/{shipment_id}").json()["status"] == "shipped"
 
 
 def test_outbound_handoff_requires_linked_shipment(admin_client):
@@ -143,7 +187,9 @@ def test_shipment_candidates_exclude_shipments_linked_to_other_trips(admin_clien
     }).json()["message"]
     assert own_trip and other_trip
 
-    res = admin_client.get(f"/shipments?status=packing&available_for_trip_id={own_trip}&limit=200")
+    res = admin_client.get(
+        f"/shipments?status=packing&available_for_trip_id={own_trip}&client_id={client_id}&limit=200"
+    )
     assert res.status_code == 200, res.text
     ids = {item["id"] for item in res.json()["items"]}
     assert own in ids
@@ -161,6 +207,242 @@ def test_cross_direction_linking_rejected(admin_client, client_id):
 
     bad_rec = admin_client.post(f"/trips/{outbound}/receipts", json={"receipt_doc_ids": ["whatever"]})
     assert bad_rec.status_code == 400, bad_rec.text
+
+
+def _seed_defect_in_zone(client_id: str, pos: dict, zone_id: str, qty: int) -> None:
+    """Принятое поступление в зоне + смена качества → брак «На хранении» в месте."""
+    import uuid as _uuid
+
+    doc_id = str(_uuid.uuid4())
+    line_id = str(_uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO receipt_docs (id, doc_number, client_id, status, is_deleted, created_at, created_by)
+               VALUES (?, ?, ?, 'done', 0, NOW(), 'test')""",
+            (doc_id, f"WH-T-{doc_id}", client_id),
+        )
+        conn.execute(
+            """INSERT INTO receipt_lines
+               (id, doc_id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
+                planned_qty, accepted_qty, storage_zone_id, is_deleted, created_at, created_by)
+               VALUES (?, ?, ?, 'Брак-товар', 'TST-DEF', ?, 'Red', ?, NULL, ?, ?, ?, 0, NOW(), 'test')""",
+            (line_id, doc_id, pos["product_id"], pos["color_id"], pos["size_id"], qty, qty, zone_id),
+        )
+        conn.execute(
+            """INSERT INTO zone_relocations
+               (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
+                client_id, from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty, created_at)
+               VALUES (?, ?, 'Брак-товар', 'TST-DEF', ?, 'Red', ?, NULL,
+                       ?, 'storage', 'storage', 'good', 'defect', ?, ?, ?, NOW())""",
+            (str(_uuid.uuid4()), pos["product_id"], pos["color_id"], pos["size_id"], client_id, zone_id, zone_id, qty),
+        )
+        conn.commit()
+
+
+def _storage_defect_in_zone(client_id: str, pos: dict, zone_id: str) -> int:
+    from modules.balances.service import get_available_in_zone
+
+    with get_connection() as conn:
+        return get_available_in_zone(
+            conn,
+            product_id=pos["product_id"], color_id=pos["color_id"], size_id=pos["size_id"],
+            client_id=client_id, zone_id=zone_id, op="storage", quality="defect",
+        )
+
+
+def _shipping_zone_id() -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM unloading_zones WHERE is_shipping_zone = 1 AND COALESCE(is_deleted, 0) = 0 "
+            "ORDER BY created_at LIMIT 1"
+        ).fetchone()
+    assert row, "Не настроена «Зона отгрузки» (миграция 0043)"
+    return str(row["id"])
+
+
+def _ready_defect_in_zone(client_id: str, pos: dict, zone_id: str) -> int:
+    from modules.balances.service import get_available_in_zone
+
+    with get_connection() as conn:
+        return get_available_in_zone(
+            conn,
+            product_id=pos["product_id"], color_id=pos["color_id"], size_id=pos["size_id"],
+            client_id=client_id, zone_id=zone_id, op="ready", quality="defect",
+        )
+
+
+def test_defect_shipment_prepared_by_warehouse_then_shipped(admin_client, client_id):
+    """Брак-отгрузка: draft → relocating (кладовщик готовит) → awaiting_trip → shipped."""
+    import uuid as _uuid
+
+    pos = {"product_id": str(_uuid.uuid4()), "color_id": str(_uuid.uuid4()), "size_id": None}
+    zone_id = str(_uuid.uuid4())
+    shipping_zone = _shipping_zone_id()
+    _seed_defect_in_zone(client_id, pos, zone_id, 7)
+    assert _storage_defect_in_zone(client_id, pos, zone_id) == 7
+
+    try:
+        create = admin_client.post("/shipments", json={
+            "cargo_type": "defect", "client_id": client_id, "client_name": "Test Client",
+            "destination": "Москва", "ship_date": "2026-06-10",
+            "lines": [{**pos, "product_name": "Брак-товар", "product_sku": "TST-DEF",
+                       "color_name": "Red", "size_name": None, "qty": 5}],
+        })
+        assert create.status_code == 200, create.text
+        shipment_id = create.json()["message"]
+
+        # draft → relocating: задача кладовщику подготовить брак.
+        adv = admin_client.post(f"/shipments/{shipment_id}/advance")
+        assert adv.status_code == 200, adv.text
+        assert adv.json()["message"] == "relocating"
+        assert _storage_defect_in_zone(client_id, pos, zone_id) == 7
+
+        # Кладовщик выбирает источник и переносит брак в зону отгрузки.
+        line_id = admin_client.get(f"/shipments/{shipment_id}").json()["lines"][0]["id"]
+        finish = admin_client.post(f"/shipments/{shipment_id}/finish-defect-relocation", json={
+            "lines": [{"line_id": line_id,
+                       "sources": [{"zone_id": zone_id, "zone_name": "Зона брака", "qty": 5}]}],
+        })
+        assert finish.status_code == 200, finish.text
+        assert finish.json()["message"] == "awaiting_trip"
+
+        # Брак зарезервирован: ушёл со хранения в ready/defect@зона отгрузки.
+        assert _storage_defect_in_zone(client_id, pos, zone_id) == 2
+        assert _ready_defect_in_zone(client_id, pos, shipping_zone) == 5
+
+        trip_id = _handoff_ready_outbound(admin_client, shipment_id)
+        assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+        assert admin_client.post(
+            f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"}
+        ).json()["message"] == "unloading"
+        unload = admin_client.post(f"/trips/{trip_id}/unload", json={
+            "load_factor": "full",
+            "unload_started_at": "2026-06-10T07:35",
+            "unload_finished_at": "2026-06-10T08:10",
+        })
+        assert unload.status_code == 200, unload.text
+
+        ship = admin_client.get(f"/shipments/{shipment_id}").json()
+        assert ship["status"] == "shipped"
+        assert ship["lines"][0]["shipped_qty"] == 5
+        # Брак списан из зоны отгрузки журнальным движением.
+        assert _storage_defect_in_zone(client_id, pos, zone_id) == 2
+        assert _ready_defect_in_zone(client_id, pos, shipping_zone) == 0
+    finally:
+        with get_connection() as conn:
+            for r in conn.execute("SELECT id FROM receipt_docs WHERE client_id = ?", (client_id,)).fetchall():
+                conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (client_id,))
+            conn.commit()
+
+
+def test_defect_shipment_gates(admin_client, client_id):
+    """Гейты брак-отгрузки: строки и общий остаток при планировании, источники при подготовке."""
+    import uuid as _uuid
+
+    pos = {"product_id": str(_uuid.uuid4()), "color_id": str(_uuid.uuid4()), "size_id": None}
+    zone_id = str(_uuid.uuid4())
+    empty_zone_id = str(_uuid.uuid4())
+
+    try:
+        # Без строк — 400.
+        empty = admin_client.post("/shipments", json={
+            "cargo_type": "defect", "client_id": client_id, "client_name": "Test Client", "lines": [],
+        })
+        empty_id = empty.json()["message"]
+        no_lines = admin_client.post(f"/shipments/{empty_id}/advance")
+        assert no_lines.status_code == 400, no_lines.text
+
+        # Суммарного брака по клиенту нет — 409 уже при планировании.
+        doc = admin_client.post("/shipments", json={
+            "cargo_type": "defect", "client_id": client_id, "client_name": "Test Client",
+            "lines": [{**pos, "product_name": "Брак-товар", "product_sku": "TST-DEF",
+                       "color_name": "Red", "size_name": None, "qty": 3}],
+        })
+        doc_id = doc.json()["message"]
+        no_stock = admin_client.post(f"/shipments/{doc_id}/advance")
+        assert no_stock.status_code == 409, no_stock.text
+
+        _seed_defect_in_zone(client_id, pos, zone_id, 4)
+        adv = admin_client.post(f"/shipments/{doc_id}/advance")
+        assert adv.status_code == 200, adv.text
+        assert adv.json()["message"] == "relocating"
+
+        # Задача кладовщику: подготовить брак к отгрузке (без даты — сразу).
+        from modules.tasks.service import list_my_tasks
+        with get_connection() as conn:
+            tasks = list_my_tasks(conn, user={"role": "warehouse_manager"})
+        assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_defect_prepare" for t in tasks)
+
+        line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+
+        # Источники не покрывают план строки — 400.
+        partial = admin_client.post(f"/shipments/{doc_id}/finish-defect-relocation", json={
+            "lines": [{"line_id": line_id, "sources": [{"zone_id": zone_id, "qty": 2}]}],
+        })
+        assert partial.status_code == 400, partial.text
+
+        # В выбранном месте брака нет — 409.
+        wrong_zone = admin_client.post(f"/shipments/{doc_id}/finish-defect-relocation", json={
+            "lines": [{"line_id": line_id,
+                       "sources": [{"zone_id": empty_zone_id, "zone_name": "Пустая зона", "qty": 3}]}],
+        })
+        assert wrong_zone.status_code == 409, wrong_zone.text
+
+        ok = admin_client.post(f"/shipments/{doc_id}/finish-defect-relocation", json={
+            "lines": [{"line_id": line_id,
+                       "sources": [{"zone_id": zone_id, "zone_name": "Зона брака", "qty": 3}]}],
+        })
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["message"] == "awaiting_trip"
+    finally:
+        with get_connection() as conn:
+            for r in conn.execute("SELECT id FROM receipt_docs WHERE client_id = ?", (client_id,)).fetchall():
+                conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (client_id,))
+            conn.commit()
+
+
+def test_defect_shipment_cancel_returns_stock(admin_client, client_id):
+    """Аннулирование подготовленной брак-отгрузки возвращает брак на исходные места."""
+    import uuid as _uuid
+
+    pos = {"product_id": str(_uuid.uuid4()), "color_id": str(_uuid.uuid4()), "size_id": None}
+    zone_id = str(_uuid.uuid4())
+    shipping_zone = _shipping_zone_id()
+    _seed_defect_in_zone(client_id, pos, zone_id, 6)
+
+    try:
+        create = admin_client.post("/shipments", json={
+            "cargo_type": "defect", "client_id": client_id, "client_name": "Test Client",
+            "lines": [{**pos, "product_name": "Брак-товар", "product_sku": "TST-DEF",
+                       "color_name": "Red", "size_name": None, "qty": 4}],
+        })
+        doc_id = create.json()["message"]
+        assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "relocating"
+        line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+        assert admin_client.post(f"/shipments/{doc_id}/finish-defect-relocation", json={
+            "lines": [{"line_id": line_id,
+                       "sources": [{"zone_id": zone_id, "zone_name": "Зона брака", "qty": 4}]}],
+        }).json()["message"] == "awaiting_trip"
+        assert _storage_defect_in_zone(client_id, pos, zone_id) == 2
+        assert _ready_defect_in_zone(client_id, pos, shipping_zone) == 4
+
+        cancel = admin_client.post(f"/shipments/{doc_id}/cancel")
+        assert cancel.status_code == 200, cancel.text
+
+        # Брак вернулся на исходное место, резерв в зоне отгрузки снят.
+        assert _storage_defect_in_zone(client_id, pos, zone_id) == 6
+        assert _ready_defect_in_zone(client_id, pos, shipping_zone) == 0
+    finally:
+        with get_connection() as conn:
+            for r in conn.execute("SELECT id FROM receipt_docs WHERE client_id = ?", (client_id,)).fetchall():
+                conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (r["id"],))
+            conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (client_id,))
+            conn.commit()
 
 
 def test_outbound_list_filter_by_direction(admin_client, client_id):

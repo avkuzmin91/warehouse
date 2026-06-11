@@ -10,6 +10,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
+import { BucketCell } from '../shared/BucketCell'
 
 const PAGE_SIZE = 50
 
@@ -35,9 +36,9 @@ export function CabinetBalancesFeature() {
   const items = data?.items ?? []
   const kpi = useMemo(() => ({
     totalQty: items.reduce((sum, item) => sum + item.total, 0),
-    goodQty: items.reduce((sum, item) => sum + item.good, 0),
-    defectQty: items.reduce((sum, item) => sum + item.defect, 0),
-    onReviewQty: items.reduce((sum, item) => sum + item.on_review, 0),
+    storageQty: items.reduce((sum, item) => sum + item.storage_good + item.storage_defect, 0),
+    readyQty: items.reduce((sum, item) => sum + item.ready_good + item.ready_defect, 0),
+    defectQty: items.reduce((sum, item) => sum + item.storage_defect + item.packing_defect + item.ready_defect, 0),
   }), [items])
 
   return (
@@ -85,17 +86,17 @@ export function CabinetBalancesFeature() {
         <>
           <div className="kpi-grid" style={{ marginBottom: 20 }}>
             <KPI label="Показано единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
-            <KPI label="Годный" value={kpi.goodQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
+            <KPI label="На хранении" value={kpi.storageQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
+            <KPI label="Готов к отгрузке" value={kpi.readyQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
             <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
-            <KPI label="На проверке" value={kpi.onReviewQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
           </div>
           <Table>
             <thead>
               <tr>
                 <th>Товар</th>
-                <th style={{ textAlign: 'right', width: 90 }}>Годный</th>
-                <th style={{ textAlign: 'right', width: 80 }}>Брак</th>
-                <th style={{ textAlign: 'right', width: 110 }}>На проверке</th>
+                <th style={{ textAlign: 'right', width: 130 }}>На хранении</th>
+                <th style={{ textAlign: 'right', width: 130 }}>На упаковке</th>
+                <th style={{ textAlign: 'right', width: 140 }}>Готов к отгрузке</th>
                 <th style={{ textAlign: 'right', width: 90, borderLeft: '2px solid var(--c-border)' }}>Всего</th>
               </tr>
             </thead>
@@ -113,14 +114,14 @@ export function CabinetBalancesFeature() {
                         {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                       </div>
                     </Td>
-                    <Td className="num" style={{ color: item.good > 0 ? 'var(--c-success)' : undefined, fontWeight: item.good > 0 ? 500 : undefined }}>
-                      {item.good.toLocaleString('ru-RU')}
+                    <Td className="num">
+                      <BucketCell good={item.storage_good} defect={item.storage_defect} accent="var(--c-success)" />
                     </Td>
-                    <Td className="num" style={{ color: item.defect > 0 ? 'var(--c-warning)' : undefined, fontWeight: item.defect > 0 ? 500 : undefined }}>
-                      {item.defect.toLocaleString('ru-RU')}
+                    <Td className="num">
+                      <BucketCell good={item.packing_good} defect={item.packing_defect} accent="var(--c-info, #3b82f6)" />
                     </Td>
-                    <Td className="num" style={{ color: item.on_review > 0 ? 'var(--c-accent)' : undefined, fontWeight: item.on_review > 0 ? 500 : undefined }}>
-                      {item.on_review.toLocaleString('ru-RU')}
+                    <Td className="num">
+                      <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-accent)" />
                     </Td>
                     <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', fontWeight: 600, background: 'var(--c-bg-sunken)', color: 'var(--c-text)' }}>
                       {item.total.toLocaleString('ru-RU')}

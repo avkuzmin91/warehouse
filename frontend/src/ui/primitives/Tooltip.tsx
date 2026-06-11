@@ -3,9 +3,11 @@ import { useState, type ReactNode } from 'react'
 interface TooltipProps {
   content: string
   children: ReactNode
+  /** Для длинных подсказок: ограничивает ширину и включает перенос строк. */
+  maxWidth?: number
 }
 
-export function Tooltip({ content, children }: TooltipProps) {
+export function Tooltip({ content, children, maxWidth }: TooltipProps) {
   const [visible, setVisible] = useState(false)
   return (
     <span
@@ -25,7 +27,9 @@ export function Tooltip({ content, children }: TooltipProps) {
           padding: '4px 8px',
           borderRadius: 4,
           fontSize: 11.5,
-          whiteSpace: 'nowrap',
+          whiteSpace: maxWidth ? 'normal' : 'nowrap',
+          width: maxWidth ? 'max-content' : undefined,
+          maxWidth,
           pointerEvents: 'none',
           zIndex: 50,
         }}>

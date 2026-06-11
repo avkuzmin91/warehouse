@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listShipments } from '../../../api/shipmentsApi'
+import { isShipmentOverdue, listShipments, SHIPMENT_STATUS_TONES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
+import { Badge } from '../../primitives/Badge'
+import type { BadgeTone } from '../../primitives/Badge'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
@@ -13,7 +15,12 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { fmtDateShort as fmtDate } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
+import { canEditShipments } from '../../../utils/access'
+import { PackingProductivityView } from './PackingProductivityView'
+import { PackingTabs } from './PackingTabs'
+import { ShipmentPriorityControl } from './ShipmentPriorityControl'
 
 const PAGE_SIZE = 25
 
@@ -27,23 +34,39 @@ function packProgress(item: ShipmentListItem) {
 }
 
 export function PackingDayFeature() {
+  const [tab] = useFilterParam('tab', 'queue')
+  if (tab === 'productivity') return <PackingProductivityView />
+  return <PackingQueueView />
+}
+
+function PackingQueueView() {
   const navigate = useNavigate()
+  const { user } = useCurrentUser()
+  const canEdit = canEditShipments(user)
   const todayStr = today()
 
   const [search, setSearch] = useFilterParam('search', '')
   const [clientId, setClientId] = useFilterParam('client', '')
-  const [dateFrom, setDateFrom] = useFilterParam('from', todayStr)
+  // Рабочая очередь: всё, что должно быть упаковано к сегодняшнему дню (без нижней границы).
+  const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', todayStr)
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
   const [reloadTick, setReloadTick] = useState(0)
+  const [flashId, setFlashId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!flashId) return
+    const t = setTimeout(() => setFlashId(null), 2500)
+    return () => clearTimeout(t)
+  }, [flashId])
 
   const { clients } = useLookups()
 
   const { data, loading } = useApi(
     (signal) => listShipments({
       page, limit: PAGE_SIZE,
-      status: 'packing',
+      status: ['packing', 'on_packing'],
       search: search.trim() || undefined,
       client_id: clientId || undefined,
       date_from: dateFrom || undefined,
@@ -52,14 +75,28 @@ export function PackingDayFeature() {
     [page, search, clientId, dateFrom, dateTo, reloadTick],
   )
 
+  const { data: overdueData } = useApi(
+    (signal) => listShipments({
+      page: 1, limit: 1, overdue: true,
+      search: search.trim() || undefined,
+      client_id: clientId || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+    }, signal),
+    [search, clientId, dateFrom, dateTo, reloadTick],
+  )
+
   const items = data?.items ?? []
   const total = data?.total ?? 0
-  const isToday = dateFrom === todayStr && dateTo === todayStr
+  const overdueTotal = overdueData?.total ?? 0
+  const isDefault = !dateFrom && dateTo === todayStr
 
   return (
     <ListPage
       title="Упаковка"
-      subtitle={isToday ? `На сегодня: ${total}` : `Найдено: ${total}`}
+      subtitle={isDefault
+        ? `В работе: ${total}${overdueTotal > 0 ? `, из них просрочено: ${overdueTotal}` : ''}`
+        : `Найдено: ${total}`}
       filters={
         <FiltersBar>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -91,11 +128,11 @@ export function PackingDayFeature() {
             from={dateFrom} to={dateTo}
             onFromChange={(v) => setDateFrom(v)}
             onToChange={(v) => setDateTo(v)}
-            onClear={() => setMany({ from: todayStr, to: todayStr })}
+            onClear={() => setMany({ from: null, to: null })}
           />
-          {!isToday && (
-            <button className="btn ghost sm" onClick={() => setMany({ from: todayStr, to: todayStr })}>
-              <Icon name="calendar" size={12} />Сегодня
+          {!isDefault && (
+            <button className="btn ghost sm" onClick={() => setMany({ from: null, to: null })}>
+              <Icon name="x" size={12} />Сбросить период
             </button>
           )}
           <button
@@ -108,13 +145,16 @@ export function PackingDayFeature() {
         </FiltersBar>
       }
     >
+      <PackingTabs active="queue" />
       <Table>
         <thead>
           <tr>
             <th style={{ width: 120 }}>Номер</th>
+            <th style={{ width: 130 }}>Приор.</th>
             <th>Клиент</th>
             <th>Назначение</th>
             <th style={{ width: 110 }}>Дата отгрузки</th>
+            <th style={{ width: 120 }}>Статус</th>
             <th style={{ textAlign: 'right', width: 60 }}>SKU</th>
             <th style={{ textAlign: 'right', width: 80 }}>План</th>
             <th style={{ textAlign: 'right', width: 90 }}>Упаковано</th>
@@ -123,47 +163,84 @@ export function PackingDayFeature() {
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={8} />
+            <SkeletonRows rows={8} cols={10} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={8}>
+            <tr><td colSpan={10}>
               <EmptyState
-                title={isToday ? 'На сегодня отгрузок в упаковке нет' : 'Отгрузок в упаковке не найдено'}
-                sub="Здесь появляются отгрузки в статусе «В плане»"
+                title={isDefault ? 'Отгрузок в упаковке нет' : 'Отгрузок в упаковке не найдено'}
+                sub="Здесь появляются отгрузки в статусах «В плане» и «На упаковке»"
               />
             </td></tr>
           ) : (
             items.map((item) => {
+              const inWork = item.status === 'on_packing'
+              const overdue = isShipmentOverdue(item)
               const progress = packProgress(item)
               const complete = progress.pct >= 100
               return (
                 <tr
                   key={item.id}
-                  style={{ cursor: 'pointer' }}
+                  style={{
+                    cursor: 'pointer',
+                    transition: 'background 0.6s',
+                    ...(overdue ? {
+                      background: 'color-mix(in oklab, var(--c-danger) 5%, transparent)',
+                      borderLeft: '2px solid var(--c-danger)',
+                    } : {}),
+                    ...(item.id === flashId ? {
+                      background: 'color-mix(in oklab, var(--c-accent) 12%, transparent)',
+                    } : {}),
+                  }}
                   onClick={() => navigate(`/inventory/shipments/${item.id}`)}
                 >
-                  <Td className="mono" style={{ fontWeight: 500 }}>{item.doc_number}</Td>
+                  <Td className="mono" style={{ fontWeight: 500 }}>
+                    {item.doc_number}
+                    {overdue && (
+                      <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>
+                        просрочена
+                      </div>
+                    )}
+                  </Td>
+                  <Td>
+                    <ShipmentPriorityControl
+                      shipment={item}
+                      canEdit={canEdit}
+                      onSaved={() => { setFlashId(item.id); setReloadTick((t) => t + 1) }}
+                    />
+                  </Td>
                   <Td>{item.client_name ?? '—'}</Td>
                   <Td className="t-sub">{item.destination ?? '—'}</Td>
-                  <Td className="mono">{fmtDate(item.ship_date)}</Td>
+                  <Td className="mono" style={overdue ? { color: 'var(--c-danger)', fontWeight: 500 } : {}}>
+                    {fmtDate(item.ship_date)}
+                  </Td>
+                  <Td>
+                    <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
+                      {item.status_label}
+                    </Badge>
+                  </Td>
                   <Td className="num">{item.sku_count}</Td>
                   <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                   <Td className="num" style={complete ? { color: 'var(--c-success)', fontWeight: 600 } : {}}>
-                    {progress.packedQty.toLocaleString('ru-RU')}
+                    {inWork ? progress.packedQty.toLocaleString('ru-RU') : '—'}
                   </Td>
                   <Td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 140 }}>
-                      <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
-                        <div style={{
-                          height: '100%', borderRadius: 3,
-                          width: `${progress.pct}%`,
-                          background: complete ? 'var(--c-success)' : 'var(--c-accent)',
-                          transition: 'width 0.3s',
-                        }} />
+                    {inWork ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 140 }}>
+                        <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                          <div style={{
+                            height: '100%', borderRadius: 3,
+                            width: `${progress.pct}%`,
+                            background: complete ? 'var(--c-success)' : 'var(--c-accent)',
+                            transition: 'width 0.3s',
+                          }} />
+                        </div>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: complete ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                          {progress.pct}%
+                        </span>
                       </div>
-                      <span style={{ fontSize: 11.5, fontWeight: 600, color: complete ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
-                        {progress.pct}%
-                      </span>
-                    </div>
+                    ) : (
+                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                    )}
                   </Td>
                 </tr>
               )

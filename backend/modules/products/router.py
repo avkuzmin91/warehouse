@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from psycopg import IntegrityError
 
 from config import (
+    INV_OP_SHIPPED,
+    INV_Q_DEFECT,
+    INV_Q_GOOD,
     PRODUCT_LIST_SORT_COLUMNS,
-    SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_SHIPPED,
+    RECEIPT_STATUS_DONE,
     UPLOADS_DIR,
     MAX_UPLOAD_BYTES,
 )
@@ -108,6 +109,23 @@ def list_products(
         LEFT JOIN users editor ON editor.id = p.updated_by_id
         LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
     """
+    stock_join_sql = f"""
+        LEFT JOIN (
+            SELECT product_id,
+                   SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END) AS good_in,
+                   SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END) AS defect_in
+            FROM zone_relocations
+            GROUP BY product_id
+        ) bal ON bal.product_id = p.id
+        LEFT JOIN (
+            SELECT rl.product_id, SUM(COALESCE(rl.accepted_qty, 0)) AS accepted
+            FROM receipt_lines rl JOIN receipt_docs rd ON rd.id = rl.doc_id
+            WHERE rl.is_deleted = 0 AND rd.is_deleted = 0 AND rd.status = '{RECEIPT_STATUS_DONE}'
+            GROUP BY rl.product_id
+        ) acc ON acc.product_id = p.id
+    """
     order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "p.created_at DESC"
     with get_connection() as connection:
         ia = _resolve_actuality_filter(connection, actuality_id)
@@ -129,11 +147,14 @@ def list_products(
                    COALESCE(pt.requires_size, 0) AS requires_size,
                    p.client_id, c.name AS client_name,
                    COALESCE(vcnt.cnt, 0) AS variant_count,
+                   GREATEST(0, COALESCE(acc.accepted, 0) + COALESCE(bal.good_in, 0)) AS stock_total,
+                   GREATEST(0, COALESCE(bal.defect_in, 0)) AS defect_total,
                    p.is_active, COALESCE(p.is_deleted, 0) AS is_deleted,
                    p.deleted_at, p.image_url, p.gallery_json,
                    p.created_at, p.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             {join_sql}
+            {stock_join_sql}
             WHERE {where_sql}
             ORDER BY {order_sql}
             LIMIT ? OFFSET ?
@@ -153,13 +174,15 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
     _ = admin
     with get_connection() as connection:
         row = connection.execute(
-            """
+            f"""
             SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
                    p.items_per_pallet,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size,
                    p.client_id, c.name AS client_name,
                    COALESCE(vcnt.cnt, 0) AS variant_count,
+                   GREATEST(0, COALESCE(acc.accepted, 0) + COALESCE(bal.good_in, 0)) AS stock_total,
+                   GREATEST(0, COALESCE(bal.defect_in, 0)) AS defect_total,
                    p.is_active, COALESCE(p.is_deleted, 0) AS is_deleted,
                    p.deleted_at, p.image_url, p.gallery_json,
                    p.created_at, p.updated_at,
@@ -170,12 +193,28 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
             LEFT JOIN (
                 SELECT product_id, COUNT(*) AS cnt FROM product_variants WHERE COALESCE(is_deleted, 0) = 0 GROUP BY product_id
             ) vcnt ON vcnt.product_id = p.id
+            LEFT JOIN (
+                SELECT product_id,
+                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END) AS good_in,
+                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END) AS defect_in
+                FROM zone_relocations
+                WHERE product_id = ?
+                GROUP BY product_id
+            ) bal ON bal.product_id = p.id
+            LEFT JOIN (
+                SELECT rl.product_id, SUM(COALESCE(rl.accepted_qty, 0)) AS accepted
+                FROM receipt_lines rl JOIN receipt_docs rd ON rd.id = rl.doc_id
+                WHERE rl.product_id = ? AND rl.is_deleted = 0 AND rd.is_deleted = 0 AND rd.status = '{RECEIPT_STATUS_DONE}'
+                GROUP BY rl.product_id
+            ) acc ON acc.product_id = p.id
             LEFT JOIN users creator ON creator.id = p.creator_id
             LEFT JOIN users editor ON editor.id = p.updated_by_id
             LEFT JOIN users deleter ON deleter.id = p.deleted_by_id
             WHERE p.id = ?
             """,
-            (item_id,),
+            (item_id, item_id, item_id),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Товар не найден")
@@ -398,12 +437,12 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
         if not exists:
             raise HTTPException(status_code=404, detail="Товар не найден")
         rows = connection.execute(
-            """
+            f"""
             SELECT v.id, v.color_id, col.name AS color_name,
                    v.size_id, sz.name AS size_name,
                    v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
-                   GREATEST(0, COALESCE(b.good_in, 0) - COALESCE(sg.shipped_good, 0)) AS stock,
-                   GREATEST(0, COALESCE(b.defect_in, 0) - COALESCE(sd.shipped_defect, 0)) AS defect_qty,
+                   GREATEST(0, COALESCE(acc.accepted, 0) + COALESCE(b.good_in, 0)) AS stock,
+                   GREATEST(0, COALESCE(b.defect_in, 0)) AS defect_qty,
                    CASE WHEN EXISTS (
                        SELECT 1 FROM receipt_lines rl
                        JOIN receipt_docs rd ON rd.id = rl.doc_id
@@ -417,37 +456,26 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             LEFT JOIN sizes sz ON sz.id = v.size_id
             LEFT JOIN (
                 SELECT product_id, color_id, size_id,
-                       SUM(CASE WHEN to_status='good'   THEN qty ELSE 0 END)
-                         - SUM(CASE WHEN from_status='good'   THEN qty ELSE 0 END) AS good_in,
-                       SUM(CASE WHEN to_status='defect' THEN qty ELSE 0 END)
-                         - SUM(CASE WHEN from_status='defect' THEN qty ELSE 0 END) AS defect_in
+                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_quality='{INV_Q_GOOD}'   THEN qty ELSE 0 END) AS good_in,
+                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                         - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END) AS defect_in
                 FROM zone_relocations
                 WHERE product_id = ?
                 GROUP BY product_id, color_id, size_id
             ) b ON b.product_id = v.product_id AND b.color_id IS NOT DISTINCT FROM v.color_id AND b.size_id IS NOT DISTINCT FROM v.size_id
             LEFT JOIN (
-                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_good
-                FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = ? AND sd.cargo_type = ?
-                GROUP BY sl.product_id, sl.color_id, sl.size_id
-            ) sg ON sg.product_id = v.product_id AND sg.color_id IS NOT DISTINCT FROM v.color_id AND sg.size_id IS NOT DISTINCT FROM v.size_id
-            LEFT JOIN (
-                SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_defect
-                FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-                WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.status = ? AND sd.cargo_type = ?
-                GROUP BY sl.product_id, sl.color_id, sl.size_id
-            ) sd ON sd.product_id = v.product_id AND sd.color_id IS NOT DISTINCT FROM v.color_id AND sd.size_id IS NOT DISTINCT FROM v.size_id
+                SELECT rl.product_id, rl.color_id, rl.size_id, SUM(COALESCE(rl.accepted_qty, 0)) AS accepted
+                FROM receipt_lines rl JOIN receipt_docs rd ON rd.id = rl.doc_id
+                WHERE rl.product_id = ? AND rl.is_deleted = 0 AND rd.is_deleted = 0 AND rd.status = '{RECEIPT_STATUS_DONE}'
+                GROUP BY rl.product_id, rl.color_id, rl.size_id
+            ) acc ON acc.product_id = v.product_id AND acc.color_id IS NOT DISTINCT FROM v.color_id AND acc.size_id IS NOT DISTINCT FROM v.size_id
             WHERE v.product_id = ? AND COALESCE(v.is_deleted, 0) = 0
             ORDER BY LOWER(v.sku) ASC
             """,
             (
                 item_id,
                 item_id,
-                SHIPMENT_STATUS_SHIPPED,
-                SHIPMENT_CARGO_GOOD,
-                item_id,
-                SHIPMENT_STATUS_SHIPPED,
-                SHIPMENT_CARGO_DEFECT,
                 item_id,
             ),
         ).fetchall()

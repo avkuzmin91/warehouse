@@ -34,6 +34,8 @@
 Backend dev: `cd backend && python -m uvicorn app:app --host 127.0.0.1 --port 8000`
 Frontend dev: запускается через docker-compose или `npm run dev` в `frontend/`.
 
+При работе через docker-compose backend **не** перезагружается сам — после правок выполнить `docker restart wms_dev_backend`.
+
 ---
 
 ## 2. База данных
@@ -70,7 +72,24 @@ with get_connection() as conn:
 **Shipments (отгрузки):**
 - `shipment_docs`, `shipment_lines`, `shipment_ops`
 
-**Балансы** считаются как `receipt_ops` (op_type ∈ `receiving` / `receiving_correction` / `defect_fix` / `defect_correction`) **минус** `shipment_lines` где `shipment_docs.status = 'shipped'`.
+**Перемещения:**
+- `zone_relocations` — append-only журнал перемещений остатков между бакетами (опер. статус × качество), включая журнальное списание при отгрузке.
+
+**Logistics (рейсы):**
+- модуль `backend/modules/logistics/` — рейсы (trips), привязка поступлений и отгрузок к рейсу, расходы.
+
+**Остатки (двухосевая модель):**
+- Остаток измеряется по двум осям: **операционный статус** (`INV_OP_*`: проверка / хранение / упаковка / зона отгрузки и т.д.) × **качество** (`INV_Q_GOOD` / `INV_Q_DEFECT`). Константы — в `config.py`.
+- Источник данных: `receipt_lines.accepted_qty` (приёмка) **плюс** нетто-перемещения из журнала `zone_relocations` по каждому бакету. Отгруженное списывается журнальной записью в `zone_relocations`, **не** вычитанием `shipment_lines`.
+- Эталон расчёта — [backend/modules/balances/service.py](backend/modules/balances/service.py). Старая формула «receipt_ops минус shipment_lines (shipped)» больше не используется.
+
+### Статусы документов
+
+Полные перечни — в [backend/config.py](backend/config.py), здесь — для ориентира:
+
+- **Receipts:** `draft → planned → on_intake → on_review → done`, плюс `cancelled` (`in_review` — легаси, нормализуется в `on_review` при старте).
+- **Shipments:** `draft → packing → on_packing → relocating → awaiting_trip → shipped`, плюс `cancelled`. Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
+- **Trips:** `draft → awaiting_arrival → unloading → costing → closed`, плюс `cancelled`.
 
 ### Запрещённые таблицы и имена
 
@@ -218,6 +237,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
 |---|---|---|
 | `ui/pages/` | route layer — рендерит фичу + читает URL-state | прямые fetch, бизнес-`useEffect`, бизнес-`useState` |
 | `ui/features/<domain>/` | вся бизнес-логика, состояния, API-вызовы | — |
+| `ui/features/shared/process/` | общие компоненты процессных карточек: `ProcessRail`, `PhaseBlock`, `RoleChip`, `DocHeader`, `PrimaryAction` — использовать, не дублировать | — |
 | `ui/primitives/` | чистые UI-атомы (Button, Badge, Card, Input, Icon, Tooltip, ...) | бизнес-логика, API |
 | `ui/data/` | сложные data-компоненты (Table, FiltersBar, Pagination, Combobox, DateRange, MultiSelect) | API, бизнес-логика |
 | `ui/layouts/` | композиция страницы (`ListPage`, `DetailPage`, `FormPage`, `AppLayout`, `AuthLayout`) | API |
@@ -255,7 +275,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
 
 ```ts
 // --- Types ---
-export type ReceiptStatus = 'draft' | 'planned' | 'on_review' | 'done' | 'cancelled'
+export type ReceiptStatus = 'draft' | 'planned' | 'on_intake' | 'on_review' | 'done' | 'cancelled'
 export type ReceiptDoc  = { id: string; doc_number: string; /* ... */ }
 export type ReceiptLine = { /* ... */ }
 export type ReceiptListItem = ReceiptDoc & { sku_count: number; /* ... */ }
@@ -353,7 +373,7 @@ ui/features/inventory/
     ReceiptDetailFeature.tsx      # загрузка + роутинг по статусу
     views/
       DraftView.tsx               # status = draft
-      PlannedView.tsx             # status = planned
+      PlannedView.tsx             # status = planned | on_intake
       ReviewView.tsx              # status = on_review | done
     components/
       AddLineDrawer.tsx
@@ -365,14 +385,14 @@ ui/features/inventory/
 Главная фича грузит данные и делегирует рендер view'у по статусу:
 
 ```tsx
-if (detail.doc.status === 'draft')   return <DraftView   {...props} />
-if (detail.doc.status === 'planned') return <PlannedView {...props} />
+if (detail.doc.status === 'draft') return <DraftView {...props} />
+if (detail.doc.status === 'planned' || detail.doc.status === 'on_intake') return <PlannedView {...props} />
 return <ReviewView {...props} />
 ```
 
 ### 5.6 Справочники
 
-`useLookups()` отдаёт уже закешированные `clients`, `suppliers`, `carriers`, `warehouses`, `unloadingZones`. Провайдер монтируется в `AppLayout`. **Никаких** прямых `getInventoryClients()` в страницах/фичах — только через `useLookups()`. Перезагрузка после изменений в справочнике — `useLookups().reload()`.
+`useLookups()` отдаёт уже закешированные `clients`, `suppliers`, `carriers`, `warehouses`, `unloadingZones`, `vehicleTypes`. Провайдер монтируется в `AppLayout`. **Никаких** прямых `getInventoryClients()` в страницах/фичах — только через `useLookups()`. Перезагрузка после изменений в справочнике — `useLookups().reload()`.
 
 ### 5.7 Подтверждения и тосты
 
@@ -436,6 +456,7 @@ URL-конвенции inventory: `/receipts`, `/shipments`, `/balances` — **�
 - `frontend/src/api/filterHelpers.ts` — фильтры читаются/пишутся **только** через `useFilterParam` / `useFilterParamsActions`.
 - `frontend/src/ui/data/SortableTh.tsx` — сортировка не нужна, не возвращать.
 - `frontend/src/ui/primitives/Tabs.tsx` — табы рисуются inline через `.tabs / .tab.active`.
+- `frontend/src/ui/features/inventory/ReceiptStepper.tsx`, `ShipmentStepper.tsx` — заменены компонентами из `ui/features/shared/process/`, не возвращать.
 
 **Backend:**
 - Таблицы `inventory_operations`, `app_migrations`.

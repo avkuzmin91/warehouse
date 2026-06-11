@@ -249,6 +249,37 @@ def test_actual_arrival_blocked_with_trip(admin_client, client_id):
     assert bad.status_code == 400, bad.text
 
 
+def test_cancel_receipt_blocked_while_linked_to_trip(admin_client, client_id):
+    linked_receipt = _planned_receipt(admin_client, client_id)
+    create = admin_client.post("/trips", json={"receipt_doc_ids": [linked_receipt]})
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+
+    bad = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert bad.status_code == 400, bad.text
+    assert "привязано к рейсу" in bad.json()["detail"]
+
+    unlink = admin_client.delete(f"/trips/{trip_id}/receipts/{linked_receipt}")
+    assert unlink.status_code == 200, unlink.text
+
+    ok = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["message"] == "cancelled"
+
+
+def test_cancel_receipt_allowed_when_trip_cancelled(admin_client, client_id):
+    linked_receipt = _planned_receipt(admin_client, client_id)
+    create = admin_client.post("/trips", json={"receipt_doc_ids": [linked_receipt]})
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+
+    cancel_trip = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel_trip.status_code == 200, cancel_trip.text
+
+    ok = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert ok.status_code == 200, ok.text
+
+
 # Тест on_review-задач удалён: статус документа on_review убран (приёмка завершается на done).
 
 

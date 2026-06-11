@@ -4,7 +4,7 @@ import { createTrip, handoffTrip, tripLexicon, isOutbound } from '../../../api/t
 import type { TripReceiptItem, TripShipmentItem, TripDirection } from '../../../api/tripsApi'
 import { getReceipts } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { listShipments } from '../../../api/shipmentsApi'
+import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
 import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
@@ -54,7 +54,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     if (outbound) {
       // 'new' — несуществующий рейс: фильтр available_for_trip_id отсекает отгрузки,
       // привязанные к любому реальному рейсу (tl.trip_id != 'new'), оставляя свободные.
-      listShipments({ status: 'packing', limit: 100, available_for_trip_id: 'new' }, ctrl.signal)
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new' }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
@@ -120,7 +120,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     .filter((s) => selected.has(s.id))
     .map((s) => ({
       line_id: s.id, shipment_doc_id: s.id, shipment_number: s.doc_number,
-      shipment_status: 'packing', client_id: s.client_id, client_name: s.client_name,
+      shipment_status: s.status, client_id: s.client_id, client_name: s.client_name,
     }))
 
   const enrich: ReceiptEnrich = {}
@@ -204,12 +204,12 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <button className="btn lg" onClick={handleSaveDraft} disabled={saving}>
-              <Icon name="save" size={15} />Сохранить черновик
+            <button className="btn" onClick={handleSaveDraft} disabled={saving}>
+              <Icon name="save" size={14} />Сохранить черновик
             </button>
             {showCosts && (
-              <button className="btn lg primary" onClick={handleHandoff} disabled={saving}>
-                <Icon name="arrowRight" size={15} />Передать на склад
+              <button className="btn primary" onClick={handleHandoff} disabled={saving}>
+                <Icon name="arrowRight" size={14} />Передать на склад
               </button>
             )}
           </div>

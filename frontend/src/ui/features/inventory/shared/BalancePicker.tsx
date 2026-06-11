@@ -13,30 +13,44 @@ type Props = {
   onClose: () => void
 }
 
+// Годный груз планируется из свободного годного «На хранении» (упаковка и
+// «Готов к отгрузке» заняты другими отгрузками). Брак планируется из суммарного
+// брака «На хранении» — места-источники выбирает кладовщик при подготовке.
+type PickRow = {
+  item: BalanceItem
+  available: number
+  zoneId: string | null
+  zoneName: string | null
+}
+
 export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
   const [search, setSearch] = useState('')
-  const [items, setItems] = useState<BalanceItem[]>([])
+  const [rows, setRows] = useState<PickRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [pending, setPending] = useState<{ item: BalanceItem; qty: number } | null>(null)
-
-  // Доступно для плана: брак → defect; годный → годный + на проверке.
-  // Товар на проверке физически на складе, по нему можно планировать заранее;
-  // если уйдёт в брак — план скорректируют. Отгрузка остаётся строго по годному.
-  const planAvailable = (b: BalanceItem) => (cargoType === 'defect' ? b.defect : b.good + b.on_review)
+  const [pending, setPending] = useState<{ row: PickRow; qty: number } | null>(null)
 
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
-    getBalances({
-        limit: 200,
-        search: search || undefined,
-        only_positive: true,
-        client_id: clientId || undefined,
-        has_defect: cargoType === 'defect' ? true : undefined,
-      }, ctrl.signal)
-      .then((res) => {
+    const load = getBalances({
+      limit: 200,
+      search: search || undefined,
+      only_positive: true,
+      client_id: clientId || undefined,
+    }, ctrl.signal).then((res) =>
+      res.items
+        .filter((b) => (cargoType === 'defect' ? b.storage_defect > 0 : b.storage_good > 0))
+        .map((b): PickRow => ({
+          item: b,
+          available: cargoType === 'defect' ? b.storage_defect : b.storage_good,
+          zoneId: null,
+          zoneName: null,
+        })),
+    )
+    load
+      .then((next) => {
         if (ctrl.signal.aborted) return
-        setItems(res.items.filter((b) => planAvailable(b) > 0))
+        setRows(next)
       })
       .catch(() => { /* aborted or error */ })
       .finally(() => {
@@ -46,8 +60,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
     return () => ctrl.abort()
   }, [search, clientId, cargoType])
 
-  const available = pending ? planAvailable(pending.item) : 0
-  const aggregateAvailable = available
+  const available = pending ? pending.row.available : 0
 
   return (
     <>
@@ -67,7 +80,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
             <div>
               <div style={{ fontWeight: 600, fontSize: 15 }}>Подобрать товар</div>
               <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-                {cargoType === 'defect' ? 'Только брак' : 'Только годный товар'}
+                {cargoType === 'defect' ? 'Брак на хранении' : 'Годный товар на хранении'}
                 {clientId ? ' · по выбранному клиенту' : ''}
               </div>
             </div>
@@ -96,22 +109,21 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                 border: '1px solid var(--c-accent)', background: 'var(--c-accent-bg)',
               }}
             >
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{pending.item.product_name}</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{pending.row.item.product_name}</div>
               <div className="t-sub mono" style={{ marginTop: 2 }}>
-                {[pending.item.product_sku, pending.item.color_name, pending.item.size_name].filter(Boolean).join(' · ')}
+                {[pending.row.item.product_sku, pending.row.item.color_name, pending.row.item.size_name].filter(Boolean).join(' · ')}
               </div>
-              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
-                Всего доступно:{' '}
-                <span className="mono" style={{ fontWeight: 600, color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)' }}>
-                  {aggregateAvailable}
-                </span> шт
-              </div>
-              {cargoType !== 'defect' && pending.item.on_review > 0 && (
-                <div style={{ marginTop: 4, fontSize: 12, color: 'var(--c-text-subtle)' }}>
-                  Годный <span className="mono" style={{ color: 'var(--c-success)' }}>{pending.item.good}</span>
-                  {' · '}На проверке <span className="mono" style={{ color: 'var(--c-warning)' }}>{pending.item.on_review}</span>
+              {pending.row.zoneName && (
+                <div style={{ marginTop: 6, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
+                  Местоположение: <span style={{ fontWeight: 600 }}>{pending.row.zoneName}</span>
                 </div>
               )}
+              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
+                Доступно:{' '}
+                <span className="mono" style={{ fontWeight: 600, color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)' }}>
+                  {available}
+                </span> шт
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -137,35 +149,38 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
           <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {loading ? (
               <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: 12 }}>Загрузка…</div>
-            ) : items.length === 0 ? (
+            ) : rows.length === 0 ? (
               <EmptyState title="Ничего не найдено" sub="Нет остатков по заданному запросу" />
             ) : (
-              items.map((item) => (
+              rows.map((row, i) => (
                 <div
-                  key={`${item.product_id}__${item.color_id}__${item.size_id}`}
+                  key={`${row.item.product_id}__${row.item.color_id}__${row.item.size_id}__${row.zoneId ?? ''}__${i}`}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
                     borderRadius: 8, border: '1px solid var(--c-border)',
                     cursor: 'pointer',
                   }}
-                  onClick={() => setPending({ item, qty: 0 })}
+                  onClick={() => setPending({ row, qty: 0 })}
                 >
                   <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                     <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{item.product_name}</div>
-                    <div className="t-sub mono">{[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}</div>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{row.item.product_name}</div>
+                    <div className="t-sub mono">{[row.item.product_sku, row.item.color_name, row.item.size_name].filter(Boolean).join(' · ')}</div>
+                    {row.zoneName && (
+                      <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 1 }}>
+                        <Icon name="boxes" size={10} style={{ marginRight: 4, verticalAlign: -1 }} />{row.zoneName}
+                      </div>
+                    )}
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div className="mono" style={{ color: cargoType === 'defect' ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
-                      {cargoType === 'defect' ? item.defect : item.good}
+                      {row.available}
                     </div>
-                    {cargoType !== 'defect' && item.on_review > 0 ? (
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--c-warning)' }}>+{item.on_review} на проверке</div>
-                    ) : (
-                      <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>доступно</div>
-                    )}
+                    <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>
+                      {cargoType === 'defect' ? 'брак' : 'на хранении'}
+                    </div>
                   </div>
                   <Icon name="plus" size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
                 </div>
@@ -183,10 +198,10 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                 style={{ flex: 1 }}
                 disabled={pending.qty <= 0 || pending.qty > available}
                 onClick={() => onAdd(
-                  pending.item,
+                  pending.row.item,
                   pending.qty,
-                  null,
-                  null,
+                  pending.row.zoneId,
+                  pending.row.zoneName,
                 )}
               >
                 <Icon name="plus" size={13} />Добавить

@@ -14,46 +14,46 @@ import {
   deleteShipmentLineFile,
   returnShipmentLineFromPacking,
   SHIPMENT_STATUS_LABELS,
-  SHIPMENT_STATUS_TONES,
-} from '../../../api/shipmentsApi'
-import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ShipmentLineFile } from '../../../api/shipmentsApi'
-import { resolvePublicUploadSrc } from '../../../api/constants'
-import { getBalances, getBalancesByZone } from '../../../api/balancesApi'
-import type { BalanceItem, BalanceZoneItem } from '../../../api/balancesApi'
-import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
-import type { ClientStoreItem } from '../../../api/domainTypes'
-import { ShipmentStepper } from '../../features/inventory/ShipmentStepper'
-import { ShipmentPriorityControl } from '../../features/inventory/ShipmentPriorityControl'
-import { Badge } from '../../primitives/Badge'
-import type { BadgeTone } from '../../primitives/Badge'
-import { Icon } from '../../primitives/Icon'
-import { Alert } from '../../primitives/Alert'
-import { EmptyState } from '../../primitives/EmptyState'
-import { Tooltip } from '../../primitives/Tooltip'
-import { useConfirm } from '../../feedback/ConfirmDialog'
-import { useToast } from '../../feedback/Toast'
-import { Drawer } from '../../feedback/Drawer'
-import { Modal } from '../../feedback/Modal'
-import { DatePicker } from '../../primitives/DatePicker'
-import { AutoGrowTextarea, Field, Input } from '../../primitives/Input'
-import { fmtDateLong } from '../../../utils/format'
-import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../utils/access'
-import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { useLookups } from '../../../hooks/useLookups'
-import { BalancePicker } from '../../features/inventory/shared/BalancePicker'
-import { NumberStep } from '../../features/inventory/shared/NumberStep'
-import { CargoTypeDisplay } from './components/CargoTypeDisplay'
+} from '../../../../api/shipmentsApi'
+import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ShipmentLineFile } from '../../../../api/shipmentsApi'
+import { resolvePublicUploadSrc } from '../../../../api/constants'
+import { getBalances, getBalancesByZone } from '../../../../api/balancesApi'
+import type { BalanceItem, BalanceZoneItem } from '../../../../api/balancesApi'
+import { getInventoryClientStores } from '../../../../api/inventoryLookupsApi'
+import type { ClientStoreItem } from '../../../../api/domainTypes'
+import { ShipmentPriorityControl } from '../../inventory/ShipmentPriorityControl'
+import { Icon } from '../../../primitives/Icon'
+import { PhaseBlock } from '../../shared/process/PhaseBlock'
+import { ShipHeader } from './components/ShipHeader'
+import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './components/processUI'
+import { PrimaryAction } from '../../shared/process/PrimaryAction'
+import { Alert } from '../../../primitives/Alert'
+import { EmptyState } from '../../../primitives/EmptyState'
+import { Tooltip } from '../../../primitives/Tooltip'
+import { useConfirm } from '../../../feedback/ConfirmDialog'
+import { useToast } from '../../../feedback/Toast'
+import { Drawer } from '../../../feedback/Drawer'
+import { Modal } from '../../../feedback/Modal'
+import { DatePicker } from '../../../primitives/DatePicker'
+import { AutoGrowTextarea, Field, Input } from '../../../primitives/Input'
+import { fmtDateLong } from '../../../../utils/format'
+import { balanceKey } from '../../../../utils/balanceKey'
+import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
+import { useCurrentUser } from '../../../../hooks/useCurrentUser'
+import { useLookups } from '../../../../hooks/useLookups'
+import { BalancePicker } from '../../inventory/shared/BalancePicker'
+import { NumberStep } from '../../inventory/shared/NumberStep'
 import { OpEntry } from './components/OpEntry'
 import { lineAvailable } from './shared/opLabels'
-import { Table, Td } from '../../data/Table'
-import { Combobox } from '../../data/Combobox'
-import type { ComboboxOption } from '../../data/Combobox'
-import { LineIdentityCell } from '../../features/inventory/receiptDetail/components/LineIdentityCell'
+import { Table, Td } from '../../../data/Table'
+import { Combobox } from '../../../data/Combobox'
+import type { ComboboxOption } from '../../../data/Combobox'
+import { LineIdentityCell } from '../../inventory/receiptDetail/components/LineIdentityCell'
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
 import { RelocationPanel } from './components/RelocationPanel'
+import { DefectPreparePanel } from './components/DefectPreparePanel'
 
 type EditableShipmentLine = ShipmentLine & { _key: string; available: number }
 type LineDraft = {
@@ -72,7 +72,7 @@ type LineFilePreview = {
   qty: number
 }
 
-export function InventoryShipmentDetailPage() {
+export function ShipmentDetailFeature() {
   const { docId } = useParams<{ docId: string }>()
   const navigate = useNavigate()
   const confirm = useConfirm()
@@ -166,6 +166,7 @@ export function InventoryShipmentDetailPage() {
   }
 
   const status = doc?.status as ShipmentStatus | undefined
+  const isDefectCargo = doc?.cargo_type === 'defect'
   const isDraft = status === 'draft'
   const isPacking = status === 'packing'
   const isOnPacking = status === 'on_packing'
@@ -179,23 +180,29 @@ export function InventoryShipmentDetailPage() {
   const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при отправке рейса
   const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped'
   const canMovePacking = canEdit && (isPacking || isOnPacking)
-  const canReturnPacking = canPack && (isPacking || isOnPacking)
+  // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
+  // У начальника смены (canPack без canEdit) кнопки возврата нет.
+  const canReturnPacking = canMovePacking
   // «Готово к рейсу» — кладовщик (canEdit = warehouse_manager) в статусе «Перемещение».
   const canRelocate = canEdit && isRelocating
 
   // Главное действие шага: метка/иконка/право зависят от статуса. «Готово к рейсу»
-  // (relocating) не здесь — у него своя кнопка в панели раскладки по местам.
-  const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut'; show: boolean } | null =
-    isDraft       ? { label: 'Запланировать',       icon: 'arrowRight', show: canEdit }
-      : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   show: canEdit }
-      : isOnPacking ? { label: 'Передать кладовщику',  icon: 'forklift',   show: canPack }
+  // (relocating) не здесь — у него своя кнопка в панели раскладки/подготовки.
+  // Брак-отгрузка минует упаковку: из черновика сразу к кладовщику на подготовку.
+  const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut' | 'check'; hint: string; show: boolean } | null =
+    isDraft && isDefectCargo
+      ? { label: 'Запланировать', icon: 'arrowRight', hint: 'уйдёт кладовщику на подготовку — статус «Перемещение»', show: canEdit }
+      : isDraft     ? { label: 'Запланировать',       icon: 'arrowRight', hint: 'уйдёт кладовщику — статус «В плане»',          show: canEdit }
+      : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   hint: 'уйдёт начальнику смены — статус «На упаковке»', show: canEdit }
+      : isOnPacking ? { label: 'Завершить упаковку',    icon: 'check',      hint: 'уйдёт кладовщику — статус «Перемещение»',       show: canPack }
       : null
 
   const shipmentClientId = doc?.client_id ?? null
   const shipmentCargoType = doc?.cargo_type
 
-  // Зоны-источники «на проверке» нужны при передаче (packing) и подвозе (on_packing);
-  // полный список остатков (BalancePicker) — только при редактировании состава.
+  // Места-источники свободного годного «На хранении» нужны при передаче (packing)
+  // и подвозе (on_packing); полный список остатков (BalancePicker) — только при
+  // редактировании состава.
   const loadBalances = useCallback(async () => {
     if (!shipmentClientId || !(canDelete || canMovePacking || isOnPacking)) {
       setBalances([])
@@ -209,7 +216,7 @@ export function InventoryShipmentDetailPage() {
         client_id: shipmentClientId,
         has_defect: shipmentCargoType === 'defect' ? true : undefined,
       })
-      setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.defect > 0 : b.good + b.on_review > 0))
+      setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.storage_defect > 0 : b.storage_good > 0))
     } else {
       setBalances([])
     }
@@ -217,7 +224,7 @@ export function InventoryShipmentDetailPage() {
       client_id: shipmentClientId,
       only_positive: true,
     })
-    setReviewZoneBalances(zonesRes.items.filter((item) => item.status === 'on_review'))
+    setReviewZoneBalances(zonesRes.items.filter((item) => item.op_status === 'storage' && item.quality === 'good'))
   }, [shipmentClientId, shipmentCargoType, canDelete, canMovePacking, isOnPacking])
 
   useEffect(() => {
@@ -292,7 +299,7 @@ export function InventoryShipmentDetailPage() {
     return options
   }
 
-  // Зоны-источники для передачи/подвоза — где у позиции есть остаток «на проверке».
+  // Места-источники для передачи/подвоза — где у позиции есть свободный годный.
   function getLineSourceZoneOptions(line: ShipmentLine): MoveZoneOption[] {
     return reviewZoneBalances
       .filter((item) =>
@@ -311,8 +318,8 @@ export function InventoryShipmentDetailPage() {
   async function handleReturnFromPacking(line: ShipmentLine) {
     if (!docId) return
     const ok = await confirm({
-      title: 'Вернуть на проверку?',
-      body: `${line.available_for_pack} шт по «${line.product_name}» вернётся в исходные места. Передачу на упаковку можно будет указать заново.`,
+      title: 'Вернуть на хранение?',
+      body: `${line.available_for_pack} шт по «${line.product_name}» вернётся в исходные местоположения. Передачу на упаковку можно будет указать заново.`,
       confirmLabel: 'Вернуть',
     })
     if (!ok) return
@@ -320,7 +327,7 @@ export function InventoryShipmentDetailPage() {
     try {
       await returnShipmentLineFromPacking(docId, line.id)
       await refreshAfterLineChange()
-      toast('Товар возвращён на проверку', 'success')
+      toast('Товар возвращён на хранение', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка возврата', 'error')
     } finally {
@@ -362,6 +369,7 @@ export function InventoryShipmentDetailPage() {
 
   // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
   // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
+  // Брак-отгрузка: ТЗ не требуется, места-источники выберет кладовщик при подготовке.
   const advanceChecks: ReadinessCheck[] = (isDraft || isPacking)
     ? [
         {
@@ -374,7 +382,7 @@ export function InventoryShipmentDetailPage() {
           label: 'План заполнен',
           error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
         },
-        ...(isDraft
+        ...(isDraft && !isDefectCargo
           ? [{
               ok: infoComment.trim() !== '',
               label: 'Техническое задание заполнено',
@@ -408,7 +416,6 @@ export function InventoryShipmentDetailPage() {
   const advanceBlockReasons = showReadiness
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
-  const readinessOk = advanceChecks.every((check) => check.ok)
   async function refreshAfterLineChange() {
     await load()
     await loadBalances()
@@ -581,7 +588,9 @@ export function InventoryShipmentDetailPage() {
   async function handleCancel() {
     const ok = await confirm({
       title: 'Аннулировать отгрузку?',
-      body: 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
+      body: isDefectCargo && isAwaitingTrip
+        ? 'Отгрузка будет аннулирована, подготовленный брак вернётся на исходные места. Это действие нельзя отменить.'
+        : 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
       danger: true,
       confirmLabel: 'Аннулировать',
     })
@@ -607,31 +616,59 @@ export function InventoryShipmentDetailPage() {
     )
   }
 
+  // «Состав» — только про план (Менеджер). Подсвечиваем как активный лишь при создании;
+  // в «В плане» ход у Кладовщика (блок «Передача»), поэтому Состав не подсвечиваем.
+  const compState: 'active' | 'done' = isDraft ? 'active' : 'done'
+  const compHint = isDraft ? 'Товар из остатков клиента'
+    : isPacking ? 'План можно править до передачи на упаковку'
+    : undefined
+
+  // Фаза «Упаковка»: передача (Кладовщик, packing) → годный/брак (Нач. смены, on_packing) → результат (done).
+  const packPhase = isDraft
+    ? { state: 'locked' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: null,
+        hint: 'Передачу и упаковку заполнят кладовщик и начальник смены' }
+    : isPacking
+      ? { state: 'active' as const, role: 'warehouse' as const, title: 'Передача на упаковку', mode: 'transfer' as const,
+          hint: '«Передать» — выбор мест-источников, перемещение сразу' }
+      : isOnPacking
+        ? { state: 'active' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'packing' as const,
+            hint: '«Внести упаковку» — годный и брак; при браке кладовщик подвозит товар' }
+        : { state: 'done' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'result' as const,
+            hint: undefined }
+
+  // Сводные итоги состава для панелей правой колонки.
+  const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
+  const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size
+  const poolTotal = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
+  const packedGood = doc.lines.reduce((s, l) => s + l.packed_good, 0)
+  const packedDefect = doc.lines.reduce((s, l) => s + l.packed_defect, 0)
+  const storeAgg = (() => {
+    const m = new Map<string, number>()
+    for (const l of doc.lines) {
+      const k = l.store_name ?? 'Без магазина'
+      m.set(k, (m.get(k) ?? 0) + l.qty)
+    }
+    return [...m.entries()]
+  })()
+
   return (
     <div className="page">
-      <div className="page-header" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <div className="detail-status-row">
-            <button className="btn ghost icon sm" onClick={() => navigate('/inventory/shipments')}>
-              <Icon name="arrowLeft" size={14} />
-            </button>
-            <Badge tone={SHIPMENT_STATUS_TONES[status!] as BadgeTone} dot>
-              {SHIPMENT_STATUS_LABELS[status!]}
-            </Badge>
-            <ShipmentPriorityControl
-              shipment={doc}
-              canEdit={canEditPriority}
-              onSaved={(priorityRank) => setDoc((prev) => prev ? { ...prev, priority_rank: priorityRank } : prev)}
-            />
-            <span className="detail-meta">
-              {doc.doc_number} · {doc.client_name ?? '—'}
-            </span>
-          </div>
-          <div className="page-title">{doc.doc_number}</div>
-        </div>
-
-        <div className="detail-actions">
-          <div className="detail-actions-row">
+      <ShipHeader
+        status={status!}
+        cargoType={doc.cargo_type as ShipmentCargoType}
+        title={doc.doc_number}
+        subtitle={`${isDefectCargo ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
+        onBack={() => navigate('/inventory/shipments')}
+        blockReasons={showBlockReasons ? advanceBlockReasons : []}
+        priority={
+          <ShipmentPriorityControl
+            shipment={doc}
+            canEdit={canEditPriority}
+            onSaved={(priorityRank) => setDoc((prev) => prev ? { ...prev, priority_rank: priorityRank } : prev)}
+          />
+        }
+        actions={
+          <>
             <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
               <Icon name="layers" size={14} />Журнал
               {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
@@ -641,7 +678,7 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="trash" size={14} />Удалить
               </button>
             )}
-            {canEdit && isPacking && (
+            {canEdit && (isPacking || (isDefectCargo && (isRelocating || isAwaitingTrip))) && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
@@ -651,23 +688,23 @@ export function InventoryShipmentDetailPage() {
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            {primary?.show && (
-              <button className="btn primary" disabled={acting} onClick={handleAdvanceClick}>
-                <Icon name={primary.icon} size={14} />{primary.label}
+            {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
+              <button className="btn" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}>
+                <Icon name="truckOut" size={14} />Открыть рейс {doc.trip_number}
               </button>
             )}
-          </div>
-          {showBlockReasons && advanceBlockReasons.length > 0 && (
-            <div className="block-reasons">
-              {advanceBlockReasons.map((reason, index) => (
-                <div key={index}>— {reason}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <ShipmentStepper status={status!} ops={doc.ops} style={{ marginTop: -10 }} />
+            {primary?.show && (
+              <PrimaryAction
+                icon={primary.icon}
+                label={primary.label}
+                hint={primary.hint}
+                disabled={acting}
+                onClick={handleAdvanceClick}
+              />
+            )}
+          </>
+        }
+      />
 
       {error && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
@@ -675,26 +712,30 @@ export function InventoryShipmentDetailPage() {
 
       {isAwaitingTrip && (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Товар разложен по местам хранения. Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.
+          {isDefectCargo
+            ? 'Брак перемещён в зону отгрузки со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'
+            : 'Товар разложен по местоположениям со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'}
         </Alert>
       )}
 
-      <div className={showReadiness ? 'split-360' : undefined}>
-        <div className="col gap-16">
-          <div className="card">
-            <div className="card-head">
-              <Icon name="file" size={15} className="ic-accent" />
-              <div className="card-head-title">Основная информация</div>
-              {canEditInfo && infoSaved && (
-                <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="check" size={12} />Сохранено
-                </span>
-              )}
-            </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock
+            icon="file"
+            title="Основная информация"
+            role="manager"
+            state={isDraft ? 'active' : 'done'}
+            hint={canEditInfo ? 'План можно править до передачи на упаковку' : undefined}
+            right={canEditInfo && infoSaved ? (
+              <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="check" size={12} />Сохранено
+              </span>
+            ) : undefined}
+          >
             {canEditInfo ? (
-              <div className="card-body">
-                <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   <Field label="Клиент" style={{ marginBottom: 0 }}>
                     <div style={{ position: 'relative' }}>
                       <Input
@@ -740,7 +781,9 @@ export function InventoryShipmentDetailPage() {
                       <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
                     </Field>
                   ) : (
-                    <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
+                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                      <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
+                    </Field>
                   )}
                   {showCosts && (
                     <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
@@ -755,7 +798,7 @@ export function InventoryShipmentDetailPage() {
                       />
                     </Field>
                   )}
-                  <Field label="Техническое задание" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                     <AutoGrowTextarea
                       minRows={3}
                       placeholder="Опишите задачу для команды склада"
@@ -765,11 +808,10 @@ export function InventoryShipmentDetailPage() {
                     />
                   </Field>
                 </div>
-              </div>
+              </>
             ) : (
-              <div style={{ padding: '12px 16px' }}>
-                <CargoTypeDisplay value={doc.cargo_type as ShipmentCargoType} />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
                   <div>
                     <div className="field-label"><span>Рейс</span></div>
@@ -800,109 +842,233 @@ export function InventoryShipmentDetailPage() {
                     <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
                   </div>
                 </div>
-              </div>
+              </>
             )}
-          </div>
+          </PhaseBlock>
 
-        </div>
-
-        {showReadiness && (
-          <div className="col gap-16">
-            <div className="card">
-              <div className="card-head">
-                <Icon name="check" size={15} className="ic-success" />
-                <div className="card-head-title">Готовность</div>
-                <span
-                  className="right"
-                  style={{
-                    fontSize: 12,
-                    color: readinessOk ? 'var(--c-success)' : 'var(--c-warning)',
-                    fontWeight: 600,
-                  }}
-                >
-                  {readinessOk ? 'Готово' : 'Не готово'}
-                </span>
-              </div>
-              <div className="readiness-list">
-                {advanceChecks.map((check, index) => (
-                  <div key={index} className="readiness-row">
-                    {check.ok ? (
-                      <div className="readiness-dot ok">
-                        <Icon name="check" size={10} />
-                      </div>
-                    ) : (
-                      <div className="readiness-dot pending" />
-                    )}
-                    <span className={`readiness-label ${check.ok ? 'ok' : 'pending'}`}>{check.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-head">
-          <Icon name="boxes" size={15} className="ic-accent" />
-          <div className="card-head-title">Состав отгрузки</div>
-          {doc.lines.length > 0 && (
-            <span className="badge accent" style={{ marginLeft: 6 }}>{doc.lines.length}</span>
-          )}
-          {canDelete && (
-            <div className="right">
+          <PhaseBlock
+            icon="boxes"
+            title="Состав отгрузки"
+            role="manager"
+            state={compState}
+            hint={compHint}
+            right={canDelete ? (
               <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={acting || !doc.client_id}>
                 <Icon name="plus" size={12} />Добавить товар
               </button>
-            </div>
+            ) : undefined}
+          >
+            {doc.lines.length === 0 ? (
+              <div style={{ padding: '32px 0' }}>
+                <EmptyState
+                  title="Состав пуст"
+                  sub={canDelete ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
+                />
+              </div>
+            ) : (
+              <CompositionTable
+                lines={editableLines}
+                showZone={false}
+                canEditPlan={canEditPlan}
+                canDelete={canDelete}
+                canAttachFiles={canAttachFiles}
+                acting={acting}
+                saving={saving}
+                savingLine={savingLine}
+                uploadingLines={uploadingLines}
+                getDraft={getDraft}
+                getStoreOptions={getLineStoreOptions}
+                onPreviewFile={setFilePreview}
+                onQty={setDraftQty}
+                onStore={setDraftStore}
+                onDelete={handleDeleteLine}
+                onUploadFile={handleUploadFile}
+                onReplaceFile={handleReplaceFile}
+                onDeleteFile={handleDeleteFile}
+              />
+            )}
+          </PhaseBlock>
+
+          {!isDefectCargo && (
+            <PhaseBlock
+              icon="box"
+              title={packPhase.title}
+              role={packPhase.role}
+              state={packPhase.state}
+              hint={packPhase.hint}
+            >
+              {packPhase.mode === null ? (
+                <LockedGrid labels={['На упаковке', 'Годный', 'Брак']} />
+              ) : doc.lines.length === 0 ? (
+                <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                  Нет позиций для упаковки.
+                </div>
+              ) : (
+                <PackingTable
+                  mode={packPhase.mode}
+                  lines={editableLines}
+                  canMove={canMovePacking}
+                  canPack={canPack && isOnPacking}
+                  canReturn={canReturnPacking}
+                  acting={acting}
+                  savingLine={savingLine}
+                  onOpenMove={(line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' })}
+                  onReturn={handleReturnFromPacking}
+                  onOpenPacking={setPackingLine}
+                />
+              )}
+            </PhaseBlock>
+          )}
+
+          {!isDefectCargo && (isDraft || isPacking || isOnPacking) && (
+            <PhaseBlock icon="archive" title="Раскладка и рейс" role="warehouse" state="locked"
+              hint="Местоположения и готовность к рейсу — после упаковки">
+              <LockedGrid labels={['Местоположения', 'Готово к рейсу']} />
+            </PhaseBlock>
+          )}
+
+          {isDefectCargo && isDraft && (
+            <PhaseBlock icon="archive" title="Подготовка к отгрузке" role="warehouse" state="locked"
+              hint="Кладовщик выберет места-источники и перенесёт брак в зону отгрузки">
+              <LockedGrid labels={['Места-источники', 'Готово к рейсу']} />
+            </PhaseBlock>
+          )}
+
+          {isRelocating && !isDefectCargo && (
+            <RelocationPanel
+              docId={docId!}
+              lines={doc.lines}
+              zoneOptions={unloadingZones}
+              canEdit={canRelocate}
+              onDone={refreshAfterLineChange}
+            />
+          )}
+
+          {isRelocating && isDefectCargo && (
+            <DefectPreparePanel
+              docId={docId!}
+              lines={doc.lines}
+              clientId={doc.client_id}
+              canEdit={canRelocate}
+              onDone={refreshAfterLineChange}
+            />
+          )}
+
+          {(isAwaitingTrip || status === 'shipped') && (
+            <RelocationPanel
+              docId={docId!}
+              lines={doc.lines}
+              zoneOptions={unloadingZones}
+              canEdit={false}
+              readOnly
+              onDone={refreshAfterLineChange}
+            />
           )}
         </div>
-        {doc.lines.length === 0 ? (
-          <div style={{ padding: '32px 0' }}>
-            <EmptyState
-              title="Состав пуст"
-              sub={canDelete ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
-            />
-          </div>
-        ) : (
-          <ShipmentLinesTable
-            lines={editableLines}
-            status={doc.status as ShipmentStatus}
-            canEditPlan={canEditPlan}
-            canDelete={canDelete}
-            canAttachFiles={canAttachFiles}
-            canMove={canMovePacking}
-            canPack={canPack && isOnPacking}
-            canReturn={canReturnPacking}
-            acting={acting}
-            saving={saving}
-            savingLine={savingLine}
-            uploadingLines={uploadingLines}
-            getDraft={getDraft}
-            getStoreOptions={getLineStoreOptions}
-            onPreviewFile={setFilePreview}
-            onQty={setDraftQty}
-            onStore={setDraftStore}
-            onOpenMove={(line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' })}
-            onReturn={handleReturnFromPacking}
-            onOpenPacking={setPackingLine}
-            onDelete={handleDeleteLine}
-            onUploadFile={handleUploadFile}
-            onReplaceFile={handleReplaceFile}
-            onDeleteFile={handleDeleteFile}
-          />
-        )}
-      </div>
 
-      {isRelocating && (
-        <RelocationPanel
-          docId={docId!}
-          lines={doc.lines}
-          zoneOptions={unloadingZones}
-          canEdit={canRelocate}
-          onDone={refreshAfterLineChange}
-        />
-      )}
+        {/* Right — маршрут + контекстные панели */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <RailPanel status={status!} ops={doc.ops} cargoType={doc.cargo_type as ShipmentCargoType} />
+
+          {showReadiness && (
+            <ChecklistPanel items={advanceChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
+          )}
+
+          {(isDraft || (isDefectCargo && isRelocating)) && (
+            <Panel icon="chart" title="Итого">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="SKU" mono>{skuCount}</ReadRow>
+                <ReadRow label="Кол-во" mono strong>{planTotal} шт</ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {isPacking && storeAgg.length > 0 && (
+            <Panel icon="building" title="Магазины">
+              <div style={{ padding: '0 2px' }}>
+                {storeAgg.map(([name, qty]) => (
+                  <ReadRow key={name} label={name} mono>{qty} шт</ReadRow>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {isOnPacking && (
+            <Panel icon="box" title="Итог упаковки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="На упаковке" mono>{poolTotal} шт</ReadRow>
+                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood}</span></ReadRow>
+                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect}</span></ReadRow>
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Осталось до плана" mono strong>{Math.max(0, planTotal - packedGood)} шт</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {isRelocating && !isDefectCargo && (
+            <Panel icon="chart" title="Итог раскладки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
+                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
+                <ReadRow label="Упаковано" mono>{packedGood + packedDefect} шт</ReadRow>
+              </div>
+            </Panel>
+          )}
+
+          {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
+            <Panel icon="truckOut" title="Рейс отгрузки">
+              <button
+                className="btn ghost sm"
+                onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                style={{ width: '100%', justifyContent: 'flex-start' }}
+              >
+                <Icon name="truckOut" size={13} />{doc.trip_number}
+              </button>
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                Дата отгрузки (факт) и списание остатков проставляются при отправке рейса.
+              </div>
+            </Panel>
+          )}
+
+          {status === 'shipped' && isDefectCargo && (
+            <Panel icon="chart" title="Итог отгрузки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="Отгружено брака" mono>
+                  <span style={{ color: 'var(--c-warning)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
+                </ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {status === 'shipped' && !isDefectCargo && (
+            <Panel icon="chart" title="Итог отгрузки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="Отгружено годного" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
+                <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+        </div>
+      </div>
 
       <Drawer
         open={opsDrawerOpen}
@@ -1557,15 +1723,13 @@ function StoreCell({
   )
 }
 
-type ShipmentLinesTableProps = {
+type CompositionTableProps = {
   lines:           EditableShipmentLine[]
-  status:          ShipmentStatus
+  // Брак-отгрузка: показываем местоположение-источник строки (брак списывается с него).
+  showZone?:       boolean
   canEditPlan:     boolean
   canDelete:       boolean
   canAttachFiles:  boolean
-  canMove:         boolean
-  canPack:         boolean
-  canReturn:       boolean
   acting:          boolean
   saving:          Record<string, boolean>
   savingLine:      string | null
@@ -1575,28 +1739,20 @@ type ShipmentLinesTableProps = {
   onPreviewFile:   (preview: LineFilePreview) => void
   onQty:           (lineId: string, v: number) => void
   onStore:         (lineId: string, storeId: string, storeName: string | null) => void
-  onOpenMove:      (line: ShipmentLine) => void
-  onReturn:        (line: ShipmentLine) => void
-  onOpenPacking:   (line: ShipmentLine) => void
   onDelete:        (lineId: string) => void
   onUploadFile:    (lineId: string, files: File[]) => void
   onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile:    (lineId: string, fileId: string) => void
 }
 
-function ShipmentLinesTable({
-  lines, status, canEditPlan, canDelete, canAttachFiles, canMove, canPack, canReturn,
+/** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
+function CompositionTable({
+  lines, showZone = false, canEditPlan, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
-  onPreviewFile, onQty, onStore, onOpenMove, onReturn, onOpenPacking, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
-}: ShipmentLinesTableProps) {
+  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
+}: CompositionTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
-  const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
-  const packedTotal = lines.reduce((s, l) => s + l.packed_good + l.packed_defect, 0)
-  const showTransfer = status === 'packing'
-  const showPacking = status === 'on_packing'
-  const showResult = status === 'relocating' || status === 'awaiting_trip' || status === 'shipped'
-  const colCount = 6 + (showTransfer ? 1 : 0) + (showPacking ? 3 : 0) + (showResult ? 1 : 0)
 
   return (
     <Table>
@@ -1604,21 +1760,9 @@ function ShipmentLinesTable({
         <tr>
           <th style={{ width: 32 }} />
           <th>Товар · вариант</th>
+          {showZone && <th style={{ width: 170 }}>Местоположение</th>}
           <th style={{ width: 180 }}>Магазин</th>
           <th style={{ width: 160, textAlign: 'right' }}>План отгрузки</th>
-          {showTransfer && (
-            <th style={{ width: 220 }}>Передача на упаковку</th>
-          )}
-          {showPacking && (
-            <>
-              <th style={{ width: 110, textAlign: 'right' }}>На упаковке</th>
-              <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>
-              <th style={{ width: 300 }}>Действия упаковки</th>
-            </>
-          )}
-          {showResult && (
-            <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>
-          )}
           <th style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
               <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
@@ -1643,13 +1787,13 @@ function ShipmentLinesTable({
                 </div>
               </Td>
               <Td>
-                <LineIdentityCell
-                  name={line.product_name}
-                  sku={line.product_sku}
-                  color={line.color_name}
-                  size={line.size_name}
-                />
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
               </Td>
+              {showZone && (
+                <Td style={{ fontSize: 13 }}>
+                  {line.storage_zone_name ?? <span style={{ color: 'var(--c-warning)' }}>не указано</span>}
+                </Td>
+              )}
               <Td>
                 <StoreCell
                   value={draft.storeId}
@@ -1666,85 +1810,13 @@ function ShipmentLinesTable({
               <Td className="num">
                 {canEditPlan ? (
                   <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
-                    <NumberStep
-                      value={draft.qty}
-                      onChange={(v) => onQty(line.id, v)}
-                      disabled={busy}
-                      warning={planOver}
-                      width={100}
-                    />
+                    <NumberStep value={draft.qty} onChange={(v) => onQty(line.id, v)} disabled={busy} warning={planOver} width={100} />
                     {planOver && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
                   </div>
                 ) : (
                   <span className="num" style={{ fontWeight: 500 }}>{line.qty}</span>
                 )}
               </Td>
-
-              {showTransfer && (
-                <Td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span className="t-sub" style={{ fontSize: 12.5 }}>
-                      На упаковке{' '}
-                      <b className="num" style={{ color: line.available_for_pack > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
-                        {line.available_for_pack}
-                      </b>
-                    </span>
-                    {canMove && (
-                      <button className="btn ghost sm" disabled={busy} title="Передать товар в зону упаковки" onClick={() => onOpenMove(line)}>
-                        <Icon name="forklift" size={12} />Передать
-                      </button>
-                    )}
-                    {canReturn && line.available_for_pack > 0 && (
-                      <button className="btn ghost sm icon" disabled={busy} title="Вернуть на проверку (откат передачи)" onClick={() => onReturn(line)}>
-                        <Icon name="refresh" size={13} />
-                      </button>
-                    )}
-                  </div>
-                </Td>
-              )}
-
-              {showPacking && (
-                <>
-                  <Td className="num">
-                    <span className="num" style={{ color: line.available_for_pack > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
-                      {line.available_for_pack}
-                    </span>
-                  </Td>
-                  <Td className="num">
-                    <span className="num" style={{ fontWeight: 600, color: 'var(--c-success)' }}>{line.packed_good}</span>
-                    <span style={{ color: 'var(--c-text-faint)' }}> / </span>
-                    <span className="num" style={{ fontWeight: 600, color: line.packed_defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{line.packed_defect}</span>
-                  </Td>
-                  <Td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {canPack && (
-                        <button className="btn primary sm" disabled={busy} title="Внести годный/брак с датой упаковки" onClick={() => onOpenPacking(line)}>
-                          <Icon name="check" size={12} />Внести упаковку
-                        </button>
-                      )}
-                      {canMove && (
-                        <button className="btn ghost sm" disabled={busy} title="Подвезти товар на упаковку" onClick={() => onOpenMove(line)}>
-                          <Icon name="forklift" size={12} />Подвезти
-                        </button>
-                      )}
-                      {canReturn && line.available_for_pack > 0 && (
-                        <button className="btn ghost sm icon" disabled={busy} title="Вернуть на проверку (откат передачи)" onClick={() => onReturn(line)}>
-                          <Icon name="refresh" size={13} />
-                        </button>
-                      )}
-                    </div>
-                  </Td>
-                </>
-              )}
-
-              {showResult && (
-                <Td className="num">
-                  <span className="num" style={{ fontWeight: 600, color: 'var(--c-success)' }}>{line.packed_good}</span>
-                  <span style={{ color: 'var(--c-text-faint)' }}> / </span>
-                  <span className="num" style={{ fontWeight: 600, color: line.packed_defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{line.packed_defect}</span>
-                </Td>
-              )}
-
               <Td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
                 <LineFilesCell
                   lineId={line.id}
@@ -1764,20 +1836,125 @@ function ShipmentLinesTable({
                   onDelete={onDeleteFile}
                 />
               </Td>
-
               <Td>
                 {canDelete ? (
                   <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <button
-                      className="btn ghost icon sm"
-                      disabled={busy}
-                      onClick={() => onDelete(line.id)}
-                    >
+                    <button className="btn ghost icon sm" disabled={busy} onClick={() => onDelete(line.id)}>
                       <Icon name="trash" size={13} />
                     </button>
                   </div>
                 ) : null}
               </Td>
+            </tr>
+          )
+        })}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={showZone ? 7 : 6} style={{ padding: 0 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 24, padding: '10px 14px',
+              background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5,
+            }}>
+              <span style={{ fontWeight: 700 }}>Итого</span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>{skuCount} SKU</span>
+              <span style={{ color: 'var(--c-text-subtle)' }}>
+                План <b className="num" style={{ color: 'var(--c-text)' }}>{planTotal}</b>
+              </span>
+            </div>
+          </td>
+        </tr>
+      </tfoot>
+    </Table>
+  )
+}
+
+type PackingTableProps = {
+  // transfer — передача (Кладовщик, packing); packing — годный/брак (Нач. смены, on_packing); result — итог (read-only).
+  mode:          'transfer' | 'packing' | 'result'
+  lines:         EditableShipmentLine[]
+  canMove:       boolean
+  canPack:       boolean
+  canReturn:     boolean
+  acting:        boolean
+  savingLine:    string | null
+  onOpenMove:    (line: ShipmentLine) => void
+  onReturn:      (line: ShipmentLine) => void
+  onOpenPacking: (line: ShipmentLine) => void
+}
+
+/** Упаковка: план-цель + на упаковке + (годный/брак) + действия передачи/упаковки. */
+function PackingTable({
+  mode, lines, canMove, canPack, canReturn, acting, savingLine,
+  onOpenMove, onReturn, onOpenPacking,
+}: PackingTableProps) {
+  const planTotal = lines.reduce((s, l) => s + l.qty, 0)
+  const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
+  const packedTotal = lines.reduce((s, l) => s + l.packed_good + l.packed_defect, 0)
+  const isResult = mode === 'result'
+  const showGoodDefect = mode === 'packing' || mode === 'result'
+  const colCount = isResult ? 3 : showGoodDefect ? 5 : 4
+
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <th>Товар · вариант</th>
+          <th style={{ width: 100, textAlign: 'right' }}>План</th>
+          {!isResult && <th style={{ width: 110, textAlign: 'right' }}>На упаковке</th>}
+          {showGoodDefect && <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>}
+          {!isResult && <th style={{ width: 300 }}>{mode === 'packing' ? 'Действия упаковки' : 'Передача'}</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line) => {
+          const busy = acting || savingLine === line.id
+          return (
+            <tr key={line.id}>
+              <Td>
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+              </Td>
+              <Td className="num"><span className="num" style={{ fontWeight: 500 }}>{line.qty}</span></Td>
+              {!isResult && (
+                <Td className="num">
+                  <span className="num" style={{ color: line.available_for_pack > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
+                    {line.available_for_pack}
+                  </span>
+                </Td>
+              )}
+              {showGoodDefect && (
+                <Td className="num">
+                  <span className="num" style={{ fontWeight: 600, color: 'var(--c-success)' }}>{line.packed_good}</span>
+                  <span style={{ color: 'var(--c-text-faint)' }}> / </span>
+                  <span className="num" style={{ fontWeight: 600, color: line.packed_defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{line.packed_defect}</span>
+                </Td>
+              )}
+              {!isResult && (
+                <Td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {mode === 'packing' && canPack && (
+                      <button className="btn primary sm" disabled={busy} title="Внести годный/брак с датой упаковки" onClick={() => onOpenPacking(line)}>
+                        <Icon name="check" size={12} />Внести упаковку
+                      </button>
+                    )}
+                    {canMove && (
+                      <button
+                        className="btn primary sm"
+                        disabled={busy}
+                        title={mode === 'packing' ? 'Передать ещё товар на упаковку' : 'Передать товар в зону упаковки'}
+                        onClick={() => onOpenMove(line)}
+                      >
+                        <Icon name="forklift" size={12} />{mode === 'packing' ? 'Передать ещё' : 'Передать'}
+                      </button>
+                    )}
+                    {canReturn && line.available_for_pack > 0 && (
+                      <button className="btn ghost sm icon" disabled={busy} title="Вернуть на хранение (откат передачи)" onClick={() => onReturn(line)}>
+                        <Icon name="refresh" size={13} />
+                      </button>
+                    )}
+                  </div>
+                </Td>
+              )}
             </tr>
           )
         })}
@@ -1790,16 +1967,15 @@ function ShipmentLinesTable({
               background: 'var(--c-bg-sunken)', borderTop: '1px solid var(--c-border)', fontSize: 12.5,
             }}>
               <span style={{ fontWeight: 700 }}>Итого</span>
-              <span style={{ color: 'var(--c-text-subtle)' }}>{skuCount} SKU</span>
               <span style={{ color: 'var(--c-text-subtle)' }}>
                 План <b className="num" style={{ color: 'var(--c-text)' }}>{planTotal}</b>
               </span>
-              {(showTransfer || showPacking) && (
+              {!isResult && (
                 <span style={{ color: 'var(--c-text-subtle)' }}>
                   На упаковке <b className="num" style={{ color: 'var(--c-text)' }}>{poolTotal}</b>
                 </span>
               )}
-              {(showPacking || showResult) && (
+              {showGoodDefect && (
                 <span style={{ color: 'var(--c-text-subtle)' }}>
                   Упаковано <b className="num" style={{ color: 'var(--c-text)' }}>{packedTotal}</b>
                 </span>

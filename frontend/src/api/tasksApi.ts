@@ -9,6 +9,7 @@ export type TaskKind =
   | 'shipment_move_in'
   | 'shipment_pack'
   | 'shipment_relocate'
+  | 'shipment_defect_prepare'
 
 export type TaskItem = {
   kind: TaskKind
@@ -20,6 +21,7 @@ export type TaskItem = {
   role: string
   direction: 'inbound' | 'outbound' | null
   since: string | null
+  priority_rank: number | null
 }
 
 export type TasksResponse = {

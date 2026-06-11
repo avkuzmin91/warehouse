@@ -9,6 +9,8 @@ import {
 import {
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
+  shipmentPriorityLabel,
+  shipmentPriorityTone,
   type ShipmentStatus,
 } from '../../../api/shipmentsApi'
 import { useApi } from '../../../hooks/useApi'
@@ -85,7 +87,7 @@ function PlanRow({ item }: { item: OperationalPlanItem }) {
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
           {item.type === 'shipment' && item.priority_rank && (
-            <Badge tone="warning">#{item.priority_rank}</Badge>
+            <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
           )}
           <span
             style={{

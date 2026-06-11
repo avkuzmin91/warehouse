@@ -4,10 +4,7 @@ from datetime import date
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PLANNED,
-    SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_SHIPPED,
 )
@@ -46,11 +43,13 @@ def _accepted_qty_on(connection, day: date) -> int:
 
 
 def _defect_qty_on(connection, day: date) -> int:
-    """Брака выявлено за день (при упаковке): нетто-конвертации в статус defect."""
+    """Брака выявлено за день: нетто-конвертации качества в defect (перемещения не считаются)."""
     row = connection.execute(
         """
-        SELECT COALESCE(SUM(CASE WHEN to_status = 'defect'   THEN qty
-                                 WHEN from_status = 'defect' THEN -qty ELSE 0 END), 0) AS total
+        SELECT COALESCE(SUM(CASE
+                   WHEN to_quality = 'defect'   AND COALESCE(from_quality,'') <> 'defect' THEN qty
+                   WHEN from_quality = 'defect' AND COALESCE(to_quality,'')   <> 'defect' THEN -qty
+                   ELSE 0 END), 0) AS total
         FROM zone_relocations
         WHERE created_at LIKE ?
         """,
@@ -182,8 +181,12 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
                COALESCE(SUM(l.qty) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0), 0) AS total_qty,
                COALESCE((
                    SELECT SUM(CASE
-                       WHEN zr.from_status=? AND zr.to_status IN (?, ?) THEN zr.qty
-                       WHEN zr.to_status=? AND zr.from_status IN (?, ?) THEN -zr.qty
+                       WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
+                       WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
+                       ELSE 0 END)
+                   + SUM(CASE
+                       WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
+                       WHEN zr.from_quality='defect' AND COALESCE(zr.to_quality,'')<>'defect'   THEN -zr.qty
                        ELSE 0 END)
                    FROM zone_relocations zr
                    JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -197,16 +200,14 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
           AND d.ship_date <= ?
         GROUP BY d.id
         ORDER BY
-          d.ship_date ASC,
           CASE WHEN d.priority_rank IS NULL THEN 1 ELSE 0 END,
           d.priority_rank ASC NULLS LAST,
+          d.ship_date ASC,
           d.created_at ASC,
           d.doc_number ASC
         LIMIT ?
         """,
         (
-            RECEIPT_STATUS_ON_REVIEW, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT,
-            RECEIPT_STATUS_ON_REVIEW, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT,
             SHIPMENT_STATUS_PACKING, today.isoformat(), shipments_limit,
         ),
     ).fetchall()

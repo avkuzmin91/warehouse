@@ -674,6 +674,8 @@ def _row_to_product_item(row: Mapping[str, Any]) -> ProductItem:
         client_id=row["client_id"],
         client_name=row["client_name"],
         variant_count=int(row["variant_count"] or 0),
+        stock_total=max(0, int(row.get("stock_total") or 0)),
+        defect_total=max(0, int(row.get("defect_total") or 0)),
         is_active=bool(row["is_active"]),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],

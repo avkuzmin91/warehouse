@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
-import { moveShipmentLineToPacking } from '../../../../api/shipmentsApi'
-import type { ShipmentLine, ShipmentMoveAllocation } from '../../../../api/shipmentsApi'
-import { Drawer } from '../../../feedback/Drawer'
-import { Combobox } from '../../../data/Combobox'
-import type { ComboboxOption } from '../../../data/Combobox'
-import { NumberStep } from '../../../features/inventory/shared/NumberStep'
-import { Icon } from '../../../primitives/Icon'
-import { useToast } from '../../../feedback/Toast'
+import { moveShipmentLineToPacking } from '../../../../../api/shipmentsApi'
+import type { ShipmentLine, ShipmentMoveAllocation } from '../../../../../api/shipmentsApi'
+import { Drawer } from '../../../../feedback/Drawer'
+import { Combobox } from '../../../../data/Combobox'
+import type { ComboboxOption } from '../../../../data/Combobox'
+import { NumberStep } from '../../../inventory/shared/NumberStep'
+import { Icon } from '../../../../primitives/Icon'
+import { useToast } from '../../../../feedback/Toast'
 
 export type MoveZoneOption = { id: string; name: string; available: number }
 
@@ -77,7 +77,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
     try {
       await moveShipmentLineToPacking(docId, line.id, allocations)
       await onDone()
-      toast(mode === 'replenish' ? 'Товар подвезён на упаковку' : 'Товар передан на упаковку', 'success')
+      toast('Товар передан на упаковку', 'success')
       onClose()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка перемещения', 'error')
@@ -86,7 +86,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
     }
   }
 
-  const title = mode === 'replenish' ? 'Подвезти на упаковку' : 'Передать на упаковку'
+  const title = mode === 'replenish' ? 'Передать ещё на упаковку' : 'Передать на упаковку'
 
   return (
     <Drawer
@@ -103,7 +103,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn ghost" onClick={onClose} disabled={saving}>Отмена</button>
             <button className="btn primary" onClick={submit} disabled={saving || noZones || total <= 0}>
-              <Icon name="forklift" size={14} />{mode === 'replenish' ? 'Подвезти' : 'Передать'}
+              <Icon name="forklift" size={14} />{mode === 'replenish' ? 'Передать ещё' : 'Передать'}
             </button>
           </div>
         </div>
@@ -129,7 +129,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
 
       {noZones ? (
         <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
-          Нет товара «на проверке» для этой позиции — переместить нечего.
+          Нет свободного товара на хранении для этой позиции — переместить нечего.
         </div>
       ) : (
         <>
@@ -138,7 +138,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
               const options: ComboboxOption[] = zoneOptions.map((z) => ({
                 value: z.id,
                 label: z.name,
-                sub: `на проверке ${z.available.toLocaleString('ru-RU')} шт`,
+                sub: `на хранении ${z.available.toLocaleString('ru-RU')} шт`,
               }))
               const avail = row.zoneId ? (availById.get(row.zoneId) ?? 0) : 0
               return (

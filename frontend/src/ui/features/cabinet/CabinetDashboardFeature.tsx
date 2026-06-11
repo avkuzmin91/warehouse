@@ -22,8 +22,12 @@ export function CabinetDashboardFeature() {
   const balanceItems = balances.data?.items ?? []
   const productItems = products.data?.items ?? []
   const totalShownQty = balanceItems.reduce((sum, item) => sum + item.total, 0)
-  const goodShownQty = balanceItems.reduce((sum, item) => sum + item.good, 0)
-  const defectShownQty = balanceItems.reduce((sum, item) => sum + item.defect, 0)
+  const goodShownQty = balanceItems.reduce(
+    (sum, item) => sum + item.storage_good + item.packing_good + item.ready_good, 0,
+  )
+  const defectShownQty = balanceItems.reduce(
+    (sum, item) => sum + item.storage_defect + item.packing_defect + item.ready_defect, 0,
+  )
 
   return (
     <ListPage

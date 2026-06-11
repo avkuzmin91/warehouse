@@ -44,6 +44,34 @@ class ShipmentPackingResponse(BaseModel):
     entries:            list[ShipmentPackingEntry]
 
 
+class ShipmentPackingProductivityRow(BaseModel):
+    client_id:    str | None = None
+    client_name:  str | None = None
+    product_id:   str
+    product_sku:  str | None = None
+    product_name: str | None = None
+    good:         int
+    defect:       int
+    total:        int
+
+
+class ShipmentPackingProductivityDay(BaseModel):
+    packed_date: str
+    good:        int
+    defect:      int
+    total:       int
+    sku_count:   int
+    doc_count:   int
+    rows:        list[ShipmentPackingProductivityRow]
+
+
+class ShipmentPackingProductivityResponse(BaseModel):
+    days:         list[ShipmentPackingProductivityDay]
+    total_good:   int
+    total_defect: int
+    total:        int
+
+
 class ShipmentMoveAllocation(BaseModel):
     from_zone_id: str | None = None
     qty: int = Field(ge=1)
@@ -85,6 +113,21 @@ class ShipmentFinishRelocationPayload(BaseModel):
     lines: list[ShipmentRelocateLine] = []
 
 
+class ShipmentDefectSourceAllocation(BaseModel):
+    zone_id:   str
+    zone_name: str | None = None
+    qty:       int = Field(ge=1)
+
+
+class ShipmentDefectRelocateLine(BaseModel):
+    line_id: str
+    sources: list[ShipmentDefectSourceAllocation] = []
+
+
+class ShipmentFinishDefectRelocationPayload(BaseModel):
+    lines: list[ShipmentDefectRelocateLine] = []
+
+
 class ShipmentDocCreate(BaseModel):
     cargo_type:      str = "good"
     client_id:       str | None = None
@@ -105,13 +148,13 @@ class ShipmentDocUpdate(BaseModel):
     carrier:         str | None = None
     logistics_cost:  float | None = None
     ship_date:       str | None = None
-    priority_rank:   int | None = Field(default=None, ge=1, le=999)
+    priority_rank:   int | None = Field(default=None, ge=1, le=2)
     actual_ship_date: str | None = None
     comment:         str | None = None
 
 
 class ShipmentPriorityUpdate(BaseModel):
-    priority_rank: int | None = Field(default=None, ge=1, le=999)
+    priority_rank: int | None = Field(default=None, ge=1, le=2)
 
 
 class ShipmentLineFile(BaseModel):
@@ -120,6 +163,13 @@ class ShipmentLineFile(BaseModel):
     url:        str
     mime_type:  str | None = None
     created_at: str
+
+
+class ShipmentLinePlacement(BaseModel):
+    kind:      str  # 'good' | 'defect'
+    zone_id:   str | None
+    zone_name: str | None
+    qty:       int
 
 
 class ShipmentLineItem(BaseModel):
@@ -140,6 +190,7 @@ class ShipmentLineItem(BaseModel):
     storage_zone_name: str | None
     store_id:          str | None
     store_name:        str | None
+    placements:        list[ShipmentLinePlacement] = []
     files:             list[ShipmentLineFile] = []
 
 

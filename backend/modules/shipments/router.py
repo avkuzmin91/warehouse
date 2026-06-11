@@ -13,8 +13,10 @@ from config import (
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
     SHIPMENT_CANCELLABLE_STATUSES,
+    SHIPMENT_CANCELLABLE_STATUSES_DEFECT,
     SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REVERT_TRANSITIONS,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
@@ -36,11 +38,13 @@ from modules.shipments.schemas import (
     ShipmentDetailResponse,
     ShipmentDocCreate,
     ShipmentDocUpdate,
+    ShipmentFinishDefectRelocationPayload,
     ShipmentFinishRelocationPayload,
     ShipmentLineFile,
     ShipmentLineIn,
     ShipmentLineItem,
     ShipmentLinePackPayload,
+    ShipmentLinePlacement,
     ShipmentLinesListItem,
     ShipmentLinesResponse,
     ShipmentListItem,
@@ -48,12 +52,14 @@ from modules.shipments.schemas import (
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
     ShipmentPackingEntry,
+    ShipmentPackingProductivityResponse,
     ShipmentPackingResponse,
     ShipmentPriorityUpdate,
     ShipmentReturnFromPackingPayload,
 )
 from modules.shipments.service import (
     advance_shipment,
+    finish_defect_relocation,
     finish_relocation,
     line_on_packing_qty,
     line_packed_breakdown,
@@ -61,7 +67,9 @@ from modules.shipments.service import (
     move_line_to_packing,
     next_doc_number,
     normalize_cargo_type,
+    packing_productivity,
     record_packing,
+    return_defect_to_storage,
     return_line_from_packing,
     reverse_packing_entry,
 )
@@ -81,11 +89,15 @@ _FILE_FINAL_STATUSES = {SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED}
 
 def _shipment_priority_order(alias: str = "d") -> str:
     return (
-        f"{alias}.ship_date DESC NULLS LAST, "
         f"CASE WHEN {alias}.priority_rank IS NULL THEN 1 ELSE 0 END, "
         f"{alias}.priority_rank ASC NULLS LAST, "
+        f"{alias}.ship_date ASC NULLS LAST, "
         f"{alias}.created_at DESC"
     )
+
+
+def _priority_label(rank: int | None) -> str:
+    return SHIPMENT_PRIORITY_LABELS.get(rank, f"#{rank}")
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
@@ -223,6 +235,7 @@ def list_shipments(
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
+    cargo_type: str | None = Query(None),
     available_for_trip_id: str | None = Query(None),
     user=Depends(_get_viewer),
 ):
@@ -231,6 +244,8 @@ def list_shipments(
         conds = ["d.is_deleted = 0"]
         params: list = []
         use_priority_order = overdue
+        if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if available_for_trip_id and available_for_trip_id.strip():
             conds.append(
                 "NOT EXISTS (SELECT 1 FROM trip_lines tl"
@@ -243,11 +258,13 @@ def list_shipments(
             allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
             if len(allowed) == 1:
                 conds.append("d.status = ?"); params.append(allowed[0])
-                if allowed[0] == SHIPMENT_STATUS_PACKING:
-                    use_priority_order = True
             elif len(allowed) > 1:
                 placeholders = ",".join("?" for _ in allowed)
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
+            if allowed and all(
+                s not in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED) for s in allowed
+            ):
+                use_priority_order = True
         if overdue:
             today = date.today().isoformat()
             conds.append("d.status = ?")
@@ -283,8 +300,12 @@ def list_shipments(
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
                     COALESCE((
                         SELECT SUM(CASE
-                            WHEN zr.to_status IN ('good','defect')   THEN zr.qty
-                            WHEN zr.from_status IN ('good','defect') THEN -zr.qty
+                            WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
+                            WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
+                            ELSE 0 END)
+                        + SUM(CASE
+                            WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
+                            WHEN zr.from_quality='defect' AND COALESCE(zr.to_quality,'')<>'defect'   THEN -zr.qty
                             ELSE 0 END)
                         FROM zone_relocations zr
                         JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -345,11 +366,14 @@ def list_shipment_lines(
     date_from: str | None = Query(None),
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
+    cargo_type: str | None = Query(None),
     user=Depends(_get_viewer),
 ):
     with get_connection() as conn:
         conds = ["d.is_deleted = 0", "l.is_deleted = 0"]
         params: list = []
+        if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if status:
             requested = [s.strip() for s in status.split(",") if s.strip()]
             allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
@@ -445,7 +469,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             (doc_id,),
         ).fetchone()
         lines_rows = conn.execute(
-            "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+            "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
             (doc_id,),
         ).fetchall()
         files_rows = conn.execute(
@@ -460,14 +484,44 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_status='good'   THEN qty WHEN from_status='good'   THEN -qty ELSE 0 END), 0) AS good,
-                  COALESCE(SUM(CASE WHEN to_status='defect' THEN qty WHEN from_status='defect' THEN -qty ELSE 0 END), 0) AS defect
+                  COALESCE(SUM(CASE WHEN to_op='ready'   AND COALESCE(from_op,'')<>'ready' THEN qty
+                                    WHEN from_op='ready' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
+                                    WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
                FROM zone_relocations
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
                GROUP BY shipment_line_id""",
             (doc_id,),
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
+
+        # Раскладка по местам (годный: ready→ready из зоны упаковки; брак с упаковки:
+        # packing→storage; подготовка брак-отгрузки: storage→ready в зону отгрузки),
+        # чтобы показывать её после перемещения только для просмотра.
+        placement_rows = conn.execute(
+            """SELECT shipment_line_id, from_quality AS kind, to_zone_id,
+                  MIN(to_zone_name) AS to_zone_name, COALESCE(SUM(qty), 0) AS qty
+               FROM zone_relocations
+               WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
+                 AND (
+                     (from_op = 'ready' AND to_op = 'ready')
+                     OR (from_op = 'packing' AND to_op = 'storage' AND from_quality = 'defect')
+                     OR (from_op = 'storage' AND to_op = 'ready' AND from_quality = 'defect')
+                 )
+               GROUP BY shipment_line_id, from_quality, to_zone_id
+               HAVING COALESCE(SUM(qty), 0) <> 0
+               ORDER BY MIN(to_zone_name)""",
+            (doc_id,),
+        ).fetchall()
+        placements_by_line: dict[str, list[ShipmentLinePlacement]] = {}
+        for r in placement_rows:
+            lid = str(r["shipment_line_id"])
+            placements_by_line.setdefault(lid, []).append(ShipmentLinePlacement(
+                kind=str(r["kind"]),
+                zone_id=r["to_zone_id"],
+                zone_name=r["to_zone_name"],
+                qty=int(r["qty"] or 0),
+            ))
 
         available_for_pack = {
             str(l["id"]): line_on_packing_qty(conn, str(l["id"]))
@@ -506,6 +560,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             storage_zone_name=l["storage_zone_name"],
             store_id=l["store_id"],
             store_name=l["store_name"],
+            placements=placements_by_line.get(str(l["id"]), []),
             files=files_by_line.get(str(l["id"]), []),
         )
         for l in lines_rows
@@ -571,11 +626,10 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
             "UPDATE shipment_docs SET priority_rank = ?, updated_at = ? WHERE id = ?",
             (new_rank, now, doc_id),
         )
-        old_label = f"#{old_rank}" if old_rank is not None else "без приоритета"
-        new_label = f"#{new_rank}" if new_rank is not None else "без приоритета"
         conn.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE, f"Приоритет отгрузки: {old_label} → {new_label}", now, uid),
+            (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE,
+             f"Приоритет отгрузки: {_priority_label(old_rank)} → {_priority_label(new_rank)}", now, uid),
         )
         conn.commit()
     return {"message": "ok"}
@@ -634,11 +688,10 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
             new_rank = fields["priority_rank"]
             if old_rank != new_rank:
-                old_label = f"#{old_rank}" if old_rank is not None else "без приоритета"
-                new_label = f"#{new_rank}" if new_rank is not None else "без приоритета"
                 conn.execute(
                     "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                    (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE, f"Приоритет отгрузки: {old_label} → {new_label}", now, uid),
+                    (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE,
+                     f"Приоритет отгрузки: {_priority_label(old_rank)} → {_priority_label(new_rank)}", now, uid),
                 )
         conn.commit()
     return {"message": "ok"}
@@ -724,6 +777,20 @@ def get_line_packing(doc_id: str, line_id: str, user=Depends(_get_viewer)):
         )
 
 
+@router.get("/shipments/packing/productivity", response_model=ShipmentPackingProductivityResponse)
+def get_packing_productivity(
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    user=Depends(_get_viewer),
+):
+    with get_connection() as conn:
+        return packing_productivity(
+            conn, date_from=date_from, date_to=date_to, client_id=client_id, search=search,
+        )
+
+
 @router.post("/shipments/{doc_id}/lines/{line_id}/packing/{entry_id}/reverse")
 def reverse_line_packing(doc_id: str, line_id: str, entry_id: str, user=Depends(_get_packer)):
     uid = str(user["id"])
@@ -787,25 +854,46 @@ def finish_shipment_relocation(doc_id: str, body: ShipmentFinishRelocationPayloa
     return {"message": next_status}
 
 
+@router.post("/shipments/{doc_id}/finish-defect-relocation")
+def finish_shipment_defect_relocation(doc_id: str, body: ShipmentFinishDefectRelocationPayload, user=Depends(_get_warehouse)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        next_status = finish_defect_relocation(conn, doc_id, body.lines, uid)
+    return {"message": next_status}
+
+
 @router.post("/shipments/{doc_id}/cancel")
 def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, cargo_type, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) not in SHIPMENT_CANCELLABLE_STATUSES:
-            raise HTTPException(status_code=400, detail="Аннулировать можно только до передачи на упаковку")
+        is_defect_cargo = normalize_cargo_type(row["cargo_type"]) == SHIPMENT_CARGO_DEFECT
+        cancellable = SHIPMENT_CANCELLABLE_STATUSES_DEFECT if is_defect_cargo else SHIPMENT_CANCELLABLE_STATUSES
+        if str(row["status"]) not in cancellable:
+            raise HTTPException(status_code=400, detail="Документ нельзя аннулировать в текущем статусе")
+        cancel_comment = None
+        if is_defect_cargo:
+            returned = return_defect_to_storage(conn, doc_id, uid)
+            if returned > 0:
+                cancel_comment = f"Брак возвращён на исходные места: {returned} шт."
         conn.execute(
-            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
+            "UPDATE shipment_docs SET status=?, priority_rank=NULL, updated_at=? WHERE id=?",
             (SHIPMENT_STATUS_CANCELLED, now, doc_id),
         )
+        if row.get("priority_rank") is not None:
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE,
+                 "Приоритет снят: документ аннулирован", now, uid),
+            )
         conn.execute(
-            "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
-            (str(uuid4()), doc_id, "cancel", now, uid),
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, "cancel", cancel_comment, now, uid),
         )
         conn.commit()
     return {"message": SHIPMENT_STATUS_CANCELLED}

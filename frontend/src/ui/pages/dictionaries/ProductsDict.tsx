@@ -7,12 +7,19 @@ import type { ProductItem, ProductVariantItem, InventoryProductTypeLookup } from
 import { useLookups } from '../../../hooks/useLookups'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
-import { Checkbox } from '../../primitives/Checkbox'
 import { EmptyState } from '../../primitives/EmptyState'
 import { FiltersBar, FilterSelect } from '../../data/FiltersBar'
 import { Pagination } from '../../data/Pagination'
 
 const LIMIT = 20
+
+function variantCountLabel(n: number) {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return `${n} вариант`
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} варианта`
+  return `${n} вариантов`
+}
 
 const ACTUALITY_OPTIONS = [
   { value: '', label: 'Все' },
@@ -116,7 +123,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
         </div>
         <FilterSelect label="Тип" value={typeId} options={typeOptions} onChange={(v) => { setTypeId(v); setPage(1) }} />
         <FilterSelect label="Клиент" value={clientId} options={clientOptions} onChange={(v) => { setClientId(v); setPage(1) }} />
-        <FilterSelect label="Актуальность" value={actuality} options={ACTUALITY_OPTIONS} onChange={(v) => { setActuality(v); setPage(1) }} />
+        <FilterSelect label="Статус" value={actuality} options={ACTUALITY_OPTIONS} onChange={(v) => { setActuality(v); setPage(1) }} />
         {hasFilters && (
           <button className="btn ghost sm" onClick={() => { setSearch(''); setTypeId(''); setClientId(''); setActuality(''); setPage(1) }}>
             <Icon name="x" size={12} />Сбросить
@@ -132,24 +139,23 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
             <table className="t">
               <thead>
                 <tr>
-                  <th style={{ width: 30 }}>
-                    <Checkbox checked={false} onChange={() => {}} />
-                  </th>
                   <th style={{ width: 50 }}></th>
                   <th>Товар · SKU</th>
-                  <th style={{ width: 140 }}>Тип</th>
-                  <th style={{ width: 150 }}>Клиент</th>
-                  <th style={{ width: 90, textAlign: 'right' }}>Варианты</th>
+                  <th style={{ width: 130 }}>Тип</th>
+                  <th style={{ width: 140 }}>Клиент</th>
+                  <th style={{ width: 80, textAlign: 'right' }}>Годный</th>
+                  <th style={{ width: 64, textAlign: 'right' }}>Брак</th>
                   <th style={{ width: 90 }}>Статус</th>
+                  <th style={{ width: 36 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24 }}>
                     <span className="text-sm muted">Загрузка…</span>
                   </td></tr>
                 ) : products.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding: 32 }}>
+                  <tr><td colSpan={8} style={{ padding: 32 }}>
                     <EmptyState
                       title="Товары не найдены"
                       sub={hasFilters ? 'Попробуйте изменить фильтры' : 'Добавьте первый товар'}
@@ -160,14 +166,11 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
                     <tr
                       key={p.id}
                       style={{ cursor: 'pointer', background: selectedId === p.id ? 'var(--c-bg-sunken)' : undefined }}
-                      onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                      onClick={() => navigate(`/dictionaries/products/${p.id}`)}
                     >
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <Checkbox checked={false} onChange={() => {}} />
-                      </td>
                       <td>
                         <div style={{
-                          width: 32, height: 32, borderRadius: 6,
+                          width: 36, height: 36, borderRadius: 6,
                           background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           overflow: 'hidden',
@@ -179,19 +182,35 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
                       </td>
                       <td>
                         <div style={{ fontWeight: 450 }}>{p.name}</div>
-                        <div className="text-xs subtle mono">{p.sku_base}</div>
+                        <div className="text-xs subtle">
+                          <span className="mono">{p.sku_base}</span> · {variantCountLabel(p.variant_count)}
+                        </div>
                       </td>
                       <td>
                         {p.type_name && <Badge>{p.type_name}</Badge>}
                       </td>
                       <td className="text-sm">{p.client_name ?? <span className="faint">—</span>}</td>
+                      <td className="num" style={p.stock_total > 0 ? { color: 'var(--c-success)', fontWeight: 500 } : { color: 'var(--c-text-faint)' }}>
+                        {p.stock_total.toLocaleString('ru-RU')}
+                      </td>
                       <td className="num">
-                        <span className="badge accent" style={{ height: 18 }}>{p.variant_count} шт</span>
+                        {p.defect_total > 0
+                          ? <span style={{ color: 'var(--c-warning)', fontWeight: 500 }}>{p.defect_total.toLocaleString('ru-RU')}</span>
+                          : <span className="faint">—</span>}
                       </td>
                       <td>
                         <Badge tone={p.is_active ? 'success' : ''} dot>
                           {p.is_active ? 'Активен' : 'Архив'}
                         </Badge>
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="btn ghost icon sm"
+                          title="Показать варианты"
+                          onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                        >
+                          <Icon name="list" size={14} style={selectedId === p.id ? { color: 'var(--c-accent)' } : undefined} />
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -207,8 +226,8 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
           {!selectedProduct ? (
             <div style={{ padding: '40px 16px', textAlign: 'center' }}>
               <Icon name="list" size={22} style={{ color: 'var(--c-text-faint)', marginBottom: 10, display: 'block', margin: '0 auto 10px' }} />
-              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', fontWeight: 450 }}>Выберите товар</div>
-              <div style={{ fontSize: 12, color: 'var(--c-text-faint)', marginTop: 4 }}>Варианты появятся здесь</div>
+              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', fontWeight: 450 }}>Варианты товара</div>
+              <div style={{ fontSize: 12, color: 'var(--c-text-faint)', marginTop: 4 }}>Нажмите на иконку списка в строке товара</div>
             </div>
           ) : (
             <>
@@ -277,6 +296,15 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
                           </td>
                         </tr>
                       ))}
+                      <tr>
+                        <td className="text-sm" style={{ fontWeight: 500 }}>Итого</td>
+                        <td className="num" style={{ fontWeight: 500 }}>
+                          {variants.reduce((s, v) => s + v.stock, 0).toLocaleString('ru-RU')}
+                        </td>
+                        <td className="num" style={{ fontWeight: 500 }}>
+                          {variants.reduce((s, v) => s + v.defect_qty, 0).toLocaleString('ru-RU')}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 )}

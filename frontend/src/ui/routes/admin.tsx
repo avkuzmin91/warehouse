@@ -41,6 +41,9 @@ const ProductCreatePage = lazy(() =>
 const ProductEditPage = lazy(() =>
   import('../pages/ProductEditPage').then((m) => ({ default: m.ProductEditPage })),
 )
+const ProductViewPage = lazy(() =>
+  import('../pages/ProductViewPage').then((m) => ({ default: m.ProductViewPage })),
+)
 
 export const adminRoutes = [
   <Route key="home" path="/home" element={<HomePage />} />,
@@ -86,5 +89,6 @@ export const adminRoutes = [
   <Route key="dictionaries-unloading-zones" path="/dictionaries/unloading-zones" element={<Navigate to="/dictionaries?type=unloading-zones" replace />} />,
 
   <Route key="dictionaries-products-new" path="/dictionaries/products/new" element={<ProductCreatePage />} />,
-  <Route key="dictionaries-products-id" path="/dictionaries/products/:id" element={<ProductEditPage />} />,
+  <Route key="dictionaries-products-id" path="/dictionaries/products/:id" element={<ProductViewPage />} />,
+  <Route key="dictionaries-products-id-edit" path="/dictionaries/products/:id/edit" element={<ProductEditPage />} />,
 ]

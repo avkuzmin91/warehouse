@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { getMyTasks, taskLink } from '../../../api/tasksApi'
 import type { TaskItem, TaskKind } from '../../../api/tasksApi'
 import { isOutbound } from '../../../api/tripsApi'
+import { shipmentPriorityLabel, shipmentPriorityTone } from '../../../api/shipmentsApi'
+import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
@@ -17,6 +19,7 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   shipment_move_in: 'forklift',
   shipment_pack: 'boxOut',
   shipment_relocate: 'forklift',
+  shipment_defect_prepare: 'forklift',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -28,6 +31,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   shipment_move_in: 'Передать на упаковку',
   shipment_pack: 'Упаковать',
   shipment_relocate: 'Разложить по местам',
+  shipment_defect_prepare: 'Подготовить к отгрузке',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -103,7 +107,9 @@ export function MyTasksFeature() {
 
   const tasks: TaskItem[] = [...(data?.items ?? [])]
     .filter((task) => isTaskVisibleForRole(task, user?.role))
-    .sort((a, b) => (a.since ?? '').localeCompare(b.since ?? ''))
+    .sort((a, b) =>
+      (a.priority_rank ?? Infinity) - (b.priority_rank ?? Infinity)
+      || (a.since ?? '').localeCompare(b.since ?? ''))
   const roleLabel = ROLE_LABEL[user?.role ?? ''] ?? (user?.role ?? '—')
   const loadedCount = data?.items.length ?? tasks.length
   const totalCount = data?.total ?? loadedCount
@@ -160,6 +166,9 @@ export function MyTasksFeature() {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span style={{ fontSize: 14.5, fontWeight: 600 }}>{taskTitle(t)}</span>
                       <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{t.doc_number}</span>
+                      {t.priority_rank && (
+                        <Badge tone={shipmentPriorityTone(t.priority_rank)}>{shipmentPriorityLabel(t.priority_rank)}</Badge>
+                      )}
                     </div>
                     <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1 }}>
                       {taskSub(t)}

@@ -1,14 +1,14 @@
-import type { ShipmentOp } from '../../../../api/shipmentsApi'
-import { Avatar, getInitials } from '../../../primitives/Avatar'
-import { Icon } from '../../../primitives/Icon'
-import { fmtDateTime } from '../../../../utils/format'
+import type { ShipmentOp } from '../../../../../api/shipmentsApi'
+import { Avatar, getInitials } from '../../../../primitives/Avatar'
+import { Icon } from '../../../../primitives/Icon'
+import { fmtDateTime } from '../../../../../utils/format'
 import { OP_ICONS, OP_LABELS, OP_TONES } from '../shared/opLabels'
 
 const BG_MAP: Record<string, string> = {
   accent: 'var(--c-accent-bg)',
   success: 'var(--c-success-bg)',
   warning: 'color-mix(in oklab, var(--c-warning) 18%, var(--c-bg))',
-  info: 'color-mix(in oklab, var(--c-info, #3b82f6) 15%, var(--c-bg))',
+  info: 'color-mix(in oklab, var(--c-info) 15%, var(--c-bg))',
   danger: 'color-mix(in oklab, var(--c-danger) 12%, var(--c-bg))',
   '': 'var(--c-bg-sunken)',
 }
@@ -17,7 +17,7 @@ const BORDER_MAP: Record<string, string> = {
   accent: 'var(--c-accent-border)',
   success: 'color-mix(in oklab, var(--c-success) 35%, transparent)',
   warning: 'color-mix(in oklab, var(--c-warning) 40%, transparent)',
-  info: 'color-mix(in oklab, var(--c-info, #3b82f6) 35%, transparent)',
+  info: 'color-mix(in oklab, var(--c-info) 35%, transparent)',
   danger: 'color-mix(in oklab, var(--c-danger) 35%, transparent)',
   '': 'var(--c-border)',
 }
@@ -26,7 +26,7 @@ const COLOR_MAP: Record<string, string> = {
   accent: 'var(--c-accent)',
   success: 'var(--c-success)',
   warning: 'var(--c-warning)',
-  info: 'var(--c-info, #3b82f6)',
+  info: 'var(--c-info)',
   danger: 'var(--c-danger)',
   '': 'var(--c-text-muted)',
 }

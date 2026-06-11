@@ -6,6 +6,7 @@ from uuid import uuid4
 from config import (
     RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_PLAN_FIX,
+    RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
     RECEIPT_STATUS_TRANSITIONS,
 )
@@ -264,7 +265,7 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
     op_type = (
-        RECEIPT_OP_PLAN_FIX if next_status == "planned" else
+        RECEIPT_OP_PLAN_FIX if next_status == RECEIPT_STATUS_PLANNED else
         RECEIPT_OP_INTAKE_START
     )
 

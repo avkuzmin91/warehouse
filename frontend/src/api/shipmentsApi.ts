@@ -36,6 +36,30 @@ export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
   'draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip', 'shipped',
 ]
 
+// Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
+export const SHIPMENT_PRIORITY_URGENT = 1
+export const SHIPMENT_PRIORITY_HIGH   = 2
+
+export const SHIPMENT_PRIORITY_LABELS: Record<number, string> = {
+  [SHIPMENT_PRIORITY_URGENT]: 'Срочно',
+  [SHIPMENT_PRIORITY_HIGH]:   'Повышенный',
+}
+
+export function shipmentPriorityLabel(rank: number | null): string {
+  return (rank != null && SHIPMENT_PRIORITY_LABELS[rank]) || 'Обычный'
+}
+
+export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' | '' {
+  if (rank === SHIPMENT_PRIORITY_URGENT) return 'danger'
+  if (rank === SHIPMENT_PRIORITY_HIGH) return 'warning'
+  return ''
+}
+
+/** Статусы отгрузок, доступные для привязки к рейсу: любые, кроме завершённых (shipped/cancelled). */
+export const SHIPMENT_TRIP_SELECTABLE_STATUSES: ShipmentStatus[] = [
+  'draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip',
+]
+
 export type ShipmentCargoType = 'good' | 'defect'
 
 export type ShipmentOpType =
@@ -59,6 +83,13 @@ export type ShipmentLineFile = {
   created_at: string
 }
 
+export type ShipmentLinePlacement = {
+  kind:      'good' | 'defect'
+  zone_id:   string | null
+  zone_name: string | null
+  qty:       number
+}
+
 export type ShipmentLine = {
   id:                string
   product_id:        string
@@ -77,6 +108,7 @@ export type ShipmentLine = {
   storage_zone_name: string | null
   store_id:          string | null
   store_name:        string | null
+  placements:        ShipmentLinePlacement[]
   files:             ShipmentLineFile[]
 }
 
@@ -162,6 +194,7 @@ export type ShipmentListParams = {
   date_from?: string
   date_to?:   string
   overdue?:   boolean
+  cargo_type?: ShipmentCargoType
   /** Кандидаты на привязку к рейсу: исключает отгрузки, привязанные к другому активному рейсу. */
   available_for_trip_id?: string
 }
@@ -236,6 +269,7 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
   if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
@@ -254,6 +288,7 @@ export function listShipmentLines(params: ShipmentListParams = {}, signal?: Abor
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
   const q = sp.toString()
   return request<ShipmentLinesResponse>(`/shipments/lines${q ? `?${q}` : ''}`, { signal })
 }
@@ -271,7 +306,9 @@ export function updateShipment(id: string, body: ShipmentDocUpdate) {
 }
 
 export function updateShipmentPriority(id: string, priorityRank: number | null) {
-  return request<{ message: string }>(`/shipments/${id}`, {
+  // Выделенный эндпоинт: общий PATCH разрешён только в draft/packing,
+  // а приоритет редактируется до самой отправки.
+  return request<{ message: string }>(`/shipments/${id}/priority`, {
     method: 'PATCH',
     body: JSON.stringify({ priority_rank: priorityRank }),
   })
@@ -328,6 +365,51 @@ export function reversePackingEntry(docId: string, lineId: string, entryId: stri
   )
 }
 
+export type PackingProductivityRow = {
+  client_id:    string | null
+  client_name:  string | null
+  product_id:   string
+  product_sku:  string | null
+  product_name: string | null
+  good:         number
+  defect:       number
+  total:        number
+}
+
+export type PackingProductivityDay = {
+  packed_date: string
+  good:        number
+  defect:      number
+  total:       number
+  sku_count:   number
+  doc_count:   number
+  rows:        PackingProductivityRow[]
+}
+
+export type PackingProductivityResponse = {
+  days:         PackingProductivityDay[]
+  total_good:   number
+  total_defect: number
+  total:        number
+}
+
+export type PackingProductivityParams = {
+  date_from?: string
+  date_to?:   string
+  client_id?: string
+  search?:    string
+}
+
+export function getPackingProductivity(params: PackingProductivityParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to)   sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search)    sp.set('search', params.search)
+  const q = sp.toString()
+  return request<PackingProductivityResponse>(`/shipments/packing/productivity${q ? `?${q}` : ''}`, { signal })
+}
+
 export type ShipmentMoveAllocation = { from_zone_id: string | null; qty: number }
 
 export function moveShipmentLineToPacking(docId: string, lineId: string, allocations: ShipmentMoveAllocation[]) {
@@ -357,6 +439,19 @@ export type ShipmentRelocateLine = {
 
 export function finishShipmentRelocation(id: string, lines: ShipmentRelocateLine[]) {
   return request<{ message: string }>(`/shipments/${id}/finish-relocation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+  })
+}
+
+export type ShipmentDefectSourceAllocation = { zone_id: string; zone_name: string | null; qty: number }
+export type ShipmentDefectRelocateLine = {
+  line_id: string
+  sources: ShipmentDefectSourceAllocation[]
+}
+
+export function finishShipmentDefectRelocation(id: string, lines: ShipmentDefectRelocateLine[]) {
+  return request<{ message: string }>(`/shipments/${id}/finish-defect-relocation`, {
     method: 'POST',
     body: JSON.stringify({ lines }),
   })

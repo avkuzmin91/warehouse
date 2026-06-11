@@ -7,8 +7,10 @@ import {
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
+  shipmentPriorityLabel,
+  shipmentPriorityTone,
 } from '../../api/shipmentsApi'
-import type { ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
 import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
 import { ShipmentPriorityControl } from '../features/inventory/ShipmentPriorityControl'
 import { ListPage } from '../layouts/ListPage'
@@ -18,6 +20,7 @@ import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
 import { DateRange } from '../data/DateRange'
 import { Badge } from '../primitives/Badge'
 import type { BadgeTone } from '../primitives/Badge'
+import { Dropdown } from '../primitives/Dropdown'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
@@ -71,6 +74,7 @@ export function InventoryShipmentsListPage() {
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
   const [statusFilter, setStatusFilter] = useFilterParam('status', '')
+  const [cargoFilter, setCargoFilter] = useFilterParam('cargo', '')
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [view, setView] = useFilterParam('view', 'table')
@@ -94,6 +98,8 @@ export function InventoryShipmentsListPage() {
         ? (statusFilter.split(',') as ShipmentStatus[])
         : (statusFilter as ShipmentStatus)
   const overdueParam = isOverdueFilter || undefined
+  const cargoParam: ShipmentCargoType | undefined =
+    cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
 
   useEffect(() => {
     if (mode !== 'docs' || view !== 'table') {
@@ -111,6 +117,7 @@ export function InventoryShipmentsListPage() {
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       overdue: overdueParam,
+      cargo_type: cargoParam,
     }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
@@ -124,7 +131,7 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [mode, view, page, search, skuFilter, clientId, statusFilter, dateFrom, dateTo, reloadTick])
+  }, [mode, view, page, search, skuFilter, clientId, statusFilter, cargoFilter, dateFrom, dateTo, reloadTick])
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
@@ -175,9 +182,17 @@ export function InventoryShipmentsListPage() {
             </div>
           )}
           {canEdit && (
-            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
-              <Icon name="plus" size={14} />Новая отгрузка
-            </button>
+            <Dropdown
+              trigger={
+                <button className="btn primary">
+                  <Icon name="plus" size={14} />Новая отгрузка<Icon name="chevDown" size={12} />
+                </button>
+              }
+              items={[
+                { label: 'Отгрузка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
+                { label: 'Отгрузка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/shipments/new?cargo=defect') },
+              ]}
+            />
           )}
         </>
       }
@@ -233,6 +248,16 @@ export function InventoryShipmentsListPage() {
             onClear={() => setMany({ from: '', to: '' })}
           />
           <FilterSelect
+            label="Тип груза"
+            value={cargoFilter}
+            options={[
+              { value: '', label: 'Все типы' },
+              { value: 'good', label: 'Годный' },
+              { value: 'defect', label: 'Брак' },
+            ]}
+            onChange={(v) => setCargoFilter(v)}
+          />
+          <FilterSelect
             label="Статус"
             value={statusFilter}
             options={[
@@ -244,8 +269,8 @@ export function InventoryShipmentsListPage() {
             ]}
             onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
+          {(clientId || skuFilter || dateFrom || dateTo || statusFilter || cargoFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '', cargo: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -278,6 +303,7 @@ export function InventoryShipmentsListPage() {
           clientId={clientId}
           status={statusParam}
           overdue={overdueParam}
+          cargoType={cargoParam}
           dateFrom={dateFrom}
           dateTo={dateTo}
           page={page}
@@ -290,7 +316,7 @@ export function InventoryShipmentsListPage() {
               <tr>
                 <th style={{ width: 22 }} />
                 <th style={{ width: 120 }}>Номер</th>
-                <th style={{ width: 110 }}>Приор.</th>
+                <th style={{ width: 130 }}>Приор.</th>
                 <th>Клиент</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
                 <th style={{ textAlign: 'right', width: 80 }}>План</th>
@@ -330,7 +356,10 @@ export function InventoryShipmentsListPage() {
                         )}
                       </Td>
                       <Td className="mono" style={{ fontWeight: 500 }}>
-                        {item.doc_number}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {item.doc_number}
+                          {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                        </span>
                         {overdue && (
                           <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>
                             просрочена
@@ -402,7 +431,7 @@ export function InventoryShipmentsListPage() {
         </>
       ) : (
         <KanbanBoard
-          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }}
+          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined, cargo_type: cargoParam }}
           onNavigate={(id) => navigate(`/inventory/shipments/${id}`)}
           reloadTick={reloadTick}
         />
@@ -419,6 +448,7 @@ type KanbanFilters = {
   client_id?: string
   date_from?: string
   date_to?: string
+  cargo_type?: ShipmentCargoType
 }
 
 function KanbanBoard({ filters, onNavigate, reloadTick }: {
@@ -446,7 +476,7 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}|${reloadTick ?? 0}`
+  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}|${filters.cargo_type}|${reloadTick ?? 0}`
   const prevFilterKey = useRef(filterKey)
 
   useEffect(() => {
@@ -511,7 +541,10 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                   <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                  {item.priority_rank && <Badge tone="warning">#{item.priority_rank}</Badge>}
+                  {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                  {item.priority_rank && (
+                    <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
+                  )}
                   {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
                   <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
                     {fmtDate(item.ship_date)}

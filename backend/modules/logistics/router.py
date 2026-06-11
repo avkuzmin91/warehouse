@@ -52,6 +52,7 @@ from modules.logistics.schemas import (
     TripUnloadPayload,
 )
 from modules.logistics.service import (
+    assert_shipments_ready_for_load,
     cascade_receipts_to_intake,
     cascade_shipments_to_shipped,
     link_receipts,
@@ -523,6 +524,8 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
         op_noun = "погрузку" if outbound else "разгрузку"
         if str(doc_row["status"]) != TRIP_STATUS_UNLOADING:
             raise HTTPException(status_code=400, detail=f"Завершить {op_noun} можно только из статуса '{from_ru}'")
+        if outbound:
+            assert_shipments_ready_for_load(conn, trip_id)
         unload_started_at = (
             (payload.unload_started_at or "").strip()
             or doc_row["unload_started_at"]

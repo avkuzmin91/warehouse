@@ -25,6 +25,7 @@ import { Select } from '../primitives/Select'
 import { Tooltip } from '../primitives/Tooltip'
 import { Table, Td } from '../data/Table'
 import { useConfirm } from '../feedback/ConfirmDialog'
+import { useToast } from '../feedback/Toast'
 
 function parseNum(s: string) {
   const n = parseFloat(String(s).replace(',', '.'))
@@ -94,6 +95,7 @@ export function ProductEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const confirm = useConfirm()
+  const toast = useToast()
   const imgRef = useRef<HTMLInputElement>(null)
 
   const [product, setProduct] = useState<ProductItem | null>(null)
@@ -105,8 +107,6 @@ export function ProductEditPage() {
   const [isActive, setIsActive] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
 
   const [images, setImages] = useState<ProductImageItem[]>([])
@@ -121,7 +121,7 @@ export function ProductEditPage() {
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
   const [clients, setClients] = useState<ComboboxOption[]>([])
   const [rows, setRows] = useState<ProductVariantWriteItem[]>([])
-  const [variantHasReceipts, setVariantHasReceipts] = useState<Map<string, boolean>>(new Map())
+  const [variantMeta, setVariantMeta] = useState<Map<string, { hasReceipts: boolean; sku: string }>>(new Map())
   const [varLoading, setVarLoading] = useState(false)
   const [varError, setVarError] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -171,7 +171,7 @@ export function ProductEditPage() {
           is_active: v.is_active,
         })),
       )
-      setVariantHasReceipts(new Map(items.map((v) => [v.id, v.has_receipts ?? false])))
+      setVariantMeta(new Map(items.map((v) => [v.id, { hasReceipts: v.has_receipts ?? false, sku: v.sku }])))
     } catch (e: unknown) {
       setVarError(e instanceof Error ? e.message : 'Ошибка загрузки вариантов')
     } finally {
@@ -282,18 +282,16 @@ export function ProductEditPage() {
   async function handleSaveAll() {
     if (!id) return
     setNameTouched(true)
-    setError('')
     setVarError('')
-    setSuccess('')
     setSaving(true)
     try {
       await saveProductPart()
       await saveVariantsPart()
       await loadVariants()
-      setSuccess('Изменения сохранены')
+      toast('Изменения сохранены', 'success')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Ошибка сохранения'
-      setError(msg)
+      toast(msg, 'error')
       setVarError(msg)
     } finally {
       setSaving(false)
@@ -370,11 +368,11 @@ export function ProductEditPage() {
     <DetailPage
       title={product.name}
       subtitle={product.sku_base}
-      backTo="/dictionaries/products"
+      backTo={`/dictionaries/products/${id}`}
       actions={
         <>
           <Badge tone={product.is_active ? 'success' : ''}>{product.is_active ? 'Активен' : 'Неактивен'}</Badge>
-          <button type="button" className="btn ghost" onClick={() => navigate('/dictionaries/products')} disabled={busy}>
+          <button type="button" className="btn ghost" onClick={() => navigate(`/dictionaries/products/${id}`)} disabled={busy}>
             Отмена
           </button>
           <button type="button" className="btn primary" onClick={() => void handleSaveAll()} disabled={busy}>
@@ -428,8 +426,6 @@ export function ProductEditPage() {
                 <Field label="Активен">
                   <Toggle checked={isActive} onChange={setIsActive} label="Товар активен" />
                 </Field>
-                {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5 }}>{error}</div>}
-                {success && <div style={{ color: 'var(--c-success)', fontSize: 12.5 }}>{success}</div>}
               </div>
             </div>
           </form>
@@ -563,6 +559,7 @@ export function ProductEditPage() {
                 <Table>
                   <thead>
                     <tr>
+                      <th>SKU</th>
                       <th>Цвет</th>
                       {requiresSize && <th>Размер</th>}
                       <th>Д x Ш x В (см)</th>
@@ -572,14 +569,24 @@ export function ProductEditPage() {
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={requiresSize ? 4 : 3} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                        <td colSpan={requiresSize ? 5 : 4} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
                           Нет вариантов — нажмите «Добавить»
                         </td>
                       </tr>
                     ) : rows.map((row, i) => {
-                      const locked = row.id ? (variantHasReceipts.get(row.id) ?? false) : false
+                      const meta = row.id ? variantMeta.get(row.id) : undefined
+                      const locked = meta?.hasReceipts ?? false
                       return (
                     <tr key={row.id ?? `new-${i}`}>
+                      <Td>
+                        {meta?.sku ? (
+                          <span className="mono" title={meta.sku} style={{ fontSize: 11.5, display: 'inline-block', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+                            {meta.sku}
+                          </span>
+                        ) : (
+                          <span className="faint text-xs">новый</span>
+                        )}
+                      </Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                           <Select

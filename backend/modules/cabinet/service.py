@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from config import (
-    PRODUCT_LIST_SORT_COLUMNS,
-    SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_SHIPPED,
-)
+from config import PRODUCT_LIST_SORT_COLUMNS
 from modules.products.schemas import ProductItem, ProductListResponse, ProductVariantDimension, ProductVariantItem
 from modules.products.service import (
     _ci_substring_like_param,
@@ -139,8 +134,8 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
         SELECT v.id, v.color_id, col.name AS color_name,
                v.size_id, sz.name AS size_name,
                v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
-               GREATEST(0, COALESCE(b.good_in, 0) - COALESCE(sg.shipped_good, 0)) AS stock,
-               GREATEST(0, COALESCE(b.defect_in, 0) - COALESCE(sd.shipped_defect, 0)) AS defect_qty,
+               GREATEST(0, COALESCE(acc.accepted, 0) + COALESCE(b.good_in, 0)) AS stock,
+               GREATEST(0, COALESCE(b.defect_in, 0)) AS defect_qty,
                CASE WHEN EXISTS (
                    SELECT 1 FROM receipt_lines rl
                    JOIN receipt_docs rd ON rd.id = rl.doc_id
@@ -155,26 +150,21 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
         LEFT JOIN sizes sz ON sz.id = v.size_id
         LEFT JOIN (
             SELECT product_id, color_id, size_id,
-                   SUM(CASE WHEN to_status='good'   THEN qty ELSE 0 END)
-                     - SUM(CASE WHEN from_status='good'   THEN qty ELSE 0 END) AS good_in,
-                   SUM(CASE WHEN to_status='defect' THEN qty ELSE 0 END)
-                     - SUM(CASE WHEN from_status='defect' THEN qty ELSE 0 END) AS defect_in
+                   SUM(CASE WHEN to_quality='good' AND to_op<>'shipped' THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='good'   THEN qty ELSE 0 END) AS good_in,
+                   SUM(CASE WHEN to_quality='defect' AND to_op<>'shipped' THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='defect' THEN qty ELSE 0 END) AS defect_in
             FROM zone_relocations
             WHERE product_id = ? AND client_id = ?
             GROUP BY product_id, color_id, size_id
         ) b ON b.product_id = v.product_id AND b.color_id IS NOT DISTINCT FROM v.color_id AND b.size_id IS NOT DISTINCT FROM v.size_id
         LEFT JOIN (
-            SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_good
-            FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-            WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.client_id = ? AND sd.status = ? AND sd.cargo_type = ?
-            GROUP BY sl.product_id, sl.color_id, sl.size_id
-        ) sg ON sg.product_id = v.product_id AND sg.color_id IS NOT DISTINCT FROM v.color_id AND sg.size_id IS NOT DISTINCT FROM v.size_id
-        LEFT JOIN (
-            SELECT sl.product_id, sl.color_id, sl.size_id, SUM(COALESCE(NULLIF(sl.shipped_qty, 0), sl.qty)) AS shipped_defect
-            FROM shipment_lines sl JOIN shipment_docs sd ON sd.id = sl.doc_id
-            WHERE sl.product_id = ? AND sl.is_deleted = 0 AND sd.is_deleted = 0 AND sd.client_id = ? AND sd.status = ? AND sd.cargo_type = ?
-            GROUP BY sl.product_id, sl.color_id, sl.size_id
-        ) sd ON sd.product_id = v.product_id AND sd.color_id IS NOT DISTINCT FROM v.color_id AND sd.size_id IS NOT DISTINCT FROM v.size_id
+            SELECT rl.product_id, rl.color_id, rl.size_id, SUM(COALESCE(rl.accepted_qty, 0)) AS accepted
+            FROM receipt_lines rl JOIN receipt_docs rd ON rd.id = rl.doc_id
+            WHERE rl.product_id = ? AND rd.client_id = ?
+              AND rl.is_deleted = 0 AND rd.is_deleted = 0 AND rd.status = 'done'
+            GROUP BY rl.product_id, rl.color_id, rl.size_id
+        ) acc ON acc.product_id = v.product_id AND acc.color_id IS NOT DISTINCT FROM v.color_id AND acc.size_id IS NOT DISTINCT FROM v.size_id
         WHERE v.product_id = ?
           AND v.client_id = ?
           AND COALESCE(v.is_deleted, 0) = 0
@@ -186,12 +176,6 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
             client_id,
             product_id,
             client_id,
-            SHIPMENT_STATUS_SHIPPED,
-            SHIPMENT_CARGO_GOOD,
-            product_id,
-            client_id,
-            SHIPMENT_STATUS_SHIPPED,
-            SHIPMENT_CARGO_DEFECT,
             product_id,
             client_id,
         ),

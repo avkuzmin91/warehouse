@@ -82,7 +82,7 @@ RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_PLANNED:   RECEIPT_STATUS_ON_INTAKE,
     # on_intake → done выполняет «Принять товары» (/arrive): весь принятый товар
-    # попадает в остаток как on_review (статус инвентаря, не документа). QC перенесён в упаковку.
+    # встаёт на остатки как «На хранении / Годный». Брак фиксируется на упаковке.
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
@@ -175,6 +175,69 @@ SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
 
 SHIPMENT_CARGO_GOOD   = "good"
 SHIPMENT_CARGO_DEFECT = "defect"
+
+# Брак-отгрузка минует упаковку: draft → relocating «Перемещение» (задача кладовщику
+# подготовить брак). relocating → awaiting_trip делает отдельный эндпоинт
+# finish_defect_relocation: кладовщик выбирает места-источники, брак переезжает
+# storage/defect → ready/defect в «Зону отгрузки».
+SHIPMENT_TRANSITIONS_DEFECT: dict[str, str] = {
+    SHIPMENT_STATUS_DRAFT: SHIPMENT_STATUS_RELOCATING,
+}
+
+SHIPMENT_TRANSITION_ROLES_DEFECT: dict[str, frozenset[str]] = {
+    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "warehouse_manager"}),
+}
+
+# До подготовки кладовщиком остатки не двигаются; из «Ожидает рейс» аннулирование
+# выполняет автовозврат брака из зоны отгрузки на исходные места.
+SHIPMENT_CANCELLABLE_STATUSES_DEFECT: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_AWAITING_TRIP,
+})
+
+SHIPMENT_EDITABLE_LINE_STATUSES_DEFECT: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_DRAFT,
+})
+
+# Приоритет отгрузки — уровень срочности (меньше = срочнее), NULL = обычный.
+SHIPMENT_PRIORITY_URGENT = 1
+SHIPMENT_PRIORITY_HIGH   = 2
+
+SHIPMENT_PRIORITY_LABELS: dict[int | None, str] = {
+    SHIPMENT_PRIORITY_URGENT: "Срочно",
+    SHIPMENT_PRIORITY_HIGH:   "Повышенный",
+    None:                     "Обычный",
+}
+
+# ---------------------------------------------------------------------------
+# Инвентарь — две оси статуса запаса (журнал zone_relocations)
+# ---------------------------------------------------------------------------
+
+# Операционный статус: что товар делает. «Отгружен» — терминальный,
+# в остатках не отображается (списание).
+INV_OP_STORAGE = "storage"
+INV_OP_PACKING = "packing"
+INV_OP_READY   = "ready"
+INV_OP_SHIPPED = "shipped"
+
+INV_OP_LABELS: dict[str, str] = {
+    INV_OP_STORAGE: "На хранении",
+    INV_OP_PACKING: "На упаковке",
+    INV_OP_READY:   "Готов к отгрузке",
+    INV_OP_SHIPPED: "Отгружен",
+}
+
+# Качество. «Не проверен» существует только внутри приёмки (уровень документа);
+# после приёмки товар встаёт на остатки годным, брак фиксируется на упаковке
+# или операцией смены качества.
+INV_Q_GOOD   = "good"
+INV_Q_DEFECT = "defect"
+
+INV_QUALITY_LABELS: dict[str, str] = {
+    INV_Q_GOOD:   "Годный",
+    INV_Q_DEFECT: "Брак",
+}
 
 # Типы операций журнала отгрузок
 SHIPMENT_OP_DOC_UPDATE = "doc_update"

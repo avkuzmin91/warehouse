@@ -4,6 +4,7 @@ import {
   fetchProductTypesPage,
   getSizes,
   setUnloadingZonePacking,
+  setUnloadingZoneShipping,
 } from '../../../api/adminApi'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import type { DictionaryTypeId } from './types'
@@ -16,6 +17,10 @@ import { useToast } from '../../feedback/Toast'
 
 function isPackingZone(item: AnyDictItem): boolean {
   return 'is_packing_zone' in item && !!item.is_packing_zone
+}
+
+function isShippingZone(item: AnyDictItem): boolean {
+  return 'is_shipping_zone' in item && !!item.is_shipping_zone
 }
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
@@ -114,6 +119,16 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
     }
   }
 
+  async function handleSetShipping(id: string) {
+    try {
+      await setUnloadingZoneShipping(id)
+      await load(search)
+      toast('Зона отгрузки назначена', 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Ошибка', 'error')
+    }
+  }
+
   useEffect(() => {
     setSearch('')
   }, [typeId])
@@ -189,6 +204,9 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   {isPackingZone(item) && (
                     <Badge tone="info" style={{ marginLeft: 8 }}>Зона упаковки</Badge>
                   )}
+                  {isShippingZone(item) && (
+                    <Badge tone="warning" style={{ marginLeft: 8 }}>Зона отгрузки</Badge>
+                  )}
                 </td>
                 <td className="text-sm muted">{formatDate(item.created_at)}</td>
                 <td>
@@ -204,14 +222,27 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   </Badge>
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  {typeId === 'unloading-zones' && !isPackingZone(item) ? (
-                    <button
-                      className="btn ghost sm"
-                      title="Сделать зоной упаковки"
-                      onClick={() => void handleSetPacking(item.id)}
-                    >
-                      <Icon name="forklift" size={13} />Зона упаковки
-                    </button>
+                  {typeId === 'unloading-zones' && (!isPackingZone(item) || !isShippingZone(item)) ? (
+                    <div className="row gap-8">
+                      {!isPackingZone(item) && (
+                        <button
+                          className="btn ghost sm"
+                          title="Сделать зоной упаковки"
+                          onClick={() => void handleSetPacking(item.id)}
+                        >
+                          <Icon name="forklift" size={13} />Зона упаковки
+                        </button>
+                      )}
+                      {!isShippingZone(item) && (
+                        <button
+                          className="btn ghost sm"
+                          title="Сделать зоной отгрузки"
+                          onClick={() => void handleSetShipping(item.id)}
+                        >
+                          <Icon name="truckOut" size={13} />Зона отгрузки
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <button className="btn ghost icon sm"><Icon name="more" size={14} /></button>
                   )}

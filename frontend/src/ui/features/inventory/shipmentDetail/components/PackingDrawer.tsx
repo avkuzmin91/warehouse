@@ -1,14 +1,14 @@
 import { useState } from 'react'
-import { getLinePacking, recordPacking, reversePackingEntry } from '../../../../api/shipmentsApi'
-import type { ShipmentLine } from '../../../../api/shipmentsApi'
-import { useApi } from '../../../../hooks/useApi'
-import { fmtYmdAsDmy, localTodayYmd } from '../../../../utils/format'
-import { Drawer } from '../../../feedback/Drawer'
-import { useToast } from '../../../feedback/Toast'
-import { useConfirm } from '../../../feedback/ConfirmDialog'
-import { DatePicker } from '../../../primitives/DatePicker'
-import { Icon } from '../../../primitives/Icon'
-import { NumberStep } from '../../../features/inventory/shared/NumberStep'
+import { getLinePacking, recordPacking, reversePackingEntry } from '../../../../../api/shipmentsApi'
+import type { ShipmentLine } from '../../../../../api/shipmentsApi'
+import { useApi } from '../../../../../hooks/useApi'
+import { fmtYmdAsDmy, localTodayYmd } from '../../../../../utils/format'
+import { Drawer } from '../../../../feedback/Drawer'
+import { useToast } from '../../../../feedback/Toast'
+import { useConfirm } from '../../../../feedback/ConfirmDialog'
+import { DatePicker } from '../../../../primitives/DatePicker'
+import { Icon } from '../../../../primitives/Icon'
+import { NumberStep } from '../../../inventory/shared/NumberStep'
 
 type Props = {
   docId: string
@@ -59,8 +59,9 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
       await recordPacking(docId, line.id, { good_delta: good, defect_delta: defect, packed_date: date })
       setGood(0)
       setDefect(0)
-      await refresh()
+      await onDone()
       toast('Упаковка внесена', 'success')
+      onClose()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка записи упаковки', 'error')
     } finally {

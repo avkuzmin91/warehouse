@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile } from '../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../api/shipmentsApi'
 import type { BalanceItem } from '../../api/balancesApi'
@@ -14,9 +14,12 @@ import { DatePicker } from '../primitives/DatePicker'
 import { Alert } from '../primitives/Alert'
 import { EmptyState } from '../primitives/EmptyState'
 import { Modal } from '../feedback/Modal'
-import { ShipmentStepper } from '../features/inventory/ShipmentStepper'
 import { BalancePicker } from '../features/inventory/shared/BalancePicker'
 import { NumberStep } from '../features/inventory/shared/NumberStep'
+import { PhaseBlock } from '../features/shared/process/PhaseBlock'
+import { ShipHeader } from '../features/inventory/shipmentDetail/components/ShipHeader'
+import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from '../features/inventory/shipmentDetail/components/processUI'
+import { PrimaryAction } from '../features/shared/process/PrimaryAction'
 import { fmtYmdAsDmy } from '../../utils/format'
 import { balanceKey } from '../../utils/balanceKey'
 import { canViewCosts } from '../../utils/access'
@@ -35,8 +38,9 @@ type DraftLineFilePreview = {
 
 export function InventoryShipmentCreatePage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
-  const [cargoType, setCargoType] = useState<ShipmentCargoType>('good')
+  const cargoType: ShipmentCargoType = searchParams.get('cargo') === 'defect' ? 'defect' : 'good'
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
   const [logisticsCost, setLogisticsCost] = useState('')
@@ -69,17 +73,21 @@ export function InventoryShipmentCreatePage() {
     return () => controller.abort()
   }, [clientId])
 
+  const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const hasOverflow = lines.some((l) => l.qty > l.available)
   const logisticsCostNumber = Number(logisticsCost)
   const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
+  // Брак-отгрузка минует упаковку: ТЗ не требуется, у строк должно быть местоположение.
   const readyChecks = [
-    { ok: !!clientId, error: 'Выберите клиента' },
-    { ok: !!shipDate, error: 'Укажите дату отгрузки' },
-    { ok: comment.trim() !== '', error: 'Заполните техническое задание' },
-    ...(showCosts ? [{ ok: logisticsCostFilled, error: 'Укажите стоимость логистики' }] : []),
-    { ok: lines.length > 0, error: 'Добавьте хотя бы одну позицию в отгрузку' },
-    { ok: !hasOverflow, error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
+    { ok: !!clientId, label: 'Клиент выбран', error: 'Выберите клиента' },
+    { ok: !!shipDate, label: 'Дата отгрузки (план) указана', error: 'Укажите дату отгрузки' },
+    ...(isDefectCargo
+      ? []
+      : [{ ok: comment.trim() !== '', label: 'Техническое задание заполнено', error: 'Заполните техническое задание' }]),
+    ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Укажите стоимость логистики' }] : []),
+    { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
+    { ok: !hasOverflow, label: 'Количество в пределах остатка', error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -141,7 +149,7 @@ export function InventoryShipmentCreatePage() {
       size_id:           b.size_id,
       size_name:         b.size_name,
       qty,
-      available:         cargoType === 'defect' ? b.defect : b.good + b.on_review,
+      available:         cargoType === 'defect' ? b.storage_defect : b.storage_good,
       storage_zone_id:   zoneId,
       storage_zone_name: zoneName,
       store_id:          null,
@@ -211,33 +219,28 @@ export function InventoryShipmentCreatePage() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          <button className="btn ghost icon" style={{ marginTop: 2 }} onClick={() => navigate('/inventory/shipments')}>
-            <Icon name="arrowLeft" size={16} />
-          </button>
-          <div>
-            <div className="page-title">Новая отгрузка</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
-          <button className="btn primary" disabled={saving} onClick={handleSendToPacking}>
-            <Icon name="check" size={14} />Запланировать отгрузку
-          </button>
-          </div>
-          {showBlockReasons && blockReasons.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--c-danger)', textAlign: 'right', lineHeight: 1.5 }}>
-              {blockReasons.map((reason, index) => (
-                <div key={index}>- {reason}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <ShipmentStepper status="draft" style={{ marginTop: -10 }} />
+      <ShipHeader
+        status="draft"
+        cargoType={cargoType}
+        title={isDefectCargo ? 'Новая отгрузка брака' : 'Новая отгрузка'}
+        subtitle="номер присвоится при сохранении"
+        onBack={() => navigate('/inventory/shipments')}
+        blockReasons={showBlockReasons ? blockReasons : []}
+        actions={
+          <>
+            <button className="btn" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
+            <PrimaryAction
+              icon="check"
+              label="Запланировать отгрузку"
+              hint={isDefectCargo
+                ? 'уйдёт кладовщику на подготовку — статус «Перемещение»'
+                : 'уйдёт кладовщику — статус «В плане»'}
+              disabled={saving}
+              onClick={handleSendToPacking}
+            />
+          </>
+        }
+      />
 
       {hasOverflow && (
         <Alert tone="warning" style={{ marginBottom: 14 }}>
@@ -247,18 +250,13 @@ export function InventoryShipmentCreatePage() {
 
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
-        {/* Left */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-          <div className="card">
-            <div className="card-head">
-              <Icon name="file" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Основная информация</div>
-            </div>
-            <div className="card-body">
-              <CargoTypeToggle value={cargoType} onChange={(v) => { setCargoType(v); setLines([]) }} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+          <PhaseBlock icon="file" title="Основная информация" role="manager" state="active"
+            hint="Клиент и задание для команды склада">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                 <Field label="Клиент" required style={{ marginBottom: 0 }}>
                   <Combobox
                     value={clientId}
@@ -283,7 +281,7 @@ export function InventoryShipmentCreatePage() {
                     />
                   </Field>
                 )}
-                <Field label="Техническое задание" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                   <AutoGrowTextarea
                     minRows={3}
                     placeholder="Опишите задачу для команды склада"
@@ -293,22 +291,15 @@ export function InventoryShipmentCreatePage() {
                   />
                 </Field>
               </div>
-            </div>
-          </div>
+          </PhaseBlock>
 
-          <div className="card">
-            <div className="card-head">
-              <Icon name="boxes" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Состав отгрузки</div>
-              {lines.length > 0 && (
-                <span className="badge accent" style={{ marginLeft: 6 }}>{lines.length}</span>
-              )}
-              <div style={{ marginLeft: 'auto' }}>
-                <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
-                  <Icon name="plus" size={12} />Добавить товар
-                </button>
-              </div>
-            </div>
+          <PhaseBlock icon="boxes" title="Состав отгрузки" role="manager" state="active"
+            hint="Товар из остатков клиента"
+            right={
+              <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
+                <Icon name="plus" size={12} />Добавить товар
+              </button>
+            }>
 
             {lines.length === 0 ? (
               <div style={{ padding: '32px 0' }}>
@@ -398,31 +389,44 @@ export function InventoryShipmentCreatePage() {
                 </tfoot>
               </table>
             )}
-          </div>
+          </PhaseBlock>
+
+          {!isDefectCargo && (
+            <>
+              <PhaseBlock icon="box" title="Упаковка" role="shift_lead" state="locked"
+                hint="Годный и брак внесёт начальник смены после передачи товара">
+                <LockedGrid labels={['На упаковке', 'Годный', 'Брак']} />
+              </PhaseBlock>
+
+              <PhaseBlock icon="archive" title="Раскладка и рейс" role="warehouse" state="locked"
+                hint="Местоположения и готовность к рейсу — после упаковки">
+                <LockedGrid labels={['Местоположения', 'Готово к рейсу']} />
+              </PhaseBlock>
+            </>
+          )}
+
+          {isDefectCargo && (
+            <PhaseBlock icon="archive" title="Подготовка к отгрузке" role="warehouse" state="locked"
+              hint="Кладовщик выберет места-источники и перенесёт брак в зону отгрузки">
+              <LockedGrid labels={['Места-источники', 'Готово к рейсу']} />
+            </PhaseBlock>
+          )}
         </div>
 
-        {/* Right */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div className="card">
-            <div className="card-head">
-              <Icon name="chart" size={15} style={{ color: 'var(--c-accent)' }} />
-              <div className="card-head-title">Итого</div>
-            </div>
-            <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 10, columnGap: 12, fontSize: 13 }}>
-              <span style={{ color: 'var(--c-text-muted)' }}>SKU</span>
-              <span className="mono" style={{ textAlign: 'right' }}>{lines.length}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Кол-во</span>
-              <span className="mono" style={{ textAlign: 'right', fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
-              <span style={{ color: 'var(--c-text-muted)' }}>Дата</span>
-              <span className="mono" style={{ textAlign: 'right' }}>{fmtYmdAsDmy(shipDate)}</span>
-              {showCosts && logisticsCostFilled && (
-                <>
-                  <span style={{ color: 'var(--c-text-muted)' }}>Логистика</span>
-                  <span className="mono" style={{ textAlign: 'right' }}>{logisticsCostNumber.toLocaleString()}</span>
-                </>
+        {/* Right — маршрут + итог + готовность */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <RailPanel status="draft" cargoType={cargoType} />
+          <Panel icon="chart" title="Итого">
+            <div style={{ padding: '0 2px' }}>
+              <ReadRow label="SKU" mono>{lines.length}</ReadRow>
+              <ReadRow label="Кол-во" mono strong>{totalQty} шт</ReadRow>
+              <ReadRow label="Дата (план)" mono>{shipDate ? fmtYmdAsDmy(shipDate) : '—'}</ReadRow>
+              {showCosts && (
+                <ReadRow label="Логистика" mono>{logisticsCostFilled ? `${logisticsCostNumber.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
               )}
             </div>
-          </div>
+          </Panel>
+          <ChecklistPanel items={readyChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
         </div>
       </div>
 
@@ -439,71 +443,6 @@ export function InventoryShipmentCreatePage() {
         preview={filePreview}
         onClose={() => setFilePreview(null)}
       />
-    </div>
-  )
-}
-
-function CargoTypeToggle({ value, onChange }: { value: ShipmentCargoType; onChange: (v: ShipmentCargoType) => void }) {
-  const options: { key: ShipmentCargoType; label: string; icon: string; accent: string; bg: string; desc: string }[] = [
-    {
-      key: 'good',
-      label: 'Годный товар',
-      icon: '✓',
-      accent: 'var(--c-success)',
-      bg: 'var(--c-success-bg, #f0faf4)',
-      desc: 'Отгрузка из остатков без дефектов',
-    },
-    {
-      key: 'defect',
-      label: 'Брак',
-      icon: '!',
-      accent: 'var(--c-warning)',
-      bg: 'var(--c-warning-bg)',
-      desc: 'Отгрузка бракованного товара',
-    },
-  ]
-
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-      {options.map((opt) => {
-        const active = value === opt.key
-        return (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => onChange(opt.key)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 14px',
-              borderRadius: 'var(--r-lg)',
-              border: `2px solid ${active ? opt.accent : 'var(--c-border)'}`,
-              background: active ? opt.bg : 'var(--c-bg)',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'border-color .15s, background .15s',
-            }}
-          >
-            <div style={{
-              width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: active ? opt.accent : 'var(--c-bg-sunken)',
-              color: active ? '#fff' : 'var(--c-text-muted)',
-              fontWeight: 700, fontSize: 15,
-              transition: 'background .15s, color .15s',
-            }}>
-              {opt.icon}
-            </div>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: active ? opt.accent : 'var(--c-text)' }}>
-                {opt.label}
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 1 }}>
-                {opt.desc}
-              </div>
-            </div>
-          </button>
-        )
-      })}
     </div>
   )
 }

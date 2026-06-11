@@ -20,7 +20,7 @@ import {
 import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
 import { getReceipts, createReceipt, advanceReceiptStatus } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { listShipments } from '../../../api/shipmentsApi'
+import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
 import type { CreateReceiptFormValue } from './tripDetail/components/CreateReceiptForm'
 import { useConfirm } from '../../feedback/ConfirmDialog'
@@ -123,7 +123,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
     if (isOutbound(detail.doc.direction)) {
-      listShipments({ status: 'packing', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: tripId }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {

@@ -9,7 +9,9 @@ from config import (
     RECEIPT_OP_INTAKE_START,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
-    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_SHIPPED,
     TRIP_OP_RECEIPT_LINK,
     TRIP_OP_SHIPMENT_LINK,
@@ -267,14 +269,40 @@ def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: 
     return moved
 
 
-def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
-    """При завершении погрузки outbound-рейса: привязанные отгрузки packing → shipped.
+def assert_shipments_ready_for_load(connection, trip_id: str) -> None:
+    """Гейт перед завершением погрузки outbound-рейса.
 
-    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped
-    (списывает остатки), поэтому прогоняет те же проверки, что и ручное
-    продвижение отгрузки. Идёт в одной транзакции со сменой статуса рейса.
+    Кладовщик завершает погрузку только когда все привязанные отгрузки готовы к
+    рейсу (статус «Ожидает рейс»). Аннулированные пропускаем — они не поедут.
     """
-    from modules.shipments.service import _check_duplicate_lines, _check_stock_for_shipment
+    rows = connection.execute(
+        "SELECT s.doc_number, s.status FROM trip_lines l "
+        "JOIN shipment_docs s ON s.id = l.shipment_doc_id AND COALESCE(s.is_deleted, 0) = 0 "
+        "WHERE l.trip_id = ? AND l.is_deleted = 0 AND l.shipment_doc_id IS NOT NULL "
+        "ORDER BY s.doc_number",
+        (trip_id,),
+    ).fetchall()
+    blocking = [
+        str(r["doc_number"])
+        for r in rows
+        if str(r["status"]) not in (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_STATUS_CANCELLED)
+    ]
+    if blocking:
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя завершить погрузку: отгрузки ещё не готовы к рейсу — " + ", ".join(blocking),
+        )
+
+
+def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
+    """При завершении погрузки outbound-рейса: привязанные отгрузки awaiting_trip → shipped.
+
+    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped.
+    Списание — журнальными движениями (… → shipped): годный груз уходит из мест
+    раскладки («Готов к отгрузке»), брак-отгрузка — напрямую со хранения.
+    Идёт в одной транзакции со сменой статуса рейса.
+    """
+    from modules.shipments.service import _check_duplicate_lines, consume_stock_for_shipment
 
     lines = connection.execute(
         "SELECT shipment_doc_id FROM trip_lines "
@@ -286,20 +314,26 @@ def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid
     for ln in lines:
         sid = str(ln["shipment_doc_id"])
         ship = connection.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
+            "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
         ).fetchone()
-        if not ship or str(ship["status"]) != SHIPMENT_STATUS_PACKING:
+        if not ship or str(ship["status"]) != SHIPMENT_STATUS_AWAITING_TRIP:
             continue
         _check_duplicate_lines(connection, sid)
-        _check_stock_for_shipment(connection, sid)
+        consume_stock_for_shipment(connection, sid, uid)
         connection.execute(
-            "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE shipment_docs SET status = ?, priority_rank = NULL, updated_at = ? WHERE id = ?",
             (SHIPMENT_STATUS_SHIPPED, now, sid),
         )
+        if ship.get("priority_rank") is not None:
+            connection.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), sid, SHIPMENT_OP_PRIORITY_UPDATE,
+                 "Приоритет снят: отгрузка завершена", now, uid),
+            )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), sid, "advance",
-             f"В плане → Завершён (погрузка рейса {trip_number})", now, uid),
+             f"Ожидает рейс → Завершён (погрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved

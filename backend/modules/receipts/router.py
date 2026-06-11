@@ -24,6 +24,7 @@ from config import (
     RECEIPT_STATUS_RU,
     RECEIPT_STATUS_TRANSITIONS,
     RECEIPT_STATUSES_ALL,
+    TRIP_STATUS_CANCELLED,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_manager, get_current_warehouse
@@ -805,6 +806,19 @@ def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(doc_row["status"]) != RECEIPT_STATUS_PLANNED:
             raise HTTPException(status_code=400, detail="Аннулировать можно только документ в статусе 'В плане'")
+        # Привязанное к активному рейсу поступление аннулировать нельзя: рейс повезёт
+        # «мёртвую» строку, а разгрузка попытается стартовать приёмку. Сначала отвязка.
+        trip_row = conn.execute(
+            "SELECT t.trip_number FROM trip_lines tl "
+            "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+            "WHERE tl.receipt_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND t.status != ?",
+            (doc_id, TRIP_STATUS_CANCELLED),
+        ).fetchone()
+        if trip_row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Поступление привязано к рейсу {trip_row['trip_number']} — сначала отвяжите его от рейса",
+            )
         now = _now()
         conn.execute(
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",

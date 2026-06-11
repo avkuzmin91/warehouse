@@ -50,21 +50,3 @@ export function TripHeader({ number, status, direction = 'inbound', onBack, acti
     </div>
   )
 }
-
-/** Контекстная главная кнопка + подсказка о передаче. */
-export function PrimaryAction({ icon, label, hint, onClick, disabled }: {
-  icon: Parameters<typeof Icon>[0]['name']
-  label: string
-  hint?: string
-  onClick?: () => void
-  disabled?: boolean
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-      <button className="btn lg primary" onClick={onClick} disabled={disabled}>
-        <Icon name={icon} size={15} />{label}
-      </button>
-      {hint && <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', textAlign: 'right' }}>{hint}</span>}
-    </div>
-  )
-}

@@ -16,6 +16,8 @@ class ProductItem(BaseModel):
     client_id: str | None = None
     client_name: str | None = None
     variant_count: int = 0
+    stock_total: int = 0
+    defect_total: int = 0
     is_active: bool
     is_deleted: bool = False
     deleted_at: str | None = None

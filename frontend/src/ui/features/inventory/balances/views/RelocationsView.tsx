@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getZoneRelocations } from '../../../../../api/balancesApi'
+import { getZoneRelocations, INV_OP_LABELS, INV_QUALITY_LABELS } from '../../../../../api/balancesApi'
 import type { ZoneRelocationItem } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
@@ -13,8 +13,21 @@ import { EmptyState } from '../../../../primitives/EmptyState'
 
 const PAGE_SIZE = 50
 
-const STATUS_LABELS: Record<string, string> = { good: 'Годный', defect: 'Брак' }
-const STATUS_TONE: Record<string, BadgeTone> = { good: 'success', defect: 'warning' }
+const QUALITY_TONE: Record<string, BadgeTone> = { good: 'success', defect: 'warning' }
+
+/** Человекочитаемая операция движения по двум осям статуса. */
+function moveLabel(item: ZoneRelocationItem): string {
+  if (item.to_op === 'shipped') return 'Отгрузка'
+  if (item.from_quality !== item.to_quality) {
+    return `${INV_QUALITY_LABELS[item.from_quality]} → ${INV_QUALITY_LABELS[item.to_quality]}`
+  }
+  if (item.from_op !== item.to_op) {
+    const from = INV_OP_LABELS[item.from_op as keyof typeof INV_OP_LABELS] ?? item.from_op
+    const to = INV_OP_LABELS[item.to_op as keyof typeof INV_OP_LABELS] ?? item.to_op
+    return `${from} → ${to}`
+  }
+  return 'Перемещение'
+}
 
 function fmtDateTime(iso: string): string {
   const d = new Date(iso)
@@ -94,7 +107,8 @@ export function RelocationsView() {
             <th style={{ width: 130 }}>Дата</th>
             <th>Товар</th>
             <th>Клиент</th>
-            <th style={{ width: 90 }}>Статус</th>
+            <th style={{ width: 170 }}>Операция</th>
+            <th style={{ width: 90 }}>Качество</th>
             <th>Откуда → Куда</th>
             <th style={{ textAlign: 'right', width: 90 }}>Кол-во</th>
             <th>Комментарий</th>
@@ -103,9 +117,9 @@ export function RelocationsView() {
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={8} />
+            <SkeletonRows rows={8} cols={9} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={8}><EmptyState title="Перемещений нет" sub="Здесь появятся перемещения товара между местами хранения" /></td></tr>
+            <tr><td colSpan={9}><EmptyState title="Движений нет" sub="Здесь появятся движения товара между местоположениями и статусами" /></td></tr>
           ) : (
             items.map((item) => (
               <tr key={item.id}>
@@ -117,7 +131,8 @@ export function RelocationsView() {
                   </div>
                 </Td>
                 <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{item.client_name ?? '—'}</Td>
-                <Td><Badge tone={STATUS_TONE[item.status] ?? ''}>{STATUS_LABELS[item.status] ?? item.status}</Badge></Td>
+                <Td style={{ fontSize: 12.5 }}>{moveLabel(item)}</Td>
+                <Td><Badge tone={QUALITY_TONE[item.to_quality] ?? ''}>{INV_QUALITY_LABELS[item.to_quality] ?? item.to_quality}</Badge></Td>
                 <Td style={{ fontSize: 13 }}>
                   <span>{item.from_zone_name ?? 'Без места'}</span>
                   <Icon name="arrowRight" size={12} style={{ margin: '0 6px', color: 'var(--c-text-subtle)' }} />

@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
-import { finishShipmentRelocation } from '../../../../api/shipmentsApi'
-import type { ShipmentLine, ShipmentRelocateLine } from '../../../../api/shipmentsApi'
-import type { DictionaryItem } from '../../../../api/domainTypes'
-import { Combobox } from '../../../data/Combobox'
-import type { ComboboxOption } from '../../../data/Combobox'
-import { NumberStep } from '../../../features/inventory/shared/NumberStep'
-import { Icon } from '../../../primitives/Icon'
-import { LineIdentityCell } from '../../../features/inventory/receiptDetail/components/LineIdentityCell'
-import { useToast } from '../../../feedback/Toast'
+import { finishShipmentRelocation } from '../../../../../api/shipmentsApi'
+import type { ShipmentLine, ShipmentRelocateLine } from '../../../../../api/shipmentsApi'
+import type { DictionaryItem } from '../../../../../api/domainTypes'
+import { Combobox } from '../../../../data/Combobox'
+import type { ComboboxOption } from '../../../../data/Combobox'
+import { NumberStep } from '../../../inventory/shared/NumberStep'
+import { Icon } from '../../../../primitives/Icon'
+import { PhaseBlock } from '../../../shared/process/PhaseBlock'
+import { LineIdentityCell } from '../../../inventory/receiptDetail/components/LineIdentityCell'
+import { useToast } from '../../../../feedback/Toast'
 
 type Row = { zoneId: string; qty: number }
 type LineAlloc = { good: Row[]; defect: Row[] }
@@ -18,6 +19,8 @@ type Props = {
   lines:       ShipmentLine[]
   zoneOptions: DictionaryItem[]
   canEdit:     boolean
+  // На статусах после перемещения раскладка остаётся видимой только для просмотра.
+  readOnly?:   boolean
   onDone:      () => Promise<void> | void
 }
 
@@ -25,7 +28,12 @@ function initRows(qty: number): Row[] {
   return qty > 0 ? [{ zoneId: '', qty }] : []
 }
 
-export function RelocationPanel({ docId, lines, zoneOptions, canEdit, onDone }: Props) {
+export function RelocationPanel({ docId, lines, zoneOptions, canEdit, readOnly = false, onDone }: Props) {
+  if (readOnly) return <RelocationView lines={lines} />
+  return <RelocationEditor docId={docId} lines={lines} zoneOptions={zoneOptions} canEdit={canEdit} onDone={onDone} />
+}
+
+function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<Props, 'readOnly'>) {
   const toast = useToast()
   const packedLines = useMemo(
     () => lines.filter((l) => l.packed_good > 0 || l.packed_defect > 0),
@@ -119,28 +127,27 @@ export function RelocationPanel({ docId, lines, zoneOptions, canEdit, onDone }: 
   }
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="card-head">
-        <Icon name="forklift" size={15} className="ic-accent" />
-        <div className="card-head-title">Раскладка по местам хранения</div>
-        {canEdit && (
-          <div className="right">
-            <button className="btn sm primary" disabled={saving || !allReady} onClick={() => { void submit() }}>
-              <Icon name="check" size={12} />Готово к рейсу
-            </button>
-          </div>
-        )}
-      </div>
-
+    <PhaseBlock
+      icon="archive"
+      title="Раскладка по местоположениям"
+      role="warehouse"
+      state="active"
+      hint="Разложите весь годный и брак, затем «Готово к рейсу». Годный остаётся «Готов к отгрузке», брак возвращается на хранение"
+      right={canEdit ? (
+        <button className="btn sm primary" disabled={saving || !allReady} onClick={() => { void submit() }}>
+          <Icon name="check" size={12} />Готово к рейсу
+        </button>
+      ) : undefined}
+    >
       {packedLines.length === 0 ? (
         <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
           Нет упакованного товара для раскладки.
         </div>
       ) : (
-        <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {!canEdit && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-              Кладовщик указывает места хранения для годного и брака, затем жмёт «Готово к рейсу».
+              Кладовщик указывает местоположения для годного и брака, затем жмёт «Готово к рейсу».
             </div>
           )}
           {packedLines.map((line) => (
@@ -177,7 +184,62 @@ export function RelocationPanel({ docId, lines, zoneOptions, canEdit, onDone }: 
           ))}
         </div>
       )}
-    </div>
+    </PhaseBlock>
+  )
+}
+
+function RelocationView({ lines }: { lines: ShipmentLine[] }) {
+  const placedLines = useMemo(() => lines.filter((l) => l.placements.length > 0), [lines])
+  return (
+    <PhaseBlock
+      icon="archive"
+      title="Раскладка по местоположениям"
+      role="warehouse"
+      state="done"
+      hint="Товар разложен кладовщиком по местоположениям"
+    >
+      {placedLines.length === 0 ? (
+        <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+          Раскладка по местам не зафиксирована.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {placedLines.map((line) => (
+            <div
+              key={line.id}
+              style={{ border: '1px solid var(--c-border)', borderRadius: 'var(--r-lg)', padding: 12, background: 'var(--c-bg-elev)' }}
+            >
+              <div style={{ marginBottom: 10 }}>
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                {(['good', 'defect'] as const).map((kind) => {
+                  const rows = line.placements.filter((p) => p.kind === kind)
+                  if (rows.length === 0) return null
+                  const tone = kind === 'good' ? 'var(--c-success)' : 'var(--c-danger)'
+                  return (
+                    <div key={kind}>
+                      <div style={{ marginBottom: 8, fontSize: 12.5, color: tone, fontWeight: 600 }}>
+                        {kind === 'good' ? 'Годный' : 'Брак'}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {rows.map((p, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                            <span style={{ color: 'var(--c-text)' }}>{p.zone_name ?? 'Без места'}</span>
+                            <b className="num" style={{ marginLeft: 'auto', color: 'var(--c-text)' }}>{p.qty}</b>
+                            <span style={{ color: 'var(--c-text-subtle)' }}>шт</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </PhaseBlock>
   )
 }
 

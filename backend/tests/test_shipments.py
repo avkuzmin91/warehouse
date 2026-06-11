@@ -137,6 +137,34 @@ def test_shipment_lines_view_returns_doc_line_rows(admin_client, client_id):
     assert row["client_id"] == client_id
 
 
+def test_shipment_priority_levels(admin_client, client_id):
+    """Приоритет — уровни: 1 «Срочно», 2 «Повышенный»; значения вне диапазона — 422."""
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
+    doc_id = r.json()["message"]
+
+    r2 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 1})
+    assert r2.status_code == 200, r2.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["priority_rank"] == 1
+
+    r3 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 5})
+    assert r3.status_code == 422, r3.text
+
+    r4 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": None})
+    assert r4.status_code == 200, r4.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["priority_rank"] is None
+
+
+def test_shipment_cancel_clears_priority(admin_client, client_id):
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
+    doc_id = r.json()["message"]
+    assert admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 2}).status_code == 200
+
+    assert admin_client.post(f"/shipments/{doc_id}/cancel").status_code == 200
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert detail["status"] == "cancelled"
+    assert detail["priority_rank"] is None
+
+
 def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
     payload = _make_shipment_payload(client_id)
     payload["logistics_cost"] = 54321
@@ -148,7 +176,8 @@ def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehous
     assert detail.status_code == 200, detail.text
     assert detail.json()["logistics_cost"] is None
 
-    listing = warehouse_client.get("/shipments?limit=200")
+    # client_id-фильтр: в dev-БД сотни документов, без него документ не попадает в страницу.
+    listing = warehouse_client.get(f"/shipments?client_id={client_id}&limit=200")
     assert listing.status_code == 200, listing.text
     item = next(i for i in listing.json()["items"] if i["id"] == doc_id)
     assert item["logistics_cost"] is None

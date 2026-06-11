@@ -19,7 +19,7 @@ export function BalancesFeature() {
           По товарам
         </button>
         <button className={`tab ${view === 'zone' ? 'active' : ''}`} onClick={() => setView('zone')}>
-          По месту хранения
+          По местоположению
         </button>
         <button className={`tab ${view === 'relocations' ? 'active' : ''}`} onClick={() => setView('relocations')}>
           Перемещения

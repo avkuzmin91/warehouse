@@ -33,7 +33,7 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'sizes',         name: 'Размеры',       icon: 'ruler',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Размер' },
   { id: 'colors',        name: 'Цвета',         icon: 'palette',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Цвет' },
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
-  { id: 'unloading-zones', name: 'Места хранения',  icon: 'boxes',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Место хранения' },
+  { id: 'unloading-zones', name: 'Местоположения',  icon: 'boxes',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Местоположение' },
   { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
   { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },

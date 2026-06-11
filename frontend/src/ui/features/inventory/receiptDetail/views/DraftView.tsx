@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   RECEIPT_STATUS_LABELS,
@@ -14,17 +13,22 @@ import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
-import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
+import { EmptyState } from '../../../../primitives/EmptyState'
 import { Icon } from '../../../../primitives/Icon'
+import { AutoGrowTextarea, Field, Input } from '../../../../primitives/Input'
 import { fmtDate } from '../../../../../utils/format'
 import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
-import { ReceiptStepper } from '../../ReceiptStepper'
+import { PhaseBlock } from '../../../shared/process/PhaseBlock'
+import { DocHeader } from '../../../shared/process/DocHeader'
+import { PrimaryAction } from '../../../shared/process/PrimaryAction'
+import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../../../shared/process/processUI'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
+import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
 
 type Props = {
   docId: string
@@ -131,23 +135,15 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
 
   return (
     <div className="page">
-      {/* Заголовок */}
-      <div className="page-header" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <div className="detail-status-row">
-            <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
-              <Icon name="arrowLeft" size={14} />
-            </button>
-            <Badge dot>{RECEIPT_STATUS_LABELS['draft']}</Badge>
-            <span className="detail-meta">
-              {doc.doc_number} · создан {fmtDate(doc.created_at)}
-              {doc.created_by && ` · ${doc.created_by}`}
-            </span>
-          </div>
-          <div className="page-title">Создание поступления</div>
-        </div>
-        <div className="detail-actions">
-          <div className="detail-actions-row">
+      <DocHeader
+        badges={<Badge dot>{RECEIPT_STATUS_LABELS['draft']}</Badge>}
+        role="manager"
+        title={doc.doc_number}
+        subtitle={`Поступление · создано ${fmtDate(doc.created_at)}${doc.created_by ? ` · ${doc.created_by}` : ''}`}
+        onBack={() => navigate('/inventory/receipts')}
+        blockReasons={showBlockReasons ? blockReasons : []}
+        actions={
+          <>
             <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
               <Icon name="layers" size={14} />Журнал
               {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
@@ -157,139 +153,99 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            <button
-              className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { onAdvance() } }}
+            <PrimaryAction
+              icon="arrowRight"
+              label="Запланировать поступление"
+              hint="уйдёт в план склада — статус «В плане»"
               disabled={advancing}
-            >
-              <Icon name="check" size={14} />Запланировать поступление
-            </button>
-          </div>
-          {showBlockReasons && blockReasons.length > 0 && (
-            <div className="block-reasons">
-              {blockReasons.map((r, i) => (
-                <div key={i}>· {r}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <ReceiptStepper status="draft" ops={detail.ops} style={{ marginTop: -10 }} />
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { onAdvance() } }}
+            />
+          </>
+        }
+      />
 
       {metaError && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
       )}
 
-      <div className="split-300">
-        {/* Левая колонка */}
-        <div className="col gap-16">
-          {/* Реквизиты */}
-          <Card>
-            <CardHead>
-              <Icon name="file" size={15} className="ic-accent" />
-              <span className="card-head-title">Основная информация</span>
-            </CardHead>
-            <CardBody>
-              <div className="form-grid-2">
-                <div>
-                  <label className="field-label">
-                    <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <Combobox
-                    value={clientId}
-                    placeholder="Поиск клиента…"
-                    options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    onChange={(v) => { setClientId(String(v ?? '')); markDirty() }}
-                    disabled={lines.length > 0}
-                  />
-                  {lines.length > 0 && (
-                    <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 4 }}>
-                      Удалите все строки, чтобы сменить клиента
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="field-label"><span>Рейс</span></label>
-                  {doc.trip_id ? (
-                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                      style={{ width: '100%', justifyContent: 'flex-start' }}>
-                      <Icon name="truckIn" size={13} />{doc.trip_number}
-                    </button>
-                  ) : (
-                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
-                  )}
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
-                  </label>
-                  {canEditPlan ? (
-                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
-                  ) : (
-                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
-                  )}
-                </div>
-                <div>
-                  <label className="field-label"><span>Дата прибытия (факт)</span></label>
-                  <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
-                </div>
-                {showCosts && (
-                  <div>
-                    <label className="field-label">
-                      <span>Стоимость логистики для клиента, ₽</span>
-                      <span className="text-xs faint">не обязательно</span>
-                    </label>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      placeholder="0"
-                      value={logisticsCost}
-                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
-                    />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock icon="file" title="Основная информация" role="manager" state="active"
+            hint="Клиент и план поступления">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Field label="Клиент" required style={{ marginBottom: 0 }}>
+                <Combobox
+                  value={clientId}
+                  placeholder="Поиск клиента…"
+                  options={clients.map((c) => ({ value: c.id, label: c.name }))}
+                  onChange={(v) => { setClientId(String(v ?? '')); markDirty() }}
+                  disabled={lines.length > 0}
+                />
+                {lines.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 4 }}>
+                    Удалите все строки, чтобы сменить клиента
                   </div>
                 )}
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label className="field-label">
-                    <span>Комментарий</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <textarea
+              </Field>
+              <Field label="Рейс" style={{ marginBottom: 0 }}>
+                {doc.trip_id ? (
+                  <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                    style={{ width: '100%', justifyContent: 'flex-start' }}>
+                    <Icon name="truckIn" size={13} />{doc.trip_number}
+                  </button>
+                ) : (
+                  <Input value="—" readOnly style={{ cursor: 'default' }} />
+                )}
+              </Field>
+              <Field label="Дата прибытия (план)" required={canEditPlan} style={{ marginBottom: 0 }}>
+                {canEditPlan ? (
+                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                ) : (
+                  <Input value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                )}
+              </Field>
+              <Field label="Дата прибытия (факт)" style={{ marginBottom: 0 }}>
+                <Input value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+              </Field>
+              {showCosts && (
+                <Field label="Стоимость логистики для клиента, ₽" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <input
                     className="input"
-                    rows={3}
-                    placeholder="Примечание для команды склада"
-                    value={comment}
-                    onChange={(e) => { setComment(e.target.value); markDirty() }}
-                    style={{ resize: 'vertical', minHeight: 76 }}
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={logisticsCost}
+                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
                   />
-                </div>
-              </div>
-            </CardBody>
-          </Card>
+                </Field>
+              )}
+              <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <AutoGrowTextarea
+                  minRows={3}
+                  placeholder="Примечание для команды склада"
+                  value={comment}
+                  onChange={(e) => { setComment(e.target.value); markDirty() }}
+                  style={{ resize: 'vertical', minHeight: 76 }}
+                />
+              </Field>
+            </div>
+          </PhaseBlock>
 
-          {/* Строки */}
-          <Card>
-            <CardHead>
-              <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары к приемке</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div className="flex-1" />
-              <button
-                className="btn sm primary"
-                onClick={() => setShowAddLine(true)}
-                disabled={!clientId}
-              >
+          <PhaseBlock icon="boxes" title="Товары к приёмке" role="manager" state="active"
+            hint="План — что и сколько приедет на склад"
+            right={
+              <button className="btn sm primary" onClick={() => setShowAddLine(true)} disabled={!clientId}>
                 <Icon name="plus" size={12} />Добавить строку
               </button>
-            </CardHead>
+            }
+          >
             {lines.length === 0 ? (
-              <div className="empty">
-                <div className="empty-illust" />
-                <div style={{ fontSize: 14, fontWeight: 500 }}>Нет строк</div>
-                <div className="text-sm muted mt-8">
-                  {clientId ? 'Нажмите «Добавить строку» для выбора товара' : 'Сначала выберите клиента'}
-                </div>
+              <div style={{ padding: '32px 0' }}>
+                <EmptyState
+                  title="Нет строк"
+                  sub={clientId ? 'Нажмите «Добавить строку» для выбора товара' : 'Сначала выберите клиента'}
+                />
               </div>
             ) : (
               <ReceiptLinesTable
@@ -302,49 +258,25 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                 onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
               />
             )}
-          </Card>
+          </PhaseBlock>
 
+          <PhaseBlock icon="forklift" title="Приёмка" role="warehouse" state="locked"
+            hint="Кладовщик примет товар после прибытия">
+            <LockedGrid labels={['Дата прибытия (факт)', 'Принято', 'Местоположения']} />
+          </PhaseBlock>
         </div>
 
-        {/* Правая колонка */}
-        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
-          {/* Готовность */}
-          <Card>
-            <CardHead>
-              <Icon name="check" size={15} className="ic-success" />
-              <span className="card-head-title">Готовность</span>
-            </CardHead>
-            <div className="readiness-list">
-              {readyChecks.map((c, i) => (
-                <div key={i} className="readiness-row">
-                  {c.ok ? (
-                    <div className="readiness-dot ok">
-                      <Icon name="check" size={10} />
-                    </div>
-                  ) : (
-                    <div className="readiness-dot pending" />
-                  )}
-                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
-                </div>
-              ))}
+        {/* Right — маршрут + готовность + итоги */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <ReceiptRailPanel status="draft" ops={detail.ops} />
+          <ChecklistPanel items={readyChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
+          <Panel icon="chart" title="Итого">
+            <div style={{ padding: '0 2px' }}>
+              <ReadRow label="SKU" mono>{totalSku}</ReadRow>
+              <ReadRow label="Строк" mono>{lines.length}</ReadRow>
+              <ReadRow label="План" mono strong>{totalQty} шт</ReadRow>
             </div>
-          </Card>
-
-          {/* Итого */}
-          <Card>
-            <CardHead>
-              <Icon name="chart" size={15} className="ic-accent" />
-              <span className="card-head-title">Итого</span>
-            </CardHead>
-            <div className="totals-grid">
-              <span className="key">SKU</span>
-              <span className="val num">{totalSku}</span>
-              <span className="key">Строк</span>
-              <span className="val num">{lines.length}</span>
-              <span className="key">План, шт</span>
-              <span className="val num" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
-            </div>
-          </Card>
+          </Panel>
         </div>
       </div>
 

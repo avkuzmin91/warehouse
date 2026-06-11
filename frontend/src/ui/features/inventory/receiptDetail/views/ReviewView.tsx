@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   RECEIPT_OP_LABELS,
@@ -10,15 +9,18 @@ import type { ReceiptDetail } from '../../../../../api/receiptsApi'
 import { FilterChip } from '../../../../data/FiltersBar'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
-import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { Icon } from '../../../../primitives/Icon'
 import { Drawer } from '../../../../feedback/Drawer'
 import { fmtDate } from '../../../../../utils/format'
 import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
-import { ReceiptStepper } from '../../ReceiptStepper'
+import { PhaseBlock } from '../../../shared/process/PhaseBlock'
+import { DocHeader } from '../../../shared/process/DocHeader'
+import { Panel, ReadRow } from '../../../shared/process/processUI'
+import { receiptStatusRole } from '../shared/receiptProcess'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
+import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
 
 type Props = {
   docId: string
@@ -28,8 +30,8 @@ type Props = {
   advancing: boolean
 }
 
-// Поступление завершается на приёмке (done): товар попал в остаток «на проверке».
-// Годность/брак определяются позже при упаковке отгрузки. Вью — только просмотр.
+// Поступление завершается на приёмке (done): товар встал на остатки годным «На хранении».
+// Брак фиксируется позже при упаковке отгрузки. Вью — только просмотр.
 export function ReviewView({ detail }: Props) {
   const navigate = useNavigate()
   const { doc, lines, ops } = detail
@@ -41,6 +43,7 @@ export function ReviewView({ detail }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
 
+  const isCancelled = doc.status === 'cancelled'
   const plannedUnits = lines.reduce((s, l) => s + l.planned_qty, 0)
   const arrivedUnits = lines.reduce((s, l) => s + (l.accepted_qty ?? 0), 0)
   const acceptedPct = plannedUnits > 0 ? Math.floor((arrivedUnits / plannedUnits) * 100) : 0
@@ -53,42 +56,30 @@ export function ReviewView({ detail }: Props) {
 
   return (
     <div className="page">
-      <div className="page-header" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <div className="detail-status-row">
-            <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
-              <Icon name="arrowLeft" size={14} />
-            </button>
-            <Badge tone={receiptStatusTone(doc.status) as BadgeTone} dot>
-              {RECEIPT_STATUS_LABELS[doc.status]}
-            </Badge>
-            <span className="detail-meta">
-              {doc.doc_number} · {doc.client_name ?? '—'}
-            </span>
-          </div>
-          <div className="page-title" style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <span className="mono" style={{ fontWeight: 500 }}>{doc.doc_number}</span>
-          </div>
-        </div>
-        <div className="row gap-8">
+      <DocHeader
+        badges={
+          <Badge tone={receiptStatusTone(doc.status) as BadgeTone} dot>
+            {RECEIPT_STATUS_LABELS[doc.status]}
+          </Badge>
+        }
+        role={receiptStatusRole(doc.status)}
+        title={doc.doc_number}
+        subtitle={`Поступление · ${doc.client_name ?? '—'}`}
+        onBack={() => navigate('/inventory/receipts')}
+        actions={
           <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
             <Icon name="layers" size={14} />Журнал
             {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
           </button>
-        </div>
-      </div>
+        }
+      />
 
-      <ReceiptStepper status={doc.status} ops={ops} />
-
-      <div className="split-380" style={{ alignItems: 'stretch', marginBottom: 16 }}>
-        <Card>
-          <CardHead>
-            <Icon name="file" size={15} className="ic-accent" />
-            <span className="card-head-title">Основная информация</span>
-          </CardHead>
-          <CardBody>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock icon="file" title="Основная информация" role="manager" state="done">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <ReadOnlyInputField label="Клиент" value={doc.client_name} />
+              <ReadOnlyField label="Клиент" value={doc.client_name} />
               <div>
                 <div className="field-label"><span>Рейс</span></div>
                 {doc.trip_id ? (
@@ -97,56 +88,61 @@ export function ReviewView({ detail }: Props) {
                     <Icon name="truckIn" size={13} />{doc.trip_number}
                   </button>
                 ) : (
-                  <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
+                  <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
                 )}
               </div>
-              <ReadOnlyInputField label="Дата прибытия (план)" value={fmtDate(doc.arrival_date)} />
-              <ReadOnlyInputField label="Дата прибытия (факт)" value={fmtDate(doc.actual_arrival_date)} />
+              <ReadOnlyField label="Дата прибытия (план)" value={fmtDate(doc.arrival_date)} />
+              <ReadOnlyField label="Дата прибытия (факт)" value={fmtDate(doc.actual_arrival_date)} />
               {showCosts && (
-                <ReadOnlyInputField label="Стоимость логистики для клиента, ₽" value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null} mono />
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <ReadOnlyField
+                    label="Стоимость логистики для клиента, ₽"
+                    value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
+                    mono
+                  />
+                </div>
               )}
               <div style={{ gridColumn: '1 / -1' }}>
-                <div className="field-label"><span>Комментарий</span></div>
-                <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, whiteSpace: 'pre-wrap' }}>
-                  {doc.comment || '—'}
-                </div>
+                <ReadOnlyField label="Комментарий" value={doc.comment} multiline />
               </div>
             </div>
-          </CardBody>
-        </Card>
+          </PhaseBlock>
 
-        <Card>
-          <CardHead>
-            <Icon name="check" size={15} className="ic-success" />
-            <span className="card-head-title">Принято</span>
-          </CardHead>
-          <div style={{ padding: '12px 14px 8px', borderBottom: '1px solid var(--c-border)' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 7 }}>
-              <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Принято, ед.</span>
-              <span style={{ fontSize: 13 }}>
-                <b className="num">{arrivedUnits}</b>
-                <span style={{ color: 'var(--c-text-subtle)' }}> / {plannedUnits}</span>
-                <span style={{ marginLeft: 8, fontWeight: 600, color: acceptedPct >= 100 ? 'var(--c-success)' : 'var(--c-info, #3b82f6)' }}>{acceptedPct}%</span>
-              </span>
-            </div>
-            <div className="prog">
-              <div className="prog-fill" style={{ width: `${Math.min(100, acceptedPct)}%` }} />
-            </div>
-          </div>
-          <div style={{ padding: '12px 14px', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-            Товар принят и числится «на проверке». Годный/брак определяются при упаковке отгрузки.
-          </div>
-        </Card>
+          <PhaseBlock
+            icon="forklift"
+            title={isCancelled ? 'Товары к приёмке' : 'Принятые товары'}
+            role="warehouse"
+            state="done"
+          >
+            <ReceiptLinesTable stage="review" lines={lines} />
+          </PhaseBlock>
+        </div>
+
+        {/* Right — маршрут + итог приёмки */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <ReceiptRailPanel status={doc.status} ops={ops} />
+
+          {!isCancelled && (
+            <Panel icon="chart" title="Итог приёмки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{plannedUnits} шт</ReadRow>
+                <ReadRow label="Принято" mono strong>
+                  <span style={{ color: 'var(--c-success)' }}>{arrivedUnits} шт</span>
+                </ReadRow>
+                <ReadRow label="Выполнение" mono>
+                  <span style={{ color: acceptedPct >= 100 ? 'var(--c-success)' : 'var(--c-info)' }}>{acceptedPct}%</span>
+                </ReadRow>
+              </div>
+              <div className="prog" style={{ marginTop: 6 }}>
+                <div className="prog-fill" style={{ width: `${Math.min(100, acceptedPct)}%` }} />
+              </div>
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                Товар принят и числится годным «На хранении». Брак фиксируется при упаковке отгрузки.
+              </div>
+            </Panel>
+          )}
+        </div>
       </div>
-
-      <Card style={{ marginBottom: 16 }}>
-        <CardHead>
-          <Icon name="boxes" size={15} className="ic-accent" />
-          <span className="card-head-title">Принятые товары</span>
-          <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-        </CardHead>
-        <ReceiptLinesTable stage="review" lines={lines} />
-      </Card>
 
       <Drawer
         open={opsDrawerOpen}
@@ -194,16 +190,22 @@ export function ReviewView({ detail }: Props) {
   )
 }
 
-function ReadOnlyInputField({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+function ReadOnlyField({ label, value, mono, multiline }: { label: string; value: string | null | undefined; mono?: boolean; multiline?: boolean }) {
   return (
     <div>
       <div className="field-label"><span>{label}</span></div>
-      <input
-        className={`input ${mono ? 'mono' : ''}`}
-        value={value || '—'}
-        readOnly
-        style={{ cursor: 'default' }}
-      />
+      <div style={{
+        fontSize: 13,
+        fontWeight: 500,
+        minHeight: 30,
+        display: 'flex',
+        alignItems: multiline ? 'flex-start' : 'center',
+        lineHeight: multiline ? 1.5 : undefined,
+        whiteSpace: multiline ? 'pre-wrap' : undefined,
+        overflowWrap: multiline ? 'anywhere' : undefined,
+      }}>
+        <span className={mono ? 'mono' : undefined}>{value || '—'}</span>
+      </div>
     </div>
   )
 }

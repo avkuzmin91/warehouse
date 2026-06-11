@@ -4,6 +4,7 @@ from datetime import date
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
+    SHIPMENT_CARGO_DEFECT,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -106,15 +107,17 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         # Задача отгрузки — прямая функция статуса:
         #   «В плане» (+срок наступил) → кладовщик передаёт на упаковку;
         #   «На упаковке»              → начальник смены разбивает годный/брак;
-        #   «Перемещение»              → кладовщик раскладывает по местам к рейсу.
+        #   «Перемещение»              → кладовщик раскладывает по местам к рейсу;
+        #   «Перемещение» (брак, +срок наступил) → кладовщик готовит брак к отгрузке.
         today = date.today().isoformat()
         shipment_rows = connection.execute(
-            "SELECT id, doc_number, status, ship_date, updated_at, created_at FROM shipment_docs "
+            "SELECT id, doc_number, status, cargo_type, ship_date, priority_rank, updated_at, created_at FROM shipment_docs "
             "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?)",
             (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING),
         ).fetchall()
         for r in shipment_rows:
             status = str(r["status"])
+            is_defect_cargo = str(r["cargo_type"] or "") == SHIPMENT_CARGO_DEFECT
             if status == SHIPMENT_STATUS_PACKING:
                 ship_date = r["ship_date"]
                 if not ship_date or str(ship_date) > today:
@@ -122,6 +125,11 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 task_role, kind, title = ROLE_WAREHOUSE, "shipment_move_in", f"Передать на упаковку {r['doc_number']}"
             elif status == SHIPMENT_STATUS_ON_PACKING:
                 task_role, kind, title = ROLE_SHIFT, "shipment_pack", f"Упаковать {r['doc_number']}"
+            elif is_defect_cargo:  # SHIPMENT_STATUS_RELOCATING, брак-отгрузка
+                ship_date = r["ship_date"]
+                if ship_date and str(ship_date) > today:
+                    continue  # срок подготовки ещё не наступил
+                task_role, kind, title = ROLE_WAREHOUSE, "shipment_defect_prepare", f"Подготовить к отгрузке {r['doc_number']}"
             else:  # SHIPMENT_STATUS_RELOCATING
                 task_role, kind, title = ROLE_WAREHOUSE, "shipment_relocate", f"Разложить по местам {r['doc_number']}"
             if task_role not in visible_roles:
@@ -131,7 +139,12 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_type": "shipment", "doc_id": str(r["id"]),
                 "doc_number": str(r["doc_number"]), "status": status,
                 "role": task_role, "since": r["updated_at"] or r["created_at"],
+                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 
-    tasks.sort(key=lambda t: (t["since"] or ""))
+    tasks.sort(key=lambda t: (
+        t.get("priority_rank") is None,
+        t.get("priority_rank") or 0,
+        t["since"] or "",
+    ))
     return tasks

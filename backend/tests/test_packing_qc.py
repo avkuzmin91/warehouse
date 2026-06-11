@@ -63,21 +63,39 @@ def _position():
 
 
 def _balance(client_id, pos):
-    """(good, defect, on_review, on_packing) по позиции из расчёта остатков."""
+    """(ready_good, defect_всего, storage_good, packing_good) по позиции из расчёта остатков.
+
+    Позиции кортежа соответствуют старым (good, defect, on_review, on_packing):
+    упакованный годный теперь «Готов к отгрузке», принятый — «На хранении / Годный»,
+    нерешённый пул — «На упаковке / Годный».
+    """
     with get_connection() as c:
         bs = get_balances(c, page=1, limit=10000, client_id=client_id, search=None, only_positive=False, has_defect=False)
     for i in bs.items:
         if i.product_id == pos["product_id"] and i.color_id == pos["color_id"] and i.size_id == pos["size_id"]:
-            return i.good, i.defect, i.on_review, i.on_packing
+            defect = i.storage_defect + i.packing_defect + i.ready_defect
+            return i.ready_good, defect, i.storage_good, i.packing_good
     return 0, 0, 0, 0
 
 
+# Старые однострочные статусы зон → корзины (op, quality) новой модели.
+_ZONE_STATUS_MAP = {
+    "on_review":  ("storage", "good"),
+    "on_packing": ("packing", "good"),
+    "good":       ("ready", "good"),
+    "defect":     ("packing", "defect"),
+    "storage_defect": ("storage", "defect"),
+}
+
+
 def _zone_qty(client_id, pos, zone_id, status):
+    op, quality = _ZONE_STATUS_MAP[status]
     with get_connection() as c:
         bz = get_balances_by_zone(c, client_id=client_id, search=None, only_positive=False)
     for i in bz.items:
         if (i.product_id == pos["product_id"] and i.color_id == pos["color_id"]
-                and i.size_id == pos["size_id"] and i.location_id == zone_id and i.status == status):
+                and i.size_id == pos["size_id"] and i.location_id == zone_id
+                and i.op_status == op and i.quality == quality):
             return i.qty
     return 0
 
@@ -497,6 +515,13 @@ def test_relocate_good_after_packing(api, client_id):
     assert _zone_qty(client_id, pos, good_zone, "good") == 10
     assert _zone_qty(client_id, pos, packing_id, "good") == 0
 
+    # Раскладка good→good не должна задваивать упакованное в карточке, а места — видны для просмотра.
+    det_line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    assert det_line["packed_good"] == 10 and det_line["packed_defect"] == 0
+    assert det_line["placements"] == [
+        {"kind": "good", "zone_id": good_zone, "zone_name": "Годный-1", "qty": 10},
+    ]
+
 
 def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
     pos1 = _position()
@@ -518,7 +543,10 @@ def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
         "ship_date": "2000-01-01", "comment": "ТЗ", "lines": lines,
     }).json()["message"]
     api.post(f"/shipments/{doc_id}/advance")  # draft → packing
-    line1_id = api.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    line1_id = next(
+        l["id"] for l in api.get(f"/shipments/{doc_id}").json()["lines"]
+        if l["product_sku"] == "SKU-1"
+    )
 
     _as(_WH)
     mv = api.post(f"/shipments/{doc_id}/lines/{line1_id}/move-to-packing", json={"qty": 5, "from_zone_id": zone1})
@@ -550,3 +578,47 @@ def test_move_to_packing_requires_warehouse_role(api, client_id):
     _as(_SHIFT)  # начальник смены не вправе перемещать
     r = api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 5})
     assert r.status_code == 403, r.text
+
+
+def test_packing_productivity_report(api, client_id):
+    """Отчёт производительности: нетто по дням (клиент × SKU), отмены вычитаются."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 40, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 30)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 35})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+
+    d1, d2 = "2026-06-08", "2026-06-09"
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": d1})
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 5, "defect_delta": 3, "packed_date": d2})
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 7, "packed_date": d2})
+
+    # Начальник смены видит отчёт; дни по убыванию, день агрегирует записи.
+    r = api.get("/shipments/packing/productivity", params={"client_id": client_id, "date_from": d1, "date_to": d2})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [d["packed_date"] for d in body["days"]] == [d2, d1]
+    day2 = body["days"][0]
+    assert (day2["good"], day2["defect"], day2["total"]) == (12, 3, 15)
+    assert day2["sku_count"] == 1 and day2["doc_count"] == 1
+    row = day2["rows"][0]
+    assert row["product_id"] == pos["product_id"]
+    assert (row["good"], row["defect"], row["total"]) == (12, 3, 15)
+    assert row["client_id"] == client_id and row["client_name"]  # имя — из справочника клиентов
+    assert (body["total_good"], body["total_defect"], body["total"]) == (22, 3, 25)
+
+    # Фильтр периода отсекает день 1.
+    only_d2 = api.get("/shipments/packing/productivity", params={"client_id": client_id, "date_from": d2, "date_to": d2}).json()
+    assert [d["packed_date"] for d in only_d2["days"]] == [d2] and only_d2["total"] == 15
+
+    # Отмена единственной записи дня 1 → нетто 0, день исчезает из отчёта.
+    entries = api.get(f"/shipments/{doc_id}/lines/{line_id}/packing").json()["entries"]
+    e1 = next(e for e in entries if e["packed_date"] == d1)
+    rev = api.post(f"/shipments/{doc_id}/lines/{line_id}/packing/{e1['id']}/reverse")
+    assert rev.status_code == 200, rev.text
+    after = api.get("/shipments/packing/productivity", params={"client_id": client_id, "date_from": d1, "date_to": d2}).json()
+    assert [d["packed_date"] for d in after["days"]] == [d2]
+    assert (after["total_good"], after["total_defect"], after["total"]) == (12, 3, 15)
