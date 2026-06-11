@@ -19,7 +19,12 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
-from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
+from tests.conftest import (  # noqa: F401
+    admin_client,
+    cleanup_client,
+    make_client_id,
+    shift_supervisor_client,
+)
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -379,6 +384,21 @@ def test_balance_not_counted_for_draft_receipt(admin_client, client_id, product_
         matched = [i for i in items if i["product_id"] == pid]
         # Товар не должен появляться в балансах, пока поступление не принято
         assert not matched, f"Товар {pid} неожиданно найден в балансах при статусе planned: {matched}"
+    finally:
+        _cleanup_test_docs(client_id)
+
+
+def test_shift_supervisor_can_read_zone_balances(shift_supervisor_client, client_id, product_ids):
+    """Начальник смены читает остатки по местам (флоу упаковки), не получает 403."""
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, 7)
+        conn.commit()
+
+    try:
+        r = shift_supervisor_client.get(f"/balances/zones?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        r2 = shift_supervisor_client.get(f"/balances?client_id={client_id}")
+        assert r2.status_code == 200, r2.text
     finally:
         _cleanup_test_docs(client_id)
 

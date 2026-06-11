@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from dbconn import get_connection
-from modules.auth.service import get_current_manager
+from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.balances.schemas import (
     BalanceListResponse,
     BalanceZonesResponse,
@@ -30,7 +30,7 @@ def list_balances(
     search: str | None = Query(None),
     only_positive: bool = Query(True),
     has_defect: bool = Query(False),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_shipment_viewer),
 ):
     with get_connection() as conn:
         return get_balances(
@@ -49,7 +49,7 @@ def list_balances_by_zone(
     client_id: str | None = Query(None),
     search: str | None = Query(None),
     only_positive: bool = Query(True),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_shipment_viewer),
 ):
     with get_connection() as conn:
         return get_balances_by_zone(
