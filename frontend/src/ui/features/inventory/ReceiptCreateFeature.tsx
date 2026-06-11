@@ -89,7 +89,6 @@ export function ReceiptCreateFeature() {
         arrival_date: arrivalDate || null,
         comment: comment.trim() || null,
         ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message

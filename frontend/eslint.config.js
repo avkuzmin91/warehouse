@@ -24,6 +24,12 @@ export default defineConfig([
       // и form-sync (sync display from props). Включить обратно стоит только после миграции
       // на TanStack Query / Suspense-based loaders.
       'react-hooks/set-state-in-effect': 'off',
+      // Префикс `_` помечает намеренно неиспользуемый параметр (единая сигнатура функций-правил).
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
     },
   },
   {

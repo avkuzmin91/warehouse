@@ -8,7 +8,7 @@ import type { ComboboxOption } from '../../../../data/Combobox'
 import { NumberStep } from '../../../inventory/shared/NumberStep'
 import { Icon } from '../../../../primitives/Icon'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
-import { LineIdentityCell } from '../../../inventory/receiptDetail/components/LineIdentityCell'
+import { LineIdentityCell } from '../../../inventory/shared/LineIdentityCell'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
 

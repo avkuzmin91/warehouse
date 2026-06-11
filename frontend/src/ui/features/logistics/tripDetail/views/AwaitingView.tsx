@@ -6,7 +6,8 @@ import { TRIP_LOAD_LABELS, tripLexicon, tripStatusLabel } from '../../../../../a
 import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptEnrich } from '../ReceiptsBlock'
-import { DateTimeField, FieldLabel, timePart } from '../../components/fields'
+import { DateTimeField, FieldLabel } from '../../components/fields'
+import { timePart } from '../../components/dateTimeValue'
 
 function Chip({ icon, children }: { icon: IconName; children: React.ReactNode }) {
   return (

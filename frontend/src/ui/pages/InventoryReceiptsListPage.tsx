@@ -106,7 +106,7 @@ export function InventoryReceiptsListPage() {
       ctrl.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [mode, view, page, search, skuFilter, clientId, statusFilter, dateFrom, dateTo, retryTick, initialLoading])
+  }, [mode, view, page, search, skuFilter, clientId, statusParam, overdueParam, dateFrom, dateTo, retryTick, initialLoading])
 
   const STATUS_OPTIONS = [
     { value: '', label: 'Все статусы' },
@@ -416,7 +416,8 @@ function KanbanColumn({ col, filters, onNavigate }: {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}`
+  const { search, sku, client_id, date_from, date_to } = filters
+  const filterKey = `${search}|${sku}|${client_id}|${date_from}|${date_to}`
   const prevFilterKey = useRef(filterKey)
 
   useEffect(() => {
@@ -433,7 +434,7 @@ function KanbanColumn({ col, filters, onNavigate }: {
       page: activePage,
       limit: KANBAN_PAGE,
       status: col.status,
-      ...filters,
+      search, sku, client_id, date_from, date_to,
     }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
@@ -447,7 +448,7 @@ function KanbanColumn({ col, filters, onNavigate }: {
         setLoadingMore(false)
       })
     return () => ctrl.abort()
-  }, [page, filterKey, col.status])
+  }, [page, filterKey, col.status, search, sku, client_id, date_from, date_to])
 
   const hasMore = items.length < total
 

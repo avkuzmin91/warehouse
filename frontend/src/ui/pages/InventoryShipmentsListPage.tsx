@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
@@ -91,12 +91,15 @@ export function InventoryShipmentsListPage() {
   const { clients } = useLookups()
 
   const isOverdueFilter = statusFilter === 'overdue'
-  const statusParam: ShipmentStatus | ShipmentStatus[] | undefined =
-    !statusFilter || isOverdueFilter
-      ? undefined
-      : statusFilter.includes(',')
-        ? (statusFilter.split(',') as ShipmentStatus[])
-        : (statusFilter as ShipmentStatus)
+  const statusParam = useMemo<ShipmentStatus | ShipmentStatus[] | undefined>(
+    () =>
+      !statusFilter || statusFilter === 'overdue'
+        ? undefined
+        : statusFilter.includes(',')
+          ? (statusFilter.split(',') as ShipmentStatus[])
+          : (statusFilter as ShipmentStatus),
+    [statusFilter],
+  )
   const overdueParam = isOverdueFilter || undefined
   const cargoParam: ShipmentCargoType | undefined =
     cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
@@ -131,7 +134,7 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [mode, view, page, search, skuFilter, clientId, statusFilter, cargoFilter, dateFrom, dateTo, reloadTick])
+  }, [mode, view, page, search, skuFilter, clientId, statusParam, overdueParam, cargoParam, dateFrom, dateTo, reloadTick])
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
@@ -476,7 +479,8 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}|${filters.cargo_type}|${reloadTick ?? 0}`
+  const { search, sku, client_id, date_from, date_to, cargo_type } = filters
+  const filterKey = `${search}|${sku}|${client_id}|${date_from}|${date_to}|${cargo_type}|${reloadTick ?? 0}`
   const prevFilterKey = useRef(filterKey)
 
   useEffect(() => {
@@ -493,7 +497,7 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
       page: activePage,
       limit: KANBAN_PAGE,
       status: col.status,
-      ...filters,
+      search, sku, client_id, date_from, date_to, cargo_type,
     }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
@@ -507,7 +511,7 @@ function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
         setLoadingMore(false)
       })
     return () => ctrl.abort()
-  }, [page, filterKey, col.status])
+  }, [page, filterKey, col.status, search, sku, client_id, date_from, date_to, cargo_type])
 
   const hasMore = items.length < total
 

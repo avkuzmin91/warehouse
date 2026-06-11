@@ -28,7 +28,7 @@ import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { canViewCosts } from '../../../utils/access'
-import { isDateTimeComplete, isDateTimeBefore } from './components/fields'
+import { isDateTimeComplete, isDateTimeBefore } from './components/dateTimeValue'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
@@ -123,11 +123,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
     if (isOutbound(detail.doc.direction)) {
-      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
-      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
         .catch(() => {})
     }
@@ -258,7 +258,6 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         zone_id: f.zone_id || null,
         zone_name: f.zone_name || null,
         comment: f.comment.trim() || null,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: f.lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message

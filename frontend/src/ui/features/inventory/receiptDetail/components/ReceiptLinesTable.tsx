@@ -3,7 +3,7 @@ import type { ReceiptLine } from '../../../../../api/receiptsApi'
 import { Table, Td } from '../../../../data/Table'
 import { Icon } from '../../../../primitives/Icon'
 import { NumberStep } from '../../shared/NumberStep'
-import { LineIdentityCell } from './LineIdentityCell'
+import { LineIdentityCell } from '../../shared/LineIdentityCell'
 import { ZoneCell } from './ZoneCell'
 
 const groupBorder = '1px solid var(--c-border)'

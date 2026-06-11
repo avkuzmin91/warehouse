@@ -33,7 +33,7 @@ export function CabinetBalancesFeature() {
     [page, search, onlyPositive, hasDefect],
   )
 
-  const items = data?.items ?? []
+  const items = useMemo(() => data?.items ?? [], [data])
   const kpi = useMemo(() => ({
     totalQty: items.reduce((sum, item) => sum + item.total, 0),
     storageQty: items.reduce((sum, item) => sum + item.storage_good + item.storage_defect, 0),
