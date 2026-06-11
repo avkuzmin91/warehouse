@@ -132,12 +132,21 @@ def _insert_ship_consume(conn, client_id: str, product_ids, quality: str, qty: i
 
 
 def _seed_received(conn, client_id: str, product_ids, accepted: int, zone_id: str | None = None) -> tuple[str, str]:
-    """Принятое поступление (done): accepted_qty → остаток «На хранении / Годный» в зоне."""
+    """Принятое поступление (done) + intake-движение журнала, как пишет /arrive.
+
+    Остаток «На хранении / Годный» встаёт из журнала (intake → storage),
+    accepted_qty — документный факт приёмки.
+    """
     pid, color_id, size_id = product_ids
     doc = _insert_receipt(conn, client_id, "done")
     line = _insert_receipt_line(conn, doc, pid, color_id, size_id, planned_qty=accepted, accepted_qty=accepted)
     if zone_id:
         conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone_id, line))
+    _insert_move(
+        conn, client_id, product_ids, accepted,
+        from_op="intake", to_op="storage", from_quality="good", to_quality="good",
+        from_zone_id=zone_id, to_zone_id=zone_id,
+    )
     return doc, line
 
 
@@ -364,6 +373,74 @@ def test_storage_remainder_after_move_to_packing(admin_client, client_id, produc
         assert matched, "Товар не найден в балансах"
         assert matched[0]["storage_good"] == accepted_qty - moved_qty  # 25 - 10 = 15
         assert matched[0]["packing_good"] == moved_qty
+    finally:
+        _cleanup_test_docs(client_id)
+
+
+def test_intake_bucket_for_unfinished_receipt(admin_client, client_id, product_ids):
+    """Принятое по незавершённому поступлению видно в корзине «На приёмке»."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    qty = 17
+
+    with get_connection() as conn:
+        doc_id = _insert_receipt(conn, client_id, "on_intake")
+        line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, planned_qty=qty, accepted_qty=qty)
+        conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone, line_id))
+        conn.commit()
+
+    try:
+        r = admin_client.get(f"/balances?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
+        assert matched, f"Товар {pid} не найден в балансах"
+        assert matched[0]["intake"] == qty
+        assert matched[0]["storage_good"] == 0
+        assert matched[0]["total"] == qty
+
+        z = admin_client.get(f"/balances/zones?client_id={client_id}")
+        assert z.status_code == 200, z.text
+        z_data = z.json()
+        assert z_data["truncated"] is False
+        assert _zone_bucket(z_data["items"], zone, "intake", "good") == qty
+        assert _zone_bucket(z_data["items"], zone, "storage", "good") == 0
+
+        s = admin_client.get(f"/balances/summary?client_id={client_id}")
+        assert s.status_code == 200, s.text
+        assert s.json()["intake"] == qty
+        assert s.json()["total"] == qty
+    finally:
+        _cleanup_test_docs(client_id)
+
+
+def test_balances_summary_matches_buckets(admin_client, client_id, product_ids):
+    """Summary агрегирует все корзины и фильтруется по has_defect."""
+    received = 30
+    defect = 6
+    to_packing = 10
+
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, received)
+        _insert_quality_change(conn, client_id, product_ids, "defect", defect)
+        _insert_move(
+            conn, client_id, product_ids, to_packing,
+            from_op="storage", to_op="packing", from_quality="good", to_quality="good",
+        )
+        conn.commit()
+
+    try:
+        s = admin_client.get(f"/balances/summary?client_id={client_id}")
+        assert s.status_code == 200, s.text
+        data = s.json()
+        assert data["intake"] == 0
+        assert data["storage_good"] == received - defect - to_packing
+        assert data["storage_defect"] == defect
+        assert data["packing_good"] == to_packing
+        assert data["total"] == received
+
+        sd = admin_client.get(f"/balances/summary?client_id={client_id}&has_defect=true")
+        assert sd.status_code == 200, sd.text
+        assert sd.json()["storage_defect"] == defect
     finally:
         _cleanup_test_docs(client_id)
 

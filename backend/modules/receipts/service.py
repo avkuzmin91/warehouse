@@ -10,6 +10,7 @@ from config import (
     RECEIPT_STATUS_RU,
     RECEIPT_STATUS_TRANSITIONS,
 )
+from dbconn import like_substring_param
 
 
 def _now() -> str:
@@ -104,7 +105,7 @@ def list_receipts_aggregated(
         conds.append("d.status = ?")
         params.append(status)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
         params += [s, s]
     if sku:
@@ -112,7 +113,7 @@ def list_receipts_aggregated(
             "EXISTS (SELECT 1 FROM receipt_lines rl"
             " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
         )
-        params.append(f"%{sku.strip()}%")
+        params.append(like_substring_param(sku))
     if date_from:
         conds.append("d.arrival_date >= ?")
         params.append(date_from)
@@ -201,11 +202,11 @@ def list_receipt_lines(
         conds.append("d.status = ?")
         params.append(status)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
         params += [s, s]
     if sku:
-        s = f"%{sku.strip()}%"
+        s = like_substring_param(sku)
         conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
         params += [s, s]
     if date_from:

@@ -2,12 +2,14 @@ import { request } from './http'
 
 // --- Types ---
 
-/** Операционный статус запаса: что товар делает. */
-export type InvOpStatus = 'storage' | 'packing' | 'ready'
+/** Операционный статус запаса: что товар делает.
+ *  intake — виртуальный статус отображения: принято по незавершённым поступлениям. */
+export type InvOpStatus = 'intake' | 'storage' | 'packing' | 'ready'
 /** Качество запаса. «Не проверен» существует только внутри приёмки. */
 export type InvQuality = 'good' | 'defect'
 
 export const INV_OP_LABELS: Record<InvOpStatus, string> = {
+  intake:  'На приёмке',
   storage: 'На хранении',
   packing: 'На упаковке',
   ready:   'Готов к отгрузке',
@@ -28,6 +30,7 @@ export type BalanceItem = {
   size_name: string | null
   client_id: string | null
   client_name: string | null
+  intake: number
   storage_good: number
   storage_defect: number
   packing_good: number
@@ -36,6 +39,23 @@ export type BalanceItem = {
   ready_defect: number
   total: number
   docs_count: number
+}
+
+export type BalanceSummary = {
+  intake: number
+  storage_good: number
+  storage_defect: number
+  packing_good: number
+  packing_defect: number
+  ready_good: number
+  ready_defect: number
+  total: number
+}
+
+export type BalanceSummaryParams = {
+  client_id?:  string
+  search?:     string
+  has_defect?: boolean
 }
 
 export type BalanceListParams = {
@@ -79,6 +99,8 @@ export type BalanceZonesParams = {
 
 export type BalanceZonesResponse = {
   items: BalanceZoneItem[]
+  /** Выборка обрезана серверным лимитом — список неполный. */
+  truncated: boolean
 }
 
 // --- API functions ---
@@ -93,6 +115,15 @@ export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getBalancesSummary(params: BalanceSummaryParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.has_defect) sp.set('has_defect', 'true')
+  const q = sp.toString()
+  return request<BalanceSummary>(`/balances/summary${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getBalancesByZone(params: BalanceZonesParams = {}, signal?: AbortSignal) {

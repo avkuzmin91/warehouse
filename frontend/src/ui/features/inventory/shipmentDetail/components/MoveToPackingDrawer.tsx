@@ -50,25 +50,33 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
     setRows((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev))
   }
 
-  function validate(): string | null {
-    const seen = new Set<string>()
-    let any = false
-    for (const r of rows) {
-      if (!r.zoneId && r.qty <= 0) continue
-      if (!r.zoneId) return 'Выберите место в каждой строке'
-      if (r.qty <= 0) return 'Укажите количество больше нуля'
-      if (seen.has(r.zoneId)) return 'Место указано дважды — объедините строки'
-      seen.add(r.zoneId)
+  const [showReasons, setShowReasons] = useState(false)
+
+  function collectReasons(): string[] {
+    const reasons: string[] = []
+    const filled = rows.filter((r) => r.zoneId || r.qty > 0)
+    if (filled.some((r) => !r.zoneId)) reasons.push('Выберите место в каждой строке')
+    if (filled.some((r) => r.zoneId && r.qty <= 0)) reasons.push('Укажите количество больше нуля')
+    const used = filled.filter((r) => r.zoneId).map((r) => r.zoneId)
+    if (new Set(used).size !== used.length) reasons.push('Место указано дважды — объедините строки')
+    for (const r of filled) {
       const avail = availById.get(r.zoneId) ?? 0
-      if (r.qty > avail) return `В месте доступно ${avail} шт — уменьшите количество`
-      any = true
+      if (r.zoneId && r.qty > avail) { reasons.push(`В месте доступно ${avail} шт — уменьшите количество`); break }
     }
-    if (!any) return 'Добавьте хотя бы одно место с количеством'
-    return null
+    if (filled.length === 0) reasons.push('Добавьте хотя бы одно место с количеством')
+    return reasons
+  }
+
+  const blockReasons = collectReasons()
+
+  function handlePrimary() {
+    if (blockReasons.length > 0) { setShowReasons(true); return }
+    setShowReasons(false)
+    void submit()
   }
 
   async function submit() {
-    const err = validate()
+    const err = collectReasons()[0]
     if (err) { toast(err, 'error'); return }
     const allocations: ShipmentMoveAllocation[] = rows
       .filter((r) => r.zoneId && r.qty > 0)
@@ -102,7 +110,7 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn ghost" onClick={onClose} disabled={saving}>Отмена</button>
-            <button className="btn primary" onClick={submit} disabled={saving || noZones || total <= 0}>
+            <button className="btn primary" onClick={handlePrimary} disabled={saving || noZones}>
               <Icon name="forklift" size={14} />{mode === 'replenish' ? 'Передать ещё' : 'Передать'}
             </button>
           </div>
@@ -165,10 +173,11 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
                     disabled={saving}
                     tone={row.zoneId && row.qty > avail ? 'warning' : 'normal'}
                     width={96}
+                    height={34}
                   />
                   <button
                     className="btn ghost icon sm"
-                    style={{ marginTop: 2 }}
+                    style={{ marginTop: 4 }}
                     disabled={saving || rows.length <= 1}
                     title="Убрать строку"
                     onClick={() => removeRow(i)}
@@ -187,6 +196,13 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
           >
             <Icon name="plus" size={12} />Добавить место
           </button>
+          {showReasons && blockReasons.length > 0 && (
+            <div className="block-reasons" style={{ textAlign: 'left', marginTop: 10 }}>
+              {blockReasons.map((r, i) => (
+                <div key={i}>· {r}</div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </Drawer>

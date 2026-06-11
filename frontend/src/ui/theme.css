@@ -479,6 +479,9 @@ a { color: inherit; text-decoration: none; }
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
 }
+.kpi.clickable { cursor: pointer; display: block; width: 100%; text-align: left; font: inherit; color: inherit; transition: border-color 0.12s ease; }
+.kpi.clickable:hover { border-color: var(--c-accent); }
+.kpi.active { border-color: var(--c-accent); box-shadow: inset 0 0 0 1px var(--c-accent); }
 .kpi-delta { font-size: 12px; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; }
 .kpi-delta.up { color: var(--c-success); }
 .kpi-delta.down { color: var(--c-danger); }

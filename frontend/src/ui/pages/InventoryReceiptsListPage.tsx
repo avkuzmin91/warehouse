@@ -112,7 +112,8 @@ export function InventoryReceiptsListPage() {
   const STATUS_OPTIONS = [
     { value: '', label: 'Все статусы' },
     { value: 'overdue', label: 'Просрочка' },
-    ...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft').map((s) => ({ value: s, label: RECEIPT_STATUS_LABELS[s] })),
+    ...([...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft'), 'cancelled'] as ReceiptStatus[])
+      .map((s) => ({ value: s, label: RECEIPT_STATUS_LABELS[s] })),
   ]
 
   if (initialLoading) {

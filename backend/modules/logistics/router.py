@@ -405,8 +405,8 @@ def unlink_trip_shipment(trip_id: str, shipment_doc_id: str, user=Depends(get_cu
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
-        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
-            raise HTTPException(status_code=400, detail="Отвязать отгрузку можно до начала погрузки")
+        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING):
+            raise HTTPException(status_code=400, detail="Отвязать отгрузку можно до завершения погрузки")
         line = conn.execute(
             "SELECT l.id, s.doc_number FROM trip_lines l LEFT JOIN shipment_docs s ON s.id = l.shipment_doc_id "
             "WHERE l.trip_id = ? AND l.shipment_doc_id = ? AND l.is_deleted = 0",
@@ -513,7 +513,9 @@ def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_cur
 @router.post("/trips/{trip_id}/unload")
 def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_current_warehouse)):
     uid = str(user["id"])
-    if payload.load_factor is not None and payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
+    if not payload.load_factor:
+        raise HTTPException(status_code=400, detail="Укажите загруженность машины")
+    if payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
         raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)

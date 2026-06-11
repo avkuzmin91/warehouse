@@ -622,3 +622,24 @@ def test_packing_productivity_report(api, client_id):
     after = api.get("/shipments/packing/productivity", params={"client_id": client_id, "date_from": d1, "date_to": d2}).json()
     assert [d["packed_date"] for d in after["days"]] == [d2]
     assert (after["total_good"], after["total_defect"], after["total"]) == (12, 3, 15)
+
+
+def test_cancel_in_plan_returns_packing_pool_to_storage(api, client_id):
+    """Аннулирование годной отгрузки «В плане» возвращает переданное на упаковку на исходные места."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 20, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+
+    _as(_WH)
+    mv = api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    assert mv.status_code == 200, mv.text
+    assert _balance(client_id, pos) == (0, 0, 10, 10)  # 10 на хранении, 10 на упаковке
+
+    _as(_ADMIN)
+    cancel = api.post(f"/shipments/{doc_id}/cancel")
+    assert cancel.status_code == 200, cancel.text
+
+    # Пул с упаковки вернулся в исходную зону, на упаковке пусто.
+    assert _balance(client_id, pos) == (0, 0, 20, 0)
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 20

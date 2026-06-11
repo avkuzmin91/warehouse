@@ -29,6 +29,7 @@ from config import (
     SHIPMENT_TRANSITIONS,
     SHIPMENT_TRANSITIONS_DEFECT,
 )
+from dbconn import like_substring_param
 
 
 def _now() -> str:
@@ -575,7 +576,7 @@ def packing_productivity(
     if client_id and client_id.strip():
         conds.append("zr.client_id = ?"); params.append(client_id.strip())
     if search and search.strip():
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(zr.product_sku LIKE ? OR zr.product_name LIKE ?)")
         params += [s, s]
     where = " AND ".join(conds)
@@ -1013,6 +1014,77 @@ def return_defect_to_storage(connection, doc_id: str, user_id: str) -> int:
             comment=f"Возврат брака при аннулировании: {qty} шт → {r['from_zone_name'] or 'без места'}",
         )
         total_returned += qty
+    return total_returned
+
+
+def return_packing_pool_to_storage(connection, doc_id: str, user_id: str) -> int:
+    """Автовозврат при аннулировании годной отгрузки: нерешённый пул с упаковки — на исходные места.
+
+    Документ можно аннулировать в статусе «В плане», когда товар уже частично
+    передан в зону упаковки; без возврата он навсегда зависает в корзине
+    «На упаковке» у аннулированного документа. Обратные движения
+    packing/good@зона упаковки → storage/good по net исходных мест из журнала
+    передачи. Без commit — коммитит вызывающий (аннулирование).
+    """
+    from modules.balances.service import get_packing_zone, insert_inventory_move
+
+    doc = connection.execute(
+        "SELECT client_id FROM shipment_docs WHERE id = ?", (doc_id,)
+    ).fetchone()
+    lines = connection.execute(
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchall()
+
+    packing_zone: tuple[str, str] | None = None
+    total_returned = 0
+    for line in lines:
+        line_id = str(line["id"])
+        pool = line_on_packing_qty(connection, line_id)
+        if pool <= 0:
+            continue
+        if packing_zone is None:
+            packing_zone = get_packing_zone(connection)
+        packing_id, packing_name = packing_zone
+
+        sources = connection.execute(
+            """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+                   SELECT from_zone_id AS zone_id, from_zone_name AS zone_name, qty AS net
+                   FROM zone_relocations
+                   WHERE shipment_line_id = ? AND from_op = 'storage' AND to_op = 'packing'
+                     AND from_quality = 'good' AND to_quality = 'good'
+                   UNION ALL
+                   SELECT to_zone_id, to_zone_name, -qty
+                   FROM zone_relocations
+                   WHERE shipment_line_id = ? AND from_op = 'packing' AND to_op = 'storage'
+                     AND from_quality = 'good' AND to_quality = 'good'
+               ) t
+               GROUP BY zone_id HAVING SUM(net) > 0
+               ORDER BY SUM(net) DESC""",
+            (line_id, line_id),
+        ).fetchall()
+
+        remaining = pool
+        for src in sources:
+            if remaining <= 0:
+                break
+            take = min(int(src["net"]), remaining)
+            if take <= 0:
+                continue
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=doc["client_id"] if doc else None, client_name=None,
+                from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
+                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                from_zone_id=packing_id, from_zone_name=packing_name,
+                to_zone_id=src["zone_id"], to_zone_name=src["zone_name"],
+                qty=take, user_id=user_id, shipment_line_id=line_id,
+                comment=f"Возврат при аннулировании: {take} шт → {src['zone_name'] or 'без места'}",
+            )
+            remaining -= take
+            total_returned += take
     return total_returned
 
 

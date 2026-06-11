@@ -22,7 +22,12 @@ def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
     return s or None
 
 
-def ensure_admin_account(user: Mapping[str, Any]) -> None:
+def ensure_backoffice_account(user: Mapping[str, Any]) -> None:
+    """Админ-разделы бэк-офиса (справочники, товары): admin, manager, warehouse_manager.
+
+    Это НЕ проверка «только admin» — для строго админских операций
+    (управление пользователями) используется отдельная проверка role == "admin".
+    """
     if user["role"] not in ("admin", "manager", "warehouse_manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

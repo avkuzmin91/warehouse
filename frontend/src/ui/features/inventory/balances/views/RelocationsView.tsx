@@ -17,6 +17,7 @@ const QUALITY_TONE: Record<string, BadgeTone> = { good: 'success', defect: 'warn
 
 /** Человекочитаемая операция движения по двум осям статуса. */
 function moveLabel(item: ZoneRelocationItem): string {
+  if (item.from_op === 'intake') return 'Приёмка'
   if (item.to_op === 'shipped') return 'Отгрузка'
   if (item.from_quality !== item.to_quality) {
     return `${INV_QUALITY_LABELS[item.from_quality]} → ${INV_QUALITY_LABELS[item.to_quality]}`

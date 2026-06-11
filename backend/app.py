@@ -3,22 +3,17 @@ from __future__ import annotations
 import functools
 import os
 import subprocess
-import time
-import threading
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config import AUTH_RL_REFRESH_MAX, AUTH_RL_REFRESH_WINDOW_SEC, UPLOADS_DIR
+from config import UPLOADS_DIR
 from dbconn import close_pool, get_connection, init_pool
-from rate_limit.client_ip import client_ip_from_request
-from rate_limit.login_rate_limit import check_login_rate_limits, close_login_redis
+from rate_limit.login_rate_limit import check_login_rate_limits, check_refresh_rate_limit, close_login_redis
 
 from modules.auth.router import router as auth_router
 from modules.balances.router import router as balances_router
@@ -32,8 +27,6 @@ from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
 from modules.tasks.router import router as tasks_router
 from modules.users.router import router as users_router
-
-_auth_log = logging.getLogger("warehouse.auth")
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -225,25 +218,6 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 # ── Rate limiting middleware ───────────────────────────────────────────────────
 
-_rl_refresh_lock = threading.Lock()
-_rl_refresh_store: dict[str, list[float]] = {}
-
-
-def _rate_limit_consume(store: dict[str, list[float]], key: str, *, max_requests: int, window_sec: float) -> bool:
-    if max_requests <= 0 or window_sec <= 0:
-        return True
-    now = time.monotonic()
-    cutoff = now - window_sec
-    with _rl_refresh_lock:
-        lst = store.setdefault(key, [])
-        while lst and lst[0] < cutoff:
-            lst.pop(0)
-        if len(lst) >= max_requests:
-            return False
-        lst.append(now)
-    return True
-
-
 @app.middleware("http")
 async def _auth_rate_limit_middleware(request: Request, call_next):
     if request.method == "POST":
@@ -253,14 +227,9 @@ async def _auth_rate_limit_middleware(request: Request, call_next):
             if rl_resp is not None:
                 return rl_resp
         elif p == "/auth/refresh":
-            if not _rate_limit_consume(
-                _rl_refresh_store,
-                client_ip_from_request(request),
-                max_requests=AUTH_RL_REFRESH_MAX,
-                window_sec=AUTH_RL_REFRESH_WINDOW_SEC,
-            ):
-                _auth_log.warning("auth rate limit refresh ip=%s", client_ip_from_request(request))
-                return JSONResponse({"detail": "Too many requests"}, status_code=429)
+            rl_resp = await check_refresh_rate_limit(request)
+            if rl_resp is not None:
+                return rl_resp
     return await call_next(request)
 
 

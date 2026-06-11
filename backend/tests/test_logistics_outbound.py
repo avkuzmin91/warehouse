@@ -141,6 +141,52 @@ def test_outbound_unload_blocked_until_shipments_awaiting_trip(admin_client, cli
     assert admin_client.get(f"/shipments/{shipment_id}").json()["status"] == "shipped"
 
 
+def test_outbound_unlink_shipment_during_loading(admin_client, client_id):
+    """Транспорт приехал, отгрузка не успела упаковаться — менеджер открепляет её в погрузке."""
+    ready = _packing_shipment(admin_client, client_id)
+    late = _packing_shipment(admin_client, client_id)
+    trip_id = _handoff_ready_outbound(admin_client, ready)
+    link = admin_client.post(f"/trips/{trip_id}/shipments", json={"shipment_doc_ids": [late]})
+    assert link.status_code == 200, link.text
+
+    assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+    assert admin_client.post(
+        f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"}
+    ).json()["message"] == "unloading"
+
+    _force_status(ready, "awaiting_trip")
+
+    # Неготовая отгрузка блокирует завершение погрузки.
+    blocked = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
+    assert blocked.status_code == 400, blocked.text
+
+    # Открепляем её прямо в погрузке.
+    unlink = admin_client.delete(f"/trips/{trip_id}/shipments/{late}")
+    assert unlink.status_code == 200, unlink.text
+
+    # Привязать обратно в погрузке нельзя.
+    relink = admin_client.post(f"/trips/{trip_id}/shipments", json={"shipment_doc_ids": [late]})
+    assert relink.status_code == 400, relink.text
+
+    # Теперь погрузка завершается, готовая отгрузка уезжает.
+    ok = admin_client.post(f"/trips/{trip_id}/unload", json={
+        "load_factor": "full",
+        "unload_started_at": "2026-06-10T07:35",
+        "unload_finished_at": "2026-06-10T08:10",
+    })
+    assert ok.status_code == 200, ok.text
+    assert admin_client.get(f"/shipments/{ready}").json()["status"] == "shipped"
+
+    # Откреплённая осталась в упаковке и свободна для нового рейса.
+    late_ship = admin_client.get(f"/shipments/{late}").json()
+    assert late_ship["status"] == "packing"
+    assert late_ship["trip_id"] is None
+
+    # После завершения погрузки открепление снова закрыто.
+    too_late = admin_client.delete(f"/trips/{trip_id}/shipments/{ready}")
+    assert too_late.status_code == 400, too_late.text
+
+
 def test_outbound_handoff_requires_linked_shipment(admin_client):
     create = admin_client.post("/trips", json={"direction": "outbound", "origin_name": "Склад"})
     assert create.status_code == 200, create.text
@@ -227,6 +273,14 @@ def _seed_defect_in_zone(client_id: str, pos: dict, zone_id: str, qty: int) -> N
                 planned_qty, accepted_qty, storage_zone_id, is_deleted, created_at, created_by)
                VALUES (?, ?, ?, 'Брак-товар', 'TST-DEF', ?, 'Red', ?, NULL, ?, ?, ?, 0, NOW(), 'test')""",
             (line_id, doc_id, pos["product_id"], pos["color_id"], pos["size_id"], qty, qty, zone_id),
+        )
+        conn.execute(
+            """INSERT INTO zone_relocations
+               (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
+                client_id, from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty, created_at)
+               VALUES (?, ?, 'Брак-товар', 'TST-DEF', ?, 'Red', ?, NULL,
+                       ?, 'intake', 'storage', 'good', 'good', ?, ?, ?, NOW())""",
+            (str(_uuid.uuid4()), pos["product_id"], pos["color_id"], pos["size_id"], client_id, zone_id, zone_id, qty),
         )
         conn.execute(
             """INSERT INTO zone_relocations

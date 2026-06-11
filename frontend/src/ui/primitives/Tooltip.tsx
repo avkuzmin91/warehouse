@@ -5,9 +5,11 @@ interface TooltipProps {
   children: ReactNode
   /** Для длинных подсказок: ограничивает ширину и включает перенос строк. */
   maxWidth?: number
+  /** 'bottom' — для триггеров у верхнего края скролл-области, где верхний тултип срезается. */
+  placement?: 'top' | 'bottom'
 }
 
-export function Tooltip({ content, children, maxWidth }: TooltipProps) {
+export function Tooltip({ content, children, maxWidth, placement = 'top' }: TooltipProps) {
   const [visible, setVisible] = useState(false)
   return (
     <span
@@ -19,7 +21,9 @@ export function Tooltip({ content, children, maxWidth }: TooltipProps) {
       {visible && (
         <span style={{
           position: 'absolute',
-          bottom: 'calc(100% + 6px)',
+          ...(placement === 'bottom'
+            ? { top: 'calc(100% + 6px)' }
+            : { bottom: 'calc(100% + 6px)' }),
           left: '50%',
           transform: 'translateX(-50%)',
           background: '#1a1a18',

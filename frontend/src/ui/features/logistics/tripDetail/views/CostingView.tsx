@@ -26,14 +26,12 @@ function durationMin(from: string | null, to: string | null): number | null {
   return Math.round(ms / 60000)
 }
 
-export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, onSaveCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, showCosts, canEditTransportPlanning, canEditExecution, onBack, onCancel, onClose, onOpenReceipt, docsNode }: {
+export function CostingView({ detail, form, onField, cost, onCost, onSaveFields, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, loadFactor, onLoadFactor, onSaveExecution, busy, showCosts, canEditTransportPlanning, canEditExecution, onBack, onCancel, onClose, onOpenReceipt, docsNode }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
   cost: CostForm
   onCost: (patch: Partial<CostForm>) => void
-  dirtyCost: boolean
-  onSaveCost: () => void
   onSaveFields: () => void
   arrival: string
   onArrivalChange: (v: string) => void
@@ -41,8 +39,8 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
   onUnloadStartChange: (v: string) => void
   unloadEnd: string
   onUnloadEndChange: (v: string) => void
-  loadFactor: TripLoadFactor
-  onLoadFactor: (v: TripLoadFactor) => void
+  loadFactor: TripLoadFactor | ''
+  onLoadFactor: (v: TripLoadFactor | '') => void
   onSaveExecution: () => void
   busy: boolean
   showCosts: boolean
@@ -151,8 +149,8 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                     <Segmented
                       value={loadFactor}
                       options={[
-                        { value: 'full', label: TRIP_LOAD_LABELS.full, icon: 'check' },
-                        { value: 'partial', label: TRIP_LOAD_LABELS.partial, icon: 'alert' },
+                        { value: 'full', label: TRIP_LOAD_LABELS.full, icon: 'check', tone: 'success' },
+                        { value: 'partial', label: TRIP_LOAD_LABELS.partial, icon: 'alert', tone: 'warning' },
                       ]}
                       onChange={onLoadFactor}
                     />
@@ -207,11 +205,6 @@ export function CostingView({ detail, form, onField, cost, onCost, dirtyCost, on
                 <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>Итого по рейсу</span>
                 <span className="mono" style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 600 }}>{money(total)}</span>
               </div>
-              {dirtyCost && (
-                <button className="btn sm" style={{ marginTop: 10 }} onClick={onSaveCost} disabled={busy}>
-                  <Icon name="save" size={13} />Сохранить стоимость
-                </button>
-              )}
             </PhaseBlock>
           )}
 

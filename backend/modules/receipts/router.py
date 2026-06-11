@@ -6,6 +6,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    INV_OP_INTAKE,
+    INV_OP_STORAGE,
+    INV_Q_GOOD,
     RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_CANCEL,
@@ -26,7 +29,7 @@ from config import (
     RECEIPT_STATUSES_ALL,
     TRIP_STATUS_CANCELLED,
 )
-from dbconn import get_connection
+from dbconn import get_connection, like_substring_param
 from modules.auth.service import get_current_manager, get_current_warehouse
 from modules.receipts.schemas import (
     ReceiptActualArrivalUpdate,
@@ -193,7 +196,7 @@ def receipts_summary(
             conds.append("d.client_id = ?")
             params.append(client_id.strip())
         if search:
-            s = f"%{search.strip()}%"
+            s = like_substring_param(search)
             conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
             params += [s, s]
         if sku:
@@ -201,7 +204,7 @@ def receipts_summary(
                 "EXISTS (SELECT 1 FROM receipt_lines rl"
                 " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
             )
-            params.append(f"%{sku.strip()}%")
+            params.append(like_substring_param(sku))
         if date_from:
             conds.append("d.arrival_date >= ?")
             params.append(date_from)
@@ -739,11 +742,20 @@ def start_receipt_intake(doc_id: str, user=Depends(_get_warehouse)):
 
 @router.post("/receipts/{doc_id}/arrive")
 def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get_warehouse)):
-    """Принят → На проверке: «Принять товары» — фиксирует принятое количество."""
+    """Принят → На проверке: «Принять товары» — фиксирует принятое количество.
+
+    Приход встаёт на остатки журнальным движением (intake → storage) по каждой
+    строке — расчёт остатков читает только журнал, accepted_qty остаётся
+    документным фактом приёмки.
+    """
+    from modules.balances.service import insert_inventory_move
+
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT d.status, d.doc_number, d.client_id, cl.name AS client_name "
+            "FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id "
+            "WHERE d.id = ? AND d.is_deleted = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -755,8 +767,9 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
         _validate_receipt_lines_have_storage(conn, doc_id)
 
         line_rows = conn.execute(
-            "SELECT id, product_sku, color_name, size_name FROM receipt_lines "
-            "WHERE doc_id = ? AND is_deleted = 0",
+            "SELECT id, product_id, product_name, product_sku, color_id, color_name, "
+            "size_id, size_name, storage_zone_id, storage_zone_name "
+            "FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0",
             (doc_id,),
         ).fetchall()
         if not line_rows:
@@ -781,6 +794,20 @@ def arrive_receipt(doc_id: str, payload: ReceiptArrivePayload, user=Depends(_get
                  f"Принят: {qty} шт. ({_line_label(lr['product_sku'], lr['color_name'], lr['size_name'], None)})",
                  now, uid),
             )
+            if qty > 0:
+                insert_inventory_move(
+                    conn,
+                    product_id=str(lr["product_id"]), product_name=lr["product_name"], product_sku=lr["product_sku"],
+                    color_id=lr["color_id"], color_name=lr["color_name"],
+                    size_id=lr["size_id"], size_name=lr["size_name"],
+                    client_id=doc_row["client_id"], client_name=doc_row["client_name"],
+                    from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+                    from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                    from_zone_id=lr["storage_zone_id"], from_zone_name=lr["storage_zone_name"],
+                    to_zone_id=lr["storage_zone_id"], to_zone_name=lr["storage_zone_name"],
+                    qty=int(qty), user_id=uid, receipt_line_id=lid,
+                    comment=f"Приёмка по поступлению {doc_row['doc_number']}: {qty} шт.",
+                )
 
         conn.execute(
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",

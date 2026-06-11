@@ -21,13 +21,15 @@ export type ShipmentLink = {
 }
 
 /** Блок «Отгрузки в рейсе» — зеркало ReceiptsBlock: карточки отгрузок + привязка через Drawer. */
-export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right, shipments, enrich, onOpen, link, footerNote, expandable, resetKey }: {
+export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right, shipments, enrich, onOpen, link, onUnlink, footerNote, expandable, resetKey }: {
   title?: string
   right?: ReactNode
   shipments: TripShipmentItem[]
   enrich?: ShipmentEnrich
   onOpen?: (shipmentDocId: string) => void
   link?: ShipmentLink
+  /** Открепление без блока привязки (рейс уже в погрузке). Игнорируется, если задан link. */
+  onUnlink?: (shipmentDocId: string) => void
   footerNote?: ReactNode
   /** Раскрытие строк вниз с inline-составом (требует onOpen для перехода в карточку). */
   expandable?: boolean
@@ -40,6 +42,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
   useEffect(() => { setOpen(new Set()) }, [resetKey])
 
   const canExpand = !!expandable && !!onOpen
+  const unlink = link?.onUnlink ?? onUnlink
   const totalQty = shipments.reduce((s, sh) => s + (enrich?.[sh.shipment_doc_id]?.qty ?? 0), 0)
   const allOpen = shipments.length > 0 && open.size === shipments.length
 
@@ -85,7 +88,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
                   open={open.has(s.shipment_doc_id)}
                   onToggle={() => toggleOne(s.shipment_doc_id)}
                   onOpen={() => onOpen!(s.shipment_doc_id)}
-                  onRemove={link ? () => link.onUnlink(s.shipment_doc_id) : undefined}
+                  onRemove={unlink ? () => unlink(s.shipment_doc_id) : undefined}
                 />
               )
             }
@@ -97,7 +100,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
                 s={s}
                 enrich={e}
                 onOpen={onOpen ? () => onOpen(s.shipment_doc_id) : undefined}
-                onRemove={link ? () => link.onUnlink(s.shipment_doc_id) : undefined}
+                onRemove={unlink ? () => unlink(s.shipment_doc_id) : undefined}
               />
             )
           })}

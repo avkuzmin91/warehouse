@@ -16,7 +16,7 @@ interface CmdItem {
 
 const ALL_CMDS: CmdItem[] = [
   { section: 'Навигация', icon: 'home', label: 'Главная', sub: 'Сводка по складу', to: '/home' },
-  { section: 'Навигация', icon: 'truckIn', label: 'Поступления', sub: 'Список и приемка', to: '/inventory/receipts' },
+  { section: 'Навигация', icon: 'truckIn', label: 'Поступления', sub: 'Список и приёмка', to: '/inventory/receipts' },
   { section: 'Навигация', icon: 'truckOut', label: 'Отгрузки', sub: 'Сборка заказов', to: '/inventory/shipments' },
   { section: 'Навигация', icon: 'forklift', label: 'Упаковка', sub: 'План на день и факт упаковки', to: '/inventory/packing' },
   { section: 'Навигация', icon: 'boxes', label: 'Остатки', sub: 'Что и где лежит', to: '/inventory/balances' },

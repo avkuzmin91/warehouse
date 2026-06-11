@@ -226,18 +226,31 @@ export function ReadRow({ label, children, mono, strong }: {
   )
 }
 
-export type SegmentOption<T extends string> = { value: T; label: string; icon?: IconName }
+export type SegmentTone = 'success' | 'warning'
+export type SegmentOption<T extends string> = { value: T; label: string; icon?: IconName; tone?: SegmentTone }
+
+export function segmentToneColors(tone: SegmentTone): { color: string; background: string } {
+  return tone === 'success'
+    ? { color: 'var(--c-success)', background: 'var(--c-success-bg)' }
+    : { color: 'var(--c-warning)', background: 'var(--c-warning-bg)' }
+}
 
 /** Сегментированный переключатель (загруженность, состояния). */
-export function Segmented<T extends string>({ value, options, onChange }: {
+export function Segmented<T extends string>({ value, options, invalid, onChange }: {
   value: T
   options: SegmentOption<T>[]
+  invalid?: boolean
   onChange?: (v: T) => void
 }) {
   return (
-    <div style={{ display: 'inline-flex', gap: 3, padding: 3, background: 'var(--c-bg-sunken)', borderRadius: 8 }}>
+    <div style={{
+      display: 'inline-flex', gap: 3, padding: 3, borderRadius: 8,
+      background: invalid ? 'var(--c-danger-bg)' : 'var(--c-bg-sunken)',
+      boxShadow: invalid ? 'inset 0 0 0 1px var(--c-danger)' : 'none',
+    }}>
       {options.map((o) => {
         const on = o.value === value
+        const toneColors = on && o.tone ? segmentToneColors(o.tone) : null
         return (
           <button
             key={o.value}
@@ -246,7 +259,8 @@ export function Segmented<T extends string>({ value, options, onChange }: {
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', border: 0, cursor: 'pointer',
               borderRadius: 6, fontSize: 12.5, fontWeight: 500, fontFamily: 'inherit',
-              background: on ? 'var(--c-bg-elev)' : 'transparent', color: on ? 'var(--c-text)' : 'var(--c-text-muted)',
+              background: toneColors?.background ?? (on ? 'var(--c-bg-elev)' : 'transparent'),
+              color: toneColors?.color ?? (on ? 'var(--c-text)' : 'var(--c-text-muted)'),
               boxShadow: on ? 'var(--sh-1)' : 'none',
             }}
           >

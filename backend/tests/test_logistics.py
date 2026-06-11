@@ -88,6 +88,24 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
     assert final["doc"]["load_factor"] == "full"
 
 
+def test_trip_unload_requires_load_factor(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+
+    blocked = admin_client.post(f"/trips/{trip_id}/unload", json={})
+    assert blocked.status_code == 400, blocked.text
+    assert "загруженность" in blocked.json()["detail"].lower()
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
+
+    bad = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "half"})
+    assert bad.status_code == 400, bad.text
+
+    ok = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
+    assert ok.status_code == 200, ok.text
+
+
 def test_trip_unload_start_copied_from_arrival_and_can_be_adjusted(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
     trip_id = _handoff_ready_trip(admin_client, receipt_id)

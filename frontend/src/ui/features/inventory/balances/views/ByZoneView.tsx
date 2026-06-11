@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   getBalancesByZone,
+  getBalancesSummary,
   createZoneRelocation,
   createQualityChange,
   INV_OP_LABELS,
   INV_QUALITY_LABELS,
 } from '../../../../../api/balancesApi'
-import type { BalanceZoneItem, InvOpStatus, InvQuality } from '../../../../../api/balancesApi'
+import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
 import { Combobox } from '../../../../data/Combobox'
@@ -30,9 +31,10 @@ type LocationGroup = {
 }
 
 const OP_TONE: Record<InvOpStatus, BadgeTone> = {
+  intake:  '',
   storage: 'accent',
   packing: 'info',
-  ready:   'warning',
+  ready:   'success',
 }
 
 const QUALITY_TONE: Record<InvQuality, BadgeTone> = {
@@ -42,6 +44,8 @@ const QUALITY_TONE: Record<InvQuality, BadgeTone> = {
 
 export function ByZoneView() {
   const [items, setItems] = useState<BalanceZoneItem[]>([])
+  const [summary, setSummary] = useState<BalanceSummary | null>(null)
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
@@ -151,11 +155,19 @@ export function ByZoneView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await getBalancesByZone({
-        search: search || undefined,
-        client_id: clientId || undefined,
-      })
+      const [res, sum] = await Promise.all([
+        getBalancesByZone({
+          search: search || undefined,
+          client_id: clientId || undefined,
+        }),
+        getBalancesSummary({
+          search: search || undefined,
+          client_id: clientId || undefined,
+        }),
+      ])
       setItems(res.items)
+      setTruncated(res.truncated)
+      setSummary(sum)
     } finally {
       setLoading(false)
     }
@@ -191,15 +203,28 @@ export function ByZoneView() {
     return [...map.values()]
   }, [filteredItems])
 
+  // Итоги — из /balances/summary (не зависят от усечения списка);
+  // фильтры статуса/качества применяются выбором корзин.
   const kpi = useMemo(() => {
-    const sumBy = (pred: (i: BalanceZoneItem) => boolean) =>
-      filteredItems.reduce((sum, item) => sum + (pred(item) ? item.qty : 0), 0)
-    const storageQty = sumBy((i) => i.op_status === 'storage')
-    const packingQty = sumBy((i) => i.op_status === 'packing')
-    const readyQty = sumBy((i) => i.op_status === 'ready')
-    const defectQty = sumBy((i) => i.quality === 'defect')
-    return { totalQty: storageQty + packingQty + readyQty, storageQty, packingQty, readyQty, defectQty }
-  }, [filteredItems])
+    const useGood = qualityFilter !== 'defect'
+    const useDefect = qualityFilter !== 'good'
+    const opOn = (op: InvOpStatus) => !opFilter || opFilter === op
+    const bucket = (op: InvOpStatus, good: number, defect: number) =>
+      opOn(op) ? (useGood ? good : 0) + (useDefect ? defect : 0) : 0
+    const s = summary
+    const intakeQty = s && opOn('intake') && useGood ? s.intake : 0
+    const storageQty = s ? bucket('storage', s.storage_good, s.storage_defect) : 0
+    const packingQty = s ? bucket('packing', s.packing_good, s.packing_defect) : 0
+    const readyQty = s ? bucket('ready', s.ready_good, s.ready_defect) : 0
+    const defectQty = s ? bucket('storage', 0, s.storage_defect) + bucket('packing', 0, s.packing_defect) + bucket('ready', 0, s.ready_defect) : 0
+    return {
+      totalQty: intakeQty + storageQty + packingQty + readyQty,
+      intakeQty, storageQty, packingQty, readyQty, defectQty,
+    }
+  }, [summary, opFilter, qualityFilter])
+
+  const kpiVal = (n: number) => (summary ? n.toLocaleString('ru-RU') : '—')
+  const toggleOp = (op: InvOpStatus) => setOpFilter(opFilter === op ? '' : op)
 
   return (
     <>
@@ -235,6 +260,7 @@ export function ByZoneView() {
             value={opFilter}
             options={[
               { value: '', label: 'Все статусы' },
+              { value: 'intake', label: INV_OP_LABELS.intake },
               { value: 'storage', label: INV_OP_LABELS.storage },
               { value: 'packing', label: INV_OP_LABELS.packing },
               { value: 'ready', label: INV_OP_LABELS.ready },
@@ -266,13 +292,57 @@ export function ByZoneView() {
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
-        <KPI label="Всего единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
-        <KPI label={INV_OP_LABELS.storage} value={kpi.storageQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
-        <KPI label={INV_OP_LABELS.packing} value={kpi.packingQty.toLocaleString('ru-RU')} valueColor="var(--c-info)" unit="шт" />
-        <KPI label={INV_OP_LABELS.ready} value={kpi.readyQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
-        <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
+        <KPI label="Всего единиц" value={kpiVal(kpi.totalQty)} unit="шт" />
+        <KPI
+          label={INV_OP_LABELS.intake}
+          value={kpiVal(kpi.intakeQty)}
+          unit="шт"
+          active={opFilter === 'intake'}
+          onClick={() => toggleOp('intake')}
+        />
+        <KPI
+          label={INV_OP_LABELS.storage}
+          value={kpiVal(kpi.storageQty)}
+          valueColor="var(--c-accent)"
+          unit="шт"
+          active={opFilter === 'storage'}
+          onClick={() => toggleOp('storage')}
+        />
+        <KPI
+          label={INV_OP_LABELS.packing}
+          value={kpiVal(kpi.packingQty)}
+          valueColor="var(--c-info)"
+          unit="шт"
+          active={opFilter === 'packing'}
+          onClick={() => toggleOp('packing')}
+        />
+        <KPI
+          label={INV_OP_LABELS.ready}
+          value={kpiVal(kpi.readyQty)}
+          valueColor="var(--c-success)"
+          unit="шт"
+          active={opFilter === 'ready'}
+          onClick={() => toggleOp('ready')}
+        />
+        <KPI
+          label="Брак (из них)"
+          value={kpiVal(kpi.defectQty)}
+          valueColor="var(--c-warning)"
+          unit="шт"
+          active={qualityFilter === 'defect'}
+          onClick={() => setQualityFilter(qualityFilter === 'defect' ? '' : 'defect')}
+        />
       </div>
+
+      {truncated && !loading && (
+        <div
+          className="t-sub"
+          style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--c-bg-sunken)', color: 'var(--c-warning)' }}
+        >
+          Показаны не все строки — список обрезан серверным лимитом. Уточните фильтры; итоги в карточках посчитаны по всем данным.
+        </div>
+      )}
 
       {loading ? (
         <Table>
@@ -394,7 +464,7 @@ export function ByZoneView() {
 
             <div>
               <label className="field-label"><span>Количество</span></label>
-              <NumberStep value={relocQty} min={1} onChange={(v) => setRelocQty(Math.min(reloc.qty, v))} />
+              <NumberStep value={relocQty} min={1} onChange={(v) => setRelocQty(Math.min(reloc.qty, v))} height={34} />
               <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>Максимум: {reloc.qty}</div>
             </div>
 
@@ -449,7 +519,7 @@ export function ByZoneView() {
 
             <div>
               <label className="field-label"><span>Количество</span></label>
-              <NumberStep value={qualQty} min={1} onChange={(v) => setQualQty(Math.min(qual.qty, v))} />
+              <NumberStep value={qualQty} min={1} onChange={(v) => setQualQty(Math.min(qual.qty, v))} height={34} />
               <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>Максимум: {qual.qty}</div>
             </div>
 

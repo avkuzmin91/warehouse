@@ -329,7 +329,7 @@ export function cancelReceipt(docId: string) {
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
-  on_intake: 'На приемке',
+  on_intake: 'На приёмке',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',

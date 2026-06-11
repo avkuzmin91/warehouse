@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from config import PRODUCT_LIST_SORT_COLUMNS, UPLOADS_DIR, MAX_UPLOAD_BYTES
-from dbconn import get_connection
+from dbconn import escape_like, get_connection
 
 from .schemas import (
     ProductCreateDimensionBlock,
@@ -50,7 +50,7 @@ def _fold_ci_str(x: object) -> str:
 
 
 def _ci_substring_like_param(raw: str) -> str:
-    return f"%{_fold_ci_str(str(raw).strip())}%"
+    return f"%{escape_like(_fold_ci_str(str(raw).strip()))}%"
 
 
 def _order_sql_from_sort_param(sort: str | None, allowed: dict[str, str]) -> str | None:

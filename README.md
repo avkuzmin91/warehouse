@@ -36,8 +36,8 @@
 **Запуск стеков на сервере:**
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.test.yml up -d --build
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.test -f docker-compose.test.yml up -d --build
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 

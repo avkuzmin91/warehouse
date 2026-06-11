@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from security import (
     FORBIDDEN_DETAIL,
-    ensure_admin_account,
+    ensure_backoffice_account,
     ensure_manager_staff,
     ensure_packing_access,
     ensure_shipment_priority_access,
@@ -15,9 +15,9 @@ from security import (
 )
 
 
-def test_ensure_admin_rejects_plain_user():
+def test_ensure_backoffice_rejects_plain_user():
     with pytest.raises(HTTPException) as ctx:
-        ensure_admin_account(
+        ensure_backoffice_account(
             {
                 "id": "1",
                 "email": "u@x",
@@ -31,8 +31,8 @@ def test_ensure_admin_rejects_plain_user():
 
 
 @pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager"])
-def test_ensure_admin_accepts_privileged_roles(role: str):
-    ensure_admin_account(
+def test_ensure_backoffice_accepts_privileged_roles(role: str):
+    ensure_backoffice_account(
         {
             "id": "1",
             "email": "u@x",

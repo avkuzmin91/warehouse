@@ -264,7 +264,7 @@ export function PlannedView({
                 icon={isPlanned ? 'forklift' : 'check'}
                 label={isPlanned ? 'Начать приёмку' : 'Принять товары'}
                 hint={isPlanned
-                  ? 'кладовщик начнёт подсчёт — статус «На приемке»'
+                  ? 'кладовщик начнёт подсчёт — статус «На приёмке»'
                   : 'товар встанет на остатки годным — статус «Завершён»'}
                 disabled={advancing}
                 onClick={runPrimary}

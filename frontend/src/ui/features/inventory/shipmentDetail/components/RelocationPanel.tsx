@@ -71,20 +71,10 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
     return rows.reduce((s, r) => s + (r.qty > 0 ? r.qty : 0), 0)
   }
 
-  function lineReady(line: ShipmentLine): boolean {
-    const a = allocs[line.id]
-    if (!a) return false
-    for (const [kind, target] of [['good', line.packed_good], ['defect', line.packed_defect]] as const) {
-      const rows = a[kind]
-      if (sumRows(rows) !== target) return false
-      if (rows.some((r) => r.qty > 0 && !r.zoneId)) return false
-    }
-    return true
-  }
+  const [showReasons, setShowReasons] = useState(false)
 
-  const allReady = packedLines.every(lineReady)
-
-  function validate(): string | null {
+  function collectReasons(): string[] {
+    const reasons: string[] = []
     for (const line of packedLines) {
       const a = allocs[line.id]
       for (const [kind, target, ru] of [
@@ -92,21 +82,29 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
         ['defect', line.packed_defect, 'брак'],
       ] as const) {
         const rows = a[kind]
-        if (rows.some((r) => r.qty > 0 && !r.zoneId)) return `Выберите место для «${line.product_name}» (${ru})`
+        if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место для «${line.product_name}» (${ru})`)
         const seen = new Set<string>()
         for (const r of rows) {
           if (!r.zoneId) continue
-          if (seen.has(r.zoneId)) return `Место указано дважды для «${line.product_name}» (${ru})`
+          if (seen.has(r.zoneId)) { reasons.push(`Место указано дважды для «${line.product_name}» (${ru})`); break }
           seen.add(r.zoneId)
         }
-        if (sumRows(rows) !== target) return `Разложите весь ${ru} для «${line.product_name}» (нужно ${target} шт.)`
+        if (sumRows(rows) !== target) reasons.push(`Разложите весь ${ru} для «${line.product_name}» (нужно ${target} шт.)`)
       }
     }
-    return null
+    return reasons
+  }
+
+  const blockReasons = collectReasons()
+
+  function handlePrimary() {
+    if (blockReasons.length > 0) { setShowReasons(true); return }
+    setShowReasons(false)
+    void submit()
   }
 
   async function submit() {
-    const err = validate()
+    const err = collectReasons()[0]
     if (err) { toast(err, 'error'); return }
     const payload: ShipmentRelocateLine[] = packedLines.map((line) => {
       const a = allocs[line.id]
@@ -134,7 +132,7 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
       state="active"
       hint="Разложите весь годный и брак, затем «Готово к рейсу». Годный остаётся «Готов к отгрузке», брак возвращается на хранение"
       right={canEdit ? (
-        <button className="btn sm primary" disabled={saving || !allReady} onClick={() => { void submit() }}>
+        <button className="btn sm primary" disabled={saving} onClick={handlePrimary}>
           <Icon name="check" size={12} />Готово к рейсу
         </button>
       ) : undefined}
@@ -145,6 +143,13 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {showReasons && blockReasons.length > 0 && (
+            <div className="block-reasons" style={{ textAlign: 'left' }}>
+              {blockReasons.map((r, i) => (
+                <div key={i}>· {r}</div>
+              ))}
+            </div>
+          )}
           {!canEdit && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
               Кладовщик указывает местоположения для годного и брака, затем жмёт «Готово к рейсу».
@@ -288,10 +293,11 @@ function KindBlock({
               onChange={(v) => onRow(i, { qty: Math.max(0, v) })}
               disabled={disabled}
               width={96}
+              height={34}
             />
             <button
               className="btn ghost icon sm"
-              style={{ marginTop: 2 }}
+              style={{ marginTop: 4 }}
               disabled={disabled || rows.length <= 1}
               title="Убрать строку"
               onClick={() => onRemove(i)}

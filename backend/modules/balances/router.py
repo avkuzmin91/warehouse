@@ -6,6 +6,7 @@ from dbconn import get_connection
 from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.balances.schemas import (
     BalanceListResponse,
+    BalanceSummaryResponse,
     BalanceZonesResponse,
     QualityChangeCreate,
     ZoneRelocationCreate,
@@ -16,6 +17,7 @@ from modules.balances.service import (
     create_zone_relocation,
     get_balances,
     get_balances_by_zone,
+    get_balances_summary,
     list_zone_relocations,
 )
 
@@ -40,6 +42,22 @@ def list_balances(
             client_id=client_id,
             search=search,
             only_positive=only_positive,
+            has_defect=has_defect,
+        )
+
+
+@router.get("/balances/summary", response_model=BalanceSummaryResponse)
+def balances_summary(
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    has_defect: bool = Query(False),
+    user=Depends(get_current_shipment_viewer),
+):
+    with get_connection() as conn:
+        return get_balances_summary(
+            conn,
+            client_id=client_id,
+            search=search,
             has_defect=has_defect,
         )
 

@@ -269,7 +269,6 @@ export function InventoryShipmentsListPage() {
               { value: 'overdue', label: 'Просрочка' },
               ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
-              { value: 'shipped,cancelled', label: 'Завершённые' },
             ]}
             onChange={(v) => setStatusFilter(v)}
           />

@@ -17,5 +17,5 @@ export function PrimaryAction({ icon, label, hint, disabled, onClick }: {
     </button>
   )
   if (!hint) return btn
-  return <Tooltip content={hint} maxWidth={260}>{btn}</Tooltip>
+  return <Tooltip content={hint} maxWidth={260} placement="bottom">{btn}</Tooltip>
 }

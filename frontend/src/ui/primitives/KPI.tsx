@@ -9,11 +9,14 @@ interface KPIProps {
   deltaDir?: 'up' | 'down'
   spark?: number[]
   unit?: string
+  onClick?: () => void
+  active?: boolean
 }
 
-export function KPI({ label, value, valueColor, delta, deltaDir = 'up', spark, unit }: KPIProps) {
-  return (
-    <div className="kpi">
+export function KPI({ label, value, valueColor, delta, deltaDir = 'up', spark, unit, onClick, active }: KPIProps) {
+  const className = `kpi${onClick ? ' clickable' : ''}${active ? ' active' : ''}`
+  const body = (
+    <>
       <div className="kpi-label">{label}</div>
       <div className="kpi-value" style={valueColor ? { color: valueColor } : undefined}>
         {value}
@@ -34,6 +37,14 @@ export function KPI({ label, value, valueColor, delta, deltaDir = 'up', spark, u
           <Sparkline data={spark} />
         </div>
       )}
-    </div>
+    </>
   )
+  if (onClick) {
+    return (
+      <button type="button" className={className} onClick={onClick}>
+        {body}
+      </button>
+    )
+  }
+  return <div className={className}>{body}</div>
 }

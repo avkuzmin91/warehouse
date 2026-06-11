@@ -25,7 +25,7 @@ from config import (
 )
 from dbconn import get_connection
 from security import (
-    ensure_admin_account,
+    ensure_backoffice_account,
     ensure_dashboard_access,
     ensure_manager_staff,
     ensure_packing_access,
@@ -242,7 +242,8 @@ def get_current_user(
 
 
 def get_current_admin(user=Depends(get_current_user)):
-    ensure_admin_account(user)
+    """Бэк-офис (admin, manager, warehouse_manager), а не строго admin — см. ensure_backoffice_account."""
+    ensure_backoffice_account(user)
     return user
 
 

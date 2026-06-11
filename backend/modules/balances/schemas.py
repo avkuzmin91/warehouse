@@ -15,7 +15,9 @@ class BalanceItem(BaseModel):
     color_name: str | None
     size_id: str | None
     size_name: str | None
-    # Корзины: операционный статус × качество
+    # Корзины: операционный статус × качество.
+    # intake — принятое по незавершённым поступлениям (только отображение).
+    intake: int
     storage_good: int
     storage_defect: int
     packing_good: int
@@ -33,10 +35,23 @@ class BalanceListResponse(BaseModel):
     limit: int
 
 
+class BalanceSummaryResponse(BaseModel):
+    """Итоги по всем позициям (не зависят от пагинации списка)."""
+
+    intake: int
+    storage_good: int
+    storage_defect: int
+    packing_good: int
+    packing_defect: int
+    ready_good: int
+    ready_defect: int
+    total: int
+
+
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'storage' | 'packing' | 'ready'
+    op_status: str  # 'intake' | 'storage' | 'packing' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str
@@ -52,6 +67,8 @@ class BalanceZoneItem(BaseModel):
 
 class BalanceZonesResponse(BaseModel):
     items: list[BalanceZoneItem]
+    # Выборка обрезана лимитом — список неполный (итоги считать по /balances/summary)
+    truncated: bool = False
 
 
 class ZoneRelocationCreate(BaseModel):

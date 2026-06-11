@@ -13,7 +13,7 @@ from config import (
     SIZE_LIST_SORT_COLUMNS,
     COLOR_LIST_SORT_COLUMNS,
 )
-from dbconn import get_connection
+from dbconn import escape_like, get_connection
 
 from .schemas import (
     ClientStoreCreateRequest,
@@ -70,7 +70,7 @@ def _fold_ci_str(x: object) -> str:
 
 
 def _ci_substring_like_param(raw: str) -> str:
-    return f"%{_fold_ci_str(str(raw).strip())}%"
+    return f"%{escape_like(_fold_ci_str(str(raw).strip()))}%"
 
 
 def _order_sql_from_sort_param(sort: str | None, allowed: dict[str, str]) -> str | None:

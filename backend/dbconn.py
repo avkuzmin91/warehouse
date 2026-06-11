@@ -33,6 +33,19 @@ def close_pool() -> None:
         _pool = None
 
 
+def escape_like(raw: str) -> str:
+    """Экранирует спецсимволы LIKE (\\, %, _), чтобы пользовательский ввод искался буквально.
+
+    В PostgreSQL escape-символ LIKE по умолчанию — backslash, поэтому ESCAPE-клауза не нужна.
+    """
+    return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def like_substring_param(raw: str) -> str:
+    """Параметр подстрочного поиска: %...% вокруг экранированного пользовательского ввода."""
+    return f"%{escape_like(str(raw).strip())}%"
+
+
 class _ConnAdapter:
     """Оборачивает psycopg-соединение, заменяя ? на %s в запросах."""
 

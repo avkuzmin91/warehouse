@@ -214,13 +214,17 @@ SHIPMENT_PRIORITY_LABELS: dict[int | None, str] = {
 # ---------------------------------------------------------------------------
 
 # Операционный статус: что товар делает. «Отгружен» — терминальный,
-# в остатках не отображается (списание).
+# в остатках не отображается (списание). «На приёмке» — виртуальный статус
+# отображения (accepted_qty незавершённых поступлений), в журнал движений
+# zone_relocations не пишется.
+INV_OP_INTAKE  = "intake"
 INV_OP_STORAGE = "storage"
 INV_OP_PACKING = "packing"
 INV_OP_READY   = "ready"
 INV_OP_SHIPPED = "shipped"
 
 INV_OP_LABELS: dict[str, str] = {
+    INV_OP_INTAKE:  "На приёмке",
     INV_OP_STORAGE: "На хранении",
     INV_OP_PACKING: "На упаковке",
     INV_OP_READY:   "Готов к отгрузке",
@@ -336,6 +340,43 @@ TRIP_OP_LOAD_DONE       = "load_done"
 TRIP_OP_COST_ACTUAL     = "cost_actual"
 TRIP_OP_CLOSE           = "close"
 TRIP_OP_CANCEL          = "cancel"
+
+# ---------------------------------------------------------------------------
+# Кабинет клиента — границы видимости
+# ---------------------------------------------------------------------------
+
+# Клиент не видит черновики: документ появляется в кабинете с момента планирования.
+CABINET_RECEIPT_VISIBLE_STATUSES: frozenset[str] = frozenset({
+    RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_CANCELLED,
+})
+
+CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_ON_PACKING,
+    SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_CANCELLED,
+})
+
+# Журналы: клиенту отдаются только бизнес-события с готовыми русскими комментариями.
+# 'advance' исключён намеренно — его комментарии содержат внутренние коды статусов.
+CABINET_RECEIPT_OPS_VISIBLE: frozenset[str] = frozenset({
+    RECEIPT_OP_INTAKE_START,
+    RECEIPT_OP_ARRIVAL_ACCEPT,
+    RECEIPT_OP_ARRIVAL_FIX,
+    RECEIPT_OP_CANCEL,
+})
+
+CABINET_SHIPMENT_OPS_VISIBLE: frozenset[str] = frozenset({
+    SHIPMENT_OP_PACK,
+    SHIPMENT_OP_PACK_CORRECTION,
+    "cancel",
+})
 
 # ---------------------------------------------------------------------------
 # Сортировка — словари допустимых колонок (для SQL ORDER BY)

@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { getCabinetBalances } from '../../../api/cabinetApi'
+import { getCabinetBalances, getCabinetBalancesSummary } from '../../../api/cabinetApi'
+import { INV_OP_LABELS } from '../../../api/balancesApi'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, usePageParam } from '../../../hooks/useFilterParams'
 import { FiltersBar, FilterChip } from '../../data/FiltersBar'
@@ -32,18 +32,24 @@ export function CabinetBalancesFeature() {
     }, signal),
     [page, search, onlyPositive, hasDefect],
   )
+  const summaryRes = useApi(
+    (signal) => getCabinetBalancesSummary({
+      search: search.trim() || undefined,
+      has_defect: hasDefect || undefined,
+    }, signal),
+    [search, hasDefect],
+  )
 
-  const items = useMemo(() => data?.items ?? [], [data])
-  const kpi = useMemo(() => ({
-    totalQty: items.reduce((sum, item) => sum + item.total, 0),
-    storageQty: items.reduce((sum, item) => sum + item.storage_good + item.storage_defect, 0),
-    readyQty: items.reduce((sum, item) => sum + item.ready_good + item.ready_defect, 0),
-    defectQty: items.reduce((sum, item) => sum + item.storage_defect + item.packing_defect + item.ready_defect, 0),
-  }), [items])
+  const items = data?.items ?? []
+  const summary = summaryRes.data
+  const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
+  const defectQty = summary
+    ? summary.storage_defect + summary.packing_defect + summary.ready_defect
+    : undefined
 
   return (
     <ListPage
-      title="Мои остатки"
+      title="Остатки"
       subtitle={loading ? 'Загрузка…' : `${data?.total ?? 0} позиций`}
       filters={
         <FiltersBar>
@@ -84,27 +90,52 @@ export function CabinetBalancesFeature() {
         <EmptyState title="Не удалось загрузить остатки" sub={error.message} />
       ) : (
         <>
-          <div className="kpi-grid" style={{ marginBottom: 20 }}>
-            <KPI label="Показано единиц" value={kpi.totalQty.toLocaleString('ru-RU')} unit="шт" />
-            <KPI label="На хранении" value={kpi.storageQty.toLocaleString('ru-RU')} valueColor="var(--c-success)" unit="шт" />
-            <KPI label="Готов к отгрузке" value={kpi.readyQty.toLocaleString('ru-RU')} valueColor="var(--c-accent)" unit="шт" />
-            <KPI label="Брак" value={kpi.defectQty.toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
+          <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
+            <KPI label="Всего единиц" value={kpiVal(summary?.total)} unit="шт" />
+            <KPI label={INV_OP_LABELS.intake} value={kpiVal(summary?.intake)} unit="шт" />
+            <KPI
+              label={INV_OP_LABELS.storage}
+              value={kpiVal(summary ? summary.storage_good + summary.storage_defect : undefined)}
+              valueColor="var(--c-accent)"
+              unit="шт"
+            />
+            <KPI
+              label={INV_OP_LABELS.packing}
+              value={kpiVal(summary ? summary.packing_good + summary.packing_defect : undefined)}
+              valueColor="var(--c-info)"
+              unit="шт"
+            />
+            <KPI
+              label={INV_OP_LABELS.ready}
+              value={kpiVal(summary ? summary.ready_good + summary.ready_defect : undefined)}
+              valueColor="var(--c-success)"
+              unit="шт"
+            />
+            <KPI
+              label="Брак (из них)"
+              value={kpiVal(defectQty)}
+              valueColor="var(--c-warning)"
+              unit="шт"
+              active={hasDefect}
+              onClick={() => setDefectMode(hasDefect ? '' : '1')}
+            />
           </div>
           <Table>
             <thead>
               <tr>
                 <th>Товар</th>
-                <th style={{ textAlign: 'right', width: 130 }}>На хранении</th>
-                <th style={{ textAlign: 'right', width: 130 }}>На упаковке</th>
-                <th style={{ textAlign: 'right', width: 140 }}>Готов к отгрузке</th>
+                <th style={{ textAlign: 'right', width: 110 }}>{INV_OP_LABELS.intake}</th>
+                <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.storage}</th>
+                <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.packing}</th>
+                <th style={{ textAlign: 'right', width: 140 }}>{INV_OP_LABELS.ready}</th>
                 <th style={{ textAlign: 'right', width: 90, borderLeft: '2px solid var(--c-border)' }}>Всего</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={5} />
+                <SkeletonRows rows={8} cols={6} />
               ) : items.length === 0 ? (
-                <tr><Td colSpan={5}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
+                <tr><Td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
               ) : (
                 items.map((item, index) => (
                   <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${index}`}>
@@ -115,13 +146,18 @@ export function CabinetBalancesFeature() {
                       </div>
                     </Td>
                     <Td className="num">
-                      <BucketCell good={item.storage_good} defect={item.storage_defect} accent="var(--c-success)" />
+                      {item.intake > 0
+                        ? <span style={{ fontWeight: 500 }}>{item.intake.toLocaleString('ru-RU')}</span>
+                        : <span style={{ color: 'var(--c-text-faint)' }}>0</span>}
                     </Td>
                     <Td className="num">
-                      <BucketCell good={item.packing_good} defect={item.packing_defect} accent="var(--c-info, #3b82f6)" />
+                      <BucketCell good={item.storage_good} defect={item.storage_defect} accent="var(--c-accent)" />
                     </Td>
                     <Td className="num">
-                      <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-accent)" />
+                      <BucketCell good={item.packing_good} defect={item.packing_defect} accent="var(--c-info)" />
+                    </Td>
+                    <Td className="num">
+                      <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-success)" />
                     </Td>
                     <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', fontWeight: 600, background: 'var(--c-bg-sunken)', color: 'var(--c-text)' }}>
                       {item.total.toLocaleString('ru-RU')}

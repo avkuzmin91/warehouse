@@ -38,12 +38,18 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
   const overPool = add > pool
   const overPlan = packedGood + good > plan
 
-  function validate(): string | null {
-    if (!date) return 'Укажите дату упаковки'
-    if (add <= 0) return 'Укажите количество годного или брака'
-    if (overPlan) return `Годного с учётом записи больше плана (${plan} шт.)`
-    if (overPool) return `На упаковке доступно ${pool} шт — уменьшите количество`
-    return null
+  const [showReasons, setShowReasons] = useState(false)
+  const blockReasons: string[] = [
+    ...(!date ? ['Укажите дату упаковки'] : []),
+    ...(add <= 0 ? ['Укажите количество годного или брака'] : []),
+    ...(overPlan ? [`Годного с учётом записи больше плана (${plan} шт.)`] : []),
+    ...(overPool ? [`На упаковке доступно ${pool} шт — уменьшите количество`] : []),
+  ]
+
+  function handlePrimary() {
+    if (blockReasons.length > 0) { setShowReasons(true); return }
+    setShowReasons(false)
+    void submit()
   }
 
   async function refresh() {
@@ -52,7 +58,7 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
   }
 
   async function submit() {
-    const err = validate()
+    const err = blockReasons[0]
     if (err) { toast(err, 'error'); return }
     setSaving(true)
     try {
@@ -99,7 +105,7 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, width: '100%' }}>
           <button className="btn ghost" onClick={onClose} disabled={saving}>Закрыть</button>
-          <button className="btn primary" onClick={submit} disabled={saving || add <= 0}>
+          <button className="btn primary" onClick={handlePrimary} disabled={saving}>
             <Icon name="check" size={14} />Записать
           </button>
         </div>
@@ -129,13 +135,19 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 64, fontSize: 12.5, color: 'var(--c-success)' }}>Годный</span>
-          <NumberStep value={good} min={0} onChange={(v) => setGood(Math.max(0, v))} disabled={saving} tone={overPlan ? 'warning' : 'normal'} width={120} />
+          <NumberStep value={good} min={0} onChange={(v) => setGood(Math.max(0, v))} disabled={saving} tone={overPlan ? 'warning' : 'normal'} width={120} height={30} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 64, fontSize: 12.5, color: 'var(--c-danger)' }}>Брак</span>
-          <NumberStep value={defect} min={0} onChange={(v) => setDefect(Math.max(0, v))} disabled={saving} width={120} />
+          <NumberStep value={defect} min={0} onChange={(v) => setDefect(Math.max(0, v))} disabled={saving} width={120} height={30} />
         </div>
-        {(overPool || overPlan) && (
+        {showReasons && blockReasons.length > 0 ? (
+          <div className="block-reasons" style={{ textAlign: 'left' }}>
+            {blockReasons.map((r, i) => (
+              <div key={i}>· {r}</div>
+            ))}
+          </div>
+        ) : (overPool || overPlan) && (
           <div style={{ fontSize: 11.5, color: 'var(--c-warning)' }}>
             {overPlan ? `Годного с учётом записи больше плана (${plan} шт.)` : `На упаковке доступно ${pool} шт`}
           </div>

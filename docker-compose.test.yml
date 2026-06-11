@@ -8,7 +8,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Без fallback: пустая переменная — ошибка запуска, а не дефолтный пароль postgres.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан — запускайте compose с --env-file .env.test}
       POSTGRES_DB: app_test
     ports:
       - "127.0.0.1:5434:5432"

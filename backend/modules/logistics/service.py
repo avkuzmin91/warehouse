@@ -16,6 +16,7 @@ from config import (
     TRIP_OP_RECEIPT_LINK,
     TRIP_OP_SHIPMENT_LINK,
 )
+from dbconn import like_substring_param
 
 
 def _now() -> str:
@@ -74,7 +75,7 @@ def list_trips_aggregated(
         conds.append("SUBSTR(d.eta, 1, 10) <= ?")
         params.append(eta_to)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?)")
         params += [s, s, s]
 

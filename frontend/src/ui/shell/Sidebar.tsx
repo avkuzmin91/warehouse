@@ -40,11 +40,14 @@ const USERS_NAV: NavItem[] = [
 ]
 
 const CLIENT_NAV: NavItem[] = [
-  { to: '/cabinet', icon: 'home', label: 'Обзор' },
-  { to: '/cabinet/balances', icon: 'boxes', label: 'Мои остатки' },
+  { to: '/cabinet', icon: 'home', label: 'Сводка' },
+  { to: '/cabinet/balances', icon: 'boxes', label: 'Остатки' },
   { to: '/cabinet/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/cabinet/shipments', icon: 'boxOut', label: 'Отгрузки' },
-  { to: '/cabinet/products', icon: 'box', label: 'Товары' },
+  { to: '/cabinet/defects', icon: 'alert', label: 'Брак' },
+  { to: '/cabinet/products', icon: 'box', label: 'Мои товары' },
+  { to: '/cabinet/reports', icon: 'chart', label: 'Отчёты' },
+  { to: '/cabinet/profile', icon: 'building', label: 'Профиль и магазины' },
 ]
 
 const ROLE_LABELS: Record<string, string> = {

@@ -84,35 +84,36 @@ export function DefectPreparePanel({ docId, lines, clientId, canEdit, onDone }: 
     return !!src && row.qty > src.available
   }
 
-  function lineReady(line: ShipmentLine): boolean {
-    const rows = allocs[line.id] ?? []
-    if (sumRows(rows) !== line.qty) return false
-    if (rows.some((r) => r.qty > 0 && !r.zoneId)) return false
-    if (rows.some((r) => rowOverflow(line.id, r))) return false
-    return true
-  }
+  const [showReasons, setShowReasons] = useState(false)
 
-  const allReady = lines.length > 0 && lines.every(lineReady)
-
-  function validate(): string | null {
+  function collectReasons(): string[] {
+    const reasons: string[] = []
+    if (lines.length === 0) reasons.push('Нет позиций для подготовки')
     for (const line of lines) {
       const rows = allocs[line.id] ?? []
-      if (rows.some((r) => r.qty > 0 && !r.zoneId)) return `Выберите место-источник для «${line.product_name}»`
+      if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место-источник для «${line.product_name}»`)
       const seen = new Set<string>()
       for (const r of rows) {
         if (!r.zoneId) continue
-        if (seen.has(r.zoneId)) return `Место указано дважды для «${line.product_name}»`
+        if (seen.has(r.zoneId)) { reasons.push(`Место указано дважды для «${line.product_name}»`); break }
         seen.add(r.zoneId)
       }
-      if (sumRows(rows) !== line.qty) return `Укажите, откуда берётся весь брак для «${line.product_name}» (нужно ${line.qty} шт.)`
-      const over = rows.find((r) => rowOverflow(line.id, r))
-      if (over) return `В выбранном месте не хватает брака для «${line.product_name}»`
+      if (sumRows(rows) !== line.qty) reasons.push(`Укажите, откуда берётся весь брак для «${line.product_name}» (нужно ${line.qty} шт.)`)
+      if (rows.some((r) => rowOverflow(line.id, r))) reasons.push(`В выбранном месте не хватает брака для «${line.product_name}»`)
     }
-    return null
+    return reasons
+  }
+
+  const blockReasons = collectReasons()
+
+  function handlePrimary() {
+    if (blockReasons.length > 0) { setShowReasons(true); return }
+    setShowReasons(false)
+    void submit()
   }
 
   async function submit() {
-    const err = validate()
+    const err = collectReasons()[0]
     if (err) { toast(err, 'error'); return }
     const payload: ShipmentDefectRelocateLine[] = lines.map((line) => ({
       line_id: line.id,
@@ -144,7 +145,7 @@ export function DefectPreparePanel({ docId, lines, clientId, canEdit, onDone }: 
       state="active"
       hint="Выберите, откуда берётся брак по каждой строке — после «Готово к рейсу» он будет перемещён в зону отгрузки"
       right={canEdit ? (
-        <button className="btn sm primary" disabled={saving || !allReady} onClick={() => { void submit() }}>
+        <button className="btn sm primary" disabled={saving} onClick={handlePrimary}>
           <Icon name="check" size={12} />Готово к рейсу
         </button>
       ) : undefined}
@@ -155,6 +156,13 @@ export function DefectPreparePanel({ docId, lines, clientId, canEdit, onDone }: 
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {showReasons && blockReasons.length > 0 && (
+            <div className="block-reasons" style={{ textAlign: 'left' }}>
+              {blockReasons.map((r, i) => (
+                <div key={i}>· {r}</div>
+              ))}
+            </div>
+          )}
           {!canEdit && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
               Кладовщик указывает места-источники брака, затем жмёт «Готово к рейсу».
@@ -204,10 +212,11 @@ export function DefectPreparePanel({ docId, lines, clientId, canEdit, onDone }: 
                         disabled={!canEdit || saving}
                         warning={rowOverflow(line.id, row)}
                         width={96}
+                        height={34}
                       />
                       <button
                         className="btn ghost icon sm"
-                        style={{ marginTop: 2 }}
+                        style={{ marginTop: 4 }}
                         disabled={!canEdit || saving || rows.length <= 1}
                         title="Убрать строку"
                         onClick={() => removeRow(line.id, i)}

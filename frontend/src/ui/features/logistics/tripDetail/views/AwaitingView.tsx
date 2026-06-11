@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
@@ -6,7 +7,7 @@ import { TRIP_LOAD_LABELS, tripLexicon, tripStatusLabel } from '../../../../../a
 import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptEnrich } from '../ReceiptsBlock'
-import { DateTimeField, FieldLabel } from '../../components/fields'
+import { DateTimeField, FieldLabel, segmentToneColors } from '../../components/fields'
 import { timePart } from '../../components/dateTimeValue'
 
 function Chip({ icon, children }: { icon: IconName; children: React.ReactNode }) {
@@ -42,7 +43,7 @@ function isBefore(left: string, right: string): boolean {
 
 export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt, docsNode }: {
   detail: TripDetail
-  loadFactor: TripLoadFactor
+  loadFactor: TripLoadFactor | ''
   onLoadFactor: (v: TripLoadFactor) => void
   busy: boolean
   enrich?: ReceiptEnrich
@@ -70,7 +71,22 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
   const unloadStartReady = timePart(unloadStart).length === 5
   const unloadEndReady = timePart(unloadEnd).length === 5
   const unloadPeriodInvalid = unloading && unloadStartReady && unloadEndReady && isBefore(unloadEnd, unloadStart)
-  const actionDisabled = busy || (unloading ? (!unloadStartReady || !unloadEndReady || unloadPeriodInvalid) : !arrivalReady)
+  const [showReasons, setShowReasons] = useState(false)
+  const blockReasons: string[] = unloading
+    ? [
+        ...(!unloadStartReady ? [`Не указано «${lex.unloadStartLabel}»`] : []),
+        ...(!unloadEndReady ? [`Не указано «${lex.unloadEndLabel}»`] : []),
+        ...(unloadPeriodInvalid ? [lex.periodInvalid] : []),
+        ...(!loadFactor ? ['Не выбрана загруженность машины'] : []),
+      ]
+    : (!arrivalReady ? [`Не указано «${lex.arrivalLabel}»`] : [])
+  const handleAction = () => {
+    if (blockReasons.length > 0) { setShowReasons(true); return }
+    setShowReasons(false)
+    if (unloading) onUnload()
+    else onArrival()
+  }
+  const reasonsVisible = showReasons && blockReasons.length > 0
 
   return (
     <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
@@ -127,27 +143,32 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
           {!unloading && (
             <div style={{ minWidth: 240 }}>
               <FieldLabel required>{lex.arrivalLabel}</FieldLabel>
-              <DateTimeField value={arrival} onChange={onArrivalChange} />
+              <DateTimeField value={arrival} invalid={showReasons && !arrivalReady} onChange={onArrivalChange} />
             </div>
           )}
           {unloading && (
             <>
               <div style={{ minWidth: 240 }}>
                 <FieldLabel required>{lex.unloadStartLabel}</FieldLabel>
-                <DateTimeField value={unloadStart} onChange={onUnloadStartChange} />
+                <DateTimeField value={unloadStart} invalid={showReasons && !unloadStartReady} onChange={onUnloadStartChange} />
               </div>
               <div style={{ minWidth: 240 }}>
                 <FieldLabel required>{lex.unloadEndLabel}</FieldLabel>
-                <DateTimeField value={unloadEnd} onChange={onUnloadEndChange} />
+                <DateTimeField value={unloadEnd} invalid={showReasons && !unloadEndReady} onChange={onUnloadEndChange} />
               </div>
             </>
           )}
           {unloading && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--c-text-muted)', marginBottom: 7 }}>Загруженность</div>
-              <div style={{ display: 'inline-flex', gap: 4, padding: 4, background: 'var(--c-bg-sunken)', borderRadius: 10 }}>
+              <FieldLabel required>Загруженность</FieldLabel>
+              <div style={{
+                display: 'inline-flex', gap: 4, padding: 4, borderRadius: 10,
+                background: showReasons && !loadFactor ? 'var(--c-danger-bg)' : 'var(--c-bg-sunken)',
+                boxShadow: showReasons && !loadFactor ? 'inset 0 0 0 1px var(--c-danger)' : 'none',
+              }}>
                 {(['full', 'partial'] as TripLoadFactor[]).map((v) => {
                   const on = v === loadFactor
+                  const toneColors = on ? segmentToneColors(v === 'full' ? 'success' : 'warning') : null
                   return (
                     <button
                       key={v}
@@ -155,7 +176,8 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 7, height: 44, padding: '0 18px', border: 0, cursor: 'pointer',
                         borderRadius: 7, fontSize: 14, fontWeight: 500, fontFamily: 'inherit',
-                        background: on ? 'var(--c-bg-elev)' : 'transparent', color: on ? 'var(--c-text)' : 'var(--c-text-muted)',
+                        background: toneColors?.background ?? 'transparent',
+                        color: toneColors?.color ?? 'var(--c-text-muted)',
                         boxShadow: on ? 'var(--sh-1)' : 'none',
                       }}
                     >
@@ -167,8 +189,8 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             </div>
           )}
           <button
-            onClick={unloading ? onUnload : onArrival}
-            disabled={actionDisabled}
+            onClick={handleAction}
+            disabled={busy}
             className="btn primary"
             style={{ marginLeft: 'auto', height: 52, padding: '0 28px', fontSize: 15.5, borderRadius: 12 }}
           >
@@ -177,22 +199,33 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
           </button>
         </div>
 
-        {unloading && (
-          <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
-            <Icon name={unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'arrowRight' : 'alert'} size={13} style={{ color: unloadStartReady && unloadEndReady && !unloadPeriodInvalid ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
+        {reasonsVisible && (
+          <div style={{ background: 'var(--c-danger-bg)', padding: '11px 18px', fontSize: 12, color: 'var(--c-danger)', display: 'flex', gap: 6 }}>
+            <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 2 }} />
             <span>
-              {unloadPeriodInvalid
-                ? <>{lex.periodInvalid}</>
-                : unloadStartReady && unloadEndReady
-                ? (outbound
-                    ? <>После завершения {docsCount} отгрузки уйдут в статус <b>«Завершён»</b>, а рейс — менеджеру на закрытие.</>
-                    : <>После завершения {docsCount} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на закрытие.</>)
-                : <>Укажите начало и окончание {lex.warehousePhaseGen} — без времени завершить {lex.warehousePhase.toLowerCase()} нельзя.</>}
+              {blockReasons.map((r, i) => (
+                <span key={i} style={{ display: 'block' }}>· {r}</span>
+              ))}
             </span>
           </div>
         )}
 
-        {!unloading && !arrivalReady && (
+        {!reasonsVisible && unloading && (
+          <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
+            <Icon name={blockReasons.length === 0 ? 'arrowRight' : 'alert'} size={13} style={{ color: blockReasons.length === 0 ? 'var(--c-text-faint)' : 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
+            <span>
+              {unloadPeriodInvalid
+                ? <>{lex.periodInvalid}</>
+                : blockReasons.length === 0
+                ? (outbound
+                    ? <>После завершения {docsCount} отгрузки уйдут в статус <b>«Завершён»</b>, а рейс — менеджеру на закрытие.</>
+                    : <>После завершения {docsCount} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на закрытие.</>)
+                : <>Укажите время {lex.warehousePhaseGen} и загруженность машины — без них завершить {lex.warehousePhase.toLowerCase()} нельзя.</>}
+            </span>
+          </div>
+        )}
+
+        {!reasonsVisible && !unloading && !arrivalReady && (
           <div style={{ background: 'var(--c-bg-sunken)', padding: '11px 18px', fontSize: 12, color: 'var(--c-text-muted)', display: 'flex', gap: 6 }}>
             <Icon name="alert" size={13} style={{ color: 'var(--c-warning)', flexShrink: 0, marginTop: 2 }} />
             <span>Укажите время прибытия — без него рейс нельзя отправить на {lex.warehousePhase.toLowerCase()}.</span>

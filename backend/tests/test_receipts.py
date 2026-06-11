@@ -148,6 +148,42 @@ def test_receipt_advance_state_machine(admin_client, client_id):
     assert admin_client.get(f"/receipts/{doc_id}").json()["doc"]["status"] == "done"
 
 
+def test_arrive_writes_intake_move_to_journal(admin_client, client_id):
+    """Завершение приёмки пишет журнальное движение intake → storage по каждой строке."""
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [_make_receipt_line(planned_qty=12)]
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+
+    arrive = _arrive(admin_client, doc_id)
+    assert arrive.status_code == 200, arrive.text
+
+    line = admin_client.get(f"/receipts/{doc_id}").json()["lines"][0]
+    with get_connection() as conn:
+        moves = conn.execute(
+            "SELECT * FROM zone_relocations WHERE receipt_line_id = ?", (line["id"],)
+        ).fetchall()
+    assert len(moves) == 1, moves
+    mv = moves[0]
+    assert str(mv["from_op"]) == "intake"
+    assert str(mv["to_op"]) == "storage"
+    assert str(mv["from_quality"]) == "good" and str(mv["to_quality"]) == "good"
+    assert int(mv["qty"]) == 12
+    assert mv["to_zone_id"] == line["storage_zone_id"]
+    assert str(mv["client_id"]) == client_id
+
+    # Остаток встаёт из журнала: storage/good в зоне приёмки = принятому.
+    from modules.balances.service import get_available_in_zone
+
+    with get_connection() as conn:
+        available = get_available_in_zone(
+            conn,
+            product_id=str(mv["product_id"]), color_id=mv["color_id"], size_id=mv["size_id"],
+            client_id=client_id, zone_id=line["storage_zone_id"],
+            op="storage", quality="good",
+        )
+    assert available == 12
+
+
 def test_receipt_advance_final_status_returns_400(admin_client, client_id):
     payload = _make_receipt_payload(client_id)
     r = admin_client.post("/receipts", json=payload)

@@ -14,10 +14,12 @@ const STATIC: Record<string, string> = {
   trips: 'Рейсы',
   analytics: 'Аналитика',
   cabinet: 'Личный кабинет',
-  receipt: 'Приёмка товаров',
   receipts: 'Поступления',
   shipments: 'Отгрузки',
   balances: 'Остатки',
+  defects: 'Брак',
+  reports: 'Отчёты',
+  profile: 'Профиль и магазины',
   clients: 'Клиенты',
   colors: 'Цвета',
   sizes: 'Размеры',
@@ -51,6 +53,17 @@ function labelForSegment(segment: string, index: number, parts: string[]): strin
     const s = parts[2] ?? ''
     if (s.length > 0) {
       return 'Просмотр товара'
+    }
+  }
+  if (
+    parts[0] === 'cabinet' &&
+    (parts[1] === 'receipts' || parts[1] === 'shipments') &&
+    index === 2 &&
+    index === parts.length - 1
+  ) {
+    const s = parts[2] ?? ''
+    if (s.length > 0) {
+      return parts[1] === 'receipts' ? 'Карточка поступления' : 'Карточка отгрузки'
     }
   }
   if (

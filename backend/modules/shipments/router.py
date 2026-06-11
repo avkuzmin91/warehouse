@@ -27,7 +27,7 @@ from config import (
     SHIPMENT_TRANSITIONS,
     UPLOADS_DIR,
 )
-from dbconn import get_connection
+from dbconn import get_connection, like_substring_param
 from modules.auth.service import (
     get_current_manager,
     get_current_packer,
@@ -71,6 +71,7 @@ from modules.shipments.service import (
     record_packing,
     return_defect_to_storage,
     return_line_from_packing,
+    return_packing_pool_to_storage,
     reverse_packing_entry,
 )
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
@@ -194,7 +195,7 @@ def shipments_summary(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = f"%{search.strip()}%"
+            s = like_substring_param(search)
             conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
         if sku:
@@ -202,7 +203,7 @@ def shipments_summary(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
             )
-            params.append(f"%{sku.strip()}%")
+            params.append(like_substring_param(sku))
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -274,7 +275,7 @@ def list_shipments(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = f"%{search.strip()}%"
+            s = like_substring_param(search)
             conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
         if sku:
@@ -282,7 +283,7 @@ def list_shipments(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
             )
-            params.append(f"%{sku.strip()}%")
+            params.append(like_substring_param(sku))
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -390,11 +391,11 @@ def list_shipment_lines(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = f"%{search.strip()}%"
+            s = like_substring_param(search)
             conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
             params += [s, s, s]
         if sku:
-            s = f"%{sku.strip()}%"
+            s = like_substring_param(sku)
             conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
             params += [s, s]
         if date_from:
@@ -881,6 +882,10 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
             returned = return_defect_to_storage(conn, doc_id, uid)
             if returned > 0:
                 cancel_comment = f"Брак возвращён на исходные места: {returned} шт."
+        else:
+            returned = return_packing_pool_to_storage(conn, doc_id, uid)
+            if returned > 0:
+                cancel_comment = f"Товар возвращён с упаковки на исходные места: {returned} шт."
         conn.execute(
             "UPDATE shipment_docs SET status=?, priority_rank=NULL, updated_at=? WHERE id=?",
             (SHIPMENT_STATUS_CANCELLED, now, doc_id),
