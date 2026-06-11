@@ -27,25 +27,7 @@ import { Tooltip } from '../../primitives/Tooltip'
 import { Table, Td } from '../../data/Table'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { useToast } from '../../feedback/Toast'
-
-function parseNum(s: string) {
-  const n = parseFloat(String(s).replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
-}
-
-function parseOptionalWeight(s: string): number | null {
-  const trimmed = s.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? Math.round(n) : null
-}
-
-function parseOptionalInteger(s: string): number | null {
-  const trimmed = s.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? Math.round(n) : null
-}
+import { parseNum, parseOptionalWeight, parseOptionalInteger } from '../../../utils/parseNumbers'
 
 function emptyRow(requiresSize: boolean): ProductVariantWriteItem {
   return {

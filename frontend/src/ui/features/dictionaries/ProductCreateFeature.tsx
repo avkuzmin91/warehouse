@@ -16,28 +16,10 @@ import { Combobox } from '../../data/Combobox'
 import type { ComboboxOption } from '../../data/Combobox'
 import { MultiSelect } from '../../data/MultiSelect'
 import { Icon } from '../../primitives/Icon'
+import { parseNum, parseOptionalWeight, parseOptionalInteger } from '../../../utils/parseNumbers'
 
 type DimBlock = { length: string; width: string; height: string; sizes: string[] }
 type FieldKey = 'name' | 'type_id' | 'sku_base' | 'client_id' | 'colors' | 'dimensions'
-
-function parseNum(s: string): number {
-  const n = parseFloat(s.replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
-}
-
-function parseOptionalWeight(s: string): number | null {
-  const trimmed = s.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? Math.round(n) : null
-}
-
-function parseOptionalInteger(s: string): number | null {
-  const trimmed = s.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? Math.round(n) : null
-}
 
 function mapServerError(msg: string): string {
   const l = msg.toLowerCase()

@@ -11,6 +11,7 @@ import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { Icon } from '../../../../primitives/Icon'
 import { Drawer } from '../../../../feedback/Drawer'
+import { ReadOnlyField } from '../../../inventory/shared/ReadOnlyField'
 import { fmtDate } from '../../../../../utils/format'
 import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
@@ -186,26 +187,6 @@ export function ReviewView({ detail }: Props) {
         )}
       </Drawer>
 
-    </div>
-  )
-}
-
-function ReadOnlyField({ label, value, mono, multiline }: { label: string; value: string | null | undefined; mono?: boolean; multiline?: boolean }) {
-  return (
-    <div>
-      <div className="field-label"><span>{label}</span></div>
-      <div style={{
-        fontSize: 13,
-        fontWeight: 500,
-        minHeight: 30,
-        display: 'flex',
-        alignItems: multiline ? 'flex-start' : 'center',
-        lineHeight: multiline ? 1.5 : undefined,
-        whiteSpace: multiline ? 'pre-wrap' : undefined,
-        overflowWrap: multiline ? 'anywhere' : undefined,
-      }}>
-        <span className={mono ? 'mono' : undefined}>{value || '—'}</span>
-      </div>
     </div>
   )
 }

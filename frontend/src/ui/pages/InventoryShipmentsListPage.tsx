@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
@@ -13,6 +13,7 @@ import {
 import type { ShipmentCargoType, ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
 import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
 import { ShipmentPriorityControl } from '../features/inventory/ShipmentPriorityControl'
+import { KanbanBoard } from '../features/inventory/shared/KanbanBoard'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -434,148 +435,51 @@ export function InventoryShipmentsListPage() {
         </>
       ) : (
         <KanbanBoard
-          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined, cargo_type: cargoParam }}
+          columns={KANBAN_COLS}
+          gridCols={3}
+          fetchKey={`${search.trim()}|${skuFilter.trim()}|${clientId}|${dateFrom}|${dateTo}|${cargoParam}|${reloadTick}`}
+          fetchPage={(status, page, limit, signal) => listShipments({
+            page,
+            limit,
+            status,
+            search: search.trim() || undefined,
+            sku: skuFilter.trim() || undefined,
+            client_id: clientId || undefined,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+            cargo_type: cargoParam,
+          }, signal)}
+          renderCard={(item) => <ShipmentKanbanCard item={item} />}
+          highlight={isShipmentOverdue}
           onNavigate={(id) => navigate(`/inventory/shipments/${id}`)}
-          reloadTick={reloadTick}
         />
       )}
     </ListPage>
   )
 }
 
-const KANBAN_PAGE = 20
-
-type KanbanFilters = {
-  search?: string
-  sku?: string
-  client_id?: string
-  date_from?: string
-  date_to?: string
-  cargo_type?: ShipmentCargoType
-}
-
-function KanbanBoard({ filters, onNavigate, reloadTick }: {
-  filters: KanbanFilters
-  onNavigate: (id: string) => void
-  reloadTick?: number
-}) {
+function ShipmentKanbanCard({ item }: { item: ShipmentListItem }) {
+  const overdue = isShipmentOverdue(item)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, alignItems: 'start' }}>
-      {KANBAN_COLS.map((col) => (
-        <KanbanColumn key={col.status} col={col} filters={filters} onNavigate={onNavigate} reloadTick={reloadTick} />
-      ))}
-    </div>
-  )
-}
-
-function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
-  col: typeof KANBAN_COLS[number]
-  filters: KanbanFilters
-  onNavigate: (id: string) => void
-  reloadTick?: number
-}) {
-  const [items, setItems] = useState<ShipmentListItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const { search, sku, client_id, date_from, date_to, cargo_type } = filters
-  const filterKey = `${search}|${sku}|${client_id}|${date_from}|${date_to}|${cargo_type}|${reloadTick ?? 0}`
-  const prevFilterKey = useRef(filterKey)
-
-  useEffect(() => {
-    const ctrl = new AbortController()
-    const isReset = prevFilterKey.current !== filterKey
-    prevFilterKey.current = filterKey
-    const activePage = isReset ? 1 : page
-    if (isReset) {
-      setPage(1)
-      setItems([])
-    }
-    if (activePage === 1) setLoading(true); else setLoadingMore(true)
-    listShipments({
-      page: activePage,
-      limit: KANBAN_PAGE,
-      status: col.status,
-      search, sku, client_id, date_from, date_to, cargo_type,
-    }, ctrl.signal)
-      .then((res) => {
-        if (ctrl.signal.aborted) return
-        setTotal(res.total)
-        setItems((prev) => activePage === 1 ? res.items : [...prev, ...res.items])
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (ctrl.signal.aborted) return
-        setLoading(false)
-        setLoadingMore(false)
-      })
-    return () => ctrl.abort()
-  }, [page, filterKey, col.status, search, sku, client_id, date_from, date_to, cargo_type])
-
-  const hasMore = items.length < total
-
-  return (
-    <div style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
-      <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-        <Badge tone={col.tone} dot>{col.label}</Badge>
-        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-          {loading ? '…' : total}
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+        {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+        {item.priority_rank && (
+          <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
+        )}
+        {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
+          {fmtDate(item.ship_date)}
         </span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
-            <div style={{ width: 20, height: 20, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-          </div>
-        ) : items.length === 0 ? (
-          <div style={{ padding: '16px 6px', fontSize: 12, color: 'var(--c-text-faint)', textAlign: 'center' }}>Нет документов</div>
-        ) : (
-          items.map((item) => {
-            const overdue = isShipmentOverdue(item)
-            return (
-              <div
-                key={item.id}
-                className="card"
-                style={{
-                  padding: 10, cursor: 'pointer',
-                  ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
-                }}
-                onClick={() => onNavigate(item.id)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                  {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
-                  {item.priority_rank && (
-                    <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
-                  )}
-                  {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-                  <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-                    {fmtDate(item.ship_date)}
-                  </span>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-                <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
-                  <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                  <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                </div>
-              </div>
-            )
-          })
-        )}
-        {hasMore && (
-          <button
-            className="btn ghost sm"
-            style={{ width: '100%', justifyContent: 'center', color: 'var(--c-text-subtle)', fontSize: 12 }}
-            disabled={loadingMore}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {loadingMore ? '…' : `Ещё ${total - items.length}`}
-          </button>
-        )}
+      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
+      <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
+        <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+        <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
       </div>
-    </div>
+    </>
   )
 }
