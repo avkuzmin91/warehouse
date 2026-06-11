@@ -600,6 +600,7 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 .auth-backdrop-svg { width: 100%; height: 100%; display: block; }
+.auth-backdrop-svg circle { fill: #6366f1; opacity: 0.15; }
 
 /* Blur blobs */
 .auth-blob {
@@ -761,6 +762,7 @@ a { color: inherit; text-decoration: none; }
   justify-content: space-between;
 }
 .auth-label-req { color: #6366f1; margin-left: 2px; }
+.auth-label-hint { font-size: 12px; color: #b0aec8; font-weight: 400; }
 
 .auth-input-wrap {
   position: relative;
@@ -1451,3 +1453,31 @@ a { color: inherit; text-decoration: none; }
   border-radius: 99px;
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--c-text-faint); }
+
+
+/* Фото товара: кнопка удаления и бейдж главного фото (оверлеи поверх изображения, тема не применяется) */
+.product-photo-remove {
+  position: absolute;
+  top: 2px; right: 2px;
+  background: rgba(0,0,0,0.5);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.product-photo-remove:hover {
+  background: rgba(0,0,0,0.72);
+  transform: scale(1.06);
+}
+.product-photo-main-badge {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.45);
+  font-size: 9px;
+  color: #fff;
+  text-align: center;
+  padding: 2px 0;
+  letter-spacing: 0.3px;
+}

@@ -65,7 +65,6 @@ RECEIPT_STATUS_DRAFT     = "draft"
 RECEIPT_STATUS_PLANNED   = "planned"
 RECEIPT_STATUS_ON_INTAKE = "on_intake"
 RECEIPT_STATUS_ON_REVIEW = "on_review"
-RECEIPT_STATUS_IN_REVIEW_LEGACY = "in_review"   # нормализуется → on_review при старте
 RECEIPT_STATUS_DONE      = "done"
 RECEIPT_STATUS_CANCELLED = "cancelled"
 

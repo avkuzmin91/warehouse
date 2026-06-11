@@ -13,7 +13,7 @@ function AuthBackground() {
         <svg className="auth-backdrop-svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
           <defs>
             <pattern id="auth-dots-reg" width="28" height="28" patternUnits="userSpaceOnUse">
-              <circle cx="1" cy="1" r="1" fill="#6366f1" opacity="0.15" />
+              <circle cx="1" cy="1" r="1" />
             </pattern>
           </defs>
           <rect width="1440" height="900" fill="url(#auth-dots-reg)" />
@@ -127,7 +127,7 @@ export function RegisterPage() {
               <div className="auth-field">
                 <label className="auth-label" htmlFor="reg-password">
                   <span>Пароль <span className="auth-label-req">*</span></span>
-                  <span style={{ fontSize: 12, color: '#b0aec8', fontWeight: 400 }}>Минимум 8 символов</span>
+                  <span className="auth-label-hint">Минимум 8 символов</span>
                 </label>
                 <div className="auth-input-wrap">
                   <span className="auth-input-icon">

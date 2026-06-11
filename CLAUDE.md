@@ -87,7 +87,7 @@ with get_connection() as conn:
 
 Полные перечни — в [backend/config.py](backend/config.py), здесь — для ориентира:
 
-- **Receipts:** `draft → planned → on_intake → on_review → done`, плюс `cancelled` (`in_review` — легаси, нормализуется в `on_review` при старте).
+- **Receipts:** `draft → planned → on_intake → on_review → done`, плюс `cancelled` (легаси `in_review` закрыт миграцией 0045).
 - **Shipments:** `draft → packing → on_packing → relocating → awaiting_trip → shipped`, плюс `cancelled`. Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
 - **Trips:** `draft → awaiting_arrival → unloading → costing → closed`, плюс `cancelled`.
 
