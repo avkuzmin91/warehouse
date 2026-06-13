@@ -109,7 +109,7 @@ export function MyTasksFeature() {
     .filter((task) => isTaskVisibleForRole(task, user?.role))
     .sort((a, b) =>
       (a.priority_rank ?? Infinity) - (b.priority_rank ?? Infinity)
-      || (a.since ?? '').localeCompare(b.since ?? ''))
+      || (b.since ?? '').localeCompare(a.since ?? ''))
   const roleLabel = ROLE_LABEL[user?.role ?? ''] ?? (user?.role ?? '—')
   const loadedCount = data?.items.length ?? tasks.length
   const totalCount = data?.total ?? loadedCount

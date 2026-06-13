@@ -363,6 +363,64 @@ TRIP_OP_CLOSE           = "close"
 TRIP_OP_CANCEL          = "cancel"
 
 # ---------------------------------------------------------------------------
+# Финансы — Счета (invoice_*)
+# ---------------------------------------------------------------------------
+
+# Денежные суммы счёта (total_amount, paid_amount, payment.amount) хранятся в
+# КОПЕЙКАХ как INTEGER — финансовый модуль не должен накапливать ошибки
+# округления float (прочие стоимости проекта в REAL — это осознанное отличие).
+
+INVOICE_STATUS_DRAFT          = "draft"
+INVOICE_STATUS_ISSUED         = "issued"
+INVOICE_STATUS_PARTIALLY_PAID = "partially_paid"
+INVOICE_STATUS_CLOSED         = "closed"
+INVOICE_STATUS_CANCELLED      = "cancelled"
+
+INVOICE_STATUSES_ALL: list[str] = [
+    INVOICE_STATUS_DRAFT,
+    INVOICE_STATUS_ISSUED,
+    INVOICE_STATUS_PARTIALLY_PAID,
+    INVOICE_STATUS_CLOSED,
+    INVOICE_STATUS_CANCELLED,
+]
+
+INVOICE_STATUS_LABELS: dict[str, str] = {
+    INVOICE_STATUS_DRAFT:          "Черновик",
+    INVOICE_STATUS_ISSUED:         "Выставлен",
+    INVOICE_STATUS_PARTIALLY_PAID: "Частично оплачен",
+    INVOICE_STATUS_CLOSED:         "Завершён",
+    INVOICE_STATUS_CANCELLED:      "Аннулирован",
+}
+
+# Активная задолженность — для алёрта «к оплате/просрочено», оплат, закрытия и
+# признаков «срок наступил/просрочен». Черновик сюда НЕ входит: это ещё не
+# выставленное обязательство.
+INVOICE_ACTIVE_STATUSES: frozenset[str] = frozenset({
+    INVOICE_STATUS_ISSUED,
+    INVOICE_STATUS_PARTIALLY_PAID,
+})
+
+# Редактируемые статусы — состав отгрузок/файлов можно менять, счёт можно
+# аннулировать. Шире, чем active: добавляется черновик (его правят целиком).
+INVOICE_MUTABLE_STATUSES: frozenset[str] = frozenset({
+    INVOICE_STATUS_DRAFT,
+    INVOICE_STATUS_ISSUED,
+    INVOICE_STATUS_PARTIALLY_PAID,
+})
+
+# Типы операций журнала счетов (append-only)
+INVOICE_OP_DOC_CREATE      = "doc_create"
+INVOICE_OP_ISSUE           = "issue"
+INVOICE_OP_DOC_UPDATE      = "doc_update"
+INVOICE_OP_SHIPMENT_LINK   = "shipment_link"
+INVOICE_OP_SHIPMENT_UNLINK = "shipment_unlink"
+INVOICE_OP_DUE_DATE_CHANGE = "due_date_change"
+INVOICE_OP_AMOUNT_CHANGE   = "amount_change"
+INVOICE_OP_PAYMENT         = "payment"
+INVOICE_OP_CLOSE           = "close"
+INVOICE_OP_CANCEL          = "cancel"
+
+# ---------------------------------------------------------------------------
 # Кабинет клиента — границы видимости
 # ---------------------------------------------------------------------------
 

@@ -89,6 +89,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
         number={doc.trip_number}
         status={doc.status}
         direction={direction}
+        cargoType={doc.cargo_type}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>

@@ -1,0 +1,744 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+
+from config import (
+    INVOICE_ACTIVE_STATUSES,
+    INVOICE_MUTABLE_STATUSES,
+    INVOICE_OP_AMOUNT_CHANGE,
+    INVOICE_OP_CANCEL,
+    INVOICE_OP_CLOSE,
+    INVOICE_OP_DOC_CREATE,
+    INVOICE_OP_DOC_UPDATE,
+    INVOICE_OP_DUE_DATE_CHANGE,
+    INVOICE_OP_ISSUE,
+    INVOICE_OP_PAYMENT,
+    INVOICE_OP_SHIPMENT_UNLINK,
+    INVOICE_STATUS_CANCELLED,
+    INVOICE_STATUS_CLOSED,
+    INVOICE_STATUS_DRAFT,
+    INVOICE_STATUS_ISSUED,
+    INVOICE_STATUS_LABELS,
+    INVOICE_STATUS_PARTIALLY_PAID,
+    MAX_UPLOAD_BYTES,
+    SHIPMENT_STATUS_LABELS,
+    UPLOADS_DIR,
+)
+from dbconn import get_connection
+from modules.auth.service import get_current_manager
+from modules.invoices.schemas import (
+    InvoiceAlertsResponse,
+    InvoiceAttachShipments,
+    InvoiceAmountUpdate,
+    InvoiceCreate,
+    InvoiceDetailResponse,
+    InvoiceDueDateUpdate,
+    InvoiceFileItem,
+    InvoiceListItem,
+    InvoiceListResponse,
+    InvoiceOpItem,
+    InvoicePaymentCreate,
+    InvoicePaymentItem,
+    InvoiceShipmentItem,
+    InvoiceUpdate,
+    UninvoicedShipmentItem,
+    UninvoicedShipmentsResponse,
+)
+from modules.invoices.service import (
+    alerts_counts,
+    attach_shipments,
+    format_kopecks,
+    invalidate_alerts_cache,
+    is_due_reached,
+    is_overdue,
+    list_invoices_aggregated,
+    list_uninvoiced_shipments,
+    next_invoice_number,
+    recompute_paid,
+)
+from security import ensure_finance_access
+
+router = APIRouter(tags=["invoices"])
+
+_ALLOWED_INVOICE_FILE_EXTS = {".xlsx", ".xls", ".pdf", ".png", ".jpg", ".jpeg"}
+
+
+def _get_finance(user=Depends(get_current_manager)):
+    ensure_finance_access(user)
+    return user
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _status_label(status: str) -> str:
+    return INVOICE_STATUS_LABELS.get(status, status)
+
+
+def _require_active(doc) -> str:
+    status = str(doc["status"])
+    if status not in INVOICE_ACTIVE_STATUSES:
+        label = _status_label(status)
+        raise HTTPException(status_code=400, detail=f"Счёт в статусе «{label}» изменять нельзя")
+    return status
+
+
+def _require_mutable(doc) -> str:
+    status = str(doc["status"])
+    if status not in INVOICE_MUTABLE_STATUSES:
+        label = _status_label(status)
+        raise HTTPException(status_code=400, detail=f"Счёт в статусе «{label}» изменять нельзя")
+    return status
+
+
+def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
+    doc = conn.execute(
+        "SELECT * FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (invoice_id,),
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+
+    ship_rows = conn.execute(
+        """
+        SELECT s.shipment_doc_id, d.doc_number, d.cargo_type, d.status,
+               d.ship_date, d.destination
+        FROM invoice_shipments s
+        JOIN shipment_docs d ON d.id = s.shipment_doc_id
+        WHERE s.invoice_id = ? AND COALESCE(s.is_deleted, 0) = 0
+        ORDER BY d.doc_number
+        """,
+        (invoice_id,),
+    ).fetchall()
+    shipments = [
+        InvoiceShipmentItem(
+            shipment_doc_id=str(r["shipment_doc_id"]),
+            doc_number=str(r["doc_number"]),
+            cargo_type=str(r["cargo_type"]),
+            status=str(r["status"]),
+            status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+            ship_date=r["ship_date"],
+            destination=r["destination"],
+        )
+        for r in ship_rows
+    ]
+
+    pay_rows = conn.execute(
+        """
+        SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by,
+               u.email AS created_by_email
+        FROM invoice_payments p
+        LEFT JOIN users u ON u.id = p.created_by
+        WHERE p.invoice_id = ? AND COALESCE(p.is_deleted, 0) = 0
+        ORDER BY p.created_at
+        """,
+        (invoice_id,),
+    ).fetchall()
+    payments = [
+        InvoicePaymentItem(
+            id=str(r["id"]),
+            amount=int(r["amount"]),
+            paid_on=r["paid_on"],
+            comment=r["comment"],
+            created_at=str(r["created_at"]),
+            created_by=r["created_by"],
+            created_by_email=r["created_by_email"],
+        )
+        for r in pay_rows
+    ]
+
+    file_rows = conn.execute(
+        "SELECT id, filename, url, mime_type, created_at FROM invoice_files "
+        "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
+        (invoice_id,),
+    ).fetchall()
+    files = [
+        InvoiceFileItem(
+            id=str(r["id"]),
+            filename=str(r["filename"]),
+            url=str(r["url"]),
+            mime_type=r["mime_type"],
+            created_at=str(r["created_at"]),
+        )
+        for r in file_rows
+    ]
+
+    op_rows = conn.execute(
+        """
+        SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by,
+               u.email AS created_by_email
+        FROM invoice_ops o
+        LEFT JOIN users u ON u.id = o.created_by
+        WHERE o.invoice_id = ?
+        ORDER BY o.created_at
+        """,
+        (invoice_id,),
+    ).fetchall()
+    ops = [
+        InvoiceOpItem(
+            id=str(r["id"]),
+            op_type=str(r["op_type"]),
+            comment=r["comment"],
+            created_at=str(r["created_at"]),
+            created_by=r["created_by"],
+            created_by_email=r["created_by_email"],
+        )
+        for r in op_rows
+    ]
+
+    status = str(doc["status"])
+    return InvoiceDetailResponse(
+        id=str(doc["id"]),
+        doc_number=str(doc["doc_number"]),
+        client_id=doc["client_id"],
+        client_name=doc["client_name"],
+        status=status,
+        status_label=_status_label(status),
+        total_amount=int(doc["total_amount"]),
+        paid_amount=int(doc["paid_amount"]),
+        due_date=doc["due_date"],
+        overdue=is_overdue(status, doc["due_date"]),
+        due_reached=is_due_reached(status, doc["due_date"]),
+        comment=doc["comment"],
+        created_at=str(doc["created_at"]),
+        created_by=doc["created_by"],
+        updated_at=doc["updated_at"],
+        shipments=shipments,
+        payments=payments,
+        files=files,
+        ops=ops,
+    )
+
+
+# ── Create ─────────────────────────────────────────────────────────────────────
+
+@router.post("/invoices")
+def create_invoice(body: InvoiceCreate, user=Depends(_get_finance)):
+    # Счёт рождается черновиком: обязателен только клиент, остальное (отгрузки,
+    # сумма, срок, файл) дозаполняется в карточке и проверяется при выставлении.
+    client_id = str(body.client_id or "").strip()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Укажите клиента")
+    due_date = str(body.due_date or "").strip() or None
+
+    uid = str(user["id"])
+    now = _now()
+    invoice_id = str(uuid4())
+
+    with get_connection() as conn:
+        doc_number = next_invoice_number(conn)
+        conn.execute(
+            """INSERT INTO invoice_docs
+               (id,doc_number,client_id,client_name,status,total_amount,paid_amount,due_date,comment,created_at,created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (invoice_id, doc_number, client_id, (body.client_name or "").strip() or None,
+             INVOICE_STATUS_DRAFT, int(body.total_amount), 0, due_date,
+             (body.comment or "").strip() or None, now, uid),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DOC_CREATE, "Черновик создан", now, uid),
+        )
+        if [s for s in body.shipment_ids if str(s or "").strip()]:
+            attach_shipments(
+                conn,
+                invoice_id=invoice_id,
+                client_id=client_id,
+                shipment_ids=body.shipment_ids,
+                uid=uid,
+                now=now,
+            )
+        conn.commit()
+    return {"message": invoice_id}
+
+
+# ── Lists (static routes BEFORE /invoices/{invoice_id}) ─────────────────────────
+
+@router.get("/invoices", response_model=InvoiceListResponse)
+def list_invoices(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    status:    str | None = Query(None),
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    overdue:   bool = Query(False),
+    user=Depends(_get_finance),
+):
+    with get_connection() as conn:
+        items, total = list_invoices_aggregated(
+            conn, page=page, limit=limit, status=status,
+            client_id=client_id, search=search, overdue=overdue,
+        )
+    return InvoiceListResponse(
+        items=[InvoiceListItem(**it) for it in items], total=total, page=page, limit=limit,
+    )
+
+
+@router.get("/invoices/uninvoiced-shipments", response_model=UninvoicedShipmentsResponse)
+def list_uninvoiced(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    with get_connection() as conn:
+        items, total = list_uninvoiced_shipments(
+            conn, page=page, limit=limit, client_id=client_id,
+            search=search, date_from=date_from, date_to=date_to,
+        )
+    return UninvoicedShipmentsResponse(
+        items=[UninvoicedShipmentItem(**it) for it in items], total=total, page=page, limit=limit,
+    )
+
+
+@router.get("/invoices/alerts", response_model=InvoiceAlertsResponse)
+def invoice_alerts(user=Depends(_get_finance)):
+    with get_connection() as conn:
+        counts = alerts_counts(conn)
+    return InvoiceAlertsResponse(**counts)
+
+
+@router.get("/invoices/{invoice_id}", response_model=InvoiceDetailResponse)
+def get_invoice(invoice_id: str, user=Depends(_get_finance)):
+    with get_connection() as conn:
+        return _load_detail(conn, invoice_id)
+
+
+# ── Shipments link/unlink ───────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/shipments")
+def attach_invoice_shipments(invoice_id: str, body: InvoiceAttachShipments, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, client_id FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        if not [s for s in body.shipment_ids if str(s or "").strip()]:
+            raise HTTPException(status_code=400, detail="Не выбрано ни одной отгрузки")
+        attach_shipments(
+            conn,
+            invoice_id=invoice_id,
+            client_id=doc["client_id"],
+            shipment_ids=body.shipment_ids,
+            uid=uid,
+            now=now,
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/invoices/{invoice_id}/shipments/{shipment_doc_id}")
+def detach_invoice_shipment(invoice_id: str, shipment_doc_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        link = conn.execute(
+            "SELECT s.id, d.doc_number FROM invoice_shipments s "
+            "JOIN shipment_docs d ON d.id = s.shipment_doc_id "
+            "WHERE s.invoice_id = ? AND s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0",
+            (invoice_id, shipment_doc_id),
+        ).fetchone()
+        if not link:
+            raise HTTPException(status_code=404, detail="Отгрузка не привязана к счёту")
+        conn.execute("UPDATE invoice_shipments SET is_deleted = 1 WHERE id = ?", (str(link["id"]),))
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_SHIPMENT_UNLINK,
+             f"Отвязана отгрузка {link['doc_number']}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+# ── Draft: правка реквизитов и выставление ───────────────────────────────────────
+
+@router.patch("/invoices/{invoice_id}")
+def update_invoice(invoice_id: str, body: InvoiceUpdate, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    fields = body.model_fields_set
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, client_id FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        if str(doc["status"]) != INVOICE_STATUS_DRAFT:
+            raise HTTPException(status_code=400, detail="Реквизиты можно менять только в черновике")
+
+        sets: list[str] = []
+        params: list = []
+        if "client_id" in fields:
+            new_client = str(body.client_id or "").strip()
+            if not new_client:
+                raise HTTPException(status_code=400, detail="Укажите клиента")
+            if new_client != str(doc["client_id"] or ""):
+                linked = conn.execute(
+                    "SELECT 1 FROM invoice_shipments WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (invoice_id,),
+                ).fetchone()
+                if linked:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Сначала отвяжите отгрузки прежнего клиента",
+                    )
+            sets.append("client_id = ?"); params.append(new_client)
+        if "client_name" in fields:
+            sets.append("client_name = ?"); params.append((body.client_name or "").strip() or None)
+        if "due_date" in fields:
+            sets.append("due_date = ?"); params.append(str(body.due_date or "").strip() or None)
+        if "total_amount" in fields and body.total_amount is not None:
+            sets.append("total_amount = ?"); params.append(int(body.total_amount))
+        if "comment" in fields:
+            sets.append("comment = ?"); params.append((body.comment or "").strip() or None)
+
+        if not sets:
+            return {"message": "ok"}
+
+        sets.append("updated_at = ?"); params.append(now)
+        params.append(invoice_id)
+        conn.execute(f"UPDATE invoice_docs SET {', '.join(sets)} WHERE id = ?", params)
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DOC_UPDATE, "Изменены реквизиты черновика", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.post("/invoices/{invoice_id}/issue")
+def issue_invoice(invoice_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, total_amount, due_date FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        if str(doc["status"]) != INVOICE_STATUS_DRAFT:
+            raise HTTPException(status_code=400, detail="Выставить можно только черновик")
+        if int(doc["total_amount"]) <= 0:
+            raise HTTPException(status_code=400, detail="Укажите сумму счёта")
+        if not str(doc["due_date"] or "").strip():
+            raise HTTPException(status_code=400, detail="Укажите плановую дату расчёта")
+        n_ship = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM invoice_shipments "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()["n"])
+        if n_ship == 0:
+            raise HTTPException(status_code=400, detail="Добавьте хотя бы одну отгрузку")
+        n_files = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM invoice_files "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()["n"])
+        if n_files == 0:
+            raise HTTPException(status_code=400, detail="Прикрепите файл счёта (например, расчёт Excel)")
+
+        conn.execute(
+            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_ISSUED, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_ISSUE, "Счёт выставлен", now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": INVOICE_STATUS_ISSUED}
+
+
+# ── Payments / due date / close / cancel ────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/payments")
+def add_payment(invoice_id: str, body: InvoicePaymentCreate, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, total_amount, paid_amount FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_active(doc)
+        paid_on = str(body.paid_on or "").strip()
+        if not paid_on:
+            raise HTTPException(status_code=400, detail="Укажите дату оплаты")
+        remaining = int(doc["total_amount"]) - int(doc["paid_amount"])
+        if int(body.amount) > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Оплата превышает остаток по счёту ({format_kopecks(max(0, remaining))})",
+            )
+        conn.execute(
+            "INSERT INTO invoice_payments (id,invoice_id,amount,paid_on,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, int(body.amount),
+             paid_on, (body.comment or "").strip() or None, now, uid),
+        )
+        paid = recompute_paid(conn, invoice_id)
+        conn.execute(
+            "UPDATE invoice_docs SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ?",
+            (paid, INVOICE_STATUS_PARTIALLY_PAID, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_PAYMENT,
+             f"Оплата {format_kopecks(int(body.amount))}", now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": "ok"}
+
+
+@router.patch("/invoices/{invoice_id}/due-date")
+def update_due_date(invoice_id: str, body: InvoiceDueDateUpdate, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    new_date = str(body.due_date or "").strip()
+    if not new_date:
+        raise HTTPException(status_code=400, detail="Укажите новую плановую дату расчёта")
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, due_date FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_active(doc)
+        old_date = doc["due_date"] or "—"
+        reason = str(body.reason or "").strip()
+        comment = f"Срок: {old_date} → {new_date}"
+        if reason:
+            comment += f". Причина: {reason}"
+        conn.execute(
+            "UPDATE invoice_docs SET due_date = ?, updated_at = ? WHERE id = ?",
+            (new_date, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DUE_DATE_CHANGE, comment, now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": "ok"}
+
+
+@router.patch("/invoices/{invoice_id}/amount")
+def update_amount(invoice_id: str, body: InvoiceAmountUpdate, user=Depends(_get_finance)):
+    # Корректировка суммы уже выставленного счёта (клиент оспорил и прав). Правка
+    # «на месте» с обязательной причиной — журнал invoice_ops служит аудитом.
+    # Опустить сумму ниже уже оплаченной нельзя: возвратов/кредит-ноты в модели нет.
+    uid = str(user["id"])
+    now = _now()
+    reason = str(body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите причину корректировки суммы")
+    new_amount = int(body.total_amount)
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, total_amount, paid_amount FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_active(doc)
+        paid = int(doc["paid_amount"])
+        if new_amount < paid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Скорректированная сумма меньше уже оплаченной ({format_kopecks(paid)}). "
+                       "Сначала оформите возврат.",
+            )
+        old_amount = int(doc["total_amount"])
+        if new_amount == old_amount:
+            return {"message": "ok"}
+        conn.execute(
+            "UPDATE invoice_docs SET total_amount = ?, updated_at = ? WHERE id = ?",
+            (new_amount, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_AMOUNT_CHANGE,
+             f"Сумма: {format_kopecks(old_amount)} → {format_kopecks(new_amount)}. Причина: {reason}",
+             now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": "ok"}
+
+
+@router.post("/invoices/{invoice_id}/close")
+def close_invoice(invoice_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, total_amount, paid_amount FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_active(doc)
+        if int(doc["paid_amount"]) < int(doc["total_amount"]):
+            raise HTTPException(status_code=400, detail="Счёт оплачен не полностью")
+        conn.execute(
+            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_CLOSED, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_CLOSE, "Счёт завершён (оплачен)", now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": INVOICE_STATUS_CLOSED}
+
+
+@router.post("/invoices/{invoice_id}/cancel")
+def cancel_invoice(invoice_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        # Освобождаем отгрузки — снова попадают в реестр «без счёта».
+        conn.execute(
+            "UPDATE invoice_shipments SET is_deleted = 1 "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        )
+        conn.execute(
+            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_CANCELLED, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_CANCEL, "Счёт аннулирован", now, uid),
+        )
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": INVOICE_STATUS_CANCELLED}
+
+
+# ── Files ───────────────────────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/files")
+async def upload_invoice_file(
+    invoice_id: str,
+    file: UploadFile = File(...),
+    user=Depends(_get_finance),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_INVOICE_FILE_EXTS:
+        raise HTTPException(status_code=400, detail="Допустимы файлы: xlsx, xls, pdf, png, jpg, jpeg")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        if str(doc["status"]) == INVOICE_STATUS_CANCELLED:
+            raise HTTPException(status_code=400, detail="Нельзя менять файлы у аннулированного счёта")
+
+        saved_filename = f"{uuid4()}{ext}"
+        file_path = UPLOADS_DIR / saved_filename
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_bytes(data)
+        tmp_path.rename(file_path)
+
+        file_id = str(uuid4())
+        url = f"/uploads/{saved_filename}"
+        conn.execute(
+            "INSERT INTO invoice_files (id,invoice_id,filename,url,mime_type,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (file_id, invoice_id, file.filename, url, file.content_type or None, now, uid),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DOC_UPDATE, f"Прикреплён файл {file.filename}", now, uid),
+        )
+        conn.commit()
+    return {"message": file_id}
+
+
+@router.delete("/invoices/{invoice_id}/files/{file_id}")
+def delete_invoice_file(invoice_id: str, file_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        if str(doc["status"]) == INVOICE_STATUS_CANCELLED:
+            raise HTTPException(status_code=400, detail="Нельзя менять файлы у аннулированного счёта")
+        row = conn.execute(
+            "SELECT filename FROM invoice_files WHERE id = ? AND invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (file_id, invoice_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        conn.execute("UPDATE invoice_files SET is_deleted = 1 WHERE id = ?", (file_id,))
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DOC_UPDATE, f"Удалён файл {row['filename']}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}

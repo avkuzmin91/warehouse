@@ -19,13 +19,6 @@ function formatDate(): string {
   })
 }
 
-const quickActions = [
-  { to: '/inventory/receipts/new', icon: 'truckIn' as const, label: 'Принять поступление', sub: 'Создать новый документ' },
-  { to: '/inventory/shipments/new', icon: 'truckOut' as const, label: 'Собрать отгрузку', sub: 'По заявке клиента' },
-  { to: '/inventory/balances', icon: 'boxes' as const, label: 'Проверить остатки', sub: 'Что и где лежит' },
-  { to: '/dictionaries/products/new', icon: 'plus' as const, label: 'Завести товар', sub: 'Новый SKU или вариант' },
-]
-
 export function HomePage() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
@@ -72,35 +65,6 @@ export function HomePage() {
         </div>
 
         <div className="col gap-16">
-          {canEdit && (
-            <Card>
-              <CardHead>
-                <Icon name="sparkles" size={15} style={{ color: 'var(--c-accent)' }} />
-                <div className="card-head-title">Быстрые действия</div>
-              </CardHead>
-              <CardBody style={{ padding: 8 }}>
-                {quickActions.map((action) => (
-                  <div
-                    key={action.label}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 6, cursor: 'pointer' }}
-                    onClick={() => navigate(action.to)}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--c-bg-hover)' }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = '' }}
-                  >
-                    <div style={{ width: 30, height: 30, borderRadius: 6, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 30px' }}>
-                      <Icon name={action.icon} size={15} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{action.label}</div>
-                      <div className="text-xs subtle">{action.sub}</div>
-                    </div>
-                    <Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} />
-                  </div>
-                ))}
-              </CardBody>
-            </Card>
-          )}
-
           <OperationalPlanFeature />
 
           <Card>

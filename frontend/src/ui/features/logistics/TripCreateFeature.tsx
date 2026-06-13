@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createTrip, handoffTrip, tripLexicon, isOutbound } from '../../../api/tripsApi'
-import type { TripReceiptItem, TripShipmentItem, TripDirection } from '../../../api/tripsApi'
+import type { TripReceiptItem, TripShipmentItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
 import { getReceipts } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
@@ -33,12 +33,13 @@ function fmtDay(d: string | null): string | undefined {
   return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
 }
 
-export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripDirection }) {
+export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }: { direction?: TripDirection; cargoType?: TripCargoType }) {
   const navigate = useNavigate()
   const { warehouses, carriers, vehicleTypes } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const outbound = isOutbound(direction)
+  const defect = outbound && cargoType === 'defect'
   const lex = tripLexicon(direction)
 
   const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
@@ -54,7 +55,8 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     if (outbound) {
       // 'new' — несуществующий рейс: фильтр available_for_trip_id отсекает отгрузки,
       // привязанные к любому реальному рейсу (tl.trip_id != 'new'), оставляя свободные.
-      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new' }, ctrl.signal)
+      // cargo_type ограничивает кандидатов типом груза рейса (товар | брак).
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
@@ -63,7 +65,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
         .catch(() => {})
     }
     return () => ctrl.abort()
-  }, [outbound])
+  }, [outbound, cargoType])
 
   const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
 
@@ -154,6 +156,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
     const vehicle = vehicleTypes.find((v) => v.id === form.vehicle_type_id)
     return {
       direction,
+      ...(outbound ? { cargo_type: cargoType } : {}),
       origin_id: form.origin_id || null,
       origin_name: origin?.name ?? null,
       carrier_id: form.carrier_id || null,
@@ -198,7 +201,7 @@ export function TripCreateFeature({ direction = 'inbound' }: { direction?: TripD
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
             <button className="btn ghost icon sm" onClick={() => navigate(`/logistics/trips?dir=${direction}`)}><Icon name="arrowLeft" size={14} /></button>
-            <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{outbound ? 'Новый рейс отгрузки' : 'Новый рейс поступления'}</span>
+            <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{outbound ? (defect ? 'Новый рейс отгрузки брака' : 'Новый рейс отгрузки товара') : 'Новый рейс поступления'}</span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>Новый рейс</div>
         </div>

@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
     TRIP_DIRECTION_INBOUND,
     TRIP_DIRECTION_OUTBOUND,
     TRIP_LOAD_FULL,
@@ -100,6 +102,7 @@ def _doc_response(row, *, show_costs: bool = True) -> TripDocResponse:
         id=str(row["id"]),
         trip_number=str(row["trip_number"]),
         direction=str(row["direction"]),
+        cargo_type=str(row["cargo_type"] or SHIPMENT_CARGO_GOOD),
         status=str(row["status"]),
         assignee_role=row["assignee_role"],
         origin_id=row["origin_id"],
@@ -142,6 +145,13 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
     direction = (payload.direction or TRIP_DIRECTION_INBOUND).strip()
     if direction not in (TRIP_DIRECTION_INBOUND, TRIP_DIRECTION_OUTBOUND):
         raise HTTPException(status_code=400, detail="Недопустимое направление рейса")
+    # Тип груза значим только для рейса отгрузки; поступления всегда 'good'.
+    if direction == TRIP_DIRECTION_OUTBOUND:
+        cargo_type = (payload.cargo_type or SHIPMENT_CARGO_GOOD).strip()
+        if cargo_type not in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+            raise HTTPException(status_code=400, detail="Недопустимый тип груза рейса")
+    else:
+        cargo_type = SHIPMENT_CARGO_GOOD
     uid = str(user["id"])
     with get_connection() as conn:
         trip_id = str(uuid4())
@@ -150,14 +160,14 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
         conn.execute(
             """
             INSERT INTO trip_docs
-              (id, trip_number, direction, status, assignee_role,
+              (id, trip_number, direction, cargo_type, status, assignee_role,
                origin_id, origin_name, carrier_id, carrier_name,
                vehicle_type_id, vehicle_type_name, vehicle_number, transport_ordered_at, eta,
                cost_estimate, comment, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                trip_id, trip_num, direction, TRIP_STATUS_DRAFT,
+                trip_id, trip_num, direction, cargo_type, TRIP_STATUS_DRAFT,
                 TRIP_STATUS_ASSIGNEE_ROLE.get(TRIP_STATUS_DRAFT),
                 (payload.origin_id or "").strip() or None,
                 (payload.origin_name or "").strip() or None,
@@ -213,6 +223,7 @@ def list_trips(
             id=str(r["id"]),
             trip_number=str(r["trip_number"]),
             direction=str(r["direction"]),
+            cargo_type=str(r["cargo_type"] or SHIPMENT_CARGO_GOOD),
             status=str(r["status"]),
             origin_name=r["origin_name"],
             carrier_name=r["carrier_name"],

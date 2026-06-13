@@ -72,6 +72,7 @@ export function CostingView({ detail, form, onField, cost, onCost, onSaveFields,
         number={doc.trip_number}
         status="costing"
         direction={direction}
+        cargoType={doc.cargo_type}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>

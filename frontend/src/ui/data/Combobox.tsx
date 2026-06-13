@@ -16,11 +16,12 @@ interface ComboboxProps {
   placeholder?: string
   loading?: boolean
   disabled?: boolean
+  invalid?: boolean
   clearable?: boolean
   prefix?: IconName
 }
 
-export function Combobox({ value, onChange, options, placeholder = 'Выбрать…', loading, disabled, clearable, prefix }: ComboboxProps) {
+export function Combobox({ value, onChange, options, placeholder = 'Выбрать…', loading, disabled, invalid, clearable, prefix }: ComboboxProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
@@ -136,6 +137,7 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
           opacity: disabled ? 0.5 : 1,
           height: 34,
           boxSizing: 'border-box',
+          ...(invalid ? { borderColor: 'var(--c-danger)', background: 'var(--c-danger-bg)' } : null),
         }}
         onClick={handleOpen}
       >

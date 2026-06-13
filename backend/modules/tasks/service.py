@@ -142,9 +142,12 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 
+    # Новые задачи — вверх (как в почте): внутри приоритета сортируем по `since`
+    # убыванием. Стабильная сортировка позволяет задать поля с разным направлением
+    # двумя проходами.
+    tasks.sort(key=lambda t: t["since"] or "", reverse=True)
     tasks.sort(key=lambda t: (
         t.get("priority_rank") is None,
         t.get("priority_rank") or 0,
-        t["since"] or "",
     ))
     return tasks

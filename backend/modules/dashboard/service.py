@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
@@ -42,8 +42,21 @@ def _accepted_qty_on(connection, day: date) -> int:
     return int(row["total"] if row else 0)
 
 
+def _local_day_utc_range(day: date) -> tuple[str, str]:
+    """Границы локальных суток `day` в виде UTC-ISO строк [start, end).
+
+    `created_at` хранится в UTC, а `day` — локальная (бизнес-) дата склада, поэтому
+    бакет «сутки по таймзоне сервера» переводим в UTC-диапазон, иначе на границе
+    суток счётчик уезжает на размер смещения таймзоны.
+    """
+    start = datetime.combine(day, time.min).astimezone(UTC).isoformat()
+    end = datetime.combine(day + timedelta(days=1), time.min).astimezone(UTC).isoformat()
+    return start, end
+
+
 def _defect_qty_on(connection, day: date) -> int:
     """Брака выявлено за день: нетто-конвертации качества в defect (перемещения не считаются)."""
+    start, end = _local_day_utc_range(day)
     row = connection.execute(
         """
         SELECT COALESCE(SUM(CASE
@@ -51,9 +64,9 @@ def _defect_qty_on(connection, day: date) -> int:
                    WHEN from_quality = 'defect' AND COALESCE(to_quality,'')   <> 'defect' THEN -qty
                    ELSE 0 END), 0) AS total
         FROM zone_relocations
-        WHERE created_at LIKE ?
+        WHERE created_at >= ? AND created_at < ?
         """,
-        (day.isoformat() + "%",),
+        (start, end),
     ).fetchone()
     return int(row["total"] if row else 0)
 

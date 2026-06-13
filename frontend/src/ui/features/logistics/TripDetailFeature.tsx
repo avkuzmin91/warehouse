@@ -123,7 +123,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
     if (isOutbound(detail.doc.direction)) {
-      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id, cargo_type: detail.doc.cargo_type }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {

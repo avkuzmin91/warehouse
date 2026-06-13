@@ -24,6 +24,10 @@ const OPS_NAV: NavItem[] = [
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]
 
+const FINANCE_NAV: NavItem[] = [
+  { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
+]
+
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
   { to: '/inventory/packing', icon: 'forklift', label: 'Упаковка' },
@@ -72,6 +76,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const isShiftSupervisor = user?.role === 'shift_supervisor'
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
+  const hasFinanceAccess = user?.role === 'admin' || user?.role === 'manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
   const initials = getInitials(displayName)
@@ -145,6 +150,14 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
           {hasStaffAccess && OPS_NAV.map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}
+          {hasFinanceAccess && (
+            <>
+              {!collapsed && <div className="sidebar-section">Финансы</div>}
+              {FINANCE_NAV.map((item) => (
+                <NavItem key={item.to} {...item} collapsed={collapsed} />
+              ))}
+            </>
+          )}
           {hasAdminAccess && (
             <>
               {!collapsed && <div className="sidebar-section">Управление</div>}

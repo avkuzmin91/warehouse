@@ -21,6 +21,7 @@ from modules.cabinet.router import router as cabinet_router
 from modules.dashboard.router import router as dashboard_router
 from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
+from modules.invoices.router import router as invoices_router
 from modules.logistics.router import router as logistics_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
@@ -76,6 +77,7 @@ def _ensure_runtime_schema() -> None:
                 id                   TEXT PRIMARY KEY,
                 trip_number          TEXT NOT NULL UNIQUE,
                 direction            TEXT NOT NULL DEFAULT 'inbound',
+                cargo_type           TEXT NOT NULL DEFAULT 'good',
                 status               TEXT NOT NULL DEFAULT 'draft',
                 assignee_role        TEXT,
                 assignee_id          TEXT,
@@ -101,6 +103,7 @@ def _ensure_runtime_schema() -> None:
                 is_deleted           INTEGER NOT NULL DEFAULT 0
             )
         """)
+        conn.execute("ALTER TABLE IF EXISTS trip_docs ADD COLUMN IF NOT EXISTS cargo_type TEXT NOT NULL DEFAULT 'good'")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_docs_status ON trip_docs(status)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS trip_lines (
@@ -130,6 +133,84 @@ def _ensure_runtime_schema() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_ops_trip ON trip_ops(trip_id)")
+        # Финансы (счета) — на случай dev-старта без alembic.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_docs (
+                id           TEXT PRIMARY KEY,
+                doc_number   TEXT NOT NULL UNIQUE,
+                client_id    TEXT,
+                client_name  TEXT,
+                status       TEXT NOT NULL DEFAULT 'issued',
+                total_amount INTEGER NOT NULL DEFAULT 0,
+                paid_amount  INTEGER NOT NULL DEFAULT 0,
+                due_date     TEXT,
+                comment      TEXT,
+                created_at   TEXT NOT NULL,
+                created_by   TEXT,
+                updated_at   TEXT,
+                is_deleted   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_docs_status ON invoice_docs(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_docs_client ON invoice_docs(client_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invoice_docs_due ON invoice_docs(due_date) "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN ('issued', 'partially_paid')"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_shipments (
+                id              TEXT PRIMARY KEY,
+                invoice_id      TEXT NOT NULL REFERENCES invoice_docs(id),
+                shipment_doc_id TEXT NOT NULL,
+                client_id       TEXT,
+                client_name     TEXT,
+                created_at      TEXT NOT NULL,
+                created_by      TEXT,
+                is_deleted      INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_shipments_invoice ON invoice_shipments(invoice_id)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_shipments_shipment_unique "
+            "ON invoice_shipments(shipment_doc_id) WHERE is_deleted = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_payments (
+                id         TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL REFERENCES invoice_docs(id),
+                amount     INTEGER NOT NULL,
+                paid_on    TEXT,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice ON invoice_payments(invoice_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_ops (
+                id         TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL REFERENCES invoice_docs(id),
+                op_type    TEXT NOT NULL,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_ops_invoice ON invoice_ops(invoice_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_files (
+                id         TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL,
+                filename   TEXT NOT NULL,
+                url        TEXT NOT NULL,
+                mime_type  TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                is_deleted INTEGER DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_files_invoice ON invoice_files(invoice_id)")
         conn.commit()
 
 
@@ -276,6 +357,7 @@ app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(balances_router)
 app.include_router(cabinet_router)
+app.include_router(invoices_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
 app.include_router(dashboard_router)

@@ -37,6 +37,16 @@ def _packing_shipment(admin_client, client_id: str) -> str:
     return doc_id
 
 
+def _defect_shipment(admin_client, client_id: str) -> str:
+    """Брак-отгрузка в черновике (без строк) — для проверок привязки по типу груза."""
+    r = admin_client.post("/shipments", json={
+        "cargo_type": "defect", "client_id": client_id, "client_name": "Test Client",
+        "destination": "Москва", "lines": [],
+    })
+    assert r.status_code == 200, r.text
+    return r.json()["message"]
+
+
 def _force_status(doc_id: str, status: str) -> None:
     """Тестовый шорткат: проставить статус отгрузки напрямую.
 
@@ -48,9 +58,10 @@ def _force_status(doc_id: str, status: str) -> None:
         conn.commit()
 
 
-def _handoff_ready_outbound(admin_client, shipment_id: str) -> str:
+def _handoff_ready_outbound(admin_client, shipment_id: str, cargo_type: str = "good") -> str:
     create = admin_client.post("/trips", json={
         "direction": "outbound",
+        "cargo_type": cargo_type,
         "origin_id": "wh-2", "origin_name": "Склад-получатель",
         "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
         "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
@@ -255,6 +266,62 @@ def test_cross_direction_linking_rejected(admin_client, client_id):
     assert bad_rec.status_code == 400, bad_rec.text
 
 
+def test_outbound_trip_cargo_type_stored_and_returned(admin_client, client_id):
+    trip_id = admin_client.post("/trips", json={
+        "direction": "outbound", "cargo_type": "defect", "origin_name": "Склад",
+    }).json()["message"]
+    # Поступление игнорирует тип груза — всегда 'good'.
+    inbound = admin_client.post("/trips", json={
+        "direction": "inbound", "cargo_type": "defect",
+    }).json()["message"]
+
+    detail = admin_client.get(f"/trips/{trip_id}").json()
+    assert detail["doc"]["cargo_type"] == "defect"
+    assert admin_client.get(f"/trips/{inbound}").json()["doc"]["cargo_type"] == "good"
+
+    items = admin_client.get("/trips?direction=outbound&limit=200").json()["items"]
+    assert any(t["id"] == trip_id and t["cargo_type"] == "defect" for t in items)
+
+
+def test_outbound_trip_rejects_invalid_cargo_type(admin_client):
+    bad = admin_client.post("/trips", json={"direction": "outbound", "cargo_type": "junk"})
+    assert bad.status_code == 400, bad.text
+
+
+def test_link_rejects_cargo_mismatch(admin_client, client_id):
+    good_ship = _packing_shipment(admin_client, client_id)
+    defect_ship = _defect_shipment(admin_client, client_id)
+
+    good_trip = admin_client.post("/trips", json={"direction": "outbound"}).json()["message"]  # cargo = good
+    defect_trip = admin_client.post("/trips", json={
+        "direction": "outbound", "cargo_type": "defect",
+    }).json()["message"]
+
+    # Брак нельзя привязать к рейсу товара.
+    bad = admin_client.post(f"/trips/{good_trip}/shipments", json={"shipment_doc_ids": [defect_ship]})
+    assert bad.status_code == 400, bad.text
+    assert "не подходит" in bad.json()["detail"]
+
+    # Товар нельзя привязать к рейсу брака.
+    bad2 = admin_client.post(f"/trips/{defect_trip}/shipments", json={"shipment_doc_ids": [good_ship]})
+    assert bad2.status_code == 400, bad2.text
+
+    # Совпадающий тип груза — ок.
+    ok = admin_client.post(f"/trips/{defect_trip}/shipments", json={"shipment_doc_ids": [defect_ship]})
+    assert ok.status_code == 200, ok.text
+
+
+def test_create_outbound_with_mismatched_cargo_rejected(admin_client, client_id):
+    """Тип груза проверяется и при создании рейса (link_shipments внутри create)."""
+    good_ship = _packing_shipment(admin_client, client_id)
+    res = admin_client.post("/trips", json={
+        "direction": "outbound", "cargo_type": "defect", "shipment_doc_ids": [good_ship],
+    })
+    assert res.status_code == 400, res.text
+    # Отгрузка осталась свободной — рейс не создан (транзакция откатилась).
+    assert admin_client.get(f"/shipments/{good_ship}").json()["trip_id"] is None
+
+
 def _seed_defect_in_zone(client_id: str, pos: dict, zone_id: str, qty: int) -> None:
     """Принятое поступление в зоне + смена качества → брак «На хранении» в месте."""
     import uuid as _uuid
@@ -364,7 +431,7 @@ def test_defect_shipment_prepared_by_warehouse_then_shipped(admin_client, client
         assert _storage_defect_in_zone(client_id, pos, zone_id) == 2
         assert _ready_defect_in_zone(client_id, pos, shipping_zone) == 5
 
-        trip_id = _handoff_ready_outbound(admin_client, shipment_id)
+        trip_id = _handoff_ready_outbound(admin_client, shipment_id, cargo_type="defect")
         assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
         assert admin_client.post(
             f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"}

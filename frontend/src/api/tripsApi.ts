@@ -14,10 +14,13 @@ export type TripLoadFactor = 'full' | 'partial'
 
 export type TripDirection = 'inbound' | 'outbound'
 
+export type TripCargoType = 'good' | 'defect'
+
 export type TripDoc = {
   id: string
   trip_number: string
   direction: string
+  cargo_type: TripCargoType
   status: TripStatus
   assignee_role: string | null
   origin_id: string | null
@@ -82,6 +85,7 @@ export type TripListItem = {
   id: string
   trip_number: string
   direction: string
+  cargo_type: TripCargoType
   status: TripStatus
   origin_name: string | null
   carrier_name: string | null
@@ -103,6 +107,7 @@ export type TripListResponse = {
 
 export type TripCreatePayload = {
   direction?: TripDirection
+  cargo_type?: TripCargoType
   origin_id?: string | null
   origin_name?: string | null
   carrier_id?: string | null

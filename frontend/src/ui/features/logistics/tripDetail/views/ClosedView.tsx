@@ -51,6 +51,7 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode 
         number={doc.trip_number}
         status={doc.status}
         direction={direction}
+        cargoType={doc.cargo_type}
         onBack={onBack}
         action={
           <button className="btn" onClick={() => window.print()}>

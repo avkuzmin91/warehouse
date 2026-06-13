@@ -77,6 +77,19 @@ def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
 
+def can_manage_finance(user: Mapping[str, Any]) -> bool:
+    """Счета (финансы) ведут только менеджер и админ — как и просмотр стоимостей."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_finance_access(user: Mapping[str, Any]) -> None:
+    if not can_manage_finance(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 

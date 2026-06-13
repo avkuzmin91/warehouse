@@ -9,6 +9,8 @@ from config import (
     RECEIPT_OP_INTAKE_START,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
+    SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_CANCELLED,
@@ -17,6 +19,8 @@ from config import (
     TRIP_OP_SHIPMENT_LINK,
 )
 from dbconn import like_substring_param
+
+_CARGO_RU = {SHIPMENT_CARGO_GOOD: "товар", SHIPMENT_CARGO_DEFECT: "брак"}
 
 
 def _now() -> str:
@@ -90,7 +94,7 @@ def list_trips_aggregated(
     rows = connection.execute(
         f"""
         SELECT
-            d.id, d.trip_number, d.direction, d.status, d.origin_name, d.carrier_name,
+            d.id, d.trip_number, d.direction, d.cargo_type, d.status, d.origin_name, d.carrier_name,
             d.vehicle_type_name, d.eta, d.arrived_at, d.cost_estimate, d.logistics_cost_actual,
             d.created_at,
             COUNT(l.id) AS receipts_count
@@ -165,21 +169,37 @@ def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: s
     """Привязывает отгрузки к outbound-рейсу. Возвращает число новых привязок.
 
     Зеркало link_receipts: отгрузка существует, не удалена и не привязана к
-    другому активному рейсу.
+    другому активному рейсу. Дополнительно тип груза отгрузки должен совпадать с
+    типом груза рейса (рейс товара везёт только товар, рейс брака — только брак).
     """
     ids = [str(x).strip() for x in shipment_doc_ids if str(x).strip()]
     if not ids:
         return 0
 
+    trip_row = connection.execute(
+        "SELECT cargo_type FROM trip_docs WHERE id = ?", (trip_id,)
+    ).fetchone()
+    trip_cargo = str(trip_row["cargo_type"]) if trip_row and trip_row["cargo_type"] else SHIPMENT_CARGO_GOOD
+
     linked_numbers: list[str] = []
     now = _now()
     for sid in ids:
         ship = connection.execute(
-            "SELECT id, doc_number, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+            "SELECT id, doc_number, client_id, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0",
             (sid,),
         ).fetchone()
         if not ship:
             raise HTTPException(status_code=400, detail=f"Отгрузка не найдена: {sid}")
+
+        ship_cargo = str(ship["cargo_type"]) if ship["cargo_type"] else SHIPMENT_CARGO_GOOD
+        if ship_cargo != trip_cargo:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Отгрузка {ship['doc_number']} ({_CARGO_RU.get(ship_cargo, ship_cargo)}) "
+                    f"не подходит для рейса {_CARGO_RU.get(trip_cargo, trip_cargo)}а"
+                ),
+            )
 
         existing = connection.execute(
             "SELECT trip_id FROM trip_lines WHERE shipment_doc_id = ? AND is_deleted = 0",
