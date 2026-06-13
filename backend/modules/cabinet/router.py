@@ -27,6 +27,7 @@ from .schemas import (
     CabinetShipmentLinesResponse,
     CabinetShipmentListResponse,
     CabinetSummaryResponse,
+    CabinetWriteOffsResponse,
 )
 from .service import (
     cabinet_packing_report,
@@ -41,6 +42,7 @@ from .service import (
     list_cabinet_receipts,
     list_cabinet_shipment_lines,
     list_cabinet_shipments,
+    list_cabinet_write_offs,
 )
 
 router = APIRouter(tags=["cabinet"])
@@ -116,6 +118,16 @@ def get_client_balances_summary(
             search=search,
             has_defect=has_defect,
         )
+
+
+@router.get("/cabinet/write-offs", response_model=CabinetWriteOffsResponse)
+def list_client_write_offs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    client_id: str = Depends(_get_current_client_id),
+):
+    with get_connection() as conn:
+        return list_cabinet_write_offs(conn, client_id=client_id, page=page, limit=limit)
 
 
 @router.get("/cabinet/receipts", response_model=CabinetReceiptListResponse)

@@ -397,6 +397,11 @@ def update_client_store(
                 f"UPDATE client_stores SET {', '.join(fields)} WHERE id = ? AND client_id = ?",
                 tuple(values),
             )
+            if payload.name is not None:
+                connection.execute(
+                    "UPDATE shipment_lines SET store_name = ? WHERE store_id = ?",
+                    (_normalize_name(payload.name), store_id),
+                )
             connection.commit()
         except IntegrityError as exc:
             raise HTTPException(

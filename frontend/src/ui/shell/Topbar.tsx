@@ -24,7 +24,10 @@ const ROUTE_LABELS: Record<string, string[]> = {
   '/cabinet/balances': ['Личный кабинет', 'Остатки'],
   '/cabinet/receipts': ['Личный кабинет', 'Поступления'],
   '/cabinet/shipments': ['Личный кабинет', 'Отгрузки'],
-  '/cabinet/products': ['Личный кабинет', 'Товары'],
+  '/cabinet/defects': ['Личный кабинет', 'Брак'],
+  '/cabinet/products': ['Личный кабинет', 'Мои товары'],
+  '/cabinet/reports': ['Личный кабинет', 'Отчёты'],
+  '/cabinet/profile': ['Личный кабинет', 'Профиль и магазины'],
 }
 
 interface TopbarProps {
@@ -61,6 +64,14 @@ export function Topbar({ onCmd, onToggleSidebar, sidebarCollapsed }: TopbarProps
             </span>
           ))}
         </div>
+      )}
+      {path.startsWith('/cabinet') && (
+        <span
+          className="beta-pill"
+          title="Кабинет клиента работает в режиме беты: мы активно его дорабатываем. Если что-то выглядит не так — напишите вашему менеджеру."
+        >
+          Beta
+        </span>
       )}
       <div className="topbar-spacer" />
       <div className="topbar-search" onClick={onCmd}>

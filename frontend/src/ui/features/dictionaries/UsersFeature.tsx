@@ -295,7 +295,13 @@ export function UsersFeature() {
   if (userLoading) {
     return (
       <ListPage title="Пользователи" subtitle="">
-        <SkeletonRows rows={6} />
+        <div className="t-wrap">
+          <table className="t">
+            <tbody>
+              <SkeletonRows rows={6} />
+            </tbody>
+          </table>
+        </div>
       </ListPage>
     )
   }
@@ -413,7 +419,13 @@ export function UsersFeature() {
       </div>
 
       {loading ? (
-        <SkeletonRows rows={6} />
+        <div className="t-wrap">
+          <table className="t">
+            <tbody>
+              <SkeletonRows rows={6} />
+            </tbody>
+          </table>
+        </div>
       ) : (
         <>
           {loadError && (

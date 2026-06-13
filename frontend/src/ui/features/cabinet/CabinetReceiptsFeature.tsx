@@ -20,6 +20,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { fmtDate } from '../../../utils/format'
+import { CellProg } from './shared/cabinetUI'
 
 const PAGE_SIZE = 25
 
@@ -173,12 +174,12 @@ export function CabinetReceiptsFeature() {
           <Table>
             <thead>
               <tr>
-                <th>Номер</th>
-                <th style={{ width: 120 }}>Дата план</th>
-                <th style={{ width: 120 }}>Дата факт</th>
+                <th style={{ width: 140 }}>Номер</th>
+                <th style={{ width: 110 }}>Дата план</th>
+                <th style={{ width: 110 }}>Дата факт</th>
                 <th style={{ width: 160 }}>Статус</th>
-                <th style={{ width: 100, textAlign: 'right' }}>План</th>
-                <th style={{ width: 120, textAlign: 'right' }}>Принято</th>
+                <th style={{ width: 80, textAlign: 'right' }}>SKU</th>
+                <th style={{ width: 220, textAlign: 'right' }}>Принято / план</th>
               </tr>
             </thead>
             <tbody>
@@ -197,28 +198,39 @@ export function CabinetReceiptsFeature() {
                       onClick={() => navigate(`/cabinet/receipts/${item.id}`)}
                       style={{
                         cursor: 'pointer',
-                        ...(shortfall ? {
-                          background: 'color-mix(in oklab, var(--c-warning) 6%, transparent)',
-                          borderLeft: '2px solid var(--c-warning)',
-                        } : {}),
+                        ...(shortfall ? { background: 'color-mix(in oklab, var(--c-warning) 6%, transparent)' } : {}),
                       }}
                     >
-                      <Td><span className="mono" style={{ fontWeight: 500 }}>{item.doc_number}</span></Td>
-                      <Td style={{ color: 'var(--c-text-subtle)' }}>{fmtDate(item.arrival_date)}</Td>
-                      <Td style={{ color: 'var(--c-text-subtle)' }}>{fmtDate(item.actual_arrival_date)}</Td>
+                      <Td><span className="mono" style={{ fontWeight: 550 }}>{item.doc_number}</span></Td>
+                      <Td className="dt">{fmtDate(item.arrival_date)}</Td>
+                      <Td className="dt">{item.actual_arrival_date ? fmtDate(item.actual_arrival_date) : <span className="dash">—</span>}</Td>
                       <Td>
                         <Badge tone={cabinetReceiptStatusTone(item.status) as BadgeTone} dot>
                           {CABINET_RECEIPT_STATUS_LABELS[item.status]}
                         </Badge>
                       </Td>
-                      <Td className="num">{item.total_planned.toLocaleString('ru-RU')}</Td>
+                      <Td className="num">{item.sku_count}</Td>
                       <Td className="num">
-                        <span style={shortfall ? { color: 'var(--c-warning)', fontWeight: 600 } : undefined}>
-                          {item.total_accepted_qty.toLocaleString('ru-RU')}
-                        </span>
-                        {shortfall && (
-                          <div style={{ fontSize: 11, color: 'var(--c-warning)' }}>расхождение</div>
-                        )}
+                        <div className="cellprog">
+                          <div className="row" style={{ gap: 6 }}>
+                            <span style={{ fontWeight: 600, color: shortfall ? 'var(--c-warning)' : undefined }}>
+                              {item.total_accepted_qty.toLocaleString('ru-RU')}
+                            </span>
+                            <span className="t-sub">/ {item.total_planned.toLocaleString('ru-RU')}</span>
+                            {shortfall && (
+                              <span className="short-flag">
+                                <Icon name="alert" size={11} />−{(item.total_planned - item.total_accepted_qty).toLocaleString('ru-RU')}
+                              </span>
+                            )}
+                          </div>
+                          {item.status !== 'cancelled' && (
+                            <CellProg
+                              value={item.total_accepted_qty}
+                              max={item.total_planned}
+                              color={shortfall ? 'var(--c-warning)' : item.status === 'done' ? 'var(--c-success)' : 'var(--c-info)'}
+                            />
+                          )}
+                        </div>
                       </Td>
                     </tr>
                   )

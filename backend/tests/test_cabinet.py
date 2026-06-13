@@ -25,6 +25,7 @@ CABINET_GET_PATHS = [
     "/cabinet/summary",
     "/cabinet/balances",
     "/cabinet/balances/summary",
+    "/cabinet/write-offs",
     "/cabinet/receipts",
     "/cabinet/receipts/lines",
     "/cabinet/shipments",
@@ -312,4 +313,33 @@ def test_cabinet_profile(cabinet_client, own_client_id):
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM client_stores WHERE id = ?", (store_id,))
+            conn.commit()
+
+
+def test_cabinet_write_offs_isolation(cabinet_client, own_client_id, foreign_client_id):
+    """Клиент видит только списания своего товара; причина и комментарий доступны."""
+    own_id, foreign_id = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        for rec_id, cid in ((own_id, own_client_id), (foreign_id, foreign_client_id)):
+            conn.execute(
+                """INSERT INTO zone_relocations
+                   (id, product_id, product_name, product_sku, client_id,
+                    from_op, to_op, from_quality, to_quality, qty, reason, comment, created_at)
+                   VALUES (?, ?, 'Тестовый товар', 'SKU-WO', ?,
+                           'storage', 'written_off', 'good', 'good', 3, 'damage', 'тест', NOW())""",
+                (rec_id, str(uuid.uuid4()), cid),
+            )
+        conn.commit()
+    try:
+        r = cabinet_client.get("/cabinet/write-offs")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        ids = {i["id"] for i in data["items"]}
+        assert own_id in ids
+        assert foreign_id not in ids
+        mine = next(i for i in data["items"] if i["id"] == own_id)
+        assert mine["reason"] == "damage" and mine["qty"] == 3 and mine["comment"] == "тест"
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE id IN (?, ?)", (own_id, foreign_id))
             conn.commit()

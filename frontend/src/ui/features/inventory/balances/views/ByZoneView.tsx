@@ -4,14 +4,17 @@ import {
   getBalancesSummary,
   createZoneRelocation,
   createQualityChange,
+  createWriteOff,
   INV_OP_LABELS,
   INV_QUALITY_LABELS,
+  WRITEOFF_REASON_LABELS,
 } from '../../../../../api/balancesApi'
-import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality } from '../../../../../api/balancesApi'
+import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality, WriteOffReason } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
 import { Combobox } from '../../../../data/Combobox'
 import { FiltersBar, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
+import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { useToast } from '../../../../feedback/Toast'
 import { Card, CardHead } from '../../../../primitives/Card'
@@ -69,6 +72,15 @@ export function ByZoneView() {
   const [qualSaving, setQualSaving] = useState(false)
   const [qualError, setQualError] = useState('')
 
+  // Списание с остатков (терминальное): только товар «На хранении».
+  const confirm = useConfirm()
+  const [woff, setWoff] = useState<BalanceZoneItem | null>(null)
+  const [woffQty, setWoffQty] = useState(0)
+  const [woffReason, setWoffReason] = useState<WriteOffReason | ''>('')
+  const [woffComment, setWoffComment] = useState('')
+  const [woffSaving, setWoffSaving] = useState(false)
+  const [woffError, setWoffError] = useState('')
+
   const activeZones = useMemo(
     () => unloadingZones.filter((z) => z.is_active && !z.is_deleted),
     [unloadingZones],
@@ -87,6 +99,14 @@ export function ByZoneView() {
     setQualQty(0)
     setQualComment('')
     setQualError('')
+  }
+
+  function openWoff(item: BalanceZoneItem) {
+    setWoff(item)
+    setWoffQty(0)
+    setWoffReason('')
+    setWoffComment('')
+    setWoffError('')
   }
 
   async function submitReloc() {
@@ -149,6 +169,46 @@ export function ByZoneView() {
       setQualError(e instanceof Error ? e.message : 'Ошибка смены качества')
     } finally {
       setQualSaving(false)
+    }
+  }
+
+  async function submitWoff() {
+    if (!woff || !woff.location_id) return
+    setWoffError('')
+    if (!woffReason) { setWoffError('Укажите причину списания'); return }
+    if (woffReason === 'other' && !woffComment.trim()) { setWoffError('Для причины «Прочее» укажите комментарий'); return }
+    const ok = await confirm({
+      title: 'Списать товар с остатков?',
+      body: `${woff.product_name} — ${woffQty} шт будет списано безвозвратно. Причина: ${WRITEOFF_REASON_LABELS[woffReason]}.`,
+      danger: true,
+      confirmLabel: 'Списать',
+    })
+    if (!ok) return
+    setWoffSaving(true)
+    try {
+      await createWriteOff({
+        product_id:   woff.product_id,
+        product_name: woff.product_name,
+        product_sku:  woff.product_sku,
+        color_id:     woff.color_id,
+        color_name:   woff.color_name,
+        size_id:      woff.size_id,
+        size_name:    woff.size_name,
+        client_id:    woff.client_id,
+        client_name:  woff.client_name,
+        zone_id:      woff.location_id,
+        quality:      woff.quality,
+        qty:          woffQty,
+        reason:       woffReason,
+        comment:      woffComment.trim() || null,
+      })
+      toast('Товар списан с остатков', 'success')
+      setWoff(null)
+      await load()
+    } catch (e) {
+      setWoffError(e instanceof Error ? e.message : 'Ошибка списания')
+    } finally {
+      setWoffSaving(false)
     }
   }
 
@@ -369,7 +429,7 @@ export function ByZoneView() {
                     <th style={{ width: 150 }}>Статус</th>
                     <th style={{ width: 100 }}>Качество</th>
                     <th style={{ textAlign: 'right', width: 110 }}>Количество</th>
-                    <th style={{ width: 76 }} />
+                    <th style={{ width: 108 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -410,6 +470,15 @@ export function ByZoneView() {
                                 onClick={() => openQual(item)}
                               >
                                 <Icon name="refresh" size={14} />
+                              </button>
+                            )}
+                            {item.location_id && (
+                              <button
+                                className="btn ghost icon sm"
+                                title="Списать с остатков"
+                                onClick={() => openWoff(item)}
+                              >
+                                <Icon name="trash" size={14} />
                               </button>
                             )}
                           </div>
@@ -535,6 +604,72 @@ export function ByZoneView() {
             </div>
 
             {qualError && <div style={{ fontSize: 12.5, color: 'var(--c-danger)' }}>{qualError}</div>}
+          </div>
+        )}
+      </Drawer>
+
+      <Drawer
+        open={woff !== null}
+        onClose={() => setWoff(null)}
+        title="Списание с остатков"
+        subtitle={woff ? `${woff.product_name} · ${[woff.product_sku, woff.color_name, woff.size_name].filter(Boolean).join(' · ')}` : undefined}
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn ghost" onClick={() => setWoff(null)} disabled={woffSaving}>Отмена</button>
+            <button className="btn primary" onClick={() => void submitWoff()} disabled={woffSaving || woffQty <= 0}>
+              <Icon name="trash" size={14} />Списать
+            </button>
+          </div>
+        }
+      >
+        {woff && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 8, columnGap: 14, fontSize: 13 }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>Качество</span>
+              <span><Badge tone={QUALITY_TONE[woff.quality]}>{INV_QUALITY_LABELS[woff.quality]}</Badge></span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Клиент</span>
+              <span>{woff.client_name ?? '—'}</span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Местоположение</span>
+              <span>{woff.location_name ?? 'Без места'}</span>
+              <span style={{ color: 'var(--c-text-muted)' }}>Доступно</span>
+              <span className="mono" style={{ fontWeight: 600 }}>{woff.qty.toLocaleString('ru-RU')} шт</span>
+            </div>
+
+            <div className="t-sub" style={{ fontSize: 12.5, color: 'var(--c-warning)' }}>
+              Товар будет списан безвозвратно и исчезнет с остатков. Списание попадёт в журнал движений и будет видно клиенту.
+            </div>
+
+            <div>
+              <label className="field-label"><span>Причина <span style={{ color: 'var(--c-danger)' }}>*</span></span></label>
+              <Combobox
+                value={woffReason}
+                placeholder="Выберите причину"
+                options={Object.entries(WRITEOFF_REASON_LABELS).map(([value, label]) => ({ value, label }))}
+                onChange={(v) => setWoffReason((v ?? '') as WriteOffReason | '')}
+                clearable
+              />
+            </div>
+
+            <div>
+              <label className="field-label"><span>Количество</span></label>
+              <NumberStep value={woffQty} min={1} onChange={(v) => setWoffQty(Math.min(woff.qty, v))} height={34} />
+              <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>Максимум: {woff.qty}</div>
+            </div>
+
+            <div>
+              <label className="field-label">
+                <span>Комментарий{woffReason === 'other' && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
+              </label>
+              <textarea
+                className="input"
+                style={{ height: 60, paddingTop: 8, paddingBottom: 8, resize: 'vertical' }}
+                value={woffComment}
+                onChange={(e) => setWoffComment(e.target.value)}
+                placeholder="Например: повреждено при хранении"
+              />
+            </div>
+
+            {woffError && <div style={{ fontSize: 12.5, color: 'var(--c-danger)' }}>{woffError}</div>}
           </div>
         )}
       </Drawer>

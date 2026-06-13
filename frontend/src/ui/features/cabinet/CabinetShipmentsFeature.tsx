@@ -21,6 +21,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { fmtDate } from '../../../utils/format'
+import { CellProg } from './shared/cabinetUI'
 
 const PAGE_SIZE = 25
 
@@ -189,12 +190,12 @@ export function CabinetShipmentsFeature() {
           <Table>
             <thead>
               <tr>
-                <th style={{ width: 130 }}>Номер</th>
+                <th style={{ width: 150 }}>Номер</th>
                 <th>Магазин</th>
-                <th style={{ width: 110 }}>Дата план</th>
-                <th style={{ width: 110 }}>Дата факт</th>
-                <th style={{ width: 170 }}>Статус</th>
-                <th style={{ width: 150, textAlign: 'right' }}>План / упак. / отгр.</th>
+                <th style={{ width: 105 }}>Дата план</th>
+                <th style={{ width: 105 }}>Дата факт</th>
+                <th style={{ width: 180 }}>Статус</th>
+                <th style={{ width: 250, textAlign: 'right' }}>Прогресс</th>
               </tr>
             </thead>
             <tbody>
@@ -205,28 +206,43 @@ export function CabinetShipmentsFeature() {
               ) : (docs.data?.items ?? []).length === 0 ? (
                 <tr><Td colSpan={6}><EmptyState title="Отгрузок нет" sub="Документы появятся после принятия заказа в работу" /></Td></tr>
               ) : (
-                (docs.data?.items ?? []).map((item) => (
-                  <tr key={item.id} onClick={() => navigate(`/cabinet/shipments/${item.id}`)} style={{ cursor: 'pointer' }}>
-                    <Td>
-                      <span className="mono" style={{ fontWeight: 500 }}>{item.doc_number}</span>
-                      {item.cargo_type === 'defect' && (
-                        <div><Badge tone="warning">Возврат брака</Badge></div>
-                      )}
-                    </Td>
-                    <Td>{item.store_names.length > 0 ? item.store_names.join(', ') : '—'}</Td>
-                    <Td style={{ color: 'var(--c-text-subtle)' }}>{fmtDate(item.ship_date)}</Td>
-                    <Td style={{ color: 'var(--c-text-subtle)' }}>{fmtDate(item.actual_ship_date)}</Td>
-                    <Td>
-                      <Badge tone={cabinetShipmentStatusTone(item.status) as BadgeTone} dot>
-                        {cabinetShipmentStatusLabel(item.status, item.cargo_type)}
-                      </Badge>
-                    </Td>
-                    <Td className="num">
-                      {item.total_qty.toLocaleString('ru-RU')}
-                      <span style={{ color: 'var(--c-text-subtle)' }}> / {item.total_packed_qty.toLocaleString('ru-RU')} / {item.total_shipped_qty.toLocaleString('ru-RU')}</span>
-                    </Td>
-                  </tr>
-                ))
+                (docs.data?.items ?? []).map((item) => {
+                  const progressQty = item.status === 'shipped' ? item.total_shipped_qty : item.total_packed_qty
+                  return (
+                    <tr key={item.id} onClick={() => navigate(`/cabinet/shipments/${item.id}`)} style={{ cursor: 'pointer' }}>
+                      <Td>
+                        <span className="mono" style={{ fontWeight: 550 }}>{item.doc_number}</span>
+                        {item.cargo_type === 'defect' && (
+                          <div style={{ marginTop: 3 }}><Badge tone="warning">Возврат брака</Badge></div>
+                        )}
+                      </Td>
+                      <Td>{item.store_names.length > 0 ? item.store_names.join(', ') : '—'}</Td>
+                      <Td className="dt">{fmtDate(item.ship_date)}</Td>
+                      <Td className="dt">{item.actual_ship_date ? fmtDate(item.actual_ship_date) : <span className="dash">—</span>}</Td>
+                      <Td>
+                        <Badge tone={cabinetShipmentStatusTone(item.status) as BadgeTone} dot>
+                          {cabinetShipmentStatusLabel(item.status, item.cargo_type)}
+                        </Badge>
+                      </Td>
+                      <Td className="num">
+                        <div className="cellprog">
+                          <div className="row" style={{ gap: 6 }}>
+                            <span className="t-sub">{item.status === 'shipped' ? 'отгружено' : 'упаковано'}</span>
+                            <span style={{ fontWeight: 600 }}>{progressQty.toLocaleString('ru-RU')}</span>
+                            <span className="t-sub">из {item.total_qty.toLocaleString('ru-RU')} шт</span>
+                          </div>
+                          {item.status !== 'cancelled' && (
+                            <CellProg
+                              value={progressQty}
+                              max={item.total_qty}
+                              color={item.status === 'shipped' ? 'var(--c-success)' : item.total_packed_qty >= item.total_qty ? 'var(--c-accent)' : 'var(--c-info)'}
+                            />
+                          )}
+                        </div>
+                      </Td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </Table>

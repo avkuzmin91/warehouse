@@ -20,6 +20,17 @@ export const INV_QUALITY_LABELS: Record<InvQuality, string> = {
   defect: 'Брак',
 }
 
+/** Причина списания остатков (движение → written_off). */
+export type WriteOffReason = 'shortage' | 'damage' | 'disposal' | 'client_return' | 'other'
+
+export const WRITEOFF_REASON_LABELS: Record<WriteOffReason, string> = {
+  shortage:      'Недостача',
+  damage:        'Порча',
+  disposal:      'Утилизация брака',
+  client_return: 'Возврат клиенту',
+  other:         'Прочее',
+}
+
 export type BalanceItem = {
   product_id: string
   product_name: string
@@ -159,6 +170,30 @@ export function createZoneRelocation(payload: ZoneRelocationPayload) {
   })
 }
 
+export type WriteOffPayload = {
+  product_id:    string
+  product_name:  string | null
+  product_sku:   string | null
+  color_id:      string | null
+  color_name:    string | null
+  size_id:       string | null
+  size_name:     string | null
+  client_id:     string | null
+  client_name:   string | null
+  zone_id:       string
+  quality:       InvQuality
+  qty:           number
+  reason:        WriteOffReason
+  comment?:      string | null
+}
+
+export function createWriteOff(payload: WriteOffPayload) {
+  return request<{ message: string }>('/balances/write-offs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export type QualityChangePayload = {
   product_id:    string
   product_name:  string | null
@@ -187,8 +222,8 @@ export type ZoneRelocationItem = {
   id:               string
   created_at:       string
   created_by_email: string | null
-  from_op:          InvOpStatus | 'shipped'
-  to_op:            InvOpStatus | 'shipped'
+  from_op:          InvOpStatus | 'shipped' | 'written_off'
+  to_op:            InvOpStatus | 'shipped' | 'written_off'
   from_quality:     InvQuality
   to_quality:       InvQuality
   product_name:     string | null
@@ -199,6 +234,7 @@ export type ZoneRelocationItem = {
   from_zone_name:   string | null
   to_zone_name:     string | null
   qty:              number
+  reason:           string | null
   comment:          string | null
 }
 

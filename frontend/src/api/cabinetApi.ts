@@ -204,6 +204,26 @@ export type CabinetBalanceListParams = {
   has_defect?: boolean
 }
 
+export type CabinetWriteOffItem = {
+  id:           string
+  created_at:   string
+  product_name: string | null
+  product_sku:  string | null
+  color_name:   string | null
+  size_name:    string | null
+  quality:      string
+  qty:          number
+  reason:       string | null
+  comment:      string | null
+}
+
+export type CabinetWriteOffsResponse = {
+  items: CabinetWriteOffItem[]
+  total: number
+  page:  number
+  limit: number
+}
+
 export type CabinetProductListParams = {
   page?: number
   limit?: number
@@ -263,6 +283,14 @@ export function getCabinetBalances(params: CabinetBalanceListParams = {}, signal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/cabinet/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getCabinetWriteOffs(params: { page?: number; limit?: number } = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<CabinetWriteOffsResponse>(`/cabinet/write-offs${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getCabinetReceipts(params: CabinetDocListParams = {}, signal?: AbortSignal) {

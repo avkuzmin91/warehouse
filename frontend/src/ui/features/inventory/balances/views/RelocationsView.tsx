@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getZoneRelocations, INV_OP_LABELS, INV_QUALITY_LABELS } from '../../../../../api/balancesApi'
+import { getZoneRelocations, INV_OP_LABELS, INV_QUALITY_LABELS, WRITEOFF_REASON_LABELS } from '../../../../../api/balancesApi'
+import type { WriteOffReason } from '../../../../../api/balancesApi'
 import type { ZoneRelocationItem } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
@@ -19,6 +20,10 @@ const QUALITY_TONE: Record<string, BadgeTone> = { good: 'success', defect: 'warn
 function moveLabel(item: ZoneRelocationItem): string {
   if (item.from_op === 'intake') return 'Приёмка'
   if (item.to_op === 'shipped') return 'Отгрузка'
+  if (item.to_op === 'written_off') {
+    const reason = item.reason ? WRITEOFF_REASON_LABELS[item.reason as WriteOffReason] : undefined
+    return reason ? `Списание · ${reason}` : 'Списание'
+  }
   if (item.from_quality !== item.to_quality) {
     return `${INV_QUALITY_LABELS[item.from_quality]} → ${INV_QUALITY_LABELS[item.to_quality]}`
   }

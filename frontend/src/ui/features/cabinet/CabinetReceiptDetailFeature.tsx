@@ -5,8 +5,10 @@ import { DetailPage } from '../../layouts/DetailPage'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
+import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
-import { fmtDate, fmtDateTime } from '../../../utils/format'
+import { fmtDate } from '../../../utils/format'
+import { CabinetTimeline, CabinetTrack, CellProg, cabinetOpTone, cabinetReceiptTrack } from './shared/cabinetUI'
 
 interface Props {
   docId: string
@@ -24,7 +26,9 @@ export function CabinetReceiptDetailFeature({ docId }: Props) {
   }
 
   const doc = data?.doc
-  const shortfall = doc?.status === 'done' && (data?.totals.total_accepted ?? 0) < (data?.totals.total_planned ?? 0)
+  const totals = data?.totals
+  const shortfall = doc?.status === 'done' && (totals?.total_accepted ?? 0) < (totals?.total_planned ?? 0)
+  const track = doc ? cabinetReceiptTrack(doc.status) : null
 
   return (
     <DetailPage
@@ -36,45 +40,54 @@ export function CabinetReceiptDetailFeature({ docId }: Props) {
         </Badge>
       )}
     >
-      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
+      <div className="card" style={{ padding: '18px 22px', marginBottom: 16 }}>
+        {track && <CabinetTrack {...track} />}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(5, 1fr)',
+          gap: 16,
+          ...(track ? { marginTop: 20, paddingTop: 18, borderTop: '1px solid var(--c-border)' } : {}),
+        }}>
           <div>
             <div className="t-sub">Дата прибытия (план)</div>
-            <div style={{ fontWeight: 500 }}>{fmtDate(doc?.arrival_date ?? null)}</div>
+            <div className="dt" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{fmtDate(doc?.arrival_date ?? null)}</div>
           </div>
           <div>
             <div className="t-sub">Дата прибытия (факт)</div>
-            <div style={{ fontWeight: 500 }}>{fmtDate(doc?.actual_arrival_date ?? null)}</div>
+            {doc?.actual_arrival_date
+              ? <div className="dt" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{fmtDate(doc.actual_arrival_date)}</div>
+              : <div className="dash" style={{ fontWeight: 500 }}>—</div>}
           </div>
           <div>
             <div className="t-sub">ТТН</div>
             <div className="mono" style={{ fontWeight: 500 }}>{doc?.ttn || '—'}</div>
           </div>
           <div>
-            <div className="t-sub">План, шт.</div>
-            <div className="num" style={{ fontWeight: 500 }}>{(data?.totals.total_planned ?? 0).toLocaleString('ru-RU')}</div>
+            <div className="t-sub">План, шт</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{(totals?.total_planned ?? 0).toLocaleString('ru-RU')}</div>
           </div>
           <div>
-            <div className="t-sub">Принято, шт.</div>
-            <div className="num" style={{ fontWeight: 500, color: shortfall ? 'var(--c-warning)' : undefined }}>
-              {(data?.totals.total_accepted ?? 0).toLocaleString('ru-RU')}
-              {shortfall && <span style={{ fontSize: 11, marginLeft: 6 }}>расхождение</span>}
+            <div className="t-sub">Принято, шт</div>
+            <div style={{ fontWeight: 600, fontSize: 15, color: shortfall ? 'var(--c-warning)' : doc?.status === 'done' ? 'var(--c-success)' : undefined }}>
+              {(totals?.total_accepted ?? 0).toLocaleString('ru-RU')}
+              {shortfall && (
+                <span className="short-flag" style={{ marginLeft: 8 }}>
+                  <Icon name="alert" size={11} />расхождение −{((totals?.total_planned ?? 0) - (totals?.total_accepted ?? 0)).toLocaleString('ru-RU')}
+                </span>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
+      <div className="split-360" style={{ gridTemplateColumns: '1fr 340px' }}>
         <section>
-          <div className="card-head" style={{ marginBottom: 8 }}>
-            <span className="card-head-title">Товары</span>
-          </div>
           <Table>
             <thead>
               <tr>
                 <th>Товар</th>
                 <th style={{ width: 90, textAlign: 'right' }}>План</th>
-                <th style={{ width: 90, textAlign: 'right' }}>Принято</th>
+                <th style={{ width: 200, textAlign: 'right' }}>Принято</th>
               </tr>
             </thead>
             <tbody>
@@ -84,9 +97,9 @@ export function CabinetReceiptDetailFeature({ docId }: Props) {
                 <tr><Td colSpan={3}><EmptyState title="Строк нет" /></Td></tr>
               ) : (
                 (data?.lines ?? []).map((l, index) => {
-                  const lineShortfall = doc?.status === 'done' && (l.accepted_qty ?? 0) < l.planned_qty
+                  const lineShort = doc?.status === 'done' && (l.accepted_qty ?? 0) < l.planned_qty
                   return (
-                    <tr key={index} style={lineShortfall ? { background: 'color-mix(in oklab, var(--c-warning) 6%, transparent)' } : undefined}>
+                    <tr key={index} style={lineShort ? { background: 'color-mix(in oklab, var(--c-warning) 6%, transparent)' } : undefined}>
                       <Td>
                         <div style={{ fontWeight: 500 }}>{l.product_name}</div>
                         <div className="t-sub mono">
@@ -94,8 +107,20 @@ export function CabinetReceiptDetailFeature({ docId }: Props) {
                         </div>
                       </Td>
                       <Td className="num">{l.planned_qty.toLocaleString('ru-RU')}</Td>
-                      <Td className="num" style={lineShortfall ? { color: 'var(--c-warning)', fontWeight: 600 } : undefined}>
-                        {l.accepted_qty != null ? l.accepted_qty.toLocaleString('ru-RU') : '—'}
+                      <Td className="num">
+                        <div className="cellprog">
+                          <span style={{ fontWeight: lineShort ? 600 : 500, color: lineShort ? 'var(--c-warning)' : undefined }}>
+                            {l.accepted_qty != null ? l.accepted_qty.toLocaleString('ru-RU') : '—'}
+                            {lineShort && <span style={{ fontSize: 11 }}> (−{(l.planned_qty - (l.accepted_qty ?? 0)).toLocaleString('ru-RU')})</span>}
+                          </span>
+                          {l.accepted_qty != null && (
+                            <CellProg
+                              value={l.accepted_qty}
+                              max={l.planned_qty}
+                              color={lineShort ? 'var(--c-warning)' : 'var(--c-success)'}
+                            />
+                          )}
+                        </div>
                       </Td>
                     </tr>
                   )
@@ -105,24 +130,24 @@ export function CabinetReceiptDetailFeature({ docId }: Props) {
           </Table>
         </section>
 
-        <section>
-          <div className="card-head" style={{ marginBottom: 8 }}>
-            <span className="card-head-title">События</span>
+        <section className="card" style={{ padding: '12px 16px' }}>
+          <div className="row gap-8" style={{ marginBottom: 4 }}>
+            <Icon name="pulse" size={14} className="ic-accent" />
+            <span className="card-head-title">История</span>
           </div>
-          <div className="card" style={{ padding: 12 }}>
-            {loading ? (
-              <div className="t-sub">Загрузка…</div>
-            ) : (data?.ops ?? []).length === 0 ? (
-              <div className="t-sub">Событий пока нет</div>
-            ) : (
-              (data?.ops ?? []).map((op, index) => (
-                <div key={index} style={{ padding: '6px 0', borderBottom: index < (data?.ops.length ?? 0) - 1 ? '1px solid var(--c-border)' : 'none' }}>
-                  <div style={{ fontSize: 13 }}>{op.comment || op.op_type}</div>
-                  <div className="t-sub" style={{ fontSize: 11 }}>{fmtDateTime(op.created_at)}</div>
-                </div>
-              ))
-            )}
-          </div>
+          {loading ? (
+            <div className="t-sub">Загрузка…</div>
+          ) : (data?.ops ?? []).length === 0 ? (
+            <div className="t-sub" style={{ padding: '6px 0' }}>Событий пока нет</div>
+          ) : (
+            <CabinetTimeline
+              items={(data?.ops ?? []).map((op) => ({
+                text: op.comment || op.op_type,
+                createdAt: op.created_at,
+                tone: cabinetOpTone(op.op_type),
+              }))}
+            />
+          )}
         </section>
       </div>
     </DetailPage>

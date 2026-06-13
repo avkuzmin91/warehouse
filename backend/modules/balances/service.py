@@ -4,14 +4,16 @@ from config import (
     INV_OP_INTAKE,
     INV_OP_PACKING,
     INV_OP_READY,
-    INV_OP_SHIPPED,
+    INV_OP_SINKS,
     INV_OP_STORAGE,
+    INV_OP_WRITTEN_OFF,
     INV_Q_DEFECT,
     INV_Q_GOOD,
     INV_QUALITY_LABELS,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_ON_REVIEW,
+    WRITEOFF_REASON_OTHER,
 )
 from dbconn import like_substring_param
 from modules.balances.schemas import (
@@ -29,8 +31,9 @@ from modules.balances.schemas import (
 #
 # Баланс позиции в корзине (op, quality) = Σ движений в корзину − Σ движений из корзины.
 # Приход приёмки — движение (intake → storage) при завершении поступления (миграция 0046),
-# списание при отправке рейса — движение (… → shipped). intake и shipped не являются
-# корзинами: intake — только источник, shipped — только сток.
+# списание при отправке рейса — движение (… → shipped), ручное списание остатков —
+# движение (storage → written_off) с обязательной причиной. intake не корзина
+# (только источник), shipped и written_off — терминальные стоки (INV_OP_SINKS).
 # Инвариант: остаток меняется ⇔ есть запись в журнале.
 #
 # Виртуальная корзина intake в выдаче — accepted_qty поступлений в статусах
@@ -49,6 +52,7 @@ _BUCKETS: list[tuple[str, str]] = [
 
 _INTAKE_STATUSES = (RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW)
 _INTAKE_STATUS_SQL = ", ".join(f"'{s}'" for s in _INTAKE_STATUSES)
+_SINKS_SQL = ", ".join(f"'{s}'" for s in INV_OP_SINKS)
 
 # Защита от бесконечной выдачи в разрезе мест; усечение отдаётся флагом truncated.
 ZONE_ROWS_LIMIT = 2000
@@ -289,7 +293,7 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id,
                    to_zone_id AS loc_id, to_op AS op, to_quality AS quality, SUM(qty) AS qty
             FROM zone_relocations
-            WHERE to_op <> '{INV_OP_SHIPPED}'
+            WHERE to_op NOT IN ({_SINKS_SQL})
             GROUP BY product_id, client_id, color_id, size_id, to_zone_id, to_op, to_quality
         ),
         lose AS (
@@ -415,14 +419,16 @@ def insert_inventory_move(
     shipment_line_id: str | None = None, comment: str | None = None,
     packed_date: str | None = None, pack_entry_id: str | None = None,
     reverses_id: str | None = None, receipt_line_id: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
     Покрывает приход приёмки (intake→storage), перемещение (оси не меняются),
     передачу на упаковку (storage→packing), QC-упаковку (packing→ready /
-    packing,good→packing,defect), раскладку к рейсу, смену качества и списание
-    (…→shipped). packed_date/pack_entry_id/reverses_id заполняются только для
-    QC-упаковки; receipt_line_id — только для прихода приёмки.
+    packing,good→packing,defect), раскладку к рейсу, смену качества, списание
+    при отправке рейса (…→shipped) и ручное списание (…→written_off).
+    packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки;
+    receipt_line_id — только для прихода приёмки; reason — только для списания.
     """
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -432,13 +438,13 @@ def insert_inventory_move(
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
             client_id,client_name,from_op,to_op,from_quality,to_quality,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
-            packed_date,pack_entry_id,reverses_id,receipt_line_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_op, to_op, from_quality, to_quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
-         packed_date, pack_entry_id, reverses_id, receipt_line_id),
+         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason),
     )
 
 
@@ -620,6 +626,56 @@ def create_quality_change(connection, payload, user_id: str) -> None:
     connection.commit()
 
 
+def create_write_off(connection, payload, user_id: str) -> None:
+    """Ручное списание остатков: (storage, quality)@место → (written_off, quality).
+
+    Терминальный сток — товар уходит с остатков насовсем. Списывать можно только
+    товар «На хранении»: упаковка и «Готов к отгрузке» управляются процессом
+    отгрузки. Причина обязательна, для «Прочее» обязателен комментарий.
+    """
+    from fastapi import HTTPException
+
+    zone_id = (payload.zone_id or "").strip() or None
+    if not zone_id:
+        raise HTTPException(status_code=400, detail="Укажите место, из которого списывается товар")
+
+    comment = (payload.comment or "").strip()
+    if payload.reason == WRITEOFF_REASON_OTHER and not comment:
+        raise HTTPException(status_code=400, detail="Для причины «Прочее» укажите комментарий")
+
+    available = get_available_in_zone(
+        connection,
+        product_id=payload.product_id,
+        color_id=payload.color_id,
+        size_id=payload.size_id,
+        client_id=payload.client_id,
+        zone_id=zone_id,
+        op=INV_OP_STORAGE,
+        quality=payload.quality,
+    )
+    if available < payload.qty:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостаточно товара в месте для списания (доступно {available}, нужно {payload.qty})",
+        )
+
+    insert_inventory_move(
+        connection,
+        product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
+        color_id=payload.color_id, color_name=payload.color_name,
+        size_id=payload.size_id, size_name=payload.size_name,
+        client_id=payload.client_id, client_name=payload.client_name,
+        from_op=INV_OP_STORAGE, to_op=INV_OP_WRITTEN_OFF,
+        from_quality=payload.quality, to_quality=payload.quality,
+        from_zone_id=zone_id, from_zone_name=_zone_name(connection, zone_id),
+        to_zone_id=None, to_zone_name=None,
+        qty=payload.qty, user_id=user_id,
+        reason=payload.reason,
+        comment=comment or None,
+    )
+    connection.commit()
+
+
 def _zone_name(connection, zone_id: str | None) -> str | None:
     if not zone_id:
         return None
@@ -679,6 +735,7 @@ def list_zone_relocations(
             from_zone_name=row["from_zone_name"],
             to_zone_name=row["to_zone_name"],
             qty=int(row["qty"] or 0),
+            reason=row["reason"],
             comment=row["comment"],
         )
         for row in rows

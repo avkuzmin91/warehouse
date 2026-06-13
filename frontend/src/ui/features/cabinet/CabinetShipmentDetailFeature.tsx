@@ -1,13 +1,17 @@
+import { useState } from 'react'
 import { getCabinetShipment, cabinetShipmentStatusLabel, cabinetShipmentStatusTone } from '../../../api/cabinetApi'
+import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
 import { Table, Td } from '../../data/Table'
+import { Lightbox, type LightboxImage } from '../../feedback/Lightbox'
 import { DetailPage } from '../../layouts/DetailPage'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
-import { fmtDate, fmtDateTime } from '../../../utils/format'
+import { fmtDate } from '../../../utils/format'
+import { CabinetTimeline, CabinetTrack, CellProg, cabinetOpTone, cabinetShipmentTrack } from './shared/cabinetUI'
 
 interface Props {
   docId: string
@@ -15,6 +19,7 @@ interface Props {
 
 export function CabinetShipmentDetailFeature({ docId }: Props) {
   const { data, loading, error } = useApi((signal) => getCabinetShipment(docId, signal), [docId])
+  const [viewer, setViewer] = useState<{ images: LightboxImage[]; index: number } | null>(null)
 
   if (error) {
     return (
@@ -25,13 +30,18 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
   }
 
   const doc = data?.doc
+  const lines = data?.lines ?? []
   const isDefect = doc?.cargo_type === 'defect'
-  const storeNames = [...new Set((data?.lines ?? []).map((l) => l.store_name).filter(Boolean))] as string[]
+  const storeNames = [...new Set(lines.map((l) => l.store_name).filter(Boolean))] as string[]
+  const totalQty = lines.reduce((sum, l) => sum + l.qty, 0)
+  const totalPacked = lines.reduce((sum, l) => sum + l.packed_good + l.packed_defect, 0)
+  const totalShipped = lines.reduce((sum, l) => sum + l.shipped_qty, 0)
+  const track = doc ? cabinetShipmentTrack(doc.status, doc.cargo_type) : null
 
   return (
     <DetailPage
       title={doc ? `${isDefect ? 'Возврат брака' : 'Отгрузка'} ${doc.doc_number}` : 'Отгрузка'}
-      subtitle={storeNames.length > 0 ? `Магазины: ${storeNames.join(', ')}` : undefined}
+      subtitle={storeNames.length > 0 ? storeNames.join(', ') : undefined}
       backTo="/cabinet/shipments"
       actions={doc && (
         <Badge tone={cabinetShipmentStatusTone(doc.status) as BadgeTone} dot>
@@ -39,57 +49,72 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
         </Badge>
       )}
     >
-      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
+      <div className="card" style={{ padding: '18px 22px', marginBottom: 16 }}>
+        {track && <CabinetTrack {...track} />}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(5, 1fr)',
+          gap: 16,
+          ...(track ? { marginTop: 20, paddingTop: 18, borderTop: '1px solid var(--c-border)' } : {}),
+        }}>
           <div>
             <div className="t-sub">Дата отгрузки (план)</div>
-            <div style={{ fontWeight: 500 }}>{fmtDate(doc?.ship_date ?? null)}</div>
+            <div className="dt" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{fmtDate(doc?.ship_date ?? null)}</div>
           </div>
           <div>
             <div className="t-sub">Дата отгрузки (факт)</div>
-            <div style={{ fontWeight: 500 }}>{fmtDate(doc?.actual_ship_date ?? null)}</div>
+            {doc?.actual_ship_date
+              ? <div className="dt" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{fmtDate(doc.actual_ship_date)}</div>
+              : <div className="dash" style={{ fontWeight: 500 }}>—</div>}
           </div>
           <div>
             <div className="t-sub">Перевозчик</div>
             <div style={{ fontWeight: 500 }}>{doc?.carrier || '—'}</div>
           </div>
           <div>
-            <div className="t-sub">План, шт.</div>
-            <div className="num" style={{ fontWeight: 500 }}>
-              {(data?.lines ?? []).reduce((sum, l) => sum + l.qty, 0).toLocaleString('ru-RU')}
-            </div>
+            <div className="t-sub">План, шт</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{totalQty.toLocaleString('ru-RU')}</div>
           </div>
           <div>
-            <div className="t-sub">Отгружено, шт.</div>
-            <div className="num" style={{ fontWeight: 500 }}>
-              {(data?.lines ?? []).reduce((sum, l) => sum + l.shipped_qty, 0).toLocaleString('ru-RU')}
-            </div>
+            {doc?.status === 'shipped' ? (
+              <>
+                <div className="t-sub">Отгружено, шт</div>
+                <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--c-success)' }}>{totalShipped.toLocaleString('ru-RU')}</div>
+              </>
+            ) : (
+              <>
+                <div className="t-sub">Упаковано, шт</div>
+                <div className="row gap-8">
+                  <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--c-info)' }}>{totalPacked.toLocaleString('ru-RU')}</span>
+                  <div className="prog" style={{ width: 70 }}>
+                    <i className="prog-fill" style={{ width: `${totalQty > 0 ? Math.min(100, (totalPacked / totalQty) * 100) : 0}%`, background: 'var(--c-info)', display: 'block' }} />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
+      <div className="split-360" style={{ gridTemplateColumns: '1fr 340px' }}>
         <section>
-          <div className="card-head" style={{ marginBottom: 8 }}>
-            <span className="card-head-title">Товары</span>
-          </div>
           <Table>
             <thead>
               <tr>
                 <th>Товар</th>
                 <th style={{ width: 140 }}>Магазин</th>
                 <th style={{ width: 80, textAlign: 'right' }}>План</th>
-                <th style={{ width: 120, textAlign: 'right' }}>Упаковано</th>
-                <th style={{ width: 100, textAlign: 'right' }}>Отгружено</th>
+                <th style={{ width: 180, textAlign: 'right' }}>Упаковано</th>
+                <th style={{ width: 95, textAlign: 'right' }}>Отгружено</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <SkeletonRows rows={4} cols={5} />
-              ) : (data?.lines ?? []).length === 0 ? (
+              ) : lines.length === 0 ? (
                 <tr><Td colSpan={5}><EmptyState title="Строк нет" /></Td></tr>
               ) : (
-                (data?.lines ?? []).map((l) => (
+                lines.map((l) => (
                   <tr key={l.id}>
                     <Td>
                       <div style={{ fontWeight: 500 }}>{l.product_name}</div>
@@ -97,18 +122,25 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
                         {[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}
                       </div>
                       {l.files.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                        <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                           {l.files.map((f, index) => (
-                            <a
+                            <button
                               key={index}
-                              href={f.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-                              onClick={(e) => e.stopPropagation()}
+                              type="button"
+                              className="att"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setViewer({
+                                  images: l.files.map((file) => ({
+                                    src: resolvePublicUploadSrc(file.url),
+                                    caption: `${l.product_name} — ${file.filename}`,
+                                  })),
+                                  index,
+                                })
+                              }}
                             >
-                              <Icon name="paperclip" size={12} />{f.filename}
-                            </a>
+                              <Icon name="fileImg" size={11} />{f.filename}
+                            </button>
                           ))}
                         </div>
                       )}
@@ -116,39 +148,53 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
                     <Td>{l.store_name ?? '—'}</Td>
                     <Td className="num">{l.qty.toLocaleString('ru-RU')}</Td>
                     <Td className="num">
-                      {l.packed_good.toLocaleString('ru-RU')}
-                      {l.packed_defect > 0 && (
-                        <span style={{ color: 'var(--c-warning)' }}> +{l.packed_defect.toLocaleString('ru-RU')} брак</span>
-                      )}
+                      <div className="cellprog">
+                        <span>
+                          <b>{l.packed_good.toLocaleString('ru-RU')}</b>
+                          {l.packed_defect > 0 && (
+                            <span style={{ color: 'var(--c-warning)', fontSize: 11.5 }}> +{l.packed_defect.toLocaleString('ru-RU')} брак</span>
+                          )}
+                        </span>
+                        <CellProg value={l.packed_good + l.packed_defect} max={l.qty} color="var(--c-info)" />
+                      </div>
                     </Td>
-                    <Td className="num">{l.shipped_qty.toLocaleString('ru-RU')}</Td>
+                    <Td className="num">
+                      {l.shipped_qty > 0 ? l.shipped_qty.toLocaleString('ru-RU') : <span className="dash">0</span>}
+                    </Td>
                   </tr>
                 ))
               )}
             </tbody>
           </Table>
+          {!loading && lines.length > 0 && (
+            <div className="t-sub mt-8" style={{ textAlign: 'right' }}>фото упаковки прикладывает склад</div>
+          )}
         </section>
 
-        <section>
-          <div className="card-head" style={{ marginBottom: 8 }}>
-            <span className="card-head-title">События</span>
+        <section className="card" style={{ padding: '12px 16px' }}>
+          <div className="row gap-8" style={{ marginBottom: 4 }}>
+            <Icon name="pulse" size={14} className="ic-accent" />
+            <span className="card-head-title">История</span>
           </div>
-          <div className="card" style={{ padding: 12 }}>
-            {loading ? (
-              <div className="t-sub">Загрузка…</div>
-            ) : (data?.ops ?? []).length === 0 ? (
-              <div className="t-sub">Событий пока нет</div>
-            ) : (
-              (data?.ops ?? []).map((op, index) => (
-                <div key={index} style={{ padding: '6px 0', borderBottom: index < (data?.ops.length ?? 0) - 1 ? '1px solid var(--c-border)' : 'none' }}>
-                  <div style={{ fontSize: 13 }}>{op.comment || op.op_type}</div>
-                  <div className="t-sub" style={{ fontSize: 11 }}>{fmtDateTime(op.created_at)}</div>
-                </div>
-              ))
-            )}
-          </div>
+          {loading ? (
+            <div className="t-sub">Загрузка…</div>
+          ) : (data?.ops ?? []).length === 0 ? (
+            <div className="t-sub" style={{ padding: '6px 0' }}>Событий пока нет</div>
+          ) : (
+            <CabinetTimeline
+              items={(data?.ops ?? []).map((op) => ({
+                text: op.comment || op.op_type,
+                createdAt: op.created_at,
+                tone: cabinetOpTone(op.op_type),
+              }))}
+            />
+          )}
         </section>
       </div>
+
+      {viewer && (
+        <Lightbox images={viewer.images} initialIndex={viewer.index} onClose={() => setViewer(null)} />
+      )}
     </DetailPage>
   )
 }

@@ -10,13 +10,14 @@ import { ListPage } from '../../layouts/ListPage'
 import { Badge } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
-import { SkeletonRows } from '../../primitives/Skeleton'
+import { Skeleton, SkeletonRows } from '../../primitives/Skeleton'
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 24
 
 export function CabinetProductsFeature() {
   const navigate = useNavigate()
   const [search, setSearch] = useFilterParam('search', '')
+  const [view, setView] = useFilterParam('view', 'grid')
   const [page, setPage] = usePageParam()
   const { data, loading, error } = useApi(
     (signal) => getCabinetProducts({
@@ -53,11 +54,73 @@ export function CabinetProductsFeature() {
               </button>
             )}
           </div>
+          <div className="flex-1" />
+          <button className={`chip${view === 'grid' ? ' active' : ''}`} onClick={() => setView('grid')}>
+            <Icon name="grid" size={12} />Плитка
+          </button>
+          <button className={`chip${view === 'list' ? ' active' : ''}`} onClick={() => setView('list')}>
+            <Icon name="list" size={12} />Список
+          </button>
         </FiltersBar>
       }
     >
       {error ? (
         <EmptyState title="Не удалось загрузить товары" sub={error.message} />
+      ) : view === 'grid' ? (
+        <>
+          {loading ? (
+            <div className="pgrid">
+              {Array.from({ length: 6 }, (_, i) => (
+                <div key={i} className="pcard" style={{ cursor: 'default' }}>
+                  <div className="pcard-img" />
+                  <div className="pcard-body">
+                    <Skeleton height={16} width="70%" />
+                    <div className="mt-8"><Skeleton height={12} width="50%" /></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : items.length === 0 ? (
+            <EmptyState title="Товаров нет" sub="Доступные товары появятся после привязки к вашему клиенту" />
+          ) : (
+            <div className="pgrid">
+              {items.map((product) => (
+                <div key={product.id} className="pcard" onClick={() => navigate(`/cabinet/products/${product.id}`)}>
+                  <div className="pcard-img">
+                    {product.image_urls?.[0] ? (
+                      <img src={resolvePublicUploadSrc(product.image_urls[0])} alt="" />
+                    ) : (
+                      <>
+                        <Icon name="fileImg" size={26} />
+                        <span className="ph-note">фото товара</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="pcard-body">
+                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div className="pcard-name">{product.name}</div>
+                      <Badge tone={product.is_active ? 'success' : ''}>{product.is_active ? 'Активен' : 'Неактивен'}</Badge>
+                    </div>
+                    <div className="pcard-meta">
+                      <span className="mono t-sub">{product.sku_base}</span>
+                      {product.type_name && (
+                        <>
+                          <span style={{ color: 'var(--c-text-faint)' }}>·</span>
+                          <span className="t-sub">{product.type_name}</span>
+                        </>
+                      )}
+                      <div className="flex-1" />
+                      <span className="t-sub" style={{ fontWeight: 550, color: 'var(--c-text-muted)' }}>
+                        {product.variant_count.toLocaleString('ru-RU')} вар.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <Pagination page={page} pageSize={PAGE_SIZE} total={data?.total ?? 0} onPage={setPage} />
+        </>
       ) : (
         <>
           <Table>
@@ -83,8 +146,8 @@ export function CabinetProductsFeature() {
                       {product.image_urls?.[0] ? (
                         <img src={resolvePublicUploadSrc(product.image_urls[0])} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--c-border)', display: 'block' }} />
                       ) : (
-                        <div style={{ width: 40, height: 40, borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <Icon name="box" size={16} style={{ color: 'var(--c-text-subtle)' }} />
+                        <div className="cab-thumb" style={{ width: 40, height: 40 }}>
+                          <Icon name="fileImg" size={15} />
                         </div>
                       )}
                     </Td>

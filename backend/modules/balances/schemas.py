@@ -105,6 +105,23 @@ class QualityChangeCreate(BaseModel):
     comment: str | None = None
 
 
+class WriteOffCreate(BaseModel):
+    product_id: str
+    product_name: str | None = None
+    product_sku: str | None = None
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+    client_id: str | None = None
+    client_name: str | None = None
+    zone_id: str
+    quality: Literal["good", "defect"]
+    qty: int = Field(ge=1)
+    reason: Literal["shortage", "damage", "disposal", "client_return", "other"]
+    comment: str | None = None
+
+
 class ZoneRelocationItem(BaseModel):
     id: str
     created_at: str
@@ -121,6 +138,7 @@ class ZoneRelocationItem(BaseModel):
     from_zone_name: str | None
     to_zone_name: str | None
     qty: int
+    reason: str | None = None
     comment: str | None
 
 

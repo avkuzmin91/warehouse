@@ -213,23 +213,29 @@ SHIPMENT_PRIORITY_LABELS: dict[int | None, str] = {
 # Инвентарь — две оси статуса запаса (журнал zone_relocations)
 # ---------------------------------------------------------------------------
 
-# Операционный статус: что товар делает. «Отгружен» — терминальный,
-# в остатках не отображается (списание). «На приёмке» — виртуальный статус
+# Операционный статус: что товар делает. «Отгружен» и «Списан» — терминальные
+# стоки, в остатках не отображаются. «На приёмке» — виртуальный статус
 # отображения (accepted_qty незавершённых поступлений), в журнал движений
 # zone_relocations не пишется.
-INV_OP_INTAKE  = "intake"
-INV_OP_STORAGE = "storage"
-INV_OP_PACKING = "packing"
-INV_OP_READY   = "ready"
-INV_OP_SHIPPED = "shipped"
+INV_OP_INTAKE      = "intake"
+INV_OP_STORAGE     = "storage"
+INV_OP_PACKING     = "packing"
+INV_OP_READY       = "ready"
+INV_OP_SHIPPED     = "shipped"
+INV_OP_WRITTEN_OFF = "written_off"
 
 INV_OP_LABELS: dict[str, str] = {
-    INV_OP_INTAKE:  "На приёмке",
-    INV_OP_STORAGE: "На хранении",
-    INV_OP_PACKING: "На упаковке",
-    INV_OP_READY:   "Готов к отгрузке",
-    INV_OP_SHIPPED: "Отгружен",
+    INV_OP_INTAKE:      "На приёмке",
+    INV_OP_STORAGE:     "На хранении",
+    INV_OP_PACKING:     "На упаковке",
+    INV_OP_READY:       "Готов к отгрузке",
+    INV_OP_SHIPPED:     "Отгружен",
+    INV_OP_WRITTEN_OFF: "Списан",
 }
+
+# Терминальные стоки журнала: движение «в» них уводит товар с остатков,
+# движений «из» них не бывает (кроме сторно списания — отдельная фича).
+INV_OP_SINKS: tuple[str, ...] = (INV_OP_SHIPPED, INV_OP_WRITTEN_OFF)
 
 # Качество. «Не проверен» существует только внутри приёмки (уровень документа);
 # после приёмки товар встаёт на остатки годным, брак фиксируется на упаковке
@@ -240,6 +246,21 @@ INV_Q_DEFECT = "defect"
 INV_QUALITY_LABELS: dict[str, str] = {
     INV_Q_GOOD:   "Годный",
     INV_Q_DEFECT: "Брак",
+}
+
+# Причины списания остатков (zone_relocations.reason у движений → written_off)
+WRITEOFF_REASON_SHORTAGE      = "shortage"
+WRITEOFF_REASON_DAMAGE        = "damage"
+WRITEOFF_REASON_DISPOSAL      = "disposal"
+WRITEOFF_REASON_CLIENT_RETURN = "client_return"
+WRITEOFF_REASON_OTHER         = "other"
+
+WRITEOFF_REASON_LABELS: dict[str, str] = {
+    WRITEOFF_REASON_SHORTAGE:      "Недостача",
+    WRITEOFF_REASON_DAMAGE:        "Порча",
+    WRITEOFF_REASON_DISPOSAL:      "Утилизация брака",
+    WRITEOFF_REASON_CLIENT_RETURN: "Возврат клиенту",
+    WRITEOFF_REASON_OTHER:         "Прочее",
 }
 
 # Типы операций журнала отгрузок

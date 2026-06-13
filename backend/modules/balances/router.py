@@ -9,11 +9,13 @@ from modules.balances.schemas import (
     BalanceSummaryResponse,
     BalanceZonesResponse,
     QualityChangeCreate,
+    WriteOffCreate,
     ZoneRelocationCreate,
     ZoneRelocationListResponse,
 )
 from modules.balances.service import (
     create_quality_change,
+    create_write_off,
     create_zone_relocation,
     get_balances,
     get_balances_by_zone,
@@ -82,6 +84,13 @@ def list_balances_by_zone(
 def create_relocation(payload: ZoneRelocationCreate, user=Depends(get_current_manager)):
     with get_connection() as conn:
         create_zone_relocation(conn, payload, str(user["id"]))
+    return {"message": "ok"}
+
+
+@router.post("/balances/write-offs")
+def create_write_off_op(payload: WriteOffCreate, user=Depends(get_current_manager)):
+    with get_connection() as conn:
+        create_write_off(conn, payload, str(user["id"]))
     return {"message": "ok"}
 
 

@@ -10,7 +10,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
-import { fmtDate } from '../../../utils/format'
+import { fmtDate, fmtDateShort } from '../../../utils/format'
 
 export function CabinetReportsFeature() {
   const [search, setSearch] = useFilterParam('search', '')
@@ -29,6 +29,9 @@ export function CabinetReportsFeature() {
   )
 
   const days = data?.days ?? []
+  const maxDay = Math.max(...days.map((d) => d.total), 1)
+  // days приходят свежими сверху (для таблицы); график — слева направо по времени
+  const chartDays = [...days].reverse()
 
   return (
     <ListPage
@@ -73,6 +76,35 @@ export function CabinetReportsFeature() {
             <KPI label="Брак" value={(data?.total_defect ?? 0).toLocaleString('ru-RU')} valueColor="var(--c-warning)" unit="шт" />
             <KPI label="Дней с упаковкой" value={days.length.toLocaleString('ru-RU')} />
           </div>
+          {days.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-head">
+                <Icon name="chart" size={15} className="ic-accent" />
+                <span className="card-head-title">Динамика упаковки</span>
+                <div className="flex-1" />
+                <span className="row gap-12" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                  <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-accent)', opacity: 0.85 }} />годный</span>
+                  <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-warning)' }} />брак</span>
+                </span>
+              </div>
+              <div className="rchart">
+                {chartDays.map((day) => (
+                  <div
+                    key={day.packed_date}
+                    className={`rchart-col${openDay === day.packed_date ? ' sel' : ''}`}
+                    title={`${fmtDate(day.packed_date)}: ${day.total.toLocaleString('ru-RU')} шт`}
+                    onClick={() => setOpenDay(openDay === day.packed_date ? '' : day.packed_date)}
+                  >
+                    <div className="rchart-stack">
+                      {day.defect > 0 && <div className="rchart-bar defect" style={{ height: `${(day.defect / maxDay) * 100}%` }} />}
+                      <div className="rchart-bar" style={{ height: `${(day.good / maxDay) * 100}%` }} />
+                    </div>
+                    <div className="rchart-day">{fmtDateShort(day.packed_date)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <Table>
             <thead>
               <tr>
@@ -108,7 +140,7 @@ export function CabinetReportsFeature() {
                       <Td className="num">{day.doc_count.toLocaleString('ru-RU')}</Td>
                     </tr>
                     {openDay === day.packed_date && day.rows.map((row, index) => (
-                      <tr key={`${day.packed_date}-${index}`} style={{ background: 'var(--c-bg-sunken)' }}>
+                      <tr key={`${day.packed_date}-${index}`} className="subrow">
                         <Td />
                         <Td colSpan={1}>
                           <div style={{ fontSize: 13 }}>{row.product_name ?? '—'}</div>

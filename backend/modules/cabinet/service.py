@@ -7,6 +7,7 @@ from config import (
     CABINET_RECEIPT_VISIBLE_STATUSES,
     CABINET_SHIPMENT_OPS_VISIBLE,
     CABINET_SHIPMENT_VISIBLE_STATUSES,
+    INV_OP_WRITTEN_OFF,
     PRODUCT_LIST_SORT_COLUMNS,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
@@ -43,6 +44,8 @@ from modules.cabinet.schemas import (
     CabinetShipmentListItem,
     CabinetShipmentListResponse,
     CabinetSummaryResponse,
+    CabinetWriteOffItem,
+    CabinetWriteOffsResponse,
 )
 from modules.products.schemas import ProductItem, ProductListResponse, ProductVariantDimension, ProductVariantItem
 from modules.products.service import (
@@ -191,9 +194,9 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
         LEFT JOIN sizes sz ON sz.id = v.size_id
         LEFT JOIN (
             SELECT product_id, color_id, size_id,
-                   SUM(CASE WHEN to_quality='good' AND to_op<>'shipped' THEN qty ELSE 0 END)
+                   SUM(CASE WHEN to_quality='good' AND to_op NOT IN ('shipped','written_off') THEN qty ELSE 0 END)
                      - SUM(CASE WHEN from_quality='good' AND from_op<>'intake' THEN qty ELSE 0 END) AS good_in,
-                   SUM(CASE WHEN to_quality='defect' AND to_op<>'shipped' THEN qty ELSE 0 END)
+                   SUM(CASE WHEN to_quality='defect' AND to_op NOT IN ('shipped','written_off') THEN qty ELSE 0 END)
                      - SUM(CASE WHEN from_quality='defect' AND from_op<>'intake' THEN qty ELSE 0 END) AS defect_in
             FROM zone_relocations
             WHERE product_id = ? AND client_id = ?
@@ -648,6 +651,50 @@ def list_cabinet_shipment_lines(
         for r in rows
     ]
     return CabinetShipmentLinesResponse(items=items, total=total, page=page, limit=limit)
+
+
+def list_cabinet_write_offs(
+    connection,
+    *,
+    client_id: str,
+    page: int,
+    limit: int,
+) -> CabinetWriteOffsResponse:
+    """Списания товара клиента: журнальные движения → written_off."""
+    total = int(connection.execute(
+        "SELECT COUNT(*) AS cnt FROM zone_relocations WHERE client_id = ? AND to_op = ?",
+        (client_id, INV_OP_WRITTEN_OFF),
+    ).fetchone()["cnt"])
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        """
+        SELECT id, created_at, product_name, product_sku, color_name, size_name,
+               from_quality, qty, reason, comment
+        FROM zone_relocations
+        WHERE client_id = ? AND to_op = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (client_id, INV_OP_WRITTEN_OFF, limit, offset),
+    ).fetchall()
+
+    items = [
+        CabinetWriteOffItem(
+            id=str(r["id"]),
+            created_at=str(r["created_at"]),
+            product_name=r["product_name"],
+            product_sku=r["product_sku"],
+            color_name=r["color_name"],
+            size_name=r["size_name"],
+            quality=str(r["from_quality"]),
+            qty=int(r["qty"] or 0),
+            reason=r["reason"],
+            comment=r["comment"],
+        )
+        for r in rows
+    ]
+    return CabinetWriteOffsResponse(items=items, total=total, page=page, limit=limit)
 
 
 def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetShipmentDetailResponse:

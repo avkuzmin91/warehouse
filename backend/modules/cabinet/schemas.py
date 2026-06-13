@@ -170,6 +170,28 @@ class CabinetShipmentDetailResponse(BaseModel):
     ops: list[CabinetOpItem]
 
 
+# --- Списания ---
+
+class CabinetWriteOffItem(BaseModel):
+    id: str
+    created_at: str
+    product_name: str | None = None
+    product_sku: str | None = None
+    color_name: str | None = None
+    size_name: str | None = None
+    quality: str
+    qty: int
+    reason: str | None = None
+    comment: str | None = None
+
+
+class CabinetWriteOffsResponse(BaseModel):
+    items: list[CabinetWriteOffItem]
+    total: int
+    page: int
+    limit: int
+
+
 # --- Сводка ---
 
 class CabinetBalanceTotals(BaseModel):

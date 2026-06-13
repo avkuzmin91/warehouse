@@ -134,7 +134,7 @@ export function CabinetDefectsFeature() {
                 <th style={{ textAlign: 'right', width: 120 }}>На хранении</th>
                 <th style={{ textAlign: 'right', width: 120 }}>На упаковке</th>
                 <th style={{ textAlign: 'right', width: 140 }}>Готов к отгрузке</th>
-                <th style={{ textAlign: 'right', width: 110, borderLeft: '2px solid var(--c-border)' }}>Итого брак</th>
+                <th className="total-col" style={{ textAlign: 'right', width: 110 }}>Итого брак</th>
               </tr>
             </thead>
             <tbody>
@@ -155,10 +155,10 @@ export function CabinetDefectsFeature() {
                           {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                         </div>
                       </Td>
-                      <Td className="num">{item.storage_defect.toLocaleString('ru-RU')}</Td>
-                      <Td className="num">{item.packing_defect.toLocaleString('ru-RU')}</Td>
-                      <Td className="num">{item.ready_defect.toLocaleString('ru-RU')}</Td>
-                      <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', fontWeight: 600, color: 'var(--c-warning)' }}>
+                      <Td className="num">{item.storage_defect > 0 ? item.storage_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
+                      <Td className="num">{item.packing_defect > 0 ? item.packing_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
+                      <Td className="num">{item.ready_defect > 0 ? item.ready_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
+                      <Td className="num total-col" style={{ color: 'var(--c-warning)' }}>
                         {defectTotal.toLocaleString('ru-RU')}
                       </Td>
                     </tr>
@@ -168,6 +168,12 @@ export function CabinetDefectsFeature() {
             </tbody>
           </Table>
           <Pagination page={page} pageSize={PAGE_SIZE} total={stock.data?.total ?? 0} onPage={setPage} />
+          <div className="card mt-16" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--c-warning-bg)', borderColor: 'transparent' }}>
+            <Icon name="alert" size={15} style={{ color: 'var(--c-warning)', flex: '0 0 auto' }} />
+            <span style={{ fontSize: 12.5, color: 'var(--c-warning)' }}>
+              Брак фиксирует склад при приёмке и упаковке. Чтобы оформить возврат брака — напишите вашему менеджеру, документ появится на вкладке «Возвраты».
+            </span>
+          </div>
         </>
       )}
     </ListPage>

@@ -588,6 +588,109 @@ def test_relocation_requires_source_zone(admin_client, client_id, product_ids):
         _cleanup_test_docs(client_id)
 
 
+def test_write_off_reduces_storage(admin_client, client_id, product_ids):
+    """Списание уводит товар с остатков: (storage, good)@место → written_off."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone, 10)
+    try:
+        r = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "good", "qty": 4, "reason": "damage",
+            "comment": "повреждено при хранении",
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone, "storage", "good") == 6
+
+        b = admin_client.get(f"/balances?client_id={client_id}").json()["items"]
+        assert b and b[0]["storage_good"] == 6 and b[0]["total"] == 6
+
+        j = admin_client.get(f"/balances/relocations?client_id={client_id}").json()
+        mine = [i for i in j["items"] if i["to_op"] == "written_off"]
+        assert mine, j["items"]
+        assert mine[0]["from_op"] == "storage" and mine[0]["qty"] == 4
+        assert mine[0]["reason"] == "damage"
+        assert mine[0]["comment"] == "повреждено при хранении"
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_write_off_over_available_returns_400(admin_client, client_id, product_ids):
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone, 5)
+    try:
+        r = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "good", "qty": 100, "reason": "shortage",
+        })
+        assert r.status_code == 400, r.text
+        assert "Недостаточно" in r.json()["detail"]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_write_off_other_requires_comment(admin_client, client_id, product_ids):
+    """Причина «Прочее» без комментария отклоняется; недопустимая причина — 422."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone, 5)
+    try:
+        r = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "good", "qty": 1, "reason": "other",
+        })
+        assert r.status_code == 400, r.text
+        assert "комментарий" in r.json()["detail"]
+
+        bad = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "good", "qty": 1, "reason": "no_such_reason",
+        })
+        assert bad.status_code == 422, bad.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_write_off_defect_bucket(admin_client, client_id, product_ids):
+    """Списание брака (утилизация) уменьшает storage/defect."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone, 10)
+        _insert_quality_change(conn, client_id, product_ids, "defect", 6, zone)
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "defect", "qty": 6, "reason": "disposal",
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone, "storage", "defect") == 0
+        assert _zone_bucket(items, zone, "storage", "good") == 4
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
 def test_quality_change_defect_to_good(admin_client, client_id, product_ids):
     """Исправление брака: Брак → Годный в пределах места, с проверкой остатка."""
     pid, color_id, size_id = product_ids
