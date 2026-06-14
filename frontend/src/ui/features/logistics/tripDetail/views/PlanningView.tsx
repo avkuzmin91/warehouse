@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { TripDetail, TripDirection } from '../../../../../api/tripsApi'
 import { tripLexicon } from '../../../../../api/tripsApi'
-import { TripHeader, PrimaryAction } from '../TripHeader'
+import { TripHeader } from '../TripHeader'
+import { PrimaryAction } from '../../../shared/process/PrimaryAction'
 import { PlanningForm } from '../PlanningForm'
 import type { PlanningFormValue } from '../PlanningForm'
 import { PhaseBlock } from '../../components/PhaseBlock'
@@ -55,6 +56,7 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
         number={doc.trip_number}
         status="draft"
         direction={direction}
+        cargoType={doc.cargo_type}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>

@@ -22,7 +22,12 @@ def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
     return s or None
 
 
-def ensure_admin_account(user: Mapping[str, Any]) -> None:
+def ensure_backoffice_account(user: Mapping[str, Any]) -> None:
+    """Админ-разделы бэк-офиса (справочники, товары): admin, manager, warehouse_manager.
+
+    Это НЕ проверка «только admin» — для строго админских операций
+    (управление пользователями) используется отдельная проверка role == "admin".
+    """
     if user["role"] not in ("admin", "manager", "warehouse_manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -50,6 +55,15 @@ def ensure_dashboard_access(user: Mapping[str, Any]) -> None:
     ensure_shipment_view_access(user)
 
 
+def ensure_packing_access(user: Mapping[str, Any]) -> None:
+    """Внесение результата упаковки: менеджерский состав и начальник смены."""
+    if user["role"] not in ("manager", "admin", "shift_supervisor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
     """Складские действия (приёмка, разгрузка рейса): кладовщик и менеджерский состав."""
     if user["role"] not in ("warehouse_manager", "manager", "admin"):
@@ -61,6 +75,43 @@ def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
 
 def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
+
+
+def can_manage_finance(user: Mapping[str, Any]) -> bool:
+    """Счета (финансы) ведут только менеджер и админ — как и просмотр стоимостей."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_finance_access(user: Mapping[str, Any]) -> None:
+    if not can_manage_finance(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
+    return user["role"] in ("admin", "manager")
+
+
+def can_edit_shipment_planning(user: Mapping[str, Any]) -> bool:
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_shipment_priority_access(user: Mapping[str, Any]) -> None:
+    if not can_edit_shipment_priority(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def ensure_shipment_planning_access(user: Mapping[str, Any]) -> None:
+    if not can_edit_shipment_planning(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
 
 
 def ensure_cost_access(user: Mapping[str, Any]) -> None:

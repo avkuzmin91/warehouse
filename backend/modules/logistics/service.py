@@ -9,11 +9,18 @@ from config import (
     RECEIPT_OP_INTAKE_START,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
-    SHIPMENT_STATUS_PACKING,
+    SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
+    SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_SHIPPED,
     TRIP_OP_RECEIPT_LINK,
     TRIP_OP_SHIPMENT_LINK,
 )
+from dbconn import like_substring_param
+
+_CARGO_RU = {SHIPMENT_CARGO_GOOD: "товар", SHIPMENT_CARGO_DEFECT: "брак"}
 
 
 def _now() -> str:
@@ -72,7 +79,7 @@ def list_trips_aggregated(
         conds.append("SUBSTR(d.eta, 1, 10) <= ?")
         params.append(eta_to)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?)")
         params += [s, s, s]
 
@@ -87,7 +94,7 @@ def list_trips_aggregated(
     rows = connection.execute(
         f"""
         SELECT
-            d.id, d.trip_number, d.direction, d.status, d.origin_name, d.carrier_name,
+            d.id, d.trip_number, d.direction, d.cargo_type, d.status, d.origin_name, d.carrier_name,
             d.vehicle_type_name, d.eta, d.arrived_at, d.cost_estimate, d.logistics_cost_actual,
             d.created_at,
             COUNT(l.id) AS receipts_count
@@ -162,21 +169,37 @@ def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: s
     """Привязывает отгрузки к outbound-рейсу. Возвращает число новых привязок.
 
     Зеркало link_receipts: отгрузка существует, не удалена и не привязана к
-    другому активному рейсу.
+    другому активному рейсу. Дополнительно тип груза отгрузки должен совпадать с
+    типом груза рейса (рейс товара везёт только товар, рейс брака — только брак).
     """
     ids = [str(x).strip() for x in shipment_doc_ids if str(x).strip()]
     if not ids:
         return 0
 
+    trip_row = connection.execute(
+        "SELECT cargo_type FROM trip_docs WHERE id = ?", (trip_id,)
+    ).fetchone()
+    trip_cargo = str(trip_row["cargo_type"]) if trip_row and trip_row["cargo_type"] else SHIPMENT_CARGO_GOOD
+
     linked_numbers: list[str] = []
     now = _now()
     for sid in ids:
         ship = connection.execute(
-            "SELECT id, doc_number, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+            "SELECT id, doc_number, client_id, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0",
             (sid,),
         ).fetchone()
         if not ship:
             raise HTTPException(status_code=400, detail=f"Отгрузка не найдена: {sid}")
+
+        ship_cargo = str(ship["cargo_type"]) if ship["cargo_type"] else SHIPMENT_CARGO_GOOD
+        if ship_cargo != trip_cargo:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Отгрузка {ship['doc_number']} ({_CARGO_RU.get(ship_cargo, ship_cargo)}) "
+                    f"не подходит для рейса {_CARGO_RU.get(trip_cargo, trip_cargo)}а"
+                ),
+            )
 
         existing = connection.execute(
             "SELECT trip_id FROM trip_lines WHERE shipment_doc_id = ? AND is_deleted = 0",
@@ -267,14 +290,40 @@ def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: 
     return moved
 
 
-def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
-    """При завершении погрузки outbound-рейса: привязанные отгрузки packing → shipped.
+def assert_shipments_ready_for_load(connection, trip_id: str) -> None:
+    """Гейт перед завершением погрузки outbound-рейса.
 
-    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped
-    (списывает остатки), поэтому прогоняет те же проверки, что и ручное
-    продвижение отгрузки. Идёт в одной транзакции со сменой статуса рейса.
+    Кладовщик завершает погрузку только когда все привязанные отгрузки готовы к
+    рейсу (статус «Ожидает рейс»). Аннулированные пропускаем — они не поедут.
     """
-    from modules.shipments.service import _check_duplicate_lines, _check_stock_for_shipment
+    rows = connection.execute(
+        "SELECT s.doc_number, s.status FROM trip_lines l "
+        "JOIN shipment_docs s ON s.id = l.shipment_doc_id AND COALESCE(s.is_deleted, 0) = 0 "
+        "WHERE l.trip_id = ? AND l.is_deleted = 0 AND l.shipment_doc_id IS NOT NULL "
+        "ORDER BY s.doc_number",
+        (trip_id,),
+    ).fetchall()
+    blocking = [
+        str(r["doc_number"])
+        for r in rows
+        if str(r["status"]) not in (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_STATUS_CANCELLED)
+    ]
+    if blocking:
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя завершить погрузку: отгрузки ещё не готовы к рейсу — " + ", ".join(blocking),
+        )
+
+
+def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
+    """При завершении погрузки outbound-рейса: привязанные отгрузки awaiting_trip → shipped.
+
+    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped.
+    Списание — журнальными движениями (… → shipped): годный груз уходит из мест
+    раскладки («Готов к отгрузке»), брак-отгрузка — напрямую со хранения.
+    Идёт в одной транзакции со сменой статуса рейса.
+    """
+    from modules.shipments.service import _check_duplicate_lines, consume_stock_for_shipment
 
     lines = connection.execute(
         "SELECT shipment_doc_id FROM trip_lines "
@@ -286,20 +335,26 @@ def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid
     for ln in lines:
         sid = str(ln["shipment_doc_id"])
         ship = connection.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
+            "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
         ).fetchone()
-        if not ship or str(ship["status"]) != SHIPMENT_STATUS_PACKING:
+        if not ship or str(ship["status"]) != SHIPMENT_STATUS_AWAITING_TRIP:
             continue
         _check_duplicate_lines(connection, sid)
-        _check_stock_for_shipment(connection, sid)
+        consume_stock_for_shipment(connection, sid, uid)
         connection.execute(
-            "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE shipment_docs SET status = ?, priority_rank = NULL, updated_at = ? WHERE id = ?",
             (SHIPMENT_STATUS_SHIPPED, now, sid),
         )
+        if ship.get("priority_rank") is not None:
+            connection.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), sid, SHIPMENT_OP_PRIORITY_UPDATE,
+                 "Приоритет снят: отгрузка завершена", now, uid),
+            )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), sid, "advance",
-             f"В плане → Завершён (погрузка рейса {trip_number})", now, uid),
+             f"Ожидает рейс → Завершён (погрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved

@@ -1,0 +1,1122 @@
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import {
+  getShipment,
+  advanceShipment,
+  deleteShipment,
+  cancelShipment,
+  addShipmentLine,
+  updateShipmentLine,
+  updateShipment,
+  deleteShipmentLine,
+  uploadShipmentLineFile,
+  deleteShipmentLineFile,
+  returnShipmentLineFromPacking,
+  SHIPMENT_STATUS_LABELS,
+} from '../../../../api/shipmentsApi'
+import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
+import { resolvePublicUploadSrc } from '../../../../api/constants'
+import { getBalances, getBalancesByZone } from '../../../../api/balancesApi'
+import type { BalanceItem, BalanceZoneItem } from '../../../../api/balancesApi'
+import { getInventoryClientStores } from '../../../../api/inventoryLookupsApi'
+import type { ClientStoreItem } from '../../../../api/domainTypes'
+import { ShipmentPriorityControl } from '../../inventory/ShipmentPriorityControl'
+import { Icon } from '../../../primitives/Icon'
+import { PhaseBlock } from '../../shared/process/PhaseBlock'
+import { ShipHeader } from './components/ShipHeader'
+import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './components/processUI'
+import { PrimaryAction } from '../../shared/process/PrimaryAction'
+import { Alert } from '../../../primitives/Alert'
+import { EmptyState } from '../../../primitives/EmptyState'
+import { Tooltip } from '../../../primitives/Tooltip'
+import { useConfirm } from '../../../feedback/ConfirmDialog'
+import { useToast } from '../../../feedback/Toast'
+import { Drawer } from '../../../feedback/Drawer'
+import { DatePicker } from '../../../primitives/DatePicker'
+import { AutoGrowTextarea, Field, Input } from '../../../primitives/Input'
+import { fmtDateLong } from '../../../../utils/format'
+import { balanceKey } from '../../../../utils/balanceKey'
+import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
+import { useCurrentUser } from '../../../../hooks/useCurrentUser'
+import { useLookups } from '../../../../hooks/useLookups'
+import { BalancePicker } from '../../inventory/shared/BalancePicker'
+import { ReadOnlyField } from '../../inventory/shared/ReadOnlyField'
+import { OpEntry } from './components/OpEntry'
+import { lineAvailable } from './shared/opLabels'
+import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
+import type { MoveZoneOption } from './components/MoveToPackingDrawer'
+import { PackingDrawer } from './components/PackingDrawer'
+import { RelocationPanel } from './components/RelocationPanel'
+import { DefectPreparePanel } from './components/DefectPreparePanel'
+import { CompositionTable } from './components/CompositionTable'
+import { PackingTable } from './components/PackingTable'
+import { FilePreviewModal } from './components/FilePreviewModal'
+import { validateLineFile } from './components/fileHelpers'
+import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from './shared/types'
+
+type ReadinessCheck = { ok: boolean; label: string; error: string }
+
+export function ShipmentDetailFeature() {
+  const { docId } = useParams<{ docId: string }>()
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const toast = useToast()
+  const { user } = useCurrentUser()
+  const { unloadingZones } = useLookups()
+  const showCosts = canViewCosts(user)
+  const canEdit = canEditShipments(user)
+  const canEditPlanning = canEditShipmentPlanning(user)
+  const canEditPriority = canEditShipmentPriority(user)
+  const canPack = canPackShipments(user)
+  const [doc, setDoc] = useState<ShipmentDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [acting, setActing] = useState(false)
+  const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
+  const [filePreview, setFilePreview] = useState<LineFilePreview | null>(null)
+  const [balances, setBalances] = useState<BalanceItem[]>([])
+  const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
+  const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
+  const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [uploadingLines, setUploadingLines] = useState<Record<string, boolean>>({})
+
+  // Передача/подвоз на упаковку и внесение годного/брака (on_packing) — через шторки по строке.
+  const [reviewZoneBalances, setReviewZoneBalances] = useState<BalanceZoneItem[]>([])
+  const [moveDrawer, setMoveDrawer] = useState<{ line: ShipmentLine; mode: 'transfer' | 'replenish' } | null>(null)
+  const [packingLine, setPackingLine] = useState<ShipmentLine | null>(null)
+  const [savingLine, setSavingLine] = useState<string | null>(null)
+
+  const [infoClientId, setInfoClientId] = useState<string | null>(null)
+  const [infoClientName, setInfoClientName] = useState<string | null>(null)
+  const [infoShipDate, setInfoShipDate] = useState('')
+  const [infoActualShipDate, setInfoActualShipDate] = useState('')
+  const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
+  const [infoComment, setInfoComment] = useState('')
+  const [infoSaving, setInfoSaving] = useState(false)
+  const [infoSaved, setInfoSaved] = useState(false)
+  const [infoDirty, setInfoDirty] = useState(false)
+
+  useEffect(() => {
+    if (!doc) return
+    setInfoClientId(doc.client_id ?? null)
+    setInfoClientName(doc.client_name ?? null)
+    setInfoShipDate(doc.ship_date ?? '')
+    setInfoActualShipDate(doc.actual_ship_date ?? '')
+    setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+    setInfoComment(doc.comment ?? '')
+    setInfoDirty(false)
+  }, [doc])
+
+  const load = useCallback(async () => {
+    if (!docId) return
+    setLoading(true)
+    try {
+      setDoc(await getShipment(docId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка загрузки')
+    } finally {
+      setLoading(false)
+    }
+  }, [docId])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleInfoSave() {
+    if (!docId) return false
+    setInfoSaving(true)
+    setError('')
+    try {
+      await updateShipment(docId, {
+        client_id:      infoClientId,
+        client_name:    infoClientName,
+        ship_date:      infoShipDate || null,
+        ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
+        ...(showCosts ? { logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null } : {}),
+        comment:        infoComment.trim() || null,
+      })
+      await load()
+      setInfoDirty(false)
+      setInfoSaved(true)
+      setTimeout(() => setInfoSaved(false), 2000)
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      return false
+    } finally {
+      setInfoSaving(false)
+    }
+  }
+
+  const status = doc?.status as ShipmentStatus | undefined
+  const isDefectCargo = doc?.cargo_type === 'defect'
+  const isDraft = status === 'draft'
+  const isPacking = status === 'packing'
+  const isOnPacking = status === 'on_packing'
+  const isRelocating = status === 'relocating'
+  const isAwaitingTrip = status === 'awaiting_trip'
+  // Состав и план редактируются до передачи на упаковку (черновик и «В плане»).
+  const editableComposition = isDraft || isPacking
+  const canDelete = canEditPlanning && editableComposition
+  const canEditPlan = canEditPlanning && editableComposition
+  const canEditInfo = canEditPlanning && editableComposition
+  const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при отправке рейса
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped'
+  const canMovePacking = canEdit && (isPacking || isOnPacking)
+  // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
+  // У начальника смены (canPack без canEdit) кнопки возврата нет.
+  const canReturnPacking = canMovePacking
+  // «Готово к рейсу» — кладовщик (canEdit = warehouse_manager) в статусе «Перемещение».
+  const canRelocate = canEdit && isRelocating
+
+  // Главное действие шага: метка/иконка/право зависят от статуса. «Готово к рейсу»
+  // (relocating) не здесь — у него своя кнопка в панели раскладки/подготовки.
+  // Брак-отгрузка минует упаковку: из черновика сразу к кладовщику на подготовку.
+  const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut' | 'check'; hint: string; show: boolean } | null =
+    isDraft && isDefectCargo
+      ? { label: 'Запланировать', icon: 'arrowRight', hint: 'уйдёт кладовщику на подготовку — статус «Перемещение»', show: canEdit }
+      : isDraft     ? { label: 'Запланировать',       icon: 'arrowRight', hint: 'уйдёт кладовщику — статус «В плане»',          show: canEdit }
+      : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   hint: 'уйдёт начальнику смены — статус «На упаковке»', show: canEdit }
+      : isOnPacking ? { label: 'Завершить упаковку',    icon: 'check',      hint: 'уйдёт кладовщику — статус «Перемещение»',       show: canPack }
+      : null
+
+  const shipmentClientId = doc?.client_id ?? null
+  const shipmentCargoType = doc?.cargo_type
+
+  // Места-источники свободного годного «На хранении» нужны при передаче (packing)
+  // и подвозе (on_packing); полный список остатков (BalancePicker) — только при
+  // редактировании состава.
+  const loadBalances = useCallback(async () => {
+    if (!shipmentClientId || !(canDelete || canMovePacking || isOnPacking)) {
+      setBalances([])
+      setReviewZoneBalances([])
+      return
+    }
+    if (canDelete) {
+      const res = await getBalances({
+        limit: 200,
+        only_positive: true,
+        client_id: shipmentClientId,
+        has_defect: shipmentCargoType === 'defect' ? true : undefined,
+      })
+      setBalances(res.items.filter((b) => shipmentCargoType === 'defect' ? b.storage_defect > 0 : b.storage_good > 0))
+    } else {
+      setBalances([])
+    }
+    const zonesRes = await getBalancesByZone({
+      client_id: shipmentClientId,
+      only_positive: true,
+    })
+    setReviewZoneBalances(zonesRes.items.filter((item) => item.op_status === 'storage' && item.quality === 'good'))
+  }, [shipmentClientId, shipmentCargoType, canDelete, canMovePacking, isOnPacking])
+
+  useEffect(() => {
+    loadBalances().catch(() => {})
+  }, [loadBalances])
+
+  useEffect(() => {
+    if (!shipmentClientId) {
+      setClientStores([])
+      return
+    }
+    const controller = new AbortController()
+    getInventoryClientStores(shipmentClientId, controller.signal)
+      .then(setClientStores)
+      .catch(() => setClientStores([]))
+    return () => controller.abort()
+  }, [shipmentClientId])
+
+  useEffect(() => {
+    if (!doc) {
+      setDrafts({})
+      return
+    }
+    setDrafts((prev) => {
+      const next: Record<string, LineDraft> = {}
+      for (const line of doc.lines) {
+        next[line.id] = prev[line.id] ?? {
+          qty:        line.qty,
+          storeId:    line.store_id ?? '',
+          storeName:  line.store_name ?? null,
+        }
+      }
+      return next
+    })
+  }, [doc])
+
+  async function act(fn: () => Promise<unknown>, redirectAfter?: string) {
+    setActing(true)
+    setError('')
+    try {
+      await fn()
+      if (redirectAfter) navigate(redirectAfter)
+      else await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setActing(false)
+    }
+  }
+
+  const editableLines: EditableShipmentLine[] = doc
+    ? doc.lines.map((line) => ({
+        ...line,
+        _key: balanceKey(line),
+        available: lineAvailable(line, balances, doc.cargo_type as ShipmentCargoType),
+      }))
+    : []
+
+  function getDraft(line: ShipmentLine): LineDraft {
+    return drafts[line.id] ?? {
+      qty:        line.qty,
+      storeId:    line.store_id ?? '',
+      storeName:  line.store_name ?? null,
+    }
+  }
+
+  function getLineStoreOptions(line: ShipmentLine): StoreChoice[] {
+    const options = clientStores.map((store) => ({ id: store.id, name: store.name }))
+    if (line.store_id && !options.some((store) => store.id === line.store_id)) {
+      options.unshift({ id: line.store_id, name: line.store_name ?? line.store_id })
+    }
+    return options
+  }
+
+  // Места-источники для передачи/подвоза — где у позиции есть свободный годный.
+  function getLineSourceZoneOptions(line: ShipmentLine): MoveZoneOption[] {
+    return reviewZoneBalances
+      .filter((item) =>
+        item.location_id
+        && item.qty > 0
+        && balanceKey(item) === balanceKey(line)
+        && item.client_id === shipmentClientId,
+      )
+      .map((item) => ({
+        id: item.location_id!,
+        name: item.location_name ?? item.location_id!,
+        available: item.qty,
+      }))
+  }
+
+  async function handleReturnFromPacking(line: ShipmentLine) {
+    if (!docId) return
+    const ok = await confirm({
+      title: 'Вернуть на хранение?',
+      body: `${line.available_for_pack} шт по «${line.product_name}» вернётся в исходные местоположения. Передачу на упаковку можно будет указать заново.`,
+      confirmLabel: 'Вернуть',
+    })
+    if (!ok) return
+    setSavingLine(line.id)
+    try {
+      await returnShipmentLineFromPacking(docId, line.id)
+      await refreshAfterLineChange()
+      toast('Товар возвращён на хранение', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка возврата', 'error')
+    } finally {
+      setSavingLine(null)
+    }
+  }
+
+  function setDraftQty(lineId: string, value: number) {
+    setDrafts((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], qty: Math.max(1, Number.isFinite(value) ? value : 1) },
+    }))
+  }
+
+  function setDraftStore(lineId: string, storeId: string, storeName: string | null) {
+    setDrafts((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], storeId, storeName },
+    }))
+  }
+
+  function linePlanDirty(line: ShipmentLine): boolean {
+    const d = getDraft(line)
+    return d.qty !== line.qty
+      || d.storeId !== (line.store_id ?? '')
+      || d.storeName !== (line.store_name ?? null)
+  }
+
+  const hasUnsavedLineChanges = editableLines.some(linePlanDirty)
+
+  const infoLogisticsNumber = Number(infoLogisticsCost)
+  const infoLogisticsFilled = infoLogisticsCost.trim() !== '' && Number.isFinite(infoLogisticsNumber) && infoLogisticsNumber >= 0
+
+  // Передача на упаковку выполняется по строке через шторку (немедленно), поэтому к моменту
+  // перехода «Передать на упаковку» достаточно, что хоть что-то уже на столе (пул или упаковано).
+  const someMovedToPacking = (doc?.lines ?? []).some(
+    (line) => line.available_for_pack > 0 || line.packed_good + line.packed_defect > 0,
+  )
+
+  // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
+  // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
+  // Брак-отгрузка: ТЗ не требуется, места-источники выберет кладовщик при подготовке.
+  const advanceChecks: ReadinessCheck[] = (isDraft || isPacking)
+    ? [
+        {
+          ok: (doc?.lines.length ?? 0) > 0,
+          label: 'Добавлены строки',
+          error: 'Добавьте хотя бы одну строку в отгрузку',
+        },
+        {
+          ok: doc?.lines.every((line) => getDraft(line).qty >= 1) ?? false,
+          label: 'План заполнен',
+          error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
+        },
+        ...(isDraft && !isDefectCargo
+          ? [{
+              ok: infoComment.trim() !== '',
+              label: 'Техническое задание заполнено',
+              error: 'Заполните техническое задание',
+            }]
+          : []),
+        ...(isPacking
+          ? [
+              {
+                ok: !!infoShipDate,
+                label: 'Дата отгрузки (план) указана',
+                error: 'Укажите дату отгрузки (план)',
+              },
+              ...(showCosts
+                ? [{
+                    ok: infoLogisticsFilled,
+                    label: 'Стоимость логистики указана',
+                    error: 'Укажите стоимость логистики',
+                  }]
+                : []),
+              {
+                ok: someMovedToPacking,
+                label: 'Товар передан на упаковку',
+                error: 'Передайте на упаковку хотя бы часть товара (кнопка «Передать» в строке)',
+              },
+            ]
+          : []),
+      ]
+    : []
+  const showReadiness = isDraft || isPacking
+  const advanceBlockReasons = showReadiness
+    ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
+    : []
+  async function refreshAfterLineChange() {
+    await load()
+    await loadBalances()
+  }
+
+  async function handleAddLine(item: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
+    if (!docId) return
+    await act(async () => {
+      await addShipmentLine(docId, {
+        product_id:        item.product_id,
+        product_name:      item.product_name,
+        product_sku:       item.product_sku,
+        color_id:          item.color_id,
+        color_name:        item.color_name,
+        size_id:           item.size_id,
+        size_name:         item.size_name,
+        qty,
+        storage_zone_id:   zoneId,
+        storage_zone_name: zoneName,
+        store_id:          null,
+        store_name:        null,
+      })
+      await refreshAfterLineChange()
+      setShowPicker(false)
+    })
+  }
+
+  async function handleSaveQty(line: ShipmentLine): Promise<boolean> {
+    if (!docId) return false
+    const draft = getDraft(line)
+    setSaving((prev) => ({ ...prev, [line.id]: true }))
+    try {
+      await updateShipmentLine(docId, line.id, {
+        product_id:        line.product_id,
+        product_name:      line.product_name,
+        product_sku:       line.product_sku,
+        color_id:          line.color_id,
+        color_name:        line.color_name,
+        size_id:           line.size_id,
+        size_name:         line.size_name,
+        qty:               draft.qty,
+        shipped_qty:       line.shipped_qty,
+        storage_zone_id:   line.storage_zone_id ?? null,
+        storage_zone_name: line.storage_zone_name,
+        store_id:          draft.storeId || null,
+        store_name:        draft.storeName,
+      })
+      await refreshAfterLineChange()
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка')
+      return false
+    } finally {
+      setSaving((prev) => ({ ...prev, [line.id]: false }))
+    }
+  }
+
+  async function handleSaveAllLines(): Promise<boolean> {
+    if (!docId) return false
+    const changed = editableLines.filter(linePlanDirty)
+    for (const line of changed) {
+      const saved = await handleSaveQty(line)
+      if (!saved) return false
+    }
+    return true
+  }
+
+  async function handleSaveChanges() {
+    if (infoDirty) {
+      const saved = await handleInfoSave()
+      if (!saved) return
+    }
+    if (hasUnsavedLineChanges) {
+      const saved = await handleSaveAllLines()
+      if (!saved) return
+    }
+  }
+
+  async function handleDeleteLine(lineId: string) {
+    if (!docId) return
+    const ok = await confirm({
+      title: 'Удалить товар из отгрузки?',
+      body: 'Строка будет удалена из состава отгрузки. Это действие можно отменить только добавив товар заново.',
+      danger: true,
+      confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    await act(async () => {
+      await deleteShipmentLine(docId, lineId)
+      await refreshAfterLineChange()
+    })
+  }
+
+  async function handleUploadFile(lineId: string, files: File[]) {
+    if (!docId) return
+    if (files.length === 0) return
+    for (const file of files) {
+      const invalid = validateLineFile(file)
+      if (invalid) { toast(`${file.name}: ${invalid}`, 'error'); return }
+    }
+    setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      for (const file of files) {
+        await uploadShipmentLineFile(docId, lineId, file)
+      }
+      await load()
+      toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка загрузки файла', 'error')
+    } finally {
+      setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
+    }
+  }
+
+  async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
+    if (!docId) return
+    const invalid = validateLineFile(file)
+    if (invalid) { toast(invalid, 'error'); return }
+    setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await uploadShipmentLineFile(docId, lineId, file)
+      await deleteShipmentLineFile(docId, lineId, oldFileId)
+      await load()
+      toast('Файл заменён', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка замены файла', 'error')
+    } finally {
+      setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
+    }
+  }
+
+  async function handleDeleteFile(lineId: string, fileId: string) {
+    if (!docId) return
+    try {
+      await deleteShipmentLineFile(docId, lineId, fileId)
+      await load()
+      toast('Файл удалён', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка удаления файла', 'error')
+    }
+  }
+
+  function handleAdvanceClick() {
+    if (advanceBlockReasons.length > 0) {
+      setShowBlockReasons(true)
+      return
+    }
+    setShowBlockReasons(false)
+    void act(async () => {
+      if (infoDirty) {
+        const saved = await handleInfoSave()
+        if (!saved) return
+      }
+      if (hasUnsavedLineChanges) {
+        const saved = await handleSaveAllLines()
+        if (!saved) return
+      }
+      const res = await advanceShipment(docId!)
+      const nextStatus = res.message as ShipmentStatus
+      setDoc((prev) => prev
+        ? {
+            ...prev,
+            status: nextStatus,
+            status_label: SHIPMENT_STATUS_LABELS[nextStatus],
+          }
+        : prev)
+    })
+  }
+
+  async function handleCancel() {
+    const ok = await confirm({
+      title: 'Аннулировать отгрузку?',
+      body: isDefectCargo && isAwaitingTrip
+        ? 'Отгрузка будет аннулирована, подготовленный брак вернётся на исходные места. Это действие нельзя отменить.'
+        : 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
+      danger: true,
+      confirmLabel: 'Аннулировать',
+    })
+    if (!ok) return
+    await act(() => cancelShipment(docId!), '/inventory/shipments')
+  }
+
+  if (loading) {
+    return (
+      <div className="page">
+        <div style={{ padding: '80px 0', textAlign: 'center', color: 'var(--c-text-subtle)' }}>Загрузка…</div>
+      </div>
+    )
+  }
+
+  if (error || !doc) {
+    return (
+      <div className="page">
+        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--c-danger)' }}>
+          {error || 'Документ не найден'}
+        </div>
+      </div>
+    )
+  }
+
+  // «Состав» — только про план (Менеджер). Подсвечиваем как активный лишь при создании;
+  // в «В плане» ход у Кладовщика (блок «Передача»), поэтому Состав не подсвечиваем.
+  const compState: 'active' | 'done' = isDraft ? 'active' : 'done'
+  const compHint = isDraft ? 'Товар из остатков клиента'
+    : isPacking ? 'План можно править до передачи на упаковку'
+    : undefined
+
+  // Фаза «Упаковка»: передача (Кладовщик, packing) → годный/брак (Нач. смены, on_packing) → результат (done).
+  const packPhase = isDraft
+    ? { state: 'locked' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: null,
+        hint: 'Передачу и упаковку заполнят кладовщик и начальник смены' }
+    : isPacking
+      ? { state: 'active' as const, role: 'warehouse' as const, title: 'Передача на упаковку', mode: 'transfer' as const,
+          hint: '«Передать» — выбор мест-источников, перемещение сразу' }
+      : isOnPacking
+        ? { state: 'active' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'packing' as const,
+            hint: '«Внести упаковку» — годный и брак; при браке кладовщик подвозит товар' }
+        : { state: 'done' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'result' as const,
+            hint: undefined }
+
+  // Сводные итоги состава для панелей правой колонки.
+  const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
+  const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size
+  const poolTotal = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
+  const packedGood = doc.lines.reduce((s, l) => s + l.packed_good, 0)
+  const packedDefect = doc.lines.reduce((s, l) => s + l.packed_defect, 0)
+  const storeAgg = (() => {
+    const m = new Map<string, number>()
+    for (const l of doc.lines) {
+      const k = l.store_name ?? 'Без магазина'
+      m.set(k, (m.get(k) ?? 0) + l.qty)
+    }
+    return [...m.entries()]
+  })()
+
+  return (
+    <div className="page">
+      <ShipHeader
+        status={status!}
+        cargoType={doc.cargo_type as ShipmentCargoType}
+        title={doc.doc_number}
+        subtitle={`${isDefectCargo ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
+        onBack={() => navigate('/inventory/shipments')}
+        blockReasons={showBlockReasons ? advanceBlockReasons : []}
+        priority={
+          <ShipmentPriorityControl
+            shipment={doc}
+            canEdit={canEditPriority}
+            onSaved={(priorityRank) => setDoc((prev) => prev ? { ...prev, priority_rank: priorityRank } : prev)}
+          />
+        }
+        actions={
+          <>
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
+            </button>
+            {canEdit && isDraft && (
+              <button className="btn ghost" disabled={acting} onClick={() => act(() => deleteShipment(docId!), '/inventory/shipments')}>
+                <Icon name="trash" size={14} />Удалить
+              </button>
+            )}
+            {canEdit && (isPacking || (isDefectCargo && (isRelocating || isAwaitingTrip))) && (
+              <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
+                <Icon name="x" size={14} />Аннулировать
+              </button>
+            )}
+            {canEditPlan && (infoDirty || hasUnsavedLineChanges) && (
+              <button className="btn" disabled={acting || infoSaving} onClick={() => { void handleSaveChanges() }}>
+                <Icon name="save" size={14} />Сохранить изменения
+              </button>
+            )}
+            {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
+              <button className="btn" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}>
+                <Icon name="truckOut" size={14} />Открыть рейс {doc.trip_number}
+              </button>
+            )}
+            {primary?.show && (
+              <PrimaryAction
+                icon={primary.icon}
+                label={primary.label}
+                hint={primary.hint}
+                disabled={acting}
+                onClick={handleAdvanceClick}
+              />
+            )}
+          </>
+        }
+      />
+
+      {error && (
+        <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
+      )}
+
+      {isAwaitingTrip && (
+        <Alert tone="warning" style={{ marginBottom: 16 }}>
+          {isDefectCargo
+            ? 'Брак перемещён в зону отгрузки со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'
+            : 'Товар разложен по местоположениям со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'}
+        </Alert>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock
+            icon="file"
+            title="Основная информация"
+            role="manager"
+            state={isDraft ? 'active' : 'done'}
+            hint={canEditInfo ? 'План можно править до передачи на упаковку' : undefined}
+            right={canEditInfo && infoSaved ? (
+              <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="check" size={12} />Сохранено
+              </span>
+            ) : undefined}
+          >
+            {canEditInfo ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <Field label="Клиент" style={{ marginBottom: 0 }}>
+                    <div style={{ position: 'relative' }}>
+                      <Input
+                        value={doc.client_name ?? '—'}
+                        readOnly
+                        style={{ paddingRight: 34, cursor: 'default' }}
+                      />
+                      <div style={{
+                        position: 'absolute',
+                        right: 9,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        color: 'var(--c-text-subtle)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}>
+                        <Tooltip content="Клиент нельзя изменить после добавления товаров">
+                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <Icon name="lock" size={13} />
+                          </span>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  </Field>
+                  <Field label="Рейс" style={{ marginBottom: 0 }}>
+                    {doc.trip_id ? (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}
+                      >
+                        <Icon name="truckIn" size={13} />{doc.trip_number}
+                      </button>
+                    ) : (
+                      <Input value="—" readOnly style={{ cursor: 'default' }} />
+                    )}
+                  </Field>
+                  <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
+                    <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
+                  </Field>
+                  {canEditActualShipDate ? (
+                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                      <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
+                    </Field>
+                  ) : (
+                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                      <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
+                    </Field>
+                  )}
+                  {showCosts && (
+                    <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={infoLogisticsCost}
+                        onChange={(e) => { setInfoLogisticsCost(e.target.value); setInfoDirty(true) }}
+                        placeholder="0.00"
+                      />
+                    </Field>
+                  )}
+                  <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <AutoGrowTextarea
+                      minRows={3}
+                      placeholder="Опишите задачу для команды склада"
+                      value={infoComment}
+                      onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
+                      style={{ resize: 'vertical', minHeight: 76 }}
+                    />
+                  </Field>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <ReadOnlyField label="Клиент" value={doc.client_name} />
+                  <div>
+                    <div className="field-label"><span>Рейс</span></div>
+                    {doc.trip_id ? (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}
+                      >
+                        <Icon name="truckIn" size={13} />{doc.trip_number}
+                      </button>
+                    ) : (
+                      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
+                    )}
+                  </div>
+                  <ReadOnlyField label="Дата отгрузки (план)" value={fmtDateLong(doc.ship_date)} />
+                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
+                  {showCosts && (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <ReadOnlyField
+                        label="Стоимость логистики для клиента, ₽"
+                        value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
+                        mono
+                      />
+                    </div>
+                  )}
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
+                  </div>
+                </div>
+              </>
+            )}
+          </PhaseBlock>
+
+          <PhaseBlock
+            icon="boxes"
+            title="Состав отгрузки"
+            role="manager"
+            state={compState}
+            hint={compHint}
+            right={canDelete ? (
+              <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={acting || !doc.client_id}>
+                <Icon name="plus" size={12} />Добавить товар
+              </button>
+            ) : undefined}
+          >
+            {doc.lines.length === 0 ? (
+              <div style={{ padding: '32px 0' }}>
+                <EmptyState
+                  title="Состав пуст"
+                  sub={canDelete ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
+                />
+              </div>
+            ) : (
+              <CompositionTable
+                lines={editableLines}
+                showZone={false}
+                canEditPlan={canEditPlan}
+                canDelete={canDelete}
+                canAttachFiles={canAttachFiles}
+                acting={acting}
+                saving={saving}
+                savingLine={savingLine}
+                uploadingLines={uploadingLines}
+                getDraft={getDraft}
+                getStoreOptions={getLineStoreOptions}
+                onPreviewFile={setFilePreview}
+                onQty={setDraftQty}
+                onStore={setDraftStore}
+                onDelete={handleDeleteLine}
+                onUploadFile={handleUploadFile}
+                onReplaceFile={handleReplaceFile}
+                onDeleteFile={handleDeleteFile}
+              />
+            )}
+          </PhaseBlock>
+
+          {!isDefectCargo && (
+            <PhaseBlock
+              icon="box"
+              title={packPhase.title}
+              role={packPhase.role}
+              state={packPhase.state}
+              hint={packPhase.hint}
+            >
+              {packPhase.mode === null ? (
+                <LockedGrid labels={['На упаковке', 'Годный', 'Брак']} />
+              ) : doc.lines.length === 0 ? (
+                <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                  Нет позиций для упаковки.
+                </div>
+              ) : (
+                <PackingTable
+                  mode={packPhase.mode}
+                  lines={editableLines}
+                  canMove={canMovePacking}
+                  canPack={canPack && isOnPacking}
+                  canReturn={canReturnPacking}
+                  acting={acting}
+                  savingLine={savingLine}
+                  onOpenMove={(line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' })}
+                  onReturn={handleReturnFromPacking}
+                  onOpenPacking={setPackingLine}
+                />
+              )}
+            </PhaseBlock>
+          )}
+
+          {!isDefectCargo && (isDraft || isPacking || isOnPacking) && (
+            <PhaseBlock icon="archive" title="Раскладка и рейс" role="warehouse" state="locked"
+              hint="Местоположения и готовность к рейсу — после упаковки">
+              <LockedGrid labels={['Местоположения', 'Готово к рейсу']} />
+            </PhaseBlock>
+          )}
+
+          {isDefectCargo && isDraft && (
+            <PhaseBlock icon="archive" title="Подготовка к отгрузке" role="warehouse" state="locked"
+              hint="Кладовщик выберет места-источники и перенесёт брак в зону отгрузки">
+              <LockedGrid labels={['Места-источники', 'Готово к рейсу']} />
+            </PhaseBlock>
+          )}
+
+          {isRelocating && !isDefectCargo && (
+            <RelocationPanel
+              docId={docId!}
+              lines={doc.lines}
+              zoneOptions={unloadingZones}
+              canEdit={canRelocate}
+              onDone={refreshAfterLineChange}
+            />
+          )}
+
+          {isRelocating && isDefectCargo && (
+            <DefectPreparePanel
+              docId={docId!}
+              lines={doc.lines}
+              clientId={doc.client_id}
+              canEdit={canRelocate}
+              onDone={refreshAfterLineChange}
+            />
+          )}
+
+          {(isAwaitingTrip || status === 'shipped') && (
+            <RelocationPanel
+              docId={docId!}
+              lines={doc.lines}
+              zoneOptions={unloadingZones}
+              canEdit={false}
+              readOnly
+              onDone={refreshAfterLineChange}
+            />
+          )}
+        </div>
+
+        {/* Right — маршрут + контекстные панели */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <RailPanel status={status!} ops={doc.ops} cargoType={doc.cargo_type as ShipmentCargoType} />
+
+          {showReadiness && (
+            <ChecklistPanel items={advanceChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
+          )}
+
+          {(isDraft || (isDefectCargo && isRelocating)) && (
+            <Panel icon="chart" title="Итого">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="SKU" mono>{skuCount}</ReadRow>
+                <ReadRow label="Кол-во" mono strong>{planTotal} шт</ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {isPacking && storeAgg.length > 0 && (
+            <Panel icon="building" title="Магазины">
+              <div style={{ padding: '0 2px' }}>
+                {storeAgg.map(([name, qty]) => (
+                  <ReadRow key={name} label={name} mono>{qty} шт</ReadRow>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {isOnPacking && (
+            <Panel icon="box" title="Итог упаковки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="На упаковке" mono>{poolTotal} шт</ReadRow>
+                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood}</span></ReadRow>
+                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect}</span></ReadRow>
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Осталось до плана" mono strong>{Math.max(0, planTotal - packedGood)} шт</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {isRelocating && !isDefectCargo && (
+            <Panel icon="chart" title="Итог раскладки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
+                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
+                <ReadRow label="Упаковано" mono>{packedGood + packedDefect} шт</ReadRow>
+              </div>
+            </Panel>
+          )}
+
+          {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
+            <Panel icon="truckOut" title="Рейс отгрузки">
+              <button
+                className="btn ghost sm"
+                onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                style={{ width: '100%', justifyContent: 'flex-start' }}
+              >
+                <Icon name="truckOut" size={13} />{doc.trip_number}
+              </button>
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                Дата отгрузки (факт) и списание остатков проставляются при отправке рейса.
+              </div>
+            </Panel>
+          )}
+
+          {status === 'shipped' && isDefectCargo && (
+            <Panel icon="chart" title="Итог отгрузки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="Отгружено брака" mono>
+                  <span style={{ color: 'var(--c-warning)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
+                </ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {status === 'shipped' && !isDefectCargo && (
+            <Panel icon="chart" title="Итог отгрузки">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="Отгружено годного" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
+                <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
+                {showCosts && (
+                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
+                )}
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
+                </div>
+              </div>
+            </Panel>
+          )}
+        </div>
+      </div>
+
+      <Drawer
+        open={opsDrawerOpen}
+        onClose={() => setOpsDrawerOpen(false)}
+        title="Журнал операций"
+        subtitle={`${doc.ops.length} записей · ${doc.doc_number}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {doc.ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {doc.ops.map((op) => (
+              <OpEntry key={op.id} op={op} />
+            ))}
+          </div>
+        )}
+      </Drawer>
+
+      {showPicker && (
+        <BalancePicker
+          clientId={doc.client_id}
+          cargoType={doc.cargo_type as ShipmentCargoType}
+          onAdd={(item, qty, zoneId, zoneName) => { void handleAddLine(item, qty, zoneId, zoneName) }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      <FilePreviewModal
+        filename={filePreview?.file.filename ?? null}
+        mimeType={filePreview?.file.mime_type ?? null}
+        url={filePreview ? resolvePublicUploadSrc(filePreview.file.url) : ''}
+        meta={filePreview}
+        onClose={() => setFilePreview(null)}
+      />
+
+      {moveDrawer && (
+        <MoveToPackingDrawer
+          docId={docId!}
+          line={moveDrawer.line}
+          mode={moveDrawer.mode}
+          zoneOptions={getLineSourceZoneOptions(moveDrawer.line)}
+          onClose={() => setMoveDrawer(null)}
+          onDone={refreshAfterLineChange}
+        />
+      )}
+
+      {packingLine && (
+        <PackingDrawer
+          docId={docId!}
+          line={packingLine}
+          onClose={() => setPackingLine(null)}
+          onDone={refreshAfterLineChange}
+        />
+      )}
+
+    </div>
+  )
+}

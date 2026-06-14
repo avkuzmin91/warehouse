@@ -20,11 +20,17 @@ const OPS_NAV: NavItem[] = [
   { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
+  { to: '/inventory/packing', icon: 'forklift', label: 'Упаковка' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
+]
+
+const FINANCE_NAV: NavItem[] = [
+  { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
 ]
 
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
+  { to: '/inventory/packing', icon: 'forklift', label: 'Упаковка' },
   { to: '/inventory/shipments', icon: 'boxOut', label: 'Отгрузки' },
 ]
 
@@ -38,11 +44,14 @@ const USERS_NAV: NavItem[] = [
 ]
 
 const CLIENT_NAV: NavItem[] = [
-  { to: '/cabinet', icon: 'home', label: 'Обзор' },
-  { to: '/cabinet/balances', icon: 'boxes', label: 'Мои остатки' },
+  { to: '/cabinet', icon: 'home', label: 'Сводка' },
+  { to: '/cabinet/balances', icon: 'boxes', label: 'Остатки' },
   { to: '/cabinet/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/cabinet/shipments', icon: 'boxOut', label: 'Отгрузки' },
-  { to: '/cabinet/products', icon: 'box', label: 'Товары' },
+  { to: '/cabinet/defects', icon: 'alert', label: 'Брак' },
+  { to: '/cabinet/products', icon: 'box', label: 'Мои товары' },
+  { to: '/cabinet/reports', icon: 'chart', label: 'Отчёты' },
+  { to: '/cabinet/profile', icon: 'building', label: 'Профиль и магазины' },
 ]
 
 const ROLE_LABELS: Record<string, string> = {
@@ -67,6 +76,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const isShiftSupervisor = user?.role === 'shift_supervisor'
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
+  const hasFinanceAccess = user?.role === 'admin' || user?.role === 'manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
   const initials = getInitials(displayName)
@@ -108,7 +118,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
         <Brand size={22} />
         {!collapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="sidebar-brand-text">Pack-men</div>
+            <div className="sidebar-brand-text">Pack-Men</div>
             <div className="sidebar-brand-sub">
               {isClient ? 'Кабинет клиента' : 'WMS'}
             </div>
@@ -140,6 +150,14 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
           {hasStaffAccess && OPS_NAV.map((item) => (
             <NavItem key={item.to} {...item} collapsed={collapsed} />
           ))}
+          {hasFinanceAccess && (
+            <>
+              {!collapsed && <div className="sidebar-section">Финансы</div>}
+              {FINANCE_NAV.map((item) => (
+                <NavItem key={item.to} {...item} collapsed={collapsed} />
+              ))}
+            </>
+          )}
           {hasAdminAccess && (
             <>
               {!collapsed && <div className="sidebar-section">Управление</div>}

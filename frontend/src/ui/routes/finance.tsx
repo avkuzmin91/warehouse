@@ -1,0 +1,22 @@
+import { lazy } from 'react'
+import { Route } from 'react-router-dom'
+
+const FinanceInvoicesListPage = lazy(() =>
+  import('../pages/FinanceInvoicesListPage').then((m) => ({ default: m.FinanceInvoicesListPage })),
+)
+const FinanceUninvoicedShipmentsPage = lazy(() =>
+  import('../pages/FinanceUninvoicedShipmentsPage').then((m) => ({ default: m.FinanceUninvoicedShipmentsPage })),
+)
+const FinanceInvoiceCreatePage = lazy(() =>
+  import('../pages/FinanceInvoiceCreatePage').then((m) => ({ default: m.FinanceInvoiceCreatePage })),
+)
+const FinanceInvoiceDetailPage = lazy(() =>
+  import('../pages/FinanceInvoiceDetailPage').then((m) => ({ default: m.FinanceInvoiceDetailPage })),
+)
+
+export const financeRoutes = [
+  <Route key="finance-invoices" path="/finance/invoices" element={<FinanceInvoicesListPage />} />,
+  <Route key="finance-invoices-new" path="/finance/invoices/new" element={<FinanceInvoiceCreatePage />} />,
+  <Route key="finance-uninvoiced" path="/finance/uninvoiced" element={<FinanceUninvoicedShipmentsPage />} />,
+  <Route key="finance-invoices-id" path="/finance/invoices/:invoiceId" element={<FinanceInvoiceDetailPage />} />,
+]

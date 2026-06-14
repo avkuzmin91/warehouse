@@ -4,19 +4,13 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from config import (
-    RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_INTAKE_START,
-    RECEIPT_OP_LINE_QC_COMPLETE,
-    RECEIPT_OP_LINE_QC_REOPEN,
     RECEIPT_OP_PLAN_FIX,
-    RECEIPT_OP_QC_COMPLETE,
-    RECEIPT_OP_RECEIVING,
-    RECEIPT_OP_RECEIVING_CORRECTION,
-    RECEIPT_OP_DEFECT_FIX,
-    RECEIPT_OP_DEFECT_CORRECTION,
+    RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
     RECEIPT_STATUS_TRANSITIONS,
 )
+from dbconn import like_substring_param
 
 
 def _now() -> str:
@@ -41,22 +35,14 @@ def next_doc_number(connection) -> str:
 
 
 def compute_state(connection, doc_id: str) -> dict:
-    """Replay журнала операций → текущее состояние строк документа.
-
-    Используется для detail-view. Для list-view используй list_receipts (агрегирующий SQL).
-    """
-    ops = connection.execute(
-        "SELECT * FROM receipt_ops WHERE doc_id = ? ORDER BY created_at",
-        (doc_id,),
-    ).fetchall()
+    """Сводка документа поступления по строкам (без QC — годность определяется при упаковке)."""
     lines_rows = connection.execute(
         "SELECT * FROM receipt_lines WHERE doc_id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchall()
 
-    lines: dict[str, dict] = {}
-    for lr in lines_rows:
-        lines[str(lr["id"])] = {
+    line_list = [
+        {
             "id": str(lr["id"]),
             "product_id": str(lr["product_id"]),
             "product_name": str(lr["product_name"]),
@@ -69,62 +55,15 @@ def compute_state(connection, doc_id: str) -> dict:
             "storage_zone_name": lr["storage_zone_name"],
             "planned_qty": int(lr["planned_qty"]),
             "accepted_qty": int(lr["accepted_qty"]) if lr["accepted_qty"] is not None else None,
-            "accepted": 0,
-            "defect": 0,
-            "ops_count": 0,
-            "qc_status": "pending",
         }
-
-    for op in ops:
-        ot = str(op["op_type"])
-        lid = str(op["line_id"]) if op["line_id"] else None
-        qty = int(op["qty"]) if op["qty"] is not None else 0
-
-        if lid and lid in lines:
-            line = lines[lid]
-            if ot == RECEIPT_OP_RECEIVING:
-                line["accepted"] += qty
-                line["ops_count"] += 1
-                if line["qc_status"] != "done":
-                    line["qc_status"] = "in_progress"
-            elif ot == RECEIPT_OP_DEFECT_FIX:
-                line["defect"] += qty
-                line["ops_count"] += 1
-                if line["qc_status"] != "done":
-                    line["qc_status"] = "in_progress"
-            elif ot == RECEIPT_OP_RECEIVING_CORRECTION:
-                line["accepted"] = qty
-                if line["qc_status"] != "done":
-                    line["qc_status"] = "in_progress"
-            elif ot == RECEIPT_OP_DEFECT_CORRECTION:
-                line["defect"] = qty
-                if line["qc_status"] != "done":
-                    line["qc_status"] = "in_progress"
-            elif ot == RECEIPT_OP_LINE_QC_COMPLETE:
-                line["qc_status"] = "done"
-            elif ot == RECEIPT_OP_LINE_QC_REOPEN:
-                line["qc_status"] = (
-                    "in_progress"
-                    if line["accepted"] > 0 or line["defect"] > 0 or line["ops_count"] > 0
-                    else "pending"
-                )
-
-    line_list = list(lines.values())
-    sku_count = len(line_list)
-    total_planned = sum(l["planned_qty"] for l in line_list)
-    total_accepted_qty = sum(l["accepted_qty"] or 0 for l in line_list)
-    total_accepted = sum(l["accepted"] for l in line_list)
-    total_defect = sum(l["defect"] for l in line_list)
-    all_qc_done = all(l["qc_status"] == "done" for l in line_list) if line_list else False
+        for lr in lines_rows
+    ]
 
     return {
         "lines": line_list,
-        "sku_count": sku_count,
-        "total_planned": total_planned,
-        "total_accepted_qty": total_accepted_qty,
-        "total_accepted": total_accepted,
-        "total_defect": total_defect,
-        "all_qc_done": all_qc_done,
+        "sku_count": len(line_list),
+        "total_planned": sum(l["planned_qty"] for l in line_list),
+        "total_accepted_qty": sum(l["accepted_qty"] or 0 for l in line_list),
     }
 
 
@@ -166,7 +105,7 @@ def list_receipts_aggregated(
         conds.append("d.status = ?")
         params.append(status)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
         params += [s, s]
     if sku:
@@ -174,7 +113,7 @@ def list_receipts_aggregated(
             "EXISTS (SELECT 1 FROM receipt_lines rl"
             " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
         )
-        params.append(f"%{sku.strip()}%")
+        params.append(like_substring_param(sku))
     if date_from:
         conds.append("d.arrival_date >= ?")
         params.append(date_from)
@@ -216,25 +155,7 @@ def list_receipts_aggregated(
             MAX(cl.name) AS client_name,
             COUNT(DISTINCT CASE WHEN l.is_deleted = 0 THEN l.id END) AS sku_count,
             COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN l.planned_qty ELSE 0 END), 0) AS total_planned,
-            COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN COALESCE(l.accepted_qty, 0) ELSE 0 END), 0) AS total_accepted_qty,
-            COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN (
-                SELECT COALESCE(
-                    (SELECT o2.qty FROM receipt_ops o2
-                     WHERE o2.line_id = l.id AND o2.op_type = 'receiving_correction'
-                     ORDER BY o2.created_at DESC LIMIT 1),
-                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt_ops o2
-                     WHERE o2.line_id = l.id AND o2.op_type = 'receiving')
-                )
-            ) ELSE 0 END), 0) AS total_accepted,
-            COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN (
-                SELECT COALESCE(
-                    (SELECT o2.qty FROM receipt_ops o2
-                     WHERE o2.line_id = l.id AND o2.op_type = 'defect_correction'
-                     ORDER BY o2.created_at DESC LIMIT 1),
-                    (SELECT COALESCE(SUM(o2.qty),0) FROM receipt_ops o2
-                     WHERE o2.line_id = l.id AND o2.op_type = 'defect_fix')
-                )
-            ) ELSE 0 END), 0) AS total_defect
+            COALESCE(SUM(CASE WHEN l.is_deleted = 0 THEN COALESCE(l.accepted_qty, 0) ELSE 0 END), 0) AS total_accepted_qty
         FROM receipt_docs d
         LEFT JOIN clients cl ON cl.id = d.client_id
         LEFT JOIN receipt_lines l ON l.doc_id = d.id
@@ -281,11 +202,11 @@ def list_receipt_lines(
         conds.append("d.status = ?")
         params.append(status)
     if search:
-        s = f"%{search.strip()}%"
+        s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
         params += [s, s]
     if sku:
-        s = f"%{sku.strip()}%"
+        s = like_substring_param(sku)
         conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
         params += [s, s]
     if date_from:
@@ -344,26 +265,9 @@ def advance_receipt(connection, doc_id: str, user_id: str) -> str:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Документ уже в финальном статусе")
 
-    if next_status == "on_review":
-        missing = connection.execute(
-            """
-            SELECT COUNT(*) AS cnt
-            FROM receipt_lines
-            WHERE doc_id = ?
-              AND is_deleted = 0
-              AND NULLIF(TRIM(COALESCE(storage_zone_id, '')), '') IS NULL
-            """,
-            (doc_id,),
-        ).fetchone()
-        if int(missing["cnt"] if missing else 0) > 0:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail="Укажите зону хранения для каждой строки поступления")
-
     op_type = (
-        RECEIPT_OP_PLAN_FIX if next_status == "planned" else
-        RECEIPT_OP_INTAKE_START if next_status == "on_intake" else
-        RECEIPT_OP_ARRIVAL_FIX if next_status == "on_review" else
-        RECEIPT_OP_QC_COMPLETE
+        RECEIPT_OP_PLAN_FIX if next_status == RECEIPT_STATUS_PLANNED else
+        RECEIPT_OP_INTAKE_START
     )
 
     now = _now()

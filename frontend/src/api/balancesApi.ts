@@ -1,5 +1,36 @@
 import { request } from './http'
 
+// --- Types ---
+
+/** Операционный статус запаса: что товар делает.
+ *  intake — виртуальный статус отображения: принято по незавершённым поступлениям. */
+export type InvOpStatus = 'intake' | 'storage' | 'packing' | 'ready'
+/** Качество запаса. «Не проверен» существует только внутри приёмки. */
+export type InvQuality = 'good' | 'defect'
+
+export const INV_OP_LABELS: Record<InvOpStatus, string> = {
+  intake:  'На приёмке',
+  storage: 'На хранении',
+  packing: 'На упаковке',
+  ready:   'Готов к отгрузке',
+}
+
+export const INV_QUALITY_LABELS: Record<InvQuality, string> = {
+  good:   'Годный',
+  defect: 'Брак',
+}
+
+/** Причина списания остатков (движение → written_off). */
+export type WriteOffReason = 'shortage' | 'damage' | 'disposal' | 'client_return' | 'other'
+
+export const WRITEOFF_REASON_LABELS: Record<WriteOffReason, string> = {
+  shortage:      'Недостача',
+  damage:        'Порча',
+  disposal:      'Утилизация брака',
+  client_return: 'Возврат клиенту',
+  other:         'Прочее',
+}
+
 export type BalanceItem = {
   product_id: string
   product_name: string
@@ -10,11 +41,32 @@ export type BalanceItem = {
   size_name: string | null
   client_id: string | null
   client_name: string | null
-  good: number
-  defect: number
-  on_review: number
+  intake: number
+  storage_good: number
+  storage_defect: number
+  packing_good: number
+  packing_defect: number
+  ready_good: number
+  ready_defect: number
   total: number
   docs_count: number
+}
+
+export type BalanceSummary = {
+  intake: number
+  storage_good: number
+  storage_defect: number
+  packing_good: number
+  packing_defect: number
+  ready_good: number
+  ready_defect: number
+  total: number
+}
+
+export type BalanceSummaryParams = {
+  client_id?:  string
+  search?:     string
+  has_defect?: boolean
 }
 
 export type BalanceListParams = {
@@ -33,12 +85,11 @@ export type BalanceListResponse = {
   limit: number
 }
 
-export type BalanceZoneStatus = 'good' | 'defect' | 'on_review'
-
 export type BalanceZoneItem = {
   location_id:   string | null
   location_name: string | null
-  status:        BalanceZoneStatus
+  op_status:     InvOpStatus
+  quality:       InvQuality
   product_id:    string
   product_name:  string
   product_sku:   string
@@ -59,7 +110,11 @@ export type BalanceZonesParams = {
 
 export type BalanceZonesResponse = {
   items: BalanceZoneItem[]
+  /** Выборка обрезана серверным лимитом — список неполный. */
+  truncated: boolean
 }
+
+// --- API functions ---
 
 export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
@@ -71,6 +126,15 @@ export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getBalancesSummary(params: BalanceSummaryParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.has_defect) sp.set('has_defect', 'true')
+  const q = sp.toString()
+  return request<BalanceSummary>(`/balances/summary${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getBalancesByZone(params: BalanceZonesParams = {}, signal?: AbortSignal) {
@@ -92,7 +156,7 @@ export type ZoneRelocationPayload = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
-  status:        'good' | 'defect'
+  quality:       InvQuality
   from_zone_id:  string | null
   to_zone_id:    string | null
   qty:           number
@@ -106,11 +170,62 @@ export function createZoneRelocation(payload: ZoneRelocationPayload) {
   })
 }
 
+export type WriteOffPayload = {
+  product_id:    string
+  product_name:  string | null
+  product_sku:   string | null
+  color_id:      string | null
+  color_name:    string | null
+  size_id:       string | null
+  size_name:     string | null
+  client_id:     string | null
+  client_name:   string | null
+  zone_id:       string
+  quality:       InvQuality
+  qty:           number
+  reason:        WriteOffReason
+  comment?:      string | null
+}
+
+export function createWriteOff(payload: WriteOffPayload) {
+  return request<{ message: string }>('/balances/write-offs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export type QualityChangePayload = {
+  product_id:    string
+  product_name:  string | null
+  product_sku:   string | null
+  color_id:      string | null
+  color_name:    string | null
+  size_id:       string | null
+  size_name:     string | null
+  client_id:     string | null
+  client_name:   string | null
+  zone_id:       string
+  from_quality:  InvQuality
+  to_quality:    InvQuality
+  qty:           number
+  comment?:      string | null
+}
+
+export function createQualityChange(payload: QualityChangePayload) {
+  return request<{ message: string }>('/balances/quality-changes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export type ZoneRelocationItem = {
   id:               string
   created_at:       string
   created_by_email: string | null
-  status:           BalanceZoneStatus
+  from_op:          InvOpStatus | 'shipped' | 'written_off'
+  to_op:            InvOpStatus | 'shipped' | 'written_off'
+  from_quality:     InvQuality
+  to_quality:       InvQuality
   product_name:     string | null
   product_sku:      string | null
   color_name:       string | null
@@ -119,6 +234,7 @@ export type ZoneRelocationItem = {
   from_zone_name:   string | null
   to_zone_name:     string | null
   qty:              number
+  reason:           string | null
   comment:          string | null
 }
 

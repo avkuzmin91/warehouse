@@ -7,6 +7,7 @@ interface DatePickerProps {
   onChange: (value: string) => void
   placeholder?: string
   disabled?: boolean
+  invalid?: boolean
   className?: string
   portalGroup?: string // data attribute so parent DateRange can detect this portal
 }
@@ -52,7 +53,7 @@ interface PopoverStyle {
   left: number
 }
 
-export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг', disabled, className = '', portalGroup }: DatePickerProps) {
+export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг', disabled, invalid, className = '', portalGroup }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [inputText, setInputText] = useState(formatDisplay(value))
   const [viewMode, setViewMode] = useState<ViewMode>('days')
@@ -379,6 +380,7 @@ export function DatePicker({ value, onChange, placeholder = 'дд.мм.гггг'
           display: 'flex', alignItems: 'center', gap: 6,
           paddingRight: 6, cursor: disabled ? 'default' : 'text',
           opacity: disabled ? 0.5 : 1,
+          ...(invalid ? { borderColor: 'var(--c-danger)', background: 'var(--c-danger-bg)' } : null),
         }}
         onClick={() => { if (!disabled) { setOpen(true); setTimeout(() => inputRef.current?.focus(), 10) } }}
       >

@@ -58,14 +58,27 @@ def test_shipment_advance_draft_to_packing(admin_client, client_id):
     assert r2.json()["message"] == "packing"
 
 
-def test_shipment_advance_packing_to_shipped(admin_client, client_id):
+def test_shipment_advance_requires_technical_task(admin_client, client_id):
+    payload = _make_shipment_payload(client_id)
+    payload["comment"] = "  "
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+
+    r2 = admin_client.post(f"/shipments/{doc_id}/advance")
+    assert r2.status_code == 400, r2.text
+    assert r2.json()["detail"] == "Заполните техническое задание"
+
+
+def test_shipment_packing_requires_handoff_to_advance(admin_client, client_id):
+    """packing → on_packing требует передачи на упаковку: без перемещения — 400."""
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
     doc_id = r.json()["message"]
 
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
-    r3 = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
-    assert r3.status_code == 200, r3.text
-    assert r3.json()["message"] == "shipped"
+    r2 = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    assert r2.status_code == 200 and r2.json()["message"] == "packing", r2.text
+    r3 = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → on_packing
+    assert r3.status_code == 400, r3.text
 
 
 def _fake_line() -> dict:
@@ -82,61 +95,16 @@ def _fake_line() -> dict:
     }
 
 
-def test_shipment_packing_to_shipped_missing_zone_returns_400(admin_client, client_id):
-    """Отгрузка годного без указанного места хранения блокируется (400) до проверки остатков."""
+def test_shipment_cancel_allowed_in_packing(admin_client, client_id):
+    """Аннулировать можно в черновике и «В плане» (до передачи на упаковку)."""
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
-    line = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]
-    line["shipped_qty"] = 999
-
-    r_line = admin_client.patch(f"/shipments/{doc_id}/lines/{line['id']}", json=line)
-    assert r_line.status_code == 200, r_line.text
-
     admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
 
-    r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
-    assert r_ship.status_code == 400, r_ship.text
-
-
-def test_shipment_defect_missing_zone_returns_400(admin_client, client_id):
-    """Гейт распространён на брак: отгрузка брака без места хранения → 400."""
-    payload = _make_shipment_payload(client_id, [_fake_line()])
-    payload["cargo_type"] = "defect"
-    r = admin_client.post("/shipments", json=payload)
-    assert r.status_code == 200, r.text
-    doc_id = r.json()["message"]
-    line = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]
-    line["shipped_qty"] = 999
-
-    r_line = admin_client.patch(f"/shipments/{doc_id}/lines/{line['id']}", json=line)
-    assert r_line.status_code == 200, r_line.text
-
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
-
-    r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
-    assert r_ship.status_code == 400, r_ship.text
-
-
-def test_shipment_packing_to_shipped_insufficient_stock_returns_409(admin_client, client_id):
-    """Распределено по зоне, но остатка в зоне нет → 409."""
-    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
-    assert r.status_code == 200, r.text
-    doc_id = r.json()["message"]
-
-    line = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]
-    zone_id = str(uuid.uuid4())
-    line["shipped_qty"] = 999
-    line["storage_zone_id"] = zone_id
-    line["storage_zone_name"] = "Зона А"
-
-    r_line = admin_client.patch(f"/shipments/{doc_id}/lines/{line['id']}", json=line)
-    assert r_line.status_code == 200, r_line.text
-
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
-
-    r_ship = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → shipped
-    assert r_ship.status_code == 409, r_ship.text
+    r_cancel = admin_client.post(f"/shipments/{doc_id}/cancel")
+    assert r_cancel.status_code == 200, r_cancel.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "cancelled"
 
 
 def test_shipment_list_returns_pagination(admin_client):
@@ -169,6 +137,34 @@ def test_shipment_lines_view_returns_doc_line_rows(admin_client, client_id):
     assert row["client_id"] == client_id
 
 
+def test_shipment_priority_levels(admin_client, client_id):
+    """Приоритет — уровни: 1 «Срочно», 2 «Повышенный»; значения вне диапазона — 422."""
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
+    doc_id = r.json()["message"]
+
+    r2 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 1})
+    assert r2.status_code == 200, r2.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["priority_rank"] == 1
+
+    r3 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 5})
+    assert r3.status_code == 422, r3.text
+
+    r4 = admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": None})
+    assert r4.status_code == 200, r4.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["priority_rank"] is None
+
+
+def test_shipment_cancel_clears_priority(admin_client, client_id):
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
+    doc_id = r.json()["message"]
+    assert admin_client.patch(f"/shipments/{doc_id}/priority", json={"priority_rank": 2}).status_code == 200
+
+    assert admin_client.post(f"/shipments/{doc_id}/cancel").status_code == 200
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert detail["status"] == "cancelled"
+    assert detail["priority_rank"] is None
+
+
 def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
     payload = _make_shipment_payload(client_id)
     payload["logistics_cost"] = 54321
@@ -180,10 +176,29 @@ def test_warehouse_shipment_costs_are_hidden_and_readonly(admin_client, warehous
     assert detail.status_code == 200, detail.text
     assert detail.json()["logistics_cost"] is None
 
-    listing = warehouse_client.get("/shipments?limit=200")
+    # client_id-фильтр: в dev-БД сотни документов, без него документ не попадает в страницу.
+    listing = warehouse_client.get(f"/shipments?client_id={client_id}&limit=200")
     assert listing.status_code == 200, listing.text
     item = next(i for i in listing.json()["items"] if i["id"] == doc_id)
     assert item["logistics_cost"] is None
 
     forbidden = warehouse_client.patch(f"/shipments/{doc_id}", json={"logistics_cost": 777})
     assert forbidden.status_code == 403
+
+
+def test_warehouse_cannot_edit_shipment_plan_or_composition(admin_client, warehouse_client, client_id):
+    line = _fake_line()
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    line_id = detail["lines"][0]["id"]
+
+    date_patch = warehouse_client.patch(f"/shipments/{doc_id}", json={"ship_date": "2026-07-01"})
+    assert date_patch.status_code == 403
+
+    line_patch = warehouse_client.patch(f"/shipments/{doc_id}/lines/{line_id}", json={**line, "qty": 1})
+    assert line_patch.status_code == 403
+
+    line_delete = warehouse_client.delete(f"/shipments/{doc_id}/lines/{line_id}")
+    assert line_delete.status_code == 403

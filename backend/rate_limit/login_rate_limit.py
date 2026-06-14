@@ -1,5 +1,6 @@
 """
-Redis rate limit для POST /auth/login: по IP и по нормализованному email (ключ user = SHA-256).
+Redis rate limit для POST /auth/login (по IP и по нормализованному email, ключ user = SHA-256)
+и POST /auth/refresh (по IP) — общий Redis-клиент и Lua-скрипт.
 
 Атомарность: Lua-скрипт INCR + EXPIRE при первом обращении (фиксированное окно).
 При недоступности Redis (если задан REDIS_URL) — опционально строгий режим через env.
@@ -21,6 +22,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from config import AUTH_RL_REFRESH_MAX, AUTH_RL_REFRESH_WINDOW_SEC
 from rate_limit.client_ip import client_ip_from_request
 from rate_limit import metrics as rl_metrics
 from rate_limit.rl_log import log_auth_rate_limit
@@ -156,19 +158,23 @@ def _parse_email_from_json_body(body: bytes) -> str | None:
     return _normalize_login_email(data.get("email"))
 
 
-def _fallback_consume_ip(key: str) -> bool:
-    if AUTH_RATE_LIMIT_LOGIN_MAX <= 0 or AUTH_RATE_LIMIT_LOGIN_WINDOW_SEC <= 0:
+def _fallback_consume(key: str, max_requests: int, window_sec: float) -> bool:
+    if max_requests <= 0 or window_sec <= 0:
         return True
     now = time.monotonic()
-    cutoff = now - AUTH_RATE_LIMIT_LOGIN_WINDOW_SEC
+    cutoff = now - window_sec
     with _rl_fallback_lock:
         lst = _rl_fallback_hits.setdefault(key, [])
         while lst and lst[0] < cutoff:
             lst.pop(0)
-        if len(lst) >= AUTH_RATE_LIMIT_LOGIN_MAX:
+        if len(lst) >= max_requests:
             return False
         lst.append(now)
     return True
+
+
+def _fallback_consume_ip(key: str) -> bool:
+    return _fallback_consume(key, AUTH_RATE_LIMIT_LOGIN_MAX, AUTH_RATE_LIMIT_LOGIN_WINDOW_SEC)
 
 
 async def _ensure_redis() -> tuple[Any, Any]:
@@ -247,6 +253,93 @@ def _is_redis_infrastructure_error(exc: BaseException) -> bool:
         if isinstance(exc, redis_exc.RedisError):
             return True
     return isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError))
+
+
+REFRESH_TOO_MANY_BODY = {"detail": "Too many requests"}
+
+
+def _key_refresh_ip(ip: str) -> str:
+    return f"rl:refresh:ip:{ip}"
+
+
+async def check_refresh_rate_limit(request: Request) -> JSONResponse | None:
+    """
+    Для POST /auth/refresh: лимит по IP в Redis (общий счётчик для всех воркеров).
+    Без Redis (или при его сбое в fail-open) — in-memory fallback на процесс.
+    """
+    ip = client_ip_from_request(request)
+
+    redis_client, script = await _ensure_redis()
+    if redis_client is None or script is None:
+        if not _fallback_consume(f"mem:refresh:{ip}", AUTH_RL_REFRESH_MAX, AUTH_RL_REFRESH_WINDOW_SEC):
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {
+                    "type": "refresh_ip_memory",
+                    "blocked": True,
+                    "ip": ip,
+                    "reason": "no_redis_or_disabled",
+                },
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+        return None
+
+    try:
+        ok = await _redis_allow(
+            script,
+            _key_refresh_ip(ip),
+            int(AUTH_RL_REFRESH_WINDOW_SEC),
+            AUTH_RL_REFRESH_MAX,
+        )
+        if not ok:
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {
+                    "type": "refresh_ip",
+                    "blocked": True,
+                    "ip": ip,
+                    "limit": AUTH_RL_REFRESH_MAX,
+                    "window_sec": AUTH_RL_REFRESH_WINDOW_SEC,
+                },
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if _is_redis_infrastructure_error(exc):
+            await _invalidate_redis_after_error()
+        log_auth_rate_limit(
+            _log,
+            logging.ERROR,
+            {
+                "type": "redis_error",
+                "blocked": False,
+                "ip": ip,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
+        if AUTH_LOGIN_RL_FAIL_CLOSED:
+            return JSONResponse(
+                {"detail": "Rate limit service temporarily unavailable"},
+                status_code=503,
+            )
+        rl_metrics.increment("auth_rl_redis_fallback_total")
+        if not _fallback_consume(f"mem:refresh:{ip}", AUTH_RL_REFRESH_MAX, AUTH_RL_REFRESH_WINDOW_SEC):
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {
+                    "type": "refresh_ip_memory",
+                    "blocked": True,
+                    "ip": ip,
+                    "reason": "after_redis_error",
+                },
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+    return None
 
 
 async def check_login_rate_limits(request: Request) -> JSONResponse | None:

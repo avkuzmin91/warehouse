@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
@@ -7,9 +7,13 @@ import {
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
+  shipmentPriorityLabel,
+  shipmentPriorityTone,
 } from '../../api/shipmentsApi'
-import type { ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
 import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
+import { ShipmentPriorityControl } from '../features/inventory/ShipmentPriorityControl'
+import { KanbanBoard } from '../features/inventory/shared/KanbanBoard'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -17,6 +21,7 @@ import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
 import { DateRange } from '../data/DateRange'
 import { Badge } from '../primitives/Badge'
 import type { BadgeTone } from '../primitives/Badge'
+import { Dropdown } from '../primitives/Dropdown'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
@@ -36,9 +41,12 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
 ]
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
-  { status: 'draft',   label: 'Создание',  tone: '' },
-  { status: 'packing', label: 'В плане',   tone: 'info' },
-  { status: 'shipped', label: 'Завершён',  tone: 'success' },
+  { status: 'draft',         label: 'Создание',     tone: '' },
+  { status: 'packing',       label: 'В плане',      tone: 'info' },
+  { status: 'on_packing',    label: 'На упаковке',  tone: 'info' },
+  { status: 'relocating',    label: 'Перемещение',  tone: 'info' },
+  { status: 'awaiting_trip', label: 'Ожидает рейс', tone: 'warning' },
+  { status: 'shipped',       label: 'Завершён',     tone: 'success' },
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
@@ -67,6 +75,7 @@ export function InventoryShipmentsListPage() {
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
   const [statusFilter, setStatusFilter] = useFilterParam('status', '')
+  const [cargoFilter, setCargoFilter] = useFilterParam('cargo', '')
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [view, setView] = useFilterParam('view', 'table')
@@ -83,13 +92,18 @@ export function InventoryShipmentsListPage() {
   const { clients } = useLookups()
 
   const isOverdueFilter = statusFilter === 'overdue'
-  const statusParam: ShipmentStatus | ShipmentStatus[] | undefined =
-    !statusFilter || isOverdueFilter
-      ? undefined
-      : statusFilter.includes(',')
-        ? (statusFilter.split(',') as ShipmentStatus[])
-        : (statusFilter as ShipmentStatus)
+  const statusParam = useMemo<ShipmentStatus | ShipmentStatus[] | undefined>(
+    () =>
+      !statusFilter || statusFilter === 'overdue'
+        ? undefined
+        : statusFilter.includes(',')
+          ? (statusFilter.split(',') as ShipmentStatus[])
+          : (statusFilter as ShipmentStatus),
+    [statusFilter],
+  )
   const overdueParam = isOverdueFilter || undefined
+  const cargoParam: ShipmentCargoType | undefined =
+    cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
 
   useEffect(() => {
     if (mode !== 'docs' || view !== 'table') {
@@ -107,6 +121,7 @@ export function InventoryShipmentsListPage() {
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       overdue: overdueParam,
+      cargo_type: cargoParam,
     }, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return
@@ -120,7 +135,7 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [mode, view, page, search, skuFilter, clientId, statusFilter, dateFrom, dateTo, reloadTick])
+  }, [mode, view, page, search, skuFilter, clientId, statusParam, overdueParam, cargoParam, dateFrom, dateTo, reloadTick])
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
@@ -131,6 +146,13 @@ export function InventoryShipmentsListPage() {
     } finally {
       setAdvancingId(null)
     }
+  }
+
+  function handlePrioritySaved(id: string, priorityRank: number | null) {
+    setItems((prev) => prev.map((item) => (
+      item.id === id ? { ...item, priority_rank: priorityRank } : item
+    )))
+    setReloadTick((t) => t + 1)
   }
 
   if (initialLoading) {
@@ -164,9 +186,17 @@ export function InventoryShipmentsListPage() {
             </div>
           )}
           {canEdit && (
-            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
-              <Icon name="plus" size={14} />Новая отгрузка
-            </button>
+            <Dropdown
+              trigger={
+                <button className="btn primary">
+                  <Icon name="plus" size={14} />Новая отгрузка<Icon name="chevDown" size={12} />
+                </button>
+              }
+              items={[
+                { label: 'Отгрузка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
+                { label: 'Отгрузка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/shipments/new?cargo=defect') },
+              ]}
+            />
           )}
         </>
       }
@@ -222,6 +252,16 @@ export function InventoryShipmentsListPage() {
             onClear={() => setMany({ from: '', to: '' })}
           />
           <FilterSelect
+            label="Тип груза"
+            value={cargoFilter}
+            options={[
+              { value: '', label: 'Все типы' },
+              { value: 'good', label: 'Годный' },
+              { value: 'defect', label: 'Брак' },
+            ]}
+            onChange={(v) => setCargoFilter(v)}
+          />
+          <FilterSelect
             label="Статус"
             value={statusFilter}
             options={[
@@ -229,12 +269,11 @@ export function InventoryShipmentsListPage() {
               { value: 'overdue', label: 'Просрочка' },
               ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
-              { value: 'shipped,cancelled', label: 'Завершённые' },
             ]}
             onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
+          {(clientId || skuFilter || dateFrom || dateTo || statusFilter || cargoFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '', cargo: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -267,6 +306,7 @@ export function InventoryShipmentsListPage() {
           clientId={clientId}
           status={statusParam}
           overdue={overdueParam}
+          cargoType={cargoParam}
           dateFrom={dateFrom}
           dateTo={dateTo}
           page={page}
@@ -279,22 +319,20 @@ export function InventoryShipmentsListPage() {
               <tr>
                 <th style={{ width: 22 }} />
                 <th style={{ width: 120 }}>Номер</th>
+                <th style={{ width: 130 }}>Приор.</th>
                 <th>Клиент</th>
-                <th>Назначение</th>
                 <th style={{ width: 110 }}>Дата отгрузки</th>
-                <th style={{ textAlign: 'right', width: 60 }}>SKU</th>
                 <th style={{ textAlign: 'right', width: 80 }}>План</th>
                 <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
-                <th style={{ width: 130 }}>Перевозчик</th>
                 <th style={{ width: 130 }}>Статус</th>
                 <th style={{ width: 150 }}>Выполнение</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={11} />
+                <SkeletonRows rows={8} cols={9} />
               ) : items.length === 0 ? (
-                <tr><td colSpan={11}>
+                <tr><td colSpan={9}>
                   <EmptyState
                     title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
                     sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
@@ -321,22 +359,29 @@ export function InventoryShipmentsListPage() {
                         )}
                       </Td>
                       <Td className="mono" style={{ fontWeight: 500 }}>
-                        {item.doc_number}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {item.doc_number}
+                          {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                        </span>
                         {overdue && (
                           <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>
                             просрочена
                           </div>
                         )}
                       </Td>
+                      <Td>
+                        <ShipmentPriorityControl
+                          shipment={item}
+                          canEdit={canEdit}
+                          onSaved={(priorityRank) => handlePrioritySaved(item.id, priorityRank)}
+                        />
+                      </Td>
                       <Td>{item.client_name ?? '—'}</Td>
-                      <Td className="t-sub">{item.destination ?? '—'}</Td>
                       <Td className="mono" style={overdue ? { color: 'var(--c-danger)', fontWeight: 500 } : {}}>
                         {fmtDate(item.ship_date)}
                       </Td>
-                      <Td className="num">{item.sku_count}</Td>
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
-                      <Td>{item.carrier ?? '—'}</Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
@@ -389,142 +434,51 @@ export function InventoryShipmentsListPage() {
         </>
       ) : (
         <KanbanBoard
-          filters={{ search: search.trim() || undefined, sku: skuFilter.trim() || undefined, client_id: clientId || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined }}
+          columns={KANBAN_COLS}
+          gridCols={3}
+          fetchKey={`${search.trim()}|${skuFilter.trim()}|${clientId}|${dateFrom}|${dateTo}|${cargoParam}|${reloadTick}`}
+          fetchPage={(status, page, limit, signal) => listShipments({
+            page,
+            limit,
+            status,
+            search: search.trim() || undefined,
+            sku: skuFilter.trim() || undefined,
+            client_id: clientId || undefined,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+            cargo_type: cargoParam,
+          }, signal)}
+          renderCard={(item) => <ShipmentKanbanCard item={item} />}
+          highlight={isShipmentOverdue}
           onNavigate={(id) => navigate(`/inventory/shipments/${id}`)}
-          reloadTick={reloadTick}
         />
       )}
     </ListPage>
   )
 }
 
-const KANBAN_PAGE = 20
-
-type KanbanFilters = {
-  search?: string
-  sku?: string
-  client_id?: string
-  date_from?: string
-  date_to?: string
-}
-
-function KanbanBoard({ filters, onNavigate, reloadTick }: {
-  filters: KanbanFilters
-  onNavigate: (id: string) => void
-  reloadTick?: number
-}) {
+function ShipmentKanbanCard({ item }: { item: ShipmentListItem }) {
+  const overdue = isShipmentOverdue(item)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, alignItems: 'start' }}>
-      {KANBAN_COLS.map((col) => (
-        <KanbanColumn key={col.status} col={col} filters={filters} onNavigate={onNavigate} reloadTick={reloadTick} />
-      ))}
-    </div>
-  )
-}
-
-function KanbanColumn({ col, filters, onNavigate, reloadTick }: {
-  col: typeof KANBAN_COLS[number]
-  filters: KanbanFilters
-  onNavigate: (id: string) => void
-  reloadTick?: number
-}) {
-  const [items, setItems] = useState<ShipmentListItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const filterKey = `${filters.search}|${filters.sku}|${filters.client_id}|${filters.date_from}|${filters.date_to}|${reloadTick ?? 0}`
-  const prevFilterKey = useRef(filterKey)
-
-  useEffect(() => {
-    const ctrl = new AbortController()
-    const isReset = prevFilterKey.current !== filterKey
-    prevFilterKey.current = filterKey
-    const activePage = isReset ? 1 : page
-    if (isReset) {
-      setPage(1)
-      setItems([])
-    }
-    if (activePage === 1) setLoading(true); else setLoadingMore(true)
-    listShipments({
-      page: activePage,
-      limit: KANBAN_PAGE,
-      status: col.status,
-      ...filters,
-    }, ctrl.signal)
-      .then((res) => {
-        if (ctrl.signal.aborted) return
-        setTotal(res.total)
-        setItems((prev) => activePage === 1 ? res.items : [...prev, ...res.items])
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (ctrl.signal.aborted) return
-        setLoading(false)
-        setLoadingMore(false)
-      })
-    return () => ctrl.abort()
-  }, [page, filterKey, col.status])
-
-  const hasMore = items.length < total
-
-  return (
-    <div style={{ background: 'var(--c-bg-sunken)', borderRadius: 10, padding: 10, minHeight: 200 }}>
-      <div style={{ display: 'flex', alignItems: 'center', padding: '4px 6px 10px', gap: 8 }}>
-        <Badge tone={col.tone} dot>{col.label}</Badge>
-        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-          {loading ? '…' : total}
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
+        {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+        {item.priority_rank && (
+          <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
+        )}
+        {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
+          {fmtDate(item.ship_date)}
         </span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}>
-            <div style={{ width: 20, height: 20, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-          </div>
-        ) : items.length === 0 ? (
-          <div style={{ padding: '16px 6px', fontSize: 12, color: 'var(--c-text-faint)', textAlign: 'center' }}>Нет документов</div>
-        ) : (
-          items.map((item) => {
-            const overdue = isShipmentOverdue(item)
-            return (
-              <div
-                key={item.id}
-                className="card"
-                style={{
-                  padding: 10, cursor: 'pointer',
-                  ...(overdue ? { borderLeft: '2px solid var(--c-danger)' } : {}),
-                }}
-                onClick={() => onNavigate(item.id)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-                  {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-                  <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-                    {fmtDate(item.ship_date)}
-                  </span>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-                <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
-                  <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-                  <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-                </div>
-              </div>
-            )
-          })
-        )}
-        {hasMore && (
-          <button
-            className="btn ghost sm"
-            style={{ width: '100%', justifyContent: 'center', color: 'var(--c-text-subtle)', fontSize: 12 }}
-            disabled={loadingMore}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {loadingMore ? '…' : `Ещё ${total - items.length}`}
-          </button>
-        )}
+      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
+      <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
+        <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
+        <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
       </div>
-    </div>
+    </>
   )
 }

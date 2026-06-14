@@ -129,6 +129,14 @@ export function getSimpleDictionaryById(apiPath: string, id: string) {
   return request<DictionaryItem>(`${path}/${id}`)
 }
 
+export function setUnloadingZonePacking(id: string) {
+  return request<{ message: string }>(`/unloading-zones/${id}/set-packing`, { method: 'POST' })
+}
+
+export function setUnloadingZoneShipping(id: string) {
+  return request<{ message: string }>(`/unloading-zones/${id}/set-shipping`, { method: 'POST' })
+}
+
 export function createSimpleDictionaryItem(
   apiPath: string,
   payload: { name: string; is_active: boolean; color_hex?: string | null },
@@ -276,8 +284,8 @@ export function getProducts(params?: ProductListQueryParams) {
   return request<ProductListResponse>(q ? `/products?${q}` : '/products')
 }
 
-export function getProduct(id: string) {
-  return request<ProductItem>(`/products/${id}`)
+export function getProduct(id: string, signal?: AbortSignal) {
+  return request<ProductItem>(`/products/${id}`, { signal })
 }
 
 export function createProduct(payload: {
@@ -287,6 +295,7 @@ export function createProduct(payload: {
       type_id: string
       sku_base: string
       weight_grams?: number | null
+      items_per_pallet?: number | null
       client_id: string
       is_active: boolean
     }
@@ -316,6 +325,7 @@ export function updateProduct(
     is_deleted?: boolean
     sku_base?: string
     weight_grams?: number | null
+    items_per_pallet?: number | null
     image_urls?: string[]
   },
 ) {
@@ -325,8 +335,8 @@ export function updateProduct(
   })
 }
 
-export function getProductVariants(productId: string) {
-  return request<ProductVariantItem[]>(`/products/${productId}/variants`)
+export function getProductVariants(productId: string, signal?: AbortSignal) {
+  return request<ProductVariantItem[]>(`/products/${productId}/variants`, { signal })
 }
 
 export function patchProductVariants(productId: string, variants: ProductVariantWriteItem[]) {

@@ -89,7 +89,7 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
           <DateTimeField value={value.transport_ordered_at} invalid={invalid?.transport_ordered_at} onChange={(v) => onChange({ transport_ordered_at: v })} />
         </div>
         <div>
-          <FieldLabel required>Плановое прибытие</FieldLabel>
+          <FieldLabel required>{etaLabel}</FieldLabel>
           <DateTimeField value={value.eta} invalid={invalid?.eta} onChange={(v) => onChange({ eta: v })} />
         </div>
         {showCosts && (

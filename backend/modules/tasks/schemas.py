@@ -13,6 +13,7 @@ class TaskItem(BaseModel):
     role: str
     direction: str | None = None  # для рейсов: inbound | outbound
     since: str | None = None
+    priority_rank: int | None = None  # только для отгрузок
 
 
 class TasksResponse(BaseModel):

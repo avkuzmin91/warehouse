@@ -1,4 +1,3 @@
-import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { RootErrorBoundary } from './RootErrorBoundary'
@@ -28,12 +27,10 @@ if (!rootEl) {
   document.body.appendChild(p)
 } else {
   createRoot(rootEl).render(
-    <StrictMode>
-      <RootErrorBoundary>
-        <BrowserRouter basename={routerBasename()}>
-          <App />
-        </BrowserRouter>
-      </RootErrorBoundary>
-    </StrictMode>,
+    <RootErrorBoundary>
+      <BrowserRouter basename={routerBasename()}>
+        <App />
+      </BrowserRouter>
+    </RootErrorBoundary>,
   )
 }

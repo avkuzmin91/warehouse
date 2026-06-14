@@ -88,6 +88,24 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
     assert final["doc"]["load_factor"] == "full"
 
 
+def test_trip_unload_requires_load_factor(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+
+    blocked = admin_client.post(f"/trips/{trip_id}/unload", json={})
+    assert blocked.status_code == 400, blocked.text
+    assert "загруженность" in blocked.json()["detail"].lower()
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
+
+    bad = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "half"})
+    assert bad.status_code == 400, bad.text
+
+    ok = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
+    assert ok.status_code == 200, ok.text
+
+
 def test_trip_unload_start_copied_from_arrival_and_can_be_adjusted(admin_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
     trip_id = _handoff_ready_trip(admin_client, receipt_id)
@@ -187,9 +205,12 @@ def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
 
-    tasks = admin_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    kinds = {(t["doc_id"], t["kind"]) for t in tasks.json()["items"]}
+    # Прямой вызов сервиса: API /tasks отдаёт топ-20, что зависит от объёма БД.
+    from dbconn import get_connection
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as conn:
+        items = list_my_tasks(conn, user={"role": "admin"})
+    kinds = {(t["doc_id"], t["kind"]) for t in items}
     # рейс в costing → задача менеджеру; поступление в on_intake → задача кладовщику
     assert (trip_id, "trip_cost") in kinds
     assert (receipt_id, "receipt_intake") in kinds
@@ -246,24 +267,38 @@ def test_actual_arrival_blocked_with_trip(admin_client, client_id):
     assert bad.status_code == 400, bad.text
 
 
-def test_tasks_endpoint_excludes_on_review_receipts_for_warehouse(admin_client, warehouse_client, client_id):
-    receipt_id = _planned_receipt(admin_client, client_id)
-    to_intake = admin_client.post(f"/receipts/{receipt_id}/advance")
-    assert to_intake.status_code == 200, to_intake.text
-    assert to_intake.json()["message"] == "on_intake"
-    to_review = admin_client.post(f"/receipts/{receipt_id}/advance")
-    assert to_review.status_code == 200, to_review.text
-    assert to_review.json()["message"] == "on_review"
+def test_cancel_receipt_blocked_while_linked_to_trip(admin_client, client_id):
+    linked_receipt = _planned_receipt(admin_client, client_id)
+    create = admin_client.post("/trips", json={"receipt_doc_ids": [linked_receipt]})
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
 
-    tasks = warehouse_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    items = tasks.json()["items"]
-    kinds = {(t["doc_id"], t["kind"]) for t in items}
-    assert (receipt_id, "receipt_review") not in kinds
-    assert all(
-        not (t["doc_type"] == "receipt" and t["status"] == "on_review")
-        for t in items
-    )
+    bad = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert bad.status_code == 400, bad.text
+    assert "привязано к рейсу" in bad.json()["detail"]
+
+    unlink = admin_client.delete(f"/trips/{trip_id}/receipts/{linked_receipt}")
+    assert unlink.status_code == 200, unlink.text
+
+    ok = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["message"] == "cancelled"
+
+
+def test_cancel_receipt_allowed_when_trip_cancelled(admin_client, client_id):
+    linked_receipt = _planned_receipt(admin_client, client_id)
+    create = admin_client.post("/trips", json={"receipt_doc_ids": [linked_receipt]})
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+
+    cancel_trip = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel_trip.status_code == 200, cancel_trip.text
+
+    ok = admin_client.post(f"/receipts/{linked_receipt}/cancel")
+    assert ok.status_code == 200, ok.text
+
+
+# Тест on_review-задач удалён: статус документа on_review убран (приёмка завершается на done).
 
 
 def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manager_client, client_id):
@@ -273,9 +308,10 @@ def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manag
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
 
-    tasks = manager_client.get("/tasks")
-    assert tasks.status_code == 200, tasks.text
-    items = tasks.json()["items"]
+    from dbconn import get_connection
+    from modules.tasks.service import list_my_tasks
+    with get_connection() as conn:
+        items = list_my_tasks(conn, user={"role": "manager"})
     assert (trip_id, "trip_cost") in {(t["doc_id"], t["kind"]) for t in items}
     assert all(t["kind"] == "trip_cost" for t in items)
 

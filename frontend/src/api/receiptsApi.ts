@@ -64,16 +64,8 @@ export type ReceiptLine = {
   size_name: string | null
   storage_zone_id: string | null
   storage_zone_name: string | null
-  good_zone_id: string | null
-  good_zone_name: string | null
-  defect_zone_id: string | null
-  defect_zone_name: string | null
   planned_qty: number
   accepted_qty: number | null
-  accepted: number
-  defect: number
-  ops_count: number
-  qc_status: ReceiptQcStatus
   created_at: string
 }
 
@@ -94,10 +86,7 @@ export type ReceiptState = {
   lines: ReceiptLine[]
   total_planned: number
   total_accepted_qty: number
-  total_accepted: number
-  total_defect: number
   sku_count: number
-  ops_count: number
 }
 
 export type ReceiptDetail = {
@@ -111,8 +100,6 @@ export type ReceiptListItem = ReceiptDoc & {
   sku_count: number
   total_planned: number
   total_accepted_qty: number
-  total_accepted: number
-  total_defect: number
 }
 
 export type ReceiptListResponse = {
@@ -189,10 +176,6 @@ export type ReceiptLineUpdatePayload = {
   accepted_qty?: number
   storage_zone_id?: string | null
   storage_zone_name?: string | null
-  good_zone_id?: string | null
-  good_zone_name?: string | null
-  defect_zone_id?: string | null
-  defect_zone_name?: string | null
 }
 
 export type ReceiptListParams = {
@@ -262,30 +245,8 @@ export function getReceiptLines(params: ReceiptListParams = {}, signal?: AbortSi
   return request<ReceiptLinesResponse>(`/receipts/lines${q ? `?${q}` : ''}`, { signal })
 }
 
-function normalizeReceiptQcStatus(status: string): ReceiptQcStatus {
-  return status === 'completed' ? 'done' : (status as ReceiptQcStatus)
-}
-
-function normalizeReceiptDetail(detail: ReceiptDetail): ReceiptDetail {
-  return {
-    ...detail,
-    lines: detail.lines.map((line) => ({
-      ...line,
-      qc_status: normalizeReceiptQcStatus(line.qc_status),
-    })),
-    state: {
-      ...detail.state,
-      lines: detail.state.lines.map((line) => ({
-        ...line,
-        qc_status: normalizeReceiptQcStatus(line.qc_status),
-      })),
-    },
-  }
-}
-
-export async function getReceipt(docId: string) {
-  const detail = await request<ReceiptDetail>(`/receipts/${docId}`)
-  return normalizeReceiptDetail(detail)
+export function getReceipt(docId: string) {
+  return request<ReceiptDetail>(`/receipts/${docId}`)
 }
 
 export function createReceipt(payload: ReceiptCreatePayload) {
@@ -334,38 +295,7 @@ export function deleteReceiptLine(docId: string, lineId: string) {
   })
 }
 
-export function recordReceiptOp(
-  docId: string,
-  payload: {
-    line_id: string
-    op_type: 'receiving' | 'defect_fix' | 'receiving_correction' | 'defect_correction'
-    qty: number
-    reason?: string | null
-    comment?: string | null
-  },
-) {
-  return request<{ message: string }>(`/receipts/${docId}/ops`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function completeReceiptLine(
-  docId: string,
-  lineId: string,
-  targets?: { accepted: number; defect: number },
-) {
-  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/qc-complete`, {
-    method: 'POST',
-    body: targets ? JSON.stringify(targets) : undefined,
-  })
-}
-
-export function reopenReceiptLine(docId: string, lineId: string) {
-  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/qc-reopen`, {
-    method: 'POST',
-  })
-}
+// QC поступления удалён: годность/брак определяются при упаковке отгрузки.
 
 export function advanceReceiptStatus(docId: string) {
   return request<{ message: string }>(`/receipts/${docId}/advance`, {
@@ -394,18 +324,12 @@ export function cancelReceipt(docId: string) {
   })
 }
 
-export function reopenReceipt(docId: string) {
-  return request<{ message: string }>(`/receipts/${docId}/reopen`, {
-    method: 'POST',
-  })
-}
-
 // --- Labels & helpers ---
 
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
-  on_intake: 'На приемке',
+  on_intake: 'На приёмке',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
@@ -420,8 +344,10 @@ export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   cancelled: 'Аннулирован',
 }
 
+// Поток поступления завершается на приёмке: on_review больше не статус документа
+// (остаётся только как статус инвентаря). Старые done-документы отображаются корректно.
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_intake', 'on_review', 'done',
+  'draft', 'planned', 'on_intake', 'done',
 ]
 
 export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
@@ -457,10 +383,8 @@ export function receiptStatusTone(status: ReceiptStatus) {
 }
 
 export function receiptQcStatus(item: ReceiptListItem): { label: string; tone: string } {
-  if (item.status === 'done') return { label: 'Завершена', tone: 'success' }
-  if (item.status === 'on_review') return { label: 'В процессе', tone: 'warning' }
-  if (item.total_defect > 0) return { label: 'Есть брак', tone: 'danger' }
-  if (item.total_accepted > 0) return { label: 'Частично', tone: 'info' }
+  if (item.status === 'done') return { label: 'Принято', tone: 'success' }
+  if (item.status === 'on_intake') return { label: 'Приёмка', tone: 'warning' }
   return { label: 'Не начата', tone: '' }
 }
 

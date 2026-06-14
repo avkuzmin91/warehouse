@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class TripDocCreate(BaseModel):
     direction: str | None = None  # inbound | outbound (по умолчанию inbound)
+    cargo_type: str | None = None  # good | defect (для рейса отгрузки; по умолчанию good)
     origin_id: str | None = None
     origin_name: str | None = None
     carrier_id: str | None = None
@@ -69,6 +70,7 @@ class TripDocResponse(BaseModel):
     id: str
     trip_number: str
     direction: str
+    cargo_type: str = "good"
     status: str
     assignee_role: str | None = None
     origin_id: str | None = None
@@ -133,6 +135,7 @@ class TripListItem(BaseModel):
     id: str
     trip_number: str
     direction: str
+    cargo_type: str = "good"
     status: str
     origin_name: str | None = None
     carrier_name: str | None = None

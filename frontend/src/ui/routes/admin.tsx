@@ -1,6 +1,9 @@
 import { lazy } from 'react'
 import { Navigate, Route } from 'react-router-dom'
-import { DictionariesPage } from '../pages/DictionariesPage'
+
+const DictionariesPage = lazy(() =>
+  import('../pages/DictionariesPage').then((m) => ({ default: m.DictionariesPage })),
+)
 
 const HomePage = lazy(() =>
   import('../pages/HomePage').then((m) => ({ default: m.HomePage })),
@@ -40,6 +43,9 @@ const ProductCreatePage = lazy(() =>
 )
 const ProductEditPage = lazy(() =>
   import('../pages/ProductEditPage').then((m) => ({ default: m.ProductEditPage })),
+)
+const ProductViewPage = lazy(() =>
+  import('../pages/ProductViewPage').then((m) => ({ default: m.ProductViewPage })),
 )
 
 export const adminRoutes = [
@@ -86,5 +92,6 @@ export const adminRoutes = [
   <Route key="dictionaries-unloading-zones" path="/dictionaries/unloading-zones" element={<Navigate to="/dictionaries?type=unloading-zones" replace />} />,
 
   <Route key="dictionaries-products-new" path="/dictionaries/products/new" element={<ProductCreatePage />} />,
-  <Route key="dictionaries-products-id" path="/dictionaries/products/:id" element={<ProductEditPage />} />,
+  <Route key="dictionaries-products-id" path="/dictionaries/products/:id" element={<ProductViewPage />} />,
+  <Route key="dictionaries-products-id-edit" path="/dictionaries/products/:id/edit" element={<ProductEditPage />} />,
 ]

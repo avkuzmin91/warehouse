@@ -78,3 +78,94 @@ def test_carrier_duplicate_name_returns_400(admin_client):
         with get_connection() as conn:
             conn.execute("DELETE FROM carriers WHERE id IN (?, ?)", (carrier_a, carrier_b))
             conn.commit()
+
+
+def test_client_store_rename_propagates_to_shipment_lines(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    client_id = f"client-{suffix}"
+    store_id = f"store-{suffix}"
+    doc_id = str(uuid.uuid4())
+    line_id = str(uuid.uuid4())
+    old_name = f"Store Old {suffix}"
+    new_name = f"Store New {suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO client_stores (id, client_id, name, is_active, is_deleted, created_at) "
+            "VALUES (?, ?, ?, 1, 0, NOW())",
+            (store_id, client_id, old_name),
+        )
+        conn.execute(
+            """INSERT INTO shipment_docs
+               (id, doc_number, client_id, client_name, status, is_deleted, created_at, created_by)
+               VALUES (?, ?, ?, 'Test Client', 'draft', 0, NOW(), 'test')""",
+            (doc_id, f"SHP-T-{doc_id}", client_id),
+        )
+        conn.execute(
+            """INSERT INTO shipment_lines
+               (id, doc_id, product_id, product_name, product_sku,
+                qty, shipped_qty, store_id, store_name, is_deleted, created_at)
+               VALUES (?, ?, ?, 'Test Product', 'TST-SKU', 1, 0, ?, ?, 0, NOW())""",
+            (line_id, doc_id, str(uuid.uuid4()), store_id, old_name),
+        )
+        conn.commit()
+
+    try:
+        res = admin_client.patch(f"/clients/{client_id}/stores/{store_id}", json={"name": new_name})
+        assert res.status_code == 200, res.text
+
+        with get_connection() as conn:
+            row = conn.execute("SELECT store_name FROM shipment_lines WHERE id = ?", (line_id,)).fetchone()
+        assert row["store_name"] == new_name
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM shipment_lines WHERE id = ?", (line_id,))
+            conn.execute("DELETE FROM shipment_docs WHERE id = ?", (doc_id,))
+            conn.execute("DELETE FROM client_stores WHERE id = ?", (store_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.commit()
+
+
+def test_set_packing_zone_is_exclusive(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    zone_a = f"zone-a-{suffix}"
+    zone_b = f"zone-b-{suffix}"
+    with get_connection() as conn:
+        for zid, nm in ((zone_a, f"ZoneA {suffix}"), (zone_b, f"ZoneB {suffix}")):
+            conn.execute(
+                "INSERT INTO unloading_zones (id, name, is_active, is_deleted, is_packing_zone, created_at) "
+                "VALUES (?, ?, 1, 0, 0, NOW())",
+                (zid, nm),
+            )
+        conn.commit()
+    try:
+        r = admin_client.post(f"/unloading-zones/{zone_a}/set-packing")
+        assert r.status_code == 200, r.text
+        with get_connection() as conn:
+            flags = {row["id"]: row["is_packing_zone"] for row in conn.execute(
+                "SELECT id, is_packing_zone FROM unloading_zones WHERE id IN (?, ?)", (zone_a, zone_b)
+            ).fetchall()}
+        assert flags[zone_a] == 1 and flags[zone_b] == 0
+        # Назначение другой зоны снимает флаг с прежней (ровно одна).
+        admin_client.post(f"/unloading-zones/{zone_b}/set-packing")
+        with get_connection() as conn:
+            flags = {row["id"]: row["is_packing_zone"] for row in conn.execute(
+                "SELECT id, is_packing_zone FROM unloading_zones WHERE id IN (?, ?)", (zone_a, zone_b)
+            ).fetchall()}
+        assert flags[zone_a] == 0 and flags[zone_b] == 1
+        # Список отдаёт флаг.
+        lst = admin_client.get("/unloading-zones?limit=100").json()["items"]
+        b_item = next(i for i in lst if i["id"] == zone_b)
+        assert b_item["is_packing_zone"] is True
+    finally:
+        with get_connection() as conn:
+            # Вернём флаг засеянной «Зоне упаковки», чтобы не сломать другие тесты.
+            conn.execute("DELETE FROM unloading_zones WHERE id IN (?, ?)", (zone_a, zone_b))
+            seed = conn.execute("SELECT id FROM unloading_zones WHERE name = 'Зона упаковки' ORDER BY created_at LIMIT 1").fetchone()
+            if seed:
+                conn.execute("UPDATE unloading_zones SET is_packing_zone = CASE WHEN id = ? THEN 1 ELSE 0 END", (seed["id"],))
+            conn.commit()

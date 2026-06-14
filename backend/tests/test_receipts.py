@@ -136,29 +136,52 @@ def test_start_intake_requires_actual_arrival_date(admin_client, client_id):
 
 def test_receipt_advance_state_machine(admin_client, client_id):
     payload = _make_receipt_payload(client_id)
+    payload["lines"] = [_make_receipt_line()]
     r = admin_client.post("/receipts", json=payload)
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
 
-    # draft → planned
-    r2 = admin_client.post(f"/receipts/{doc_id}/advance")
-    assert r2.status_code == 200, r2.text
-    assert r2.json()["message"] == "planned"
+    # draft → planned → on_intake → done («Принять товары»); QC перенесён в упаковку.
+    arrive = _arrive(admin_client, doc_id)
+    assert arrive.status_code == 200, arrive.text
+    assert arrive.json()["message"] == "done"
+    assert admin_client.get(f"/receipts/{doc_id}").json()["doc"]["status"] == "done"
 
-    # planned → on_intake
-    r3 = admin_client.post(f"/receipts/{doc_id}/advance")
-    assert r3.status_code == 200, r3.text
-    assert r3.json()["message"] == "on_intake"
 
-    # on_intake → on_review
-    r4 = admin_client.post(f"/receipts/{doc_id}/advance")
-    assert r4.status_code == 200, r4.text
-    assert r4.json()["message"] == "on_review"
+def test_arrive_writes_intake_move_to_journal(admin_client, client_id):
+    """Завершение приёмки пишет журнальное движение intake → storage по каждой строке."""
+    payload = _make_receipt_payload(client_id)
+    payload["lines"] = [_make_receipt_line(planned_qty=12)]
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
 
-    # on_review → done
-    r5 = admin_client.post(f"/receipts/{doc_id}/advance")
-    assert r5.status_code == 200, r5.text
-    assert r5.json()["message"] == "done"
+    arrive = _arrive(admin_client, doc_id)
+    assert arrive.status_code == 200, arrive.text
+
+    line = admin_client.get(f"/receipts/{doc_id}").json()["lines"][0]
+    with get_connection() as conn:
+        moves = conn.execute(
+            "SELECT * FROM zone_relocations WHERE receipt_line_id = ?", (line["id"],)
+        ).fetchall()
+    assert len(moves) == 1, moves
+    mv = moves[0]
+    assert str(mv["from_op"]) == "intake"
+    assert str(mv["to_op"]) == "storage"
+    assert str(mv["from_quality"]) == "good" and str(mv["to_quality"]) == "good"
+    assert int(mv["qty"]) == 12
+    assert mv["to_zone_id"] == line["storage_zone_id"]
+    assert str(mv["client_id"]) == client_id
+
+    # Остаток встаёт из журнала: storage/good в зоне приёмки = принятому.
+    from modules.balances.service import get_available_in_zone
+
+    with get_connection() as conn:
+        available = get_available_in_zone(
+            conn,
+            product_id=str(mv["product_id"]), color_id=mv["color_id"], size_id=mv["size_id"],
+            client_id=client_id, zone_id=line["storage_zone_id"],
+            op="storage", quality="good",
+        )
+    assert available == 12
 
 
 def test_receipt_advance_final_status_returns_400(admin_client, client_id):
@@ -264,71 +287,7 @@ def test_manager_can_edit_planned_arrival(manager_client, client_id):
     assert detail.json()["doc"]["arrival_date"] == "2026-07-01"
 
 
-def test_complete_receipt_line_sets_qc_status_done(admin_client, client_id):
-    line_id = str(uuid.uuid4())
-    payload = _make_receipt_payload(client_id)
-    payload["lines"] = [_make_receipt_line(3)]
-    response = admin_client.post("/receipts", json=payload)
-    assert response.status_code == 200, response.text
-    doc_id = response.json()["message"]
-
-    detail = admin_client.get(f"/receipts/{doc_id}")
-    assert detail.status_code == 200, detail.text
-    line_id = detail.json()["lines"][0]["id"]
-
-    arrive = _arrive(admin_client, doc_id)
-    assert arrive.status_code == 200, arrive.text
-
-    # Принят зафиксирован при прибытии.
-    updated_after_arrive = admin_client.get(f"/receipts/{doc_id}")
-    assert updated_after_arrive.json()["lines"][0]["accepted_qty"] == 3
-
-    # Место годного обязательно при accepted > 0.
-    zone = admin_client.patch(
-        f"/receipts/{doc_id}/lines/{line_id}",
-        json={"good_zone_id": str(uuid.uuid4()), "good_zone_name": "Зона А"},
-    )
-    assert zone.status_code == 200, zone.text
-
-    complete = admin_client.post(
-        f"/receipts/{doc_id}/lines/{line_id}/qc-complete",
-        json={"accepted": 3, "defect": 0},
-    )
-    assert complete.status_code == 200, complete.text
-
-    updated = admin_client.get(f"/receipts/{doc_id}")
-    assert updated.status_code == 200, updated.text
-    data = updated.json()
-    assert data["lines"][0]["qc_status"] == "done"
-    assert data["state"]["all_qc_done"] is True
-
-
-def test_record_receipt_op_sets_line_qc_status_in_progress(admin_client, client_id):
-    payload = _make_receipt_payload(client_id)
-    payload["lines"] = [_make_receipt_line(3)]
-    response = admin_client.post("/receipts", json=payload)
-    assert response.status_code == 200, response.text
-    doc_id = response.json()["message"]
-
-    arrive = _arrive(admin_client, doc_id)
-    assert arrive.status_code == 200, arrive.text
-
-    detail = admin_client.get(f"/receipts/{doc_id}")
-    assert detail.status_code == 200, detail.text
-    line_id = detail.json()["lines"][0]["id"]
-
-    op = admin_client.post(
-        f"/receipts/{doc_id}/ops",
-        json={"line_id": line_id, "op_type": "receiving", "qty": 1},
-    )
-    assert op.status_code == 200, op.text
-
-    updated = admin_client.get(f"/receipts/{doc_id}")
-    assert updated.status_code == 200, updated.text
-    data = updated.json()
-    assert data["lines"][0]["accepted"] == 1
-    assert data["lines"][0]["qc_status"] == "in_progress"
-    assert data["state"]["lines"][0]["qc_status"] == "in_progress"
+# Тесты отключённого QC поступления удалены: годность определяется при упаковке.
 
 
 def test_arrive_requires_accepted_qty_for_every_line(admin_client, client_id):
@@ -346,34 +305,4 @@ def test_arrive_requires_accepted_qty_for_every_line(admin_client, client_id):
     assert bad.status_code == 400, bad.text
 
 
-def test_record_receipt_correction_updates_saved_qty(admin_client, client_id):
-    payload = _make_receipt_payload(client_id)
-    payload["lines"] = [_make_receipt_line(5)]
-    response = admin_client.post("/receipts", json=payload)
-    assert response.status_code == 200, response.text
-    doc_id = response.json()["message"]
-
-    arrive = _arrive(admin_client, doc_id)
-    assert arrive.status_code == 200, arrive.text
-
-    detail = admin_client.get(f"/receipts/{doc_id}")
-    assert detail.status_code == 200, detail.text
-    line_id = detail.json()["lines"][0]["id"]
-
-    first_op = admin_client.post(
-        f"/receipts/{doc_id}/ops",
-        json={"line_id": line_id, "op_type": "receiving", "qty": 3},
-    )
-    assert first_op.status_code == 200, first_op.text
-
-    correction_op = admin_client.post(
-        f"/receipts/{doc_id}/ops",
-        json={"line_id": line_id, "op_type": "receiving_correction", "qty": 1},
-    )
-    assert correction_op.status_code == 200, correction_op.text
-
-    updated = admin_client.get(f"/receipts/{doc_id}")
-    assert updated.status_code == 200, updated.text
-    data = updated.json()
-    assert data["lines"][0]["accepted"] == 1
-    assert data["lines"][0]["qc_status"] == "in_progress"
+# Тест корректировок отключённого QC удалён: годность определяется при упаковке.

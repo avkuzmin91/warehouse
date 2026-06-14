@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
     TRIP_DIRECTION_INBOUND,
     TRIP_DIRECTION_OUTBOUND,
     TRIP_LOAD_FULL,
@@ -52,6 +54,7 @@ from modules.logistics.schemas import (
     TripUnloadPayload,
 )
 from modules.logistics.service import (
+    assert_shipments_ready_for_load,
     cascade_receipts_to_intake,
     cascade_shipments_to_shipped,
     link_receipts,
@@ -99,6 +102,7 @@ def _doc_response(row, *, show_costs: bool = True) -> TripDocResponse:
         id=str(row["id"]),
         trip_number=str(row["trip_number"]),
         direction=str(row["direction"]),
+        cargo_type=str(row["cargo_type"] or SHIPMENT_CARGO_GOOD),
         status=str(row["status"]),
         assignee_role=row["assignee_role"],
         origin_id=row["origin_id"],
@@ -141,6 +145,13 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
     direction = (payload.direction or TRIP_DIRECTION_INBOUND).strip()
     if direction not in (TRIP_DIRECTION_INBOUND, TRIP_DIRECTION_OUTBOUND):
         raise HTTPException(status_code=400, detail="Недопустимое направление рейса")
+    # Тип груза значим только для рейса отгрузки; поступления всегда 'good'.
+    if direction == TRIP_DIRECTION_OUTBOUND:
+        cargo_type = (payload.cargo_type or SHIPMENT_CARGO_GOOD).strip()
+        if cargo_type not in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+            raise HTTPException(status_code=400, detail="Недопустимый тип груза рейса")
+    else:
+        cargo_type = SHIPMENT_CARGO_GOOD
     uid = str(user["id"])
     with get_connection() as conn:
         trip_id = str(uuid4())
@@ -149,14 +160,14 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
         conn.execute(
             """
             INSERT INTO trip_docs
-              (id, trip_number, direction, status, assignee_role,
+              (id, trip_number, direction, cargo_type, status, assignee_role,
                origin_id, origin_name, carrier_id, carrier_name,
                vehicle_type_id, vehicle_type_name, vehicle_number, transport_ordered_at, eta,
                cost_estimate, comment, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                trip_id, trip_num, direction, TRIP_STATUS_DRAFT,
+                trip_id, trip_num, direction, cargo_type, TRIP_STATUS_DRAFT,
                 TRIP_STATUS_ASSIGNEE_ROLE.get(TRIP_STATUS_DRAFT),
                 (payload.origin_id or "").strip() or None,
                 (payload.origin_name or "").strip() or None,
@@ -212,6 +223,7 @@ def list_trips(
             id=str(r["id"]),
             trip_number=str(r["trip_number"]),
             direction=str(r["direction"]),
+            cargo_type=str(r["cargo_type"] or SHIPMENT_CARGO_GOOD),
             status=str(r["status"]),
             origin_name=r["origin_name"],
             carrier_name=r["carrier_name"],
@@ -404,8 +416,8 @@ def unlink_trip_shipment(trip_id: str, shipment_doc_id: str, user=Depends(get_cu
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
-        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
-            raise HTTPException(status_code=400, detail="Отвязать отгрузку можно до начала погрузки")
+        if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING):
+            raise HTTPException(status_code=400, detail="Отвязать отгрузку можно до завершения погрузки")
         line = conn.execute(
             "SELECT l.id, s.doc_number FROM trip_lines l LEFT JOIN shipment_docs s ON s.id = l.shipment_doc_id "
             "WHERE l.trip_id = ? AND l.shipment_doc_id = ? AND l.is_deleted = 0",
@@ -464,7 +476,7 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             ("vehicle_number", "Гос. номер"),
             ("cost_estimate", "Стоимость логистики (план)"),
             ("transport_ordered_at", "Транспорт заказан"),
-            ("eta", "Плановое прибытие"),
+            ("eta", "Плановое отправление" if outbound else "Плановое прибытие"),
         ]
         missing = [label for col, label in required if doc_row[col] in (None, "")]
         if missing:
@@ -473,6 +485,8 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             raise HTTPException(
                 status_code=400,
                 detail=(
+                    "Плановое отправление не может быть раньше заказа транспорта"
+                    if outbound else
                     "Плановое прибытие не может быть раньше заказа транспорта"
                 ),
             )
@@ -510,7 +524,9 @@ def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_cur
 @router.post("/trips/{trip_id}/unload")
 def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_current_warehouse)):
     uid = str(user["id"])
-    if payload.load_factor is not None and payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
+    if not payload.load_factor:
+        raise HTTPException(status_code=400, detail="Укажите загруженность машины")
+    if payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
         raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
     with get_connection() as conn:
         doc_row = _fetch_doc(conn, trip_id)
@@ -521,6 +537,8 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
         op_noun = "погрузку" if outbound else "разгрузку"
         if str(doc_row["status"]) != TRIP_STATUS_UNLOADING:
             raise HTTPException(status_code=400, detail=f"Завершить {op_noun} можно только из статуса '{from_ru}'")
+        if outbound:
+            assert_shipments_ready_for_load(conn, trip_id)
         unload_started_at = (
             (payload.unload_started_at or "").strip()
             or doc_row["unload_started_at"]

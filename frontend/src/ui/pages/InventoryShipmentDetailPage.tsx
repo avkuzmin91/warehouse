@@ -1,1 +1,5 @@
-export { InventoryShipmentDetailPage } from './shipmentDetail/InventoryShipmentDetailPage'
+import { ShipmentDetailFeature } from '../features/inventory/ShipmentDetailFeature'
+
+export function InventoryShipmentDetailPage() {
+  return <ShipmentDetailFeature />
+}

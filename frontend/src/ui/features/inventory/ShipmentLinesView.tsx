@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { listShipmentLines, SHIPMENT_STATUS_TONES } from '../../../api/shipmentsApi'
-import type { ShipmentStatus } from '../../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentStatus } from '../../../api/shipmentsApi'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
 import { Badge } from '../../primitives/Badge'
@@ -18,13 +18,14 @@ type Props = {
   clientId?:  string
   status?:    ShipmentStatus | ShipmentStatus[]
   overdue?:   boolean
+  cargoType?: ShipmentCargoType
   dateFrom?:  string
   dateTo?:    string
   page:       number
   onPage:     (p: number) => void
 }
 
-export function ShipmentLinesView({ search, sku, clientId, status, overdue, dateFrom, dateTo, page, onPage }: Props) {
+export function ShipmentLinesView({ search, sku, clientId, status, overdue, cargoType, dateFrom, dateTo, page, onPage }: Props) {
   const navigate = useNavigate()
   const statusKey = Array.isArray(status) ? status.join(',') : (status ?? '')
 
@@ -36,10 +37,11 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, date
       client_id: clientId || undefined,
       status,
       overdue: overdue || undefined,
+      cargo_type: cargoType,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
     }, signal),
-    [page, search, sku, clientId, statusKey, overdue, dateFrom, dateTo],
+    [page, search, sku, clientId, statusKey, overdue, cargoType, dateFrom, dateTo],
   )
 
   const items = data?.items ?? []
@@ -76,7 +78,12 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, date
                 style={{ cursor: 'pointer' }}
                 onClick={() => navigate(`/inventory/shipments/${it.doc_id}`)}
               >
-                <Td className="mono" style={{ fontWeight: 500 }}>{it.doc_number}</Td>
+                <Td className="mono" style={{ fontWeight: 500 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {it.doc_number}
+                    {it.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                  </span>
+                </Td>
                 <Td>{it.client_name ?? '—'}</Td>
                 <Td>
                   <div style={{ fontWeight: 500 }}>{it.product_name}</div>

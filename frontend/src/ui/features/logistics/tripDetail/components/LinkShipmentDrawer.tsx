@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../../../api/shipmentsApi'
 import { Icon } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
+import type { BadgeTone } from '../../../../primitives/Badge'
 import { foldCiSearch } from '../../../../../utils/foldCiSearch'
 import { fmtDateShort } from '../../../../../utils/format'
 
@@ -57,7 +59,9 @@ function CandidateShipmentRow({ item, checked, onToggle }: {
           )}
         </div>
       </div>
-      <Badge tone="info" dot>В плане</Badge>
+      <Badge tone={(SHIPMENT_STATUS_TONES[item.status] ?? '') as BadgeTone} dot>
+        {SHIPMENT_STATUS_LABELS[item.status] ?? item.status}
+      </Badge>
     </button>
   )
 }
@@ -157,7 +161,7 @@ export function LinkShipmentDrawer({ open, onClose, tripNumber, tripDestination,
 
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
               <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>Показаны отгрузки «В плане», ещё не привязанные к рейсам.</span>
+              <span>Показаны отгрузки (кроме завершённых), ещё не привязанные к рейсам.</span>
             </div>
 
             {filtered.length === 0 ? (

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from config import PRODUCT_LIST_SORT_COLUMNS, UPLOADS_DIR, MAX_UPLOAD_BYTES
-from dbconn import get_connection
+from dbconn import escape_like, get_connection
 
 from .schemas import (
     ProductCreateDimensionBlock,
@@ -50,7 +50,7 @@ def _fold_ci_str(x: object) -> str:
 
 
 def _ci_substring_like_param(raw: str) -> str:
-    return f"%{_fold_ci_str(str(raw).strip())}%"
+    return f"%{escape_like(_fold_ci_str(str(raw).strip()))}%"
 
 
 def _order_sql_from_sort_param(sort: str | None, allowed: dict[str, str]) -> str | None:
@@ -668,11 +668,14 @@ def _row_to_product_item(row: Mapping[str, Any]) -> ProductItem:
         type_name=row["type_name"],
         sku_base=row["sku_base"],
         weight_grams=int(row["weight_grams"]) if row["weight_grams"] is not None else None,
+        items_per_pallet=int(row["items_per_pallet"]) if row["items_per_pallet"] is not None else None,
         requires_color=bool(row["requires_color"]),
         requires_size=bool(row["requires_size"]),
         client_id=row["client_id"],
         client_name=row["client_name"],
         variant_count=int(row["variant_count"] or 0),
+        stock_total=max(0, int(row.get("stock_total") or 0)),
+        defect_total=max(0, int(row.get("defect_total") or 0)),
         is_active=bool(row["is_active"]),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],

@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   RECEIPT_STATUS_LABELS,
@@ -16,17 +15,23 @@ import { Drawer } from '../../../../feedback/Drawer'
 import { Alert } from '../../../../primitives/Alert'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
-import { Card, CardBody, CardHead } from '../../../../primitives/Card'
 import { DatePicker } from '../../../../primitives/DatePicker'
+import { EmptyState } from '../../../../primitives/EmptyState'
 import { Icon } from '../../../../primitives/Icon'
+import { AutoGrowTextarea, Field, Input } from '../../../../primitives/Input'
 import { fmtDate, localTodayYmd } from '../../../../../utils/format'
 import { canViewCosts, canEditPlannedArrival } from '../../../../../utils/access'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
-import { ReceiptStepper } from '../../ReceiptStepper'
+import { PhaseBlock } from '../../../shared/process/PhaseBlock'
+import { DocHeader } from '../../../shared/process/DocHeader'
+import { PrimaryAction } from '../../../shared/process/PrimaryAction'
+import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../../../shared/process/processUI'
+import { receiptStatusRole } from '../shared/receiptProcess'
 import { AddLineDrawer } from '../components/AddLineDrawer'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
+import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
 
 type Props = {
   docId: string
@@ -57,7 +62,10 @@ export function PlannedView({
   const [comment, setComment] = useState(doc.comment ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
 
+  const isPlanned = status === 'planned'
+  const isIntake = status === 'on_intake'
   const hasTrip = !!doc.trip_id
+  const awaitingTrip = isPlanned && hasTrip
   const actualDirty = actualArrivalDate !== (doc.actual_arrival_date ?? '')
 
   const [metaDirty, setMetaDirty] = useState(false)
@@ -176,10 +184,10 @@ export function PlannedView({
   const readyChecks = [
     { ok: !!arrivalDate, label: 'Дата прибытия (план) указана', error: 'Не указана дата прибытия (план)' },
     { ok: !arrivalDate || arrivalDate <= today, label: 'Дата прибытия (план) наступила', error: 'Дата прибытия (план) ещё не наступила' },
-    ...(status === 'planned' ? [{ ok: hasTrip ? !!doc.actual_arrival_date : !!actualArrivalDate, label: 'Дата прибытия (факт) указана', error: 'Не указана дата прибытия (факт)' }] : []),
+    ...(isPlanned ? [{ ok: hasTrip ? !!doc.actual_arrival_date : !!actualArrivalDate, label: 'Дата прибытия (факт) указана', error: 'Не указана дата прибытия (факт)' }] : []),
     { ok: lines.length > 0, label: `Строк: ${lines.length}`, error: 'Нет строк в документе' },
     { ok: lines.length > 0 && lines.every((l) => plannedQtyFor(l.id) >= 1), label: 'Все строки валидны (≥ 1 шт)', error: 'Есть строки с количеством меньше 1' },
-    { ok: lines.length > 0 && missingStorageCount === 0, label: 'Место (на проверке) указано по всем строкам', error: `Не указано место (на проверке): ${missingStorageCount}` },
+    { ok: lines.length > 0 && missingStorageCount === 0, label: 'Местоположение указано по всем строкам', error: `Не указано местоположение: ${missingStorageCount}` },
     { ok: lines.length > 0 && lines.every((l) => acceptedFor(l.id) >= 0), label: 'Принят указан по всем строкам', error: 'Укажите принятое количество по всем строкам' },
     ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики для клиента указана', error: 'Не указана стоимость логистики для клиента' }] : []),
   ]
@@ -210,35 +218,34 @@ export function PlannedView({
     onStartIntake()
   }
 
-  const primaryLabel = status === 'planned' ? 'Начать приёмку' : 'Принять товары'
   function runPrimary() {
+    if (awaitingTrip) return
     if (blockReasons.length > 0) { setShowBlockReasons(true); return }
-    if (status === 'planned') void handleStartIntake()
+    if (isPlanned) void handleStartIntake()
     else void handleArrive()
   }
 
   return (
     <div className="page">
-      <div className="page-header" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <div className="detail-status-row">
-            <button className="btn ghost icon sm" onClick={() => navigate('/inventory/receipts')}>
-              <Icon name="arrowLeft" size={14} />
-            </button>
+      <DocHeader
+        badges={
+          <>
             <Badge tone={receiptStatusTone(status) as BadgeTone} dot>{RECEIPT_STATUS_LABELS[status]}</Badge>
-            <span className="detail-meta">
-              {doc.doc_number} · {doc.client_name ?? '—'}
-            </span>
-          </div>
-          <div className="page-title">{doc.doc_number}</div>
-        </div>
-        <div className="detail-actions">
-          <div className="detail-actions-row">
+            {awaitingTrip && <Badge tone="info">Ожидает рейс</Badge>}
+          </>
+        }
+        role={receiptStatusRole(status, awaitingTrip)}
+        title={doc.doc_number}
+        subtitle={`Поступление · ${doc.client_name ?? '—'}`}
+        onBack={() => navigate('/inventory/receipts')}
+        blockReasons={!awaitingTrip && showBlockReasons ? blockReasons : []}
+        actions={
+          <>
             <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
               <Icon name="layers" size={14} />Журнал
               {detail.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({detail.ops.length})</span>}
             </button>
-            {status === 'planned' && (
+            {isPlanned && !awaitingTrip && (
               <button className="btn ghost danger" onClick={onCancel} disabled={advancing}>
                 <Icon name="x" size={14} />Аннулировать
               </button>
@@ -248,120 +255,122 @@ export function PlannedView({
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            <button
-              className="btn primary"
-              onClick={runPrimary}
-              disabled={advancing}
-            >
-              <Icon name={status === 'planned' ? 'arrowRight' : 'check'} size={14} />{primaryLabel}
-            </button>
-          </div>
-          {showBlockReasons && blockReasons.length > 0 && (
-            <div className="block-reasons">
-              {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
-            </div>
-          )}
-        </div>
-      </div>
+            {awaitingTrip ? (
+              <button className="btn" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}>
+                <Icon name="truckIn" size={14} />Открыть рейс {doc.trip_number}
+              </button>
+            ) : (
+              <PrimaryAction
+                icon={isPlanned ? 'forklift' : 'check'}
+                label={isPlanned ? 'Начать приёмку' : 'Принять товары'}
+                hint={isPlanned
+                  ? 'кладовщик начнёт подсчёт — статус «На приёмке»'
+                  : 'товар встанет на остатки годным — статус «Завершён»'}
+                disabled={advancing}
+                onClick={runPrimary}
+              />
+            )}
+          </>
+        }
+      />
 
-      <ReceiptStepper status={status} ops={detail.ops} style={{ marginTop: -10 }} />
+      {awaitingTrip && (
+        <Alert tone="warning" style={{ marginBottom: 16 }}>
+          Поступление привязано к рейсу {doc.trip_number}. Приёмка начнётся автоматически
+          при завершении разгрузки рейса, дата прибытия (факт) проставится из рейса.
+        </Alert>
+      )}
 
       {metaError && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{metaError}</Alert>
       )}
 
-      <div className="split-360">
-        <div className="col gap-16">
-          {/* Основная информация */}
-          <Card>
-            <CardHead>
-              <Icon name="file" size={15} className="ic-accent" />
-              <span className="card-head-title">Основная информация</span>
-            </CardHead>
-            <CardBody>
-              <div className="form-grid-2">
-                <div>
-                  <label className="field-label"><span>Клиент</span></label>
-                  <input className="input" value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
-                </div>
-                <div>
-                  <label className="field-label"><span>Рейс</span></label>
-                  {doc.trip_id ? (
-                    <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                      style={{ width: '100%', justifyContent: 'flex-start' }}>
-                      <Icon name="truckIn" size={13} />{doc.trip_number}
-                    </button>
-                  ) : (
-                    <input className="input" value="—" readOnly style={{ cursor: 'default' }} />
-                  )}
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Дата прибытия (план){canEditPlan && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
-                  </label>
-                  {canEditPlan ? (
-                    <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
-                  ) : (
-                    <input className="input" value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
-                  )}
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Дата прибытия (факт){status === 'planned' && <span style={{ color: 'var(--c-danger)' }}> *</span>}</span>
-                    {hasTrip
-                      ? <span className="text-xs faint">из рейса</span>
-                      : null}
-                  </label>
-                  {hasTrip ? (
-                    <input className="input" value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
-                  ) : (
-                    <DatePicker value={actualArrivalDate} onChange={setActualArrivalDate} />
-                  )}
-                </div>
-                {showCosts && (
-                  <div>
-                    <label className="field-label">
-                      <span>Стоимость логистики для клиента, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                    </label>
-                    <input className="input" type="number" min={0} placeholder="0" value={logisticsCost}
-                      onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }} />
-                  </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock
+            icon="file"
+            title="Основная информация"
+            role="manager"
+            state={isPlanned ? 'active' : 'done'}
+            hint={isPlanned ? 'Даты и логистика — до начала приёмки' : undefined}
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Field label="Клиент" style={{ marginBottom: 0 }}>
+                <Input value={doc.client_name || '—'} readOnly style={{ cursor: 'default' }} />
+              </Field>
+              <Field label="Рейс" style={{ marginBottom: 0 }}>
+                {doc.trip_id ? (
+                  <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                    style={{ width: '100%', justifyContent: 'flex-start' }}>
+                    <Icon name="truckIn" size={13} />{doc.trip_number}
+                  </button>
+                ) : (
+                  <Input value="—" readOnly style={{ cursor: 'default' }} />
                 )}
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label className="field-label">
-                    <span>Комментарий</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <textarea
+              </Field>
+              <Field label="Дата прибытия (план)" required={canEditPlan} style={{ marginBottom: 0 }}>
+                {canEditPlan ? (
+                  <DatePicker value={arrivalDate} onChange={(v) => { setArrivalDate(v); markDirty() }} />
+                ) : (
+                  <Input value={fmtDate(doc.arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                )}
+              </Field>
+              <Field
+                label="Дата прибытия (факт)"
+                required={isPlanned && !hasTrip}
+                hint={hasTrip ? 'из рейса' : undefined}
+                style={{ marginBottom: 0 }}
+              >
+                {hasTrip ? (
+                  <Input value={fmtDate(doc.actual_arrival_date) || '—'} readOnly style={{ cursor: 'default' }} />
+                ) : (
+                  <DatePicker value={actualArrivalDate} onChange={setActualArrivalDate} />
+                )}
+              </Field>
+              {showCosts && (
+                <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <input
                     className="input"
-                    rows={3}
-                    placeholder="Примечание для команды склада"
-                    value={comment}
-                    onChange={(e) => { setComment(e.target.value); markDirty() }}
-                    style={{ resize: 'vertical', minHeight: 76 }}
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={logisticsCost}
+                    onChange={(e) => { setLogisticsCost(e.target.value); markDirty() }}
                   />
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-
-          {/* Строки */}
-          <Card>
-            <CardHead>
-              <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары к приемке</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div className="flex-1" />
-              {status === 'planned' && (
-                <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
-                  <Icon name="plus" size={12} />Добавить строку
-                </button>
+                </Field>
               )}
-            </CardHead>
+              <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <AutoGrowTextarea
+                  minRows={3}
+                  placeholder="Примечание для команды склада"
+                  value={comment}
+                  onChange={(e) => { setComment(e.target.value); markDirty() }}
+                  style={{ resize: 'vertical', minHeight: 76 }}
+                />
+              </Field>
+            </div>
+          </PhaseBlock>
+
+          <PhaseBlock
+            icon={isIntake ? 'forklift' : 'boxes'}
+            title={isIntake ? 'Приёмка товаров' : 'Товары к приёмке'}
+            role={isIntake ? 'warehouse' : 'manager'}
+            state="active"
+            hint={isIntake
+              ? '«Принят» и местоположение — по каждой строке'
+              : awaitingTrip
+                ? 'План можно править до разгрузки рейса'
+                : 'План, местоположения и принятое количество'}
+            right={isPlanned ? (
+              <button className="btn sm primary" onClick={() => setShowAddLine(true)}>
+                <Icon name="plus" size={12} />Добавить строку
+              </button>
+            ) : undefined}
+          >
             {lines.length === 0 ? (
-              <div className="empty">
-                <div className="empty-illust" />
-                <div style={{ fontSize: 14, fontWeight: 500 }}>Нет строк</div>
+              <div style={{ padding: '32px 0' }}>
+                <EmptyState title="Нет строк" sub="Добавьте товары, которые приедут на склад" />
               </div>
             ) : (
               <ReceiptLinesTable
@@ -379,48 +388,61 @@ export function PlannedView({
                 onDelete={(l) => void handleDeleteLine(l.id, l.product_name)}
               />
             )}
-          </Card>
+          </PhaseBlock>
+
+          {isPlanned && (
+            <PhaseBlock
+              icon="forklift"
+              title="Приёмка"
+              role="warehouse"
+              state="locked"
+              hint={awaitingTrip
+                ? `Начнётся автоматически при разгрузке рейса ${doc.trip_number}`
+                : 'Кладовщик начнёт приёмку после прибытия товара'}
+            >
+              <LockedGrid labels={['Принято', 'Местоположения']} />
+            </PhaseBlock>
+          )}
         </div>
 
-        {/* Правая колонка */}
-        <div className="col gap-16">
-          <Card>
-            <CardHead>
-              <Icon name="check" size={15} className="ic-success" />
-              <span className="card-head-title">Готовность</span>
-            </CardHead>
-            <div className="readiness-list">
-              {readyChecks.map((c, i) => (
-                <div key={i} className="readiness-row">
-                  {c.ok ? (
-                    <div className="readiness-dot ok">
-                      <Icon name="check" size={10} />
-                    </div>
-                  ) : (
-                    <div className="readiness-dot pending" />
-                  )}
-                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-          <Card>
-            <CardHead>
-              <Icon name="chart" size={15} className="ic-accent" />
-              <span className="card-head-title">Итого</span>
-            </CardHead>
-            <div className="totals-grid">
-              <span className="key">SKU</span>
-              <span className="val mono">{totalSku}</span>
-              <span className="key">Строк</span>
-              <span className="val mono">{lines.length}</span>
-              <span className="key">План, шт</span>
-              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
-              <span className="key">Принят, шт</span>
-              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalAccepted}</span>
-            </div>
-          </Card>
+        {/* Right — маршрут + контекстные панели */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <ReceiptRailPanel
+            status={status}
+            ops={detail.ops}
+            awaitingTrip={awaitingTrip}
+            tripNumber={doc.trip_number}
+          />
 
+          {!awaitingTrip && (
+            <ChecklistPanel items={readyChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
+          )}
+
+          {hasTrip && (
+            <Panel icon="truckIn" title="Рейс прибытия">
+              <button
+                className="btn ghost sm"
+                onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
+                style={{ width: '100%', justifyContent: 'flex-start' }}
+              >
+                <Icon name="truckIn" size={13} />{doc.trip_number}
+              </button>
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                {isPlanned
+                  ? 'Дата прибытия (факт) и старт приёмки проставляются при разгрузке рейса.'
+                  : 'Приёмка начата разгрузкой рейса.'}
+              </div>
+            </Panel>
+          )}
+
+          <Panel icon="chart" title="Итого">
+            <div style={{ padding: '0 2px' }}>
+              <ReadRow label="SKU" mono>{totalSku}</ReadRow>
+              <ReadRow label="Строк" mono>{lines.length}</ReadRow>
+              <ReadRow label="План" mono strong>{totalQty} шт</ReadRow>
+              <ReadRow label="Принят" mono strong>{totalAccepted} шт</ReadRow>
+            </div>
+          </Panel>
         </div>
       </div>
 

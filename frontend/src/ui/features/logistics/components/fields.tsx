@@ -4,6 +4,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { DatePicker } from '../../../primitives/DatePicker'
+import { datePart, timePart, combineDateTime } from './dateTimeValue'
 
 function ctrlStyle(empty: boolean, invalid?: boolean): CSSProperties {
   return {
@@ -141,33 +142,6 @@ export function TimeField({ value, placeholder = 'Выбрать дату', onCl
   )
 }
 
-export function datePart(value: string): string {
-  return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : ''
-}
-
-export function timePart(value: string): string {
-  const match = value.match(/^\d{4}-\d{2}-\d{2}T([\d:]{0,5})/)
-  return match ? match[1] : ''
-}
-
-/** Значение `DateTimeField` заполнено полностью — есть и дата, и время `ЧЧ:ММ`. */
-export function isDateTimeComplete(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
-}
-
-/**
- * `end` раньше `start`. Сравнивает только полностью заполненные значения
- * `YYYY-MM-DDTHH:mm` (лексикографический порядок совпадает с хронологическим).
- */
-export function isDateTimeBefore(end: string, start: string): boolean {
-  return isDateTimeComplete(end) && isDateTimeComplete(start) && end < start
-}
-
-export function combineDateTime(date: string, time: string): string {
-  if (!date) return ''
-  return time ? `${date}T${time}` : date
-}
-
 /** Поле «дата + время»: DatePicker + ручной ввод чч:мм. Значение — `YYYY-MM-DD[THH:mm]`. */
 export function DateTimeField({ value, invalid, onChange }: {
   value: string
@@ -252,18 +226,31 @@ export function ReadRow({ label, children, mono, strong }: {
   )
 }
 
-export type SegmentOption<T extends string> = { value: T; label: string; icon?: IconName }
+export type SegmentTone = 'success' | 'warning'
+export type SegmentOption<T extends string> = { value: T; label: string; icon?: IconName; tone?: SegmentTone }
+
+export function segmentToneColors(tone: SegmentTone): { color: string; background: string } {
+  return tone === 'success'
+    ? { color: 'var(--c-success)', background: 'var(--c-success-bg)' }
+    : { color: 'var(--c-warning)', background: 'var(--c-warning-bg)' }
+}
 
 /** Сегментированный переключатель (загруженность, состояния). */
-export function Segmented<T extends string>({ value, options, onChange }: {
+export function Segmented<T extends string>({ value, options, invalid, onChange }: {
   value: T
   options: SegmentOption<T>[]
+  invalid?: boolean
   onChange?: (v: T) => void
 }) {
   return (
-    <div style={{ display: 'inline-flex', gap: 3, padding: 3, background: 'var(--c-bg-sunken)', borderRadius: 8 }}>
+    <div style={{
+      display: 'inline-flex', gap: 3, padding: 3, borderRadius: 8,
+      background: invalid ? 'var(--c-danger-bg)' : 'var(--c-bg-sunken)',
+      boxShadow: invalid ? 'inset 0 0 0 1px var(--c-danger)' : 'none',
+    }}>
       {options.map((o) => {
         const on = o.value === value
+        const toneColors = on && o.tone ? segmentToneColors(o.tone) : null
         return (
           <button
             key={o.value}
@@ -272,7 +259,8 @@ export function Segmented<T extends string>({ value, options, onChange }: {
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', border: 0, cursor: 'pointer',
               borderRadius: 6, fontSize: 12.5, fontWeight: 500, fontFamily: 'inherit',
-              background: on ? 'var(--c-bg-elev)' : 'transparent', color: on ? 'var(--c-text)' : 'var(--c-text-muted)',
+              background: toneColors?.background ?? (on ? 'var(--c-bg-elev)' : 'transparent'),
+              color: toneColors?.color ?? (on ? 'var(--c-text)' : 'var(--c-text-muted)'),
               boxShadow: on ? 'var(--sh-1)' : 'none',
             }}
           >

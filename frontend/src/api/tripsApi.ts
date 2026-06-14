@@ -14,10 +14,13 @@ export type TripLoadFactor = 'full' | 'partial'
 
 export type TripDirection = 'inbound' | 'outbound'
 
+export type TripCargoType = 'good' | 'defect'
+
 export type TripDoc = {
   id: string
   trip_number: string
   direction: string
+  cargo_type: TripCargoType
   status: TripStatus
   assignee_role: string | null
   origin_id: string | null
@@ -82,6 +85,7 @@ export type TripListItem = {
   id: string
   trip_number: string
   direction: string
+  cargo_type: TripCargoType
   status: TripStatus
   origin_name: string | null
   carrier_name: string | null
@@ -103,6 +107,7 @@ export type TripListResponse = {
 
 export type TripCreatePayload = {
   direction?: TripDirection
+  cargo_type?: TripCargoType
   origin_id?: string | null
   origin_name?: string | null
   carrier_id?: string | null
@@ -285,7 +290,7 @@ export type TripLexicon = {
   arrivalLabel: string       // «Прибытие»
   unloadStartLabel: string   // «Начало разгрузки» | «Начало погрузки»
   unloadEndLabel: string     // «Окончание разгрузки» | «Окончание погрузки»
-  etaLabel: string           // «Плановое прибытие»
+  etaLabel: string           // «Плановое отправление» | «Плановое прибытие»
   finishAction: string       // «Завершить разгрузку» | «Завершить погрузку»
   arrivedAction: string      // «Машина приехала» | «Машина прибыла»
   progressTitle: string      // «Идёт разгрузка» | «Идёт погрузка»
@@ -304,7 +309,7 @@ export function tripLexicon(direction: string | null | undefined): TripLexicon {
         arrivalLabel: 'Прибытие',
         unloadStartLabel: 'Начало погрузки',
         unloadEndLabel: 'Окончание погрузки',
-        etaLabel: 'Плановое прибытие',
+        etaLabel: 'Плановое отправление',
         finishAction: 'Завершить погрузку',
         arrivedAction: 'Машина прибыла',
         progressTitle: 'Идёт погрузка',

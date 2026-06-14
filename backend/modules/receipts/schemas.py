@@ -57,10 +57,6 @@ class ReceiptLineUpdate(BaseModel):
     accepted_qty: int | None = Field(default=None, ge=0)
     storage_zone_id: str | None = None
     storage_zone_name: str | None = None
-    good_zone_id: str | None = None
-    good_zone_name: str | None = None
-    defect_zone_id: str | None = None
-    defect_zone_name: str | None = None
 
 
 class ReceiptActualArrivalUpdate(BaseModel):
@@ -122,16 +118,8 @@ class ReceiptLineResponse(BaseModel):
     size_name: str | None = None
     storage_zone_id: str | None = None
     storage_zone_name: str | None = None
-    good_zone_id: str | None = None
-    good_zone_name: str | None = None
-    defect_zone_id: str | None = None
-    defect_zone_name: str | None = None
     planned_qty: int
     accepted_qty: int | None = None
-    accepted: int = 0
-    defect: int = 0
-    ops_count: int = 0
-    qc_status: str = "pending"
     created_at: str
 
 
@@ -176,8 +164,6 @@ class ReceiptListItem(BaseModel):
     sku_count: int = 0
     total_planned: int = 0
     total_accepted_qty: int = 0
-    total_accepted: int = 0
-    total_defect: int = 0
 
 
 class ReceiptListResponse(BaseModel):

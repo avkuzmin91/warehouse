@@ -2,6 +2,8 @@ export type DictionaryItem = {
   id: string
   name: string
   color_hex?: string | null
+  is_packing_zone?: boolean
+  is_shipping_zone?: boolean
   is_active: boolean
   is_deleted?: boolean
   deleted_at?: string | null
@@ -100,12 +102,15 @@ export type ProductItem = {
   type_name: string | null
   sku_base: string
   weight_grams: number | null
+  items_per_pallet: number | null
   requires_color: boolean
   requires_size: boolean
   client_id: string | null
   client_name: string | null
   client_locked?: boolean
   variant_count: number
+  stock_total: number
+  defect_total: number
   is_active: boolean
   is_deleted?: boolean
   deleted_at?: string | null

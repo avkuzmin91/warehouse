@@ -15,7 +15,7 @@ function AuthBackground() {
         <svg className="auth-backdrop-svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
           <defs>
             <pattern id="auth-dots" width="28" height="28" patternUnits="userSpaceOnUse">
-              <circle cx="1" cy="1" r="1" fill="#6366f1" opacity="0.15" />
+              <circle cx="1" cy="1" r="1" />
             </pattern>
           </defs>
           <rect width="1440" height="900" fill="url(#auth-dots)" />

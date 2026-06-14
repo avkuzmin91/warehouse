@@ -58,13 +58,14 @@ export function ReceiptLinesView({ search, sku, clientId, status, overdue, dateF
             <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
             <th style={{ width: 140 }}>Место</th>
             <th style={{ width: 130 }}>Статус</th>
+            <th style={{ width: 160 }}>Принято</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={10} cols={9} />
+            <SkeletonRows rows={10} cols={10} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={9}>
+            <tr><td colSpan={10}>
               <EmptyState title="Товаров нет" sub="Измените фильтры или создайте поступление" />
             </td></tr>
           ) : (
@@ -91,6 +92,30 @@ export function ReceiptLinesView({ search, sku, clientId, status, overdue, dateF
                   <Badge tone={receiptStatusTone(it.status) as BadgeTone} dot>
                     {RECEIPT_STATUS_LABELS[it.status]}
                   </Badge>
+                </Td>
+                <Td>
+                  {(() => {
+                    const accepted = it.accepted_qty ?? 0
+                    const pct = it.planned_qty > 0 ? Math.min(100, Math.floor(accepted / it.planned_qty * 100)) : 0
+                    if (it.status !== 'done') return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                    return (
+                      <div style={{ minWidth: 120 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%', borderRadius: 3,
+                              width: `${pct}%`,
+                              background: pct === 100 ? 'var(--c-success)' : 'var(--c-accent)',
+                              transition: 'width 0.3s',
+                            }} />
+                          </div>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: pct === 100 ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                            {pct}%
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </Td>
               </tr>
             ))

@@ -154,9 +154,14 @@ export function TripsListFeature() {
               onClick: () => navigate('/logistics/trips/new?dir=inbound'),
             },
             {
-              label: 'Рейс отгрузки',
+              label: 'Рейс отгрузки товара',
               icon: <Icon name="truckOut" size={16} style={{ color: 'var(--c-info)' }} />,
               onClick: () => navigate('/logistics/trips/new?dir=outbound'),
+            },
+            {
+              label: 'Рейс отгрузки брака',
+              icon: <Icon name="alert" size={16} style={{ color: 'var(--c-warning)' }} />,
+              onClick: () => navigate('/logistics/trips/new?dir=outbound&cargo=defect'),
             },
           ]}
         />
@@ -220,7 +225,12 @@ export function TripsListFeature() {
               return (
                 <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
                   <Td><TypeBadge direction={direction} /></Td>
-                  <Td className="mono" style={{ fontWeight: 500 }}>{t.trip_number}</Td>
+                  <Td className="mono" style={{ fontWeight: 500 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      {t.trip_number}
+                      {direction === 'outbound' && t.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                    </span>
+                  </Td>
                   <Td>
                     <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{tripStatusLabel(t.status, direction)}</Badge>
                   </Td>

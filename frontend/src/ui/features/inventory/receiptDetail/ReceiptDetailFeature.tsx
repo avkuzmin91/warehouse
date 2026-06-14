@@ -4,7 +4,6 @@ import {
   arriveReceipt,
   cancelReceipt,
   getReceipt,
-  reopenReceipt,
   startReceiptIntake,
 } from '../../../../api/receiptsApi'
 import type { ReceiptArriveLine, ReceiptDetail } from '../../../../api/receiptsApi'
@@ -96,24 +95,6 @@ export function ReceiptDetailFeature({ docId }: Props) {
     }
   }
 
-  async function handleReopen() {
-    const ok = await confirm({
-      title: 'Вернуть на проверку?',
-      body: 'Документ будет переведён обратно в статус «На проверке». Все строки останутся без изменений.',
-      confirmLabel: 'Вернуть на проверку',
-    })
-    if (!ok) return
-    setAdvancing(true)
-    try {
-      await reopenReceipt(docId)
-      await load()
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Ошибка')
-    } finally {
-      setAdvancing(false)
-    }
-  }
-
   if (loading) {
     return (
       <div className="page">
@@ -168,7 +149,6 @@ export function ReceiptDetailFeature({ docId }: Props) {
       detail={detail}
       onReload={load}
       onAdvance={handleAdvance}
-      onReopen={handleReopen}
       advancing={advancing}
     />
   )

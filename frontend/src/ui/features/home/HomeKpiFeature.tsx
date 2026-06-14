@@ -2,7 +2,6 @@ import { getDashboardToday } from '../../../api/dashboardApi'
 import type { DashboardTodayStats } from '../../../api/dashboardApi'
 import { useApi } from '../../../hooks/useApi'
 import { KPI } from '../../primitives/KPI'
-import { PacmanPlaceholder } from './PacmanPlaceholder'
 
 // Декоративный спарклайн: формы из дизайна, без претензии на реальный временной ряд.
 function spark(seed: number, n = 14): number[] {
@@ -36,9 +35,7 @@ export function HomeKpiFeature() {
         <KPI label="Поступления сегодня" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Принято товара" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Отгружено" value="—" delta="не удалось загрузить" deltaDir="down" />
-        <div className="kpi" style={{ padding: 0 }}>
-          <PacmanPlaceholder title="Браков зафиксировано" compact />
-        </div>
+        <KPI label="Браков зафиксировано" value="—" delta="не удалось загрузить" deltaDir="down" />
       </div>
     )
   }
@@ -73,9 +70,14 @@ export function HomeKpiFeature() {
         deltaDir={ready ? delta(today.shipped, yesterday.shipped).dir : undefined}
         spark={spark(3)}
       />
-      <div className="kpi" style={{ padding: 0 }}>
-        <PacmanPlaceholder title="Браков зафиксировано" compact />
-      </div>
+      <KPI
+        label="Браков зафиксировано"
+        value={loading ? '…' : fmt(today?.defects ?? 0)}
+        unit="шт"
+        delta={ready ? delta(today.defects, yesterday.defects).label : undefined}
+        deltaDir={ready ? delta(today.defects, yesterday.defects).dir : undefined}
+        spark={spark(4)}
+      />
     </div>
   )
 }

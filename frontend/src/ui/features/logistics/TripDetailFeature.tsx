@@ -20,7 +20,7 @@ import {
 import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
 import { getReceipts, createReceipt, advanceReceiptStatus } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { listShipments } from '../../../api/shipmentsApi'
+import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
 import type { CreateReceiptFormValue } from './tripDetail/components/CreateReceiptForm'
 import { useConfirm } from '../../feedback/ConfirmDialog'
@@ -28,7 +28,7 @@ import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { canViewCosts } from '../../../utils/access'
-import { isDateTimeComplete, isDateTimeBefore } from './components/fields'
+import { isDateTimeComplete, isDateTimeBefore } from './components/dateTimeValue'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
@@ -76,7 +76,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
 
   const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
   const [cost, setCost] = useState<CostForm>({ logistics_cost_actual: '', waiting_cost: '', waiting_minutes: '' })
-  const [loadFactor, setLoadFactor] = useState<TripLoadFactor>('full')
+  const [loadFactor, setLoadFactor] = useState<TripLoadFactor | ''>('')
   const [arrival, setArrival] = useState<string>(todayYmd())
   const [unloadStart, setUnloadStart] = useState<string>('')
   const [unloadEnd, setUnloadEnd] = useState<string>('')
@@ -106,7 +106,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         waiting_cost: d.doc.waiting_cost != null ? String(d.doc.waiting_cost) : '',
         waiting_minutes: d.doc.waiting_minutes != null ? String(d.doc.waiting_minutes) : '',
       })
-      setLoadFactor(d.doc.load_factor ?? 'full')
+      setLoadFactor(d.doc.load_factor ?? '')
       setArrival(d.doc.arrived_at ?? d.doc.eta ?? todayYmd())
       setUnloadStart(d.doc.unload_started_at ?? d.doc.arrived_at ?? '')
       setUnloadEnd(d.doc.unload_finished_at ?? '')
@@ -123,11 +123,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
     if (isOutbound(detail.doc.direction)) {
-      listShipments({ status: 'packing', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id, cargo_type: detail.doc.cargo_type }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
-      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: tripId }, ctrl.signal)
+      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
         .catch(() => {})
     }
@@ -175,7 +175,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     arrived_at: arrival || null,
     unload_started_at: unloadStart || null,
     unload_finished_at: unloadEnd || null,
-    load_factor: loadFactor,
+    load_factor: loadFactor || null,
   })
 
   const onField = (patch: Partial<PlanningFormValue>) => setForm((f) => ({ ...f, ...patch }))
@@ -205,7 +205,6 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   ]
 
   const handleSaveFields = () => run(saveFields)
-  const handleSaveCost = () => run(saveCost)
   const handleSaveExecution = () => run(saveExecution)
   const handleHandoff = () => {
     if (handoffBlockReasons.length > 0) { setShowBlockReasons(true); return }
@@ -216,7 +215,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const handleUnload = () => run(() => tripUnload(tripId, {
     unload_started_at: unloadStart || null,
     unload_finished_at: unloadEnd || null,
-    load_factor: loadFactor,
+    load_factor: loadFactor || null,
   }))
 
   async function handleClose() {
@@ -258,7 +257,6 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         zone_id: f.zone_id || null,
         zone_name: f.zone_name || null,
         comment: f.comment.trim() || null,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: f.lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message
@@ -270,7 +268,20 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
 
   const handleLinkShipments = (shipmentIds: string[]) =>
     runThrowing(() => linkTripShipments(tripId, shipmentIds))
-  const handleUnlinkShipment = (shipmentDocId: string) => run(() => unlinkTripShipment(tripId, shipmentDocId))
+  const handleUnlinkShipment = async (shipmentDocId: string) => {
+    // В погрузке открепление необратимо: привязать отгрузку обратно к этому рейсу уже нельзя.
+    if (detail?.doc.status === 'unloading') {
+      const num = detail.shipments.find((s) => s.shipment_doc_id === shipmentDocId)?.shipment_number
+      const ok = await confirm({
+        title: 'Открепить отгрузку от рейса?',
+        body: `Отгрузка ${num ?? ''} не уедет этим рейсом. Привязать её обратно к рейсу будет нельзя.`,
+        danger: true,
+        confirmLabel: 'Открепить',
+      })
+      if (!ok) return
+    }
+    await run(() => unlinkTripShipment(tripId, shipmentDocId))
+  }
 
   if (loading) {
     return <div className="page"><div style={{ padding: '80px 0', textAlign: 'center', color: 'var(--c-text-subtle)' }}>Загрузка…</div></div>
@@ -321,6 +332,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       enrich={shipmentEnrich}
       onOpen={onOpenShipment}
       link={CAN_LINK.has(status) ? shipmentLink : undefined}
+      onUnlink={status === 'unloading' && canEditTransportPlanning ? handleUnlinkShipment : undefined}
       expandable
       resetKey={doc.id}
     />
@@ -337,11 +349,6 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     ...(etaBeforeOrder ? [{ ok: false, label: `${lex.arrivalLabel} не раньше заказа транспорта` }] : []),
     { ok: linkedDocsCount > 0, label: outbound ? `Отгрузок: ${shipments.length}` : `Поступлений: ${receipts.length}` },
   ]
-
-  const dirtyCost =
-    cost.logistics_cost_actual !== (doc.logistics_cost_actual != null ? String(doc.logistics_cost_actual) : '') ||
-    cost.waiting_cost !== (doc.waiting_cost != null ? String(doc.waiting_cost) : '') ||
-    cost.waiting_minutes !== (doc.waiting_minutes != null ? String(doc.waiting_minutes) : '')
 
   const dirtyFields =
     form.origin_id !== (doc.origin_id ?? '') ||
@@ -384,6 +391,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
           detail={detail} form={form} onField={onField}
           showCosts={showCosts}
           canEditTransportPlanning={canEditTransportPlanning}
+          dirtyFields={dirtyFields}
           link={status === 'awaiting_arrival' ? link : undefined}
           enrich={enrich}
           loadFactor={loadFactor} onLoadFactor={setLoadFactor}
@@ -404,7 +412,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         showCosts={showCosts}
         canEditTransportPlanning={canEditTransportPlanning}
         canEditExecution={canEditCostingExecution}
-        dirtyCost={dirtyCost} onSaveCost={handleSaveCost} onSaveFields={handleSaveFields}
+        onSaveFields={handleSaveFields}
         arrival={arrival} onArrivalChange={setArrival}
         unloadStart={unloadStart} onUnloadStartChange={setUnloadStart}
         unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}

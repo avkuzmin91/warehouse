@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getMyTasks, taskLink } from '../../../api/tasksApi'
 import type { TaskItem, TaskKind } from '../../../api/tasksApi'
 import { isOutbound } from '../../../api/tripsApi'
+import { shipmentPriorityLabel, shipmentPriorityTone } from '../../../api/shipmentsApi'
+import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
@@ -13,6 +16,10 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   trip_cost: 'ruble',
   receipt_intake: 'inbox',
   receipt_review: 'check',
+  shipment_move_in: 'forklift',
+  shipment_pack: 'boxOut',
+  shipment_relocate: 'forklift',
+  shipment_defect_prepare: 'forklift',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -21,6 +28,10 @@ const KIND_LABEL: Record<TaskKind, string> = {
   trip_cost: 'Уточнить стоимость',
   receipt_intake: 'Принять товары',
   receipt_review: 'Проверить поступление',
+  shipment_move_in: 'Передать на упаковку',
+  shipment_pack: 'Упаковать',
+  shipment_relocate: 'Разложить по местам',
+  shipment_defect_prepare: 'Подготовить к отгрузке',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -29,6 +40,10 @@ const STATUS_SUB: Record<string, string> = {
   costing: 'Уточнение стоимости',
   on_intake: 'Принят',
   on_review: 'На проверке',
+  packing: 'В плане',
+  on_packing: 'На упаковке',
+  relocating: 'Перемещение',
+  awaiting_trip: 'Ожидает рейс',
 }
 
 function taskTitle(t: TaskItem): string {
@@ -36,9 +51,15 @@ function taskTitle(t: TaskItem): string {
   return KIND_LABEL[t.kind] ?? t.title
 }
 
+const DOC_TYPE_SUB: Record<TaskItem['doc_type'], string> = {
+  trip: 'Рейс',
+  receipt: 'Поступление',
+  shipment: 'Отгрузка',
+}
+
 function taskSub(t: TaskItem): string {
   if (t.status === 'unloading' && isOutbound(t.direction)) return 'Идёт погрузка'
-  return STATUS_SUB[t.status] ?? (t.doc_type === 'trip' ? 'Рейс' : 'Поступление')
+  return STATUS_SUB[t.status] ?? DOC_TYPE_SUB[t.doc_type]
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -49,6 +70,8 @@ const ROLE_LABEL: Record<string, string> = {
   client: 'клиент',
   user: '—',
 }
+
+const TASK_PAGE_SIZE = 7
 
 // Возраст задачи из `since`. Без срока в /tasks «просрочкой» считаем ожидание дольше суток.
 function ageInfo(since: string | null): { label: string; overdue: boolean } {
@@ -65,7 +88,7 @@ function ageInfo(since: string | null): { label: string; overdue: boolean } {
 
 function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean {
   if (role === 'shift_supervisor') {
-    return false
+    return task.doc_type === 'shipment'
   }
   if (role === 'manager') {
     return task.kind === 'trip_cost'
@@ -79,12 +102,18 @@ function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean
 export function MyTasksFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
-  const { data, loading } = useApi((signal) => getMyTasks(signal), [])
+  const [limit, setLimit] = useState(TASK_PAGE_SIZE)
+  const { data, loading } = useApi((signal) => getMyTasks({ limit }, signal), [limit])
 
   const tasks: TaskItem[] = [...(data?.items ?? [])]
     .filter((task) => isTaskVisibleForRole(task, user?.role))
-    .sort((a, b) => (a.since ?? '').localeCompare(b.since ?? ''))
+    .sort((a, b) =>
+      (a.priority_rank ?? Infinity) - (b.priority_rank ?? Infinity)
+      || (b.since ?? '').localeCompare(a.since ?? ''))
   const roleLabel = ROLE_LABEL[user?.role ?? ''] ?? (user?.role ?? '—')
+  const loadedCount = data?.items.length ?? tasks.length
+  const totalCount = data?.total ?? loadedCount
+  const canLoadMore = loadedCount < totalCount
 
   return (
     <div>
@@ -97,7 +126,7 @@ export function MyTasksFeature() {
             <span style={{
               minWidth: 22, height: 20, padding: '0 7px', borderRadius: 99, display: 'inline-flex', alignItems: 'center',
               justifyContent: 'center', fontSize: 12, fontWeight: 600, background: 'var(--c-accent-bg)', color: 'var(--c-accent-text)',
-            }}>{tasks.length}</span>
+            }}>{data?.total ?? tasks.length}</span>
           )}
           <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>роль: {roleLabel}</span>
         </div>
@@ -111,52 +140,82 @@ export function MyTasksFeature() {
             <div className="t-sub" style={{ marginTop: 4 }}>Здесь появятся рейсы и поступления, ожидающие вашего действия</div>
           </div>
         ) : (
-          tasks.map((t, i) => {
-            const age = ageInfo(t.since)
-            return (
-              <div
-                key={`${t.doc_type}-${t.doc_id}-${t.kind}`}
-                onClick={() => navigate(taskLink(t))}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', cursor: 'pointer',
-                  borderTop: i === 0 ? 'none' : '1px solid var(--c-border)',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-bg-hover)' }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
-              >
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: age.overdue ? 'var(--c-danger-bg)' : 'var(--c-accent-bg)',
-                  color: age.overdue ? 'var(--c-danger)' : 'var(--c-accent)',
-                }}>
-                  <Icon name={KIND_ICON[t.kind] ?? 'check'} size={19} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    <span style={{ fontSize: 14.5, fontWeight: 600 }}>{taskTitle(t)}</span>
-                    <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{t.doc_number}</span>
+          <>
+            {tasks.map((t, i) => {
+              const age = ageInfo(t.since)
+              return (
+                <div
+                  key={`${t.doc_type}-${t.doc_id}-${t.kind}`}
+                  onClick={() => navigate(taskLink(t))}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', cursor: 'pointer',
+                    borderTop: i === 0 ? 'none' : '1px solid var(--c-border)',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-bg-hover)' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '' }}
+                >
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: age.overdue ? 'var(--c-danger-bg)' : 'var(--c-accent-bg)',
+                    color: age.overdue ? 'var(--c-danger)' : 'var(--c-accent)',
+                  }}>
+                    <Icon name={KIND_ICON[t.kind] ?? 'check'} size={19} />
                   </div>
-                  <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1 }}>
-                    {taskSub(t)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                      <span style={{ fontSize: 14.5, fontWeight: 600 }}>{taskTitle(t)}</span>
+                      <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{t.doc_number}</span>
+                      {t.priority_rank && (
+                        <Badge tone={shipmentPriorityTone(t.priority_rank)}>{shipmentPriorityLabel(t.priority_rank)}</Badge>
+                      )}
+                    </div>
+                    <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1 }}>
+                      {taskSub(t)}
+                    </div>
                   </div>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: age.overdue ? 600 : 500,
+                    color: age.overdue ? 'var(--c-danger)' : 'var(--c-text-subtle)',
+                  }}>
+                    {age.overdue && <Icon name="alert" size={13} />}{age.label}
+                  </span>
+                  <Icon name="chev" size={15} style={{ color: 'var(--c-text-faint)', flexShrink: 0 }} />
                 </div>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: age.overdue ? 600 : 500,
-                  color: age.overdue ? 'var(--c-danger)' : 'var(--c-text-subtle)',
-                }}>
-                  {age.overdue && <Icon name="alert" size={13} />}{age.label}
-                </span>
-                <Icon name="chev" size={15} style={{ color: 'var(--c-text-faint)', flexShrink: 0 }} />
+              )
+            })}
+            {canLoadMore && (
+              <div style={{ padding: '10px 16px', borderTop: '1px solid var(--c-border)' }}>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() => setLimit((value) => value + TASK_PAGE_SIZE)}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  <Icon name="chevDown" size={14} />
+                  Показать ещё {Math.min(TASK_PAGE_SIZE, totalCount - loadedCount)}
+                </button>
               </div>
-            )
-          })
+            )}
+            {limit > TASK_PAGE_SIZE && (
+              <div style={{ padding: '0 16px 10px' }}>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() => setLimit(TASK_PAGE_SIZE)}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  Свернуть до 7
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 12, color: 'var(--c-text-subtle)' }}>
         <Icon name="layers" size={13} style={{ color: 'var(--c-text-faint)' }} />
-        Очередь собрана из рейсов и поступлений по статусу и роли · старые сверху.
+        Очередь собрана из рейсов и поступлений по статусу и роли · показано {loadedCount} из {totalCount}.
       </div>
     </div>
   )

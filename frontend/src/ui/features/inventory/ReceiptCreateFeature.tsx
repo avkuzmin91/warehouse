@@ -13,11 +13,11 @@ import {
 } from '../../../api/inventoryLookupsApi'
 import type { DictionaryItem, InventoryProductLookup } from '../../../api/domainTypes'
 import { Combobox } from '../../data/Combobox'
-import { FormPage } from '../../layouts/FormPage'
-import { Card, CardHead, CardBody } from '../../primitives/Card'
 import { Alert } from '../../primitives/Alert'
 import { Badge } from '../../primitives/Badge'
+import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
+import { AutoGrowTextarea, Field } from '../../primitives/Input'
 import { Select } from '../../primitives/Select'
 import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
@@ -25,12 +25,16 @@ import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { canViewCosts } from '../../../utils/access'
+import { PhaseBlock } from '../shared/process/PhaseBlock'
+import { DocHeader } from '../shared/process/DocHeader'
+import { PrimaryAction } from '../shared/process/PrimaryAction'
+import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../shared/process/processUI'
 import { NumberStep } from './shared/NumberStep'
 import {
   receiptLineColorRequired,
   receiptLineSizeRequired,
 } from './shared/receiptLineVariantRules'
-import { ReceiptStepper } from './ReceiptStepper'
+import { ReceiptRailPanel } from './receiptDetail/components/ReceiptRailPanel'
 
 type DraftLine = ReceiptLineInput & { _id: number }
 
@@ -85,7 +89,6 @@ export function ReceiptCreateFeature() {
         arrival_date: arrivalDate || null,
         comment: comment.trim() || null,
         ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         lines: lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message
@@ -115,126 +118,94 @@ export function ReceiptCreateFeature() {
   }
 
   return (
-    <FormPage
-      title="Новое поступление"
-
-      backTo={backTarget}
-      actions={
-        <div className="detail-actions">
-          <div className="detail-actions-row">
+    <div className="page">
+      <DocHeader
+        badges={<Badge dot>Создание</Badge>}
+        role="manager"
+        title="Новое поступление"
+        subtitle="номер присвоится при сохранении"
+        onBack={() => navigate(backTarget)}
+        blockReasons={showBlockReasons ? blockReasons : []}
+        actions={
+          <>
             <button className="btn" onClick={() => navigate(backTarget)} disabled={saving}>
               Отмена
             </button>
-            <button
-              className="btn primary"
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave() } }}
+            <PrimaryAction
+              icon="check"
+              label="Запланировать поступление"
+              hint="уйдёт в план склада — статус «В плане»"
               disabled={saving}
-            >
-              <Icon name="check" size={14} />Запланировать поступление
-            </button>
-          </div>
-          {showBlockReasons && blockReasons.length > 0 && (
-            <div className="block-reasons">
-              {blockReasons.map((r, i) => <div key={i}>· {r}</div>)}
-            </div>
-          )}
-        </div>
-      }
-    >
-      <ReceiptStepper status="draft" style={{ marginTop: -10 }} />
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave() } }}
+            />
+          </>
+        }
+      />
 
       {error && (
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
-      <div className="split-300">
-        {/* Левая колонка */}
-        <div className="col gap-16">
-          {/* Основная информация */}
-          <Card>
-            <CardHead>
-              <Icon name="file" size={15} className="ic-accent" />
-              <span className="card-head-title">Основная информация</span>
-            </CardHead>
-            <CardBody>
-              <div className="form-grid-2">
-                <div>
-                  <label className="field-label">
-                    <span>Клиент <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <Combobox
-                    value={clientId}
-                    placeholder="Поиск клиента…"
-                    options={clients.map((c) => ({ value: c.id, label: c.name }))}
-                    onChange={(v) => setClientId(String(v ?? ''))}
-                    disabled={lines.length > 0}
-                  />
-                  {lines.length > 0 && (
-                    <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 4 }}>
-                      Удалите все строки, чтобы сменить клиента
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="field-label">
-                    <span>Дата прибытия (план) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                  </label>
-                  <DatePicker value={arrivalDate} onChange={setArrivalDate} />
-                </div>
-                {showCosts && (
-                  <div>
-                    <label className="field-label">
-                      <span>Стоимость логистики для клиента, ₽ <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-                    </label>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      value={logisticsCost}
-                      onChange={(e) => setLogisticsCost(e.target.value)}
-                    />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+        {/* Left — фазы */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <PhaseBlock icon="file" title="Основная информация" role="manager" state="active"
+            hint="Клиент и план поступления">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Field label="Клиент" required style={{ marginBottom: 0 }}>
+                <Combobox
+                  value={clientId}
+                  placeholder="Поиск клиента…"
+                  options={clients.map((c) => ({ value: c.id, label: c.name }))}
+                  onChange={(v) => setClientId(String(v ?? ''))}
+                  disabled={lines.length > 0}
+                />
+                {lines.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 4 }}>
+                    Удалите все строки, чтобы сменить клиента
                   </div>
                 )}
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label className="field-label">
-                    <span>Комментарий</span>
-                    <span className="text-xs faint">не обязательно</span>
-                  </label>
-                  <textarea
+              </Field>
+              <Field label="Дата прибытия (план)" required style={{ marginBottom: 0 }}>
+                <DatePicker value={arrivalDate} onChange={setArrivalDate} />
+              </Field>
+              {showCosts && (
+                <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                  <input
                     className="input"
-                    rows={3}
-                    placeholder="Примечание для команды склада"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    style={{ resize: 'vertical', minHeight: 76 }}
+                    type="number"
+                    min={0}
+                    value={logisticsCost}
+                    onChange={(e) => setLogisticsCost(e.target.value)}
                   />
-                </div>
-              </div>
-            </CardBody>
-          </Card>
+                </Field>
+              )}
+              <Field label="Комментарий" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <AutoGrowTextarea
+                  minRows={3}
+                  placeholder="Примечание для команды склада"
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  style={{ resize: 'vertical', minHeight: 76 }}
+                />
+              </Field>
+            </div>
+          </PhaseBlock>
 
-          {/* Товары */}
-          <Card>
-            <CardHead>
-              <Icon name="boxes" size={15} className="ic-accent" />
-              <span className="card-head-title">Товары</span>
-              <Badge tone="accent" style={{ marginLeft: 6 } as React.CSSProperties}>{lines.length}</Badge>
-              <div className="flex-1" />
-              <button
-                className="btn sm primary"
-                onClick={() => setShowAddLine(true)}
-                disabled={!clientId}
-              >
+          <PhaseBlock icon="boxes" title="Товары к приёмке" role="manager" state="active"
+            hint="План — что и сколько приедет на склад"
+            right={
+              <button className="btn sm primary" onClick={() => setShowAddLine(true)} disabled={!clientId}>
                 <Icon name="plus" size={12} />Добавить строку
               </button>
-            </CardHead>
+            }
+          >
             {lines.length === 0 ? (
-              <div className="empty">
-                <div className="empty-illust" />
-                <div style={{ fontSize: 14, fontWeight: 500 }}>Нет строк</div>
-                <div className="text-sm muted mt-8">
-                  {clientId ? 'Нажмите «Добавить строку» для выбора товара' : 'Сначала выберите клиента'}
-                </div>
+              <div style={{ padding: '32px 0' }}>
+                <EmptyState
+                  title="Нет строк"
+                  sub={clientId ? 'Нажмите «Добавить строку» для выбора товара' : 'Сначала выберите клиента'}
+                />
               </div>
             ) : (
               <Table>
@@ -289,43 +260,21 @@ export function ReceiptCreateFeature() {
                 </tfoot>
               </Table>
             )}
-          </Card>
+          </PhaseBlock>
 
+          <PhaseBlock icon="forklift" title="Приёмка" role="warehouse" state="locked"
+            hint="Кладовщик примет товар после прибытия">
+            <LockedGrid labels={['Дата прибытия (факт)', 'Принято', 'Местоположения']} />
+          </PhaseBlock>
         </div>
 
-        {/* Правая колонка: чеклист + превью операций + итого */}
-        <div className="col gap-16" style={{ position: 'sticky', top: 16 }}>
-          {/* Готовность */}
-          <Card>
-            <CardHead>
-              <Icon name="check" size={15} className="ic-success" />
-              <span className="card-head-title">Готовность</span>
-            </CardHead>
-            <div className="readiness-list">
-              {readyChecks.map((c, i) => (
-                <div key={i} className="readiness-row">
-                  {c.ok ? (
-                    <div className="readiness-dot ok">
-                      <Icon name="check" size={10} />
-                    </div>
-                  ) : (
-                    <div className="readiness-dot pending" />
-                  )}
-                  <span className={`readiness-label ${c.ok ? 'ok' : 'pending'}`}>{c.label}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Предпросмотр операций */}
-          <Card>
-            <CardHead>
-              <Icon name="layers" size={15} className="ic-accent" />
-              <span className="card-head-title">Будут зафиксированы</span>
-              <span className="right text-xs subtle">
-                {1 + lines.length} опер.
-              </span>
-            </CardHead>
+        {/* Right — маршрут + готовность + итоги */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <ReceiptRailPanel status="draft" />
+          <ChecklistPanel items={readyChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
+          <Panel icon="layers" title="Будут зафиксированы" bodyPad={false}
+            right={<span className="text-xs subtle">{1 + lines.length} опер.</span>}
+          >
             <div style={{ padding: '4px 0 8px' }}>
               <OpPreviewItem icon="plus" tone="accent" title="Создание документа" sub="черновик · клиент, дата" />
               {lines.slice(0, 4).map((l) => (
@@ -343,23 +292,14 @@ export function ReceiptCreateFeature() {
                 </div>
               )}
             </div>
-          </Card>
-
-          {/* Итого */}
-          <Card>
-            <CardHead>
-              <Icon name="chart" size={15} className="ic-accent" />
-              <span className="card-head-title">Итого</span>
-            </CardHead>
-            <div className="totals-grid">
-              <span className="key">SKU</span>
-              <span className="val mono">{totalSku}</span>
-              <span className="key">Строк</span>
-              <span className="val mono">{lines.length}</span>
-              <span className="key">План, шт</span>
-              <span className="val mono" style={{ fontWeight: 500, fontSize: 14 }}>{totalQty}</span>
+          </Panel>
+          <Panel icon="chart" title="Итого">
+            <div style={{ padding: '0 2px' }}>
+              <ReadRow label="SKU" mono>{totalSku}</ReadRow>
+              <ReadRow label="Строк" mono>{lines.length}</ReadRow>
+              <ReadRow label="План" mono strong>{totalQty} шт</ReadRow>
             </div>
-          </Card>
+          </Panel>
         </div>
       </div>
 
@@ -374,7 +314,7 @@ export function ReceiptCreateFeature() {
           setShowAddLine(false)
         }}
       />
-    </FormPage>
+    </div>
   )
 }
 
