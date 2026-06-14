@@ -1,0 +1,2 @@
+# Shell-скрипты всегда с LF: с CRLF они не исполняются на Linux-сервере (bad interpreter).
+*.sh text eol=lf
