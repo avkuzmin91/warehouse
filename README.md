@@ -235,3 +235,11 @@ curl -fsS http://127.0.0.1:8000/health   # dev
 ```
 
 Ожидается **`/health`:** HTTP **200**, JSON с **`"status":"ok"`**; **`/api/docs`:** **200** (HTML).
+
+## 5. Резервное копирование
+
+Ежедневный бэкап БД + файлов (`uploads/`) + исходного кода в **03:00 МСК** через cron.
+Скрипты — в **`scripts/backup/`**, полная инструкция (установка, проверка, восстановление) — в
+**[`docs/backup.md`](docs/backup.md)**.
+
+Установка на сервере (один раз, от root): `sudo bash /var/www/app-prod/scripts/backup/install-cron.sh`.
