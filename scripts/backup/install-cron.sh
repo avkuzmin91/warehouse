@@ -34,11 +34,14 @@ chmod 700 "${BACKUP_ROOT}"
 echo "Каталог бэкапов: ${BACKUP_ROOT}"
 
 # 2b. Доступ на ЧТЕНИЕ для SSH-пользователя через POSIX ACL.
-# Имя пользователя берём из окружения (BACKUP_READ_USER=alex bash install-cron.sh)
-# или из уже существующего /etc/wms-backup.env.
+# Имя пользователя берём из окружения (BACKUP_READ_USER=alex bash install-cron.sh),
+# затем из /etc/wms-backup.env, затем из репозиторных дефолтов (wms-backup.defaults.env).
 READ_USER="${BACKUP_READ_USER:-}"
 if [[ -z "${READ_USER}" && -f "${ENV_FILE}" ]]; then
   READ_USER="$(grep -E '^[[:space:]]*BACKUP_READ_USER=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- | tr -d '"'"'"' ' || true)"
+fi
+if [[ -z "${READ_USER}" && -f "${SCRIPT_DIR}/wms-backup.defaults.env" ]]; then
+  READ_USER="$(set -a; source "${SCRIPT_DIR}/wms-backup.defaults.env"; echo "${BACKUP_READ_USER:-}")"
 fi
 
 if [[ -n "${READ_USER}" ]]; then

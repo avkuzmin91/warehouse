@@ -7,10 +7,18 @@
 set -euo pipefail
 
 # --- 1. Загрузка конфигурации ---------------------------------------------------
+# Сначала локальный конфиг сервера (секреты, оверрайды), затем репозиторные значения по
+# умолчанию (через := заполняют лишь то, что не задано/пусто в /etc) — так не секретные
+# параметры (напр. BACKUP_READ_USER) приезжают через CI/CD, а не правятся руками на сервере.
 WMS_BACKUP_ENV_FILE="${WMS_BACKUP_ENV_FILE:-/etc/wms-backup.env}"
 if [[ -f "${WMS_BACKUP_ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   set -a; source "${WMS_BACKUP_ENV_FILE}"; set +a
+fi
+WMS_BACKUP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${WMS_BACKUP_SCRIPT_DIR}/wms-backup.defaults.env" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "${WMS_BACKUP_SCRIPT_DIR}/wms-backup.defaults.env"; set +a
 fi
 
 # Время склада — Москва: имена файлов и метки в логе в МСК, независимо от TZ сервера.
