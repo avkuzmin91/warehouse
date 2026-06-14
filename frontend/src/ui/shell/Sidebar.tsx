@@ -60,6 +60,7 @@ const ROLE_LABELS: Record<string, string> = {
   user: 'Без доступа',
   warehouse_manager: 'Кладовщик',
   shift_supervisor: 'Начальник смены',
+  warehouse_head: 'Начальник склада',
   client: 'Клиент',
 }
 
@@ -74,8 +75,8 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const navigate = useNavigate()
   const isClient = user?.role === 'client'
   const isShiftSupervisor = user?.role === 'shift_supervisor'
-  const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
-  const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
+  const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
+  const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
   const hasFinanceAccess = user?.role === 'admin' || user?.role === 'manager'
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'

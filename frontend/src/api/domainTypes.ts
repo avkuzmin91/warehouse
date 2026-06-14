@@ -49,13 +49,13 @@ export type SizeItem = {
 export type UserListItem = {
   id: string
   email: string
-  role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager' | 'shift_supervisor'
+  role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head'
   created_at: string
   client_id?: string | null
   client_name?: string | null
 }
 
-export type AssignableUserRole = 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'client'
+export type AssignableUserRole = 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head' | 'client'
 
 export type RecordActualityFilterItem = {
   id: string

@@ -20,6 +20,7 @@ const ROLE_LABELS: Record<string, string> = {
   client: 'Клиент',
   warehouse_manager: 'Кладовщик',
   shift_supervisor: 'Начальник смены',
+  warehouse_head: 'Начальник склада',
 }
 
 const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> = {
@@ -27,17 +28,19 @@ const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> 
   manager: 'info',
   warehouse_manager: 'info',
   shift_supervisor: 'warning',
+  warehouse_head: 'accent',
   client: 'success',
   user: '',
 }
 
-const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'client'] as const
+const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'warehouse_head', 'client'] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
 const ROLE_FILTERS = [
   { role: 'all', label: 'Все', icon: 'users' },
   { role: 'admin', label: 'Администраторы', icon: 'shield' },
   { role: 'manager', label: 'Менеджеры', icon: 'star' },
+  { role: 'warehouse_head', label: 'Начальники склада', icon: 'shield' },
   { role: 'warehouse_manager', label: 'Кладовщики', icon: 'archive' },
   { role: 'shift_supervisor', label: 'Начальники смены', icon: 'user' },
   { role: 'user', label: 'Без доступа', icon: 'user' },

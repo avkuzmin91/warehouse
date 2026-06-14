@@ -17,6 +17,8 @@ from config import (
 ROLE_WAREHOUSE = "warehouse_manager"
 ROLE_MANAGER = "manager"
 ROLE_SHIFT = "shift_supervisor"
+# Начальник склада видит очереди и кладовщика, и начальника смены.
+ROLE_WAREHOUSE_HEAD = "warehouse_head"
 
 _TRIP_TASKS = {
     TRIP_STATUS_AWAITING_ARRIVAL: (ROLE_WAREHOUSE, "trip_arrival", "Встретить рейс {num}"),
@@ -50,9 +52,9 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     Read-only: источник правды — статус документа, без отдельного хранилища.
     """
     role = str(user["role"])
-    see_warehouse = role in (ROLE_WAREHOUSE, "admin")
+    see_warehouse = role in (ROLE_WAREHOUSE, ROLE_WAREHOUSE_HEAD, "admin")
     see_manager = role in (ROLE_MANAGER, "admin")
-    see_shift = role in (ROLE_SHIFT, "admin")
+    see_shift = role in (ROLE_SHIFT, ROLE_WAREHOUSE_HEAD, "admin")
     visible_roles = set()
     if see_warehouse:
         visible_roles.add(ROLE_WAREHOUSE)
