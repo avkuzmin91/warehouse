@@ -142,6 +142,141 @@ mkdir -p /tmp/wms-src && tar -xzf \
 
 ---
 
+## Тестовое восстановление на изолированном docker-стеке (локально)
+
+Бэкап, который ни разу не разворачивали, нельзя считать рабочим. Раз в месяц (и после
+любых изменений схемы/деплоя) полезно скачать набор и **поднять его как отдельное приложение**,
+не трогая dev/prod. Ниже — отработанный подход для проверки набора `db.dump + source.tar.gz + uploads.tar.gz`.
+
+### Принципы
+
+- **Полная изоляция.** Отдельное compose-`name`, свои `container_name`, свой том БД и свои порты —
+  чтобы случайно не задеть dev/prod (их тома и контейнеры не должны фигурировать в проверочном стеке).
+- **Проверяем код из бэкапа против БД из бэкапа.** Дамп и исходники сняты в один момент, поэтому
+  ревизии alembic у них совпадают и `alembic upgrade head` при старте backend будет **no-op**.
+  Если в логе backend появились строки `Running upgrade ...` — код и дамп разъехались, это сигнал.
+- **`.env`-файлы в бэкап не попадают** (они в `.gitignore`, а `SOURCE_MODE=tree` архивирует дерево
+  без них). Для проверки задаём **одноразовые** `POSTGRES_PASSWORD` и `JWT_SECRET` — это нормально:
+  они нужны только этому временному стеку.
+- **`wms-restore.sh` рассчитан на сервер** (читает `/etc/wms-backup.env`, контейнер `wms_prod_db`).
+  Для локальной проверки удобнее воспроизвести ту же команду `pg_restore` вручную против
+  изолированного контейнера (см. ниже) — поведение идентично (`--clean --if-exists --no-owner`).
+
+> ⚠️ **Не редактируйте данные в восстановленной БД ради проверки логина.** Был случай: чтобы
+> залогиниться, перезаписали `password_hash` у `admin@example.com` тестовым паролем — после чего
+> **настоящий прод-пароль перестал подходить**, и это выглядело как «пароль не попал в бэкап»
+> (хотя все хэши на месте). Правильно:
+> - сначала убедиться, что хэши пришли: `SELECT email, left(password_hash,7), length(password_hash) FROM users;`
+>   (валидный bcrypt — `$2b$12$`, длина 60);
+> - логиниться **реальным** прод-паролем, ничего не меняя в таблице `users`;
+> - если очень нужно проверить вход без known-пароля — делать это **недеструктивно** (проверка
+>   `bcrypt.checkpw` против хранимого хэша) или **на копии**;
+> - если хэш всё же затёрли — просто **накатить дамп повторно**, он вернёт оригинальные данные.
+
+### Шаги
+
+```bash
+# 0. Каталоги под распаковку (вне репозитория, чтобы не попало в git)
+mkdir -p ./restore-test/app ./restore-test/data
+
+# 1. Распаковать исходники и файлы из бэкапа
+tar -xzf wms-source_<дата>.tar.gz  -C ./restore-test/app
+tar -xzf wms-uploads_<дата>.tar.gz -C ./restore-test/data     # внутри каталог uploads/
+
+# 2. Положить рядом проверочный compose, nginx-конфиг и .env (см. ниже) в ./restore-test/app
+#    .env:  POSTGRES_PASSWORD=restorepass / JWT_SECRET=restore-test-only
+
+# 3. Поднять ТОЛЬКО БД и дождаться healthy
+docker compose --project-directory ./restore-test/app \
+  -f ./restore-test/app/docker-compose.restore.yml up -d db
+
+# 4. Накатить дамп в чистый Postgres (та же команда, что и в wms-restore.sh)
+docker exec -i wms_restore_db pg_restore -U postgres -d app \
+  --clean --if-exists --no-owner --no-privileges < wms-db_<дата>.dump
+
+# 5. Проверить данные (счётчики, ревизия alembic)
+docker exec -i wms_restore_db psql -U postgres -d app -tA -c \
+  "SELECT version_num FROM alembic_version;"
+docker exec -i wms_restore_db psql -U postgres -d app -tA -c \
+  "SELECT 'users',count(*) FROM users UNION ALL SELECT 'receipt_docs',count(*) FROM receipt_docs;"
+
+# 6. Собрать и поднять остальное (backend накатит alembic — должен быть no-op)
+docker compose --project-directory ./restore-test/app \
+  -f ./restore-test/app/docker-compose.restore.yml up -d --build backend frontend proxy
+
+# 7. Смоук-проверки
+curl -s http://127.0.0.1:18080/health                       # {"status":"ok"}
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/             # 200 (SPA)
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/api/uploads/<файл>  # 200 (uploads)
+# вход — реальным прод-паролем на http://127.0.0.1:18080 (НЕ меняя password_hash)
+
+# 8. Снести стек вместе с томом
+docker compose --project-directory ./restore-test/app \
+  -f ./restore-test/app/docker-compose.restore.yml down -v
+```
+
+### `docker-compose.restore.yml` (изолированный стек)
+
+```yaml
+name: wms-restore     # отдельный проект — не пересекается с wms-dev / wms-prod
+
+services:
+  db:
+    image: postgres:16
+    container_name: wms_restore_db
+    environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}, POSTGRES_DB: app, TZ: Europe/Moscow }
+    ports: ["127.0.0.1:5436:5432"]
+    volumes: [db_data_restore:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL","pg_isready -U postgres -d app"], interval: 5s, timeout: 5s, retries: 10 }
+
+  backend:
+    build: { context: ./backend }
+    container_name: wms_restore_backend
+    environment:
+      APP_ENV: prod
+      TZ: Europe/Moscow
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/app
+      JWT_SECRET: ${JWT_SECRET}
+      WAREHOUSE_UPLOADS_DIR: /app/uploads
+    volumes: ["../data/uploads:/app/uploads"]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["127.0.0.1:18000:8000"]
+
+  frontend:
+    build: { context: ./frontend }
+    container_name: wms_restore_frontend
+    depends_on: [backend]
+
+  proxy:                # мини-замена прод-nginx: /api/ → backend (strip /api), / → frontend
+    image: nginx:alpine
+    container_name: wms_restore_proxy
+    volumes: ["./restore-nginx.conf:/etc/nginx/nginx.conf:ro"]
+    ports: ["127.0.0.1:18080:80"]
+    depends_on: [backend, frontend]
+
+volumes:
+  db_data_restore:
+```
+
+### `restore-nginx.conf`
+
+```nginx
+events { worker_connections 1024; }
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    client_max_body_size 50m;
+    server {
+        listen 80;
+        location = /health { proxy_pass http://backend:8000/health; }
+        location /api/     { proxy_pass http://backend:8000/; proxy_set_header Host $host; }
+        location /         { proxy_pass http://frontend:80;   proxy_set_header Host $host; }
+    }
+}
+```
+
+---
+
 ## Доступ на чтение для пользователя (SSH)
 
 Бэкапы лежат в `/var/backups/wms` с правами `700` (владелец — root), чтобы дампы БД со всеми данными
