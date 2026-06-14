@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from config import (
     RECEIPT_STATUS_ON_INTAKE,
@@ -27,6 +27,14 @@ _TRIP_TASKS = {
 _RECEIPT_TASKS = {
     RECEIPT_STATUS_ON_INTAKE: (ROLE_WAREHOUSE, "receipt_intake", "Принять товары — {num}"),
 }
+
+
+def _prev_working_day(d: date) -> date:
+    """Предыдущий рабочий день (воскресенье — нерабочее, захардкожено)."""
+    result = d - timedelta(days=1)
+    while result.weekday() == 6:  # 6 = воскресенье
+        result -= timedelta(days=1)
+    return result
 
 
 def _receipt_task_statuses(visible_roles: set[str]) -> tuple[str, ...]:
@@ -105,11 +113,12 @@ def list_my_tasks(connection, *, user) -> list[dict]:
 
     if ROLE_SHIFT in visible_roles or ROLE_WAREHOUSE in visible_roles:
         # Задача отгрузки — прямая функция статуса:
-        #   «В плане» (+срок наступил) → кладовщик передаёт на упаковку;
+        #   «В плане» (+за 1 рабочий день до отгрузки) → кладовщик передаёт на упаковку;
         #   «На упаковке»              → начальник смены разбивает годный/брак;
         #   «Перемещение»              → кладовщик раскладывает по местам к рейсу;
         #   «Перемещение» (брак, +срок наступил) → кладовщик готовит брак к отгрузке.
-        today = date.today().isoformat()
+        today_date = date.today()
+        today = today_date.isoformat()
         shipment_rows = connection.execute(
             "SELECT id, doc_number, status, cargo_type, ship_date, priority_rank, updated_at, created_at FROM shipment_docs "
             "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?)",
@@ -120,8 +129,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             is_defect_cargo = str(r["cargo_type"] or "") == SHIPMENT_CARGO_DEFECT
             if status == SHIPMENT_STATUS_PACKING:
                 ship_date = r["ship_date"]
-                if not ship_date or str(ship_date) > today:
-                    continue  # срок передачи на упаковку ещё не наступил
+                if not ship_date or _prev_working_day(date.fromisoformat(str(ship_date)[:10])) > today_date:
+                    continue  # задача появляется за 1 рабочий день до отгрузки (вс — нерабочее)
                 task_role, kind, title = ROLE_WAREHOUSE, "shipment_move_in", f"Передать на упаковку {r['doc_number']}"
             elif status == SHIPMENT_STATUS_ON_PACKING:
                 task_role, kind, title = ROLE_SHIFT, "shipment_pack", f"Упаковать {r['doc_number']}"

@@ -486,6 +486,56 @@ def test_packing_handoff_tasks(api, client_id):
     assert not any(x["doc_id"] == doc_id and x["kind"] == "shipment_pack" for x in _tasks("shift_supervisor"))
 
 
+def test_prev_working_day_skips_sunday():
+    from datetime import date
+
+    from modules.tasks.service import _prev_working_day
+
+    # Понедельник → суббота (воскресенье — нерабочее, пропускается).
+    assert _prev_working_day(date(2026, 6, 15)) == date(2026, 6, 13)
+    # Вторник → понедельник.
+    assert _prev_working_day(date(2026, 6, 16)) == date(2026, 6, 15)
+    # Воскресенье → суббота.
+    assert _prev_working_day(date(2026, 6, 14)) == date(2026, 6, 13)
+
+
+def _packing_shipment_dated(api, client_id, pos, qty, ship_date):
+    _as(_ADMIN)
+    line = {**pos, "product_name": "P", "product_sku": "SKU", "color_name": "Red", "size_name": None, "qty": qty}
+    doc_id = api.post("/shipments", json={
+        "cargo_type": "good", "client_id": client_id, "client_name": "C",
+        "ship_date": ship_date, "comment": "ТЗ", "lines": [line],
+    }).json()["message"]
+    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    return doc_id
+
+
+def test_packing_handoff_appears_one_working_day_before(api, client_id):
+    from datetime import date, timedelta
+
+    from modules.tasks.service import _prev_working_day
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+
+    today = date.today()
+
+    # Срок ещё далеко: за 1 рабочий день до отгрузки задача не наступила.
+    far = today + timedelta(days=14)
+    assert _prev_working_day(far) > today
+    far_doc = _packing_shipment_dated(api, client_id, pos, 4, far.isoformat())
+    assert not any(x["doc_id"] == far_doc and x["kind"] == "shipment_move_in" for x in _tasks("warehouse_manager"))
+
+    # Ближайший рабочий день после сегодня: до него ровно 1 рабочий день → задача видна.
+    soon = today + timedelta(days=1)
+    while soon.weekday() == 6:  # пропускаем воскресенье
+        soon += timedelta(days=1)
+    assert _prev_working_day(soon) <= today
+    soon_doc = _packing_shipment_dated(api, client_id, pos, 3, soon.isoformat())
+    assert any(x["doc_id"] == soon_doc and x["kind"] == "shipment_move_in" for x in _tasks("warehouse_manager"))
+
+
 def test_relocate_good_after_packing(api, client_id):
     pos = _position()
     intake_zone = str(uuid.uuid4())
