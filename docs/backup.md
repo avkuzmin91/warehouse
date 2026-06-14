@@ -145,24 +145,26 @@ mkdir -p /tmp/wms-src && tar -xzf \
 ## Доступ на чтение для пользователя (SSH)
 
 Бэкапы лежат в `/var/backups/wms` с правами `700` (владелец — root), чтобы дампы БД со всеми данными
-не были доступны посторонним. Чтобы выдать **конкретному** SSH-пользователю (например `alex`)
-доступ **только на чтение** — используется POSIX ACL с наследованием: новые файлы бэкапа автоматически
-становятся читаемыми этим пользователем, ничего настраивать после каждого прогона не нужно.
+не были доступны посторонним. Чтобы выдать **конкретному** SSH-пользователю доступ **только на чтение** —
+используется POSIX ACL с наследованием: новые файлы бэкапа автоматически становятся читаемыми этим
+пользователем, ничего настраивать после каждого прогона не нужно.
 
-**Выдать доступ** (от root, идемпотентно):
+**Имя пользователя — в репозитории, приезжает через CI/CD.** Оно задано в
+[`scripts/backup/wms-backup.defaults.env`](../scripts/backup/wms-backup.defaults.env) (сейчас `alex`) и
+деплоится вместе со скриптом — править `/etc/wms-backup.env` на сервере не нужно. Каждый прогон
+`wms-backup.sh` (cron или вручную) сам поддерживает ACL для этого пользователя. Переопределить для
+конкретного сервера можно через `BACKUP_READ_USER=` в `/etc/wms-backup.env` (он приоритетнее дефолта).
+
+После деплоя ACL применится при ближайшем прогоне; чтобы не ждать 03:00 — один раз вручную:
 
 ```bash
-# При установке:
-sudo BACKUP_READ_USER=alex bash /var/www/app-prod/scripts/backup/install-cron.sh
-
-# Или позже, не переустанавливая cron — задать в конфиге и один раз применить:
-echo 'BACKUP_READ_USER=alex' | sudo tee -a /etc/wms-backup.env
-sudo setfacl -R   -m u:alex:rX /var/backups/wms          # текущие файлы
-sudo find /var/backups/wms -type d -exec setfacl -d -m u:alex:rX {} +   # будущие файлы
+sudo bash /var/www/app-prod/scripts/backup/wms-backup.sh   # подхватит alex из репо-дефолта и выдаст ACL
+# либо переустановить cron (заодно рекурсивно поправит ACL на уже существующих файлах):
+sudo bash /var/www/app-prod/scripts/backup/install-cron.sh
 ```
 
-> Нужен пакет `acl` (на Ubuntu обычно есть; иначе `sudo apt-get install -y acl`).
-> `BACKUP_READ_USER` в `/etc/wms-backup.env` нужен, чтобы `wms-backup.sh` поддерживал ACL и при ручных запусках.
+> Единственная серверная зависимость — пакет `acl` (на Ubuntu обычно есть; иначе один раз
+> `sudo apt-get install -y acl`). Без `setfacl` скрипт молча пропустит выдачу ACL.
 
 **Проверить** (видно строку `user:alex:r-x` и метку `+` в `ls`):
 
@@ -212,7 +214,7 @@ OFFSITE_CMD='rclone copy --max-age 25h "$BACKUP_ROOT" s3:wms-backups'
 | `RETENTION_DAYS` | `14` | сколько суток хранить |
 | `SOURCE_MODE` | `tree` | `tree` (архив дерева) или `mirror` (git-история) |
 | `REPO_URL` | — | URL репозитория для `SOURCE_MODE=mirror` |
-| `BACKUP_READ_USER` | — | SSH-пользователь с доступом на чтение бэкапов (ACL) |
+| `BACKUP_READ_USER` | `alex` (репо-дефолт) | SSH-пользователь с доступом на чтение бэкапов (ACL); из `wms-backup.defaults.env`, оверрайд — в `/etc/wms-backup.env` |
 | `OFFSITE_CMD` | — | команда внешней выгрузки |
 
 Для полного зеркала git-истории вместо снимка дерева: `SOURCE_MODE=mirror` и `REPO_URL` с доступом
