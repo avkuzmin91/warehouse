@@ -64,6 +64,16 @@ def _shift_supervisor_user_row():
     }
 
 
+def _warehouse_head_user_row():
+    return {
+        "id": "test-warehouse-head-id",
+        "email": "whhead@test.com",
+        "role": "warehouse_head",
+        "created_at": "2020-01-01T00:00:00",
+        "client_id": None,
+    }
+
+
 class _RoleClient(TestClient):
     """TestClient, привязанный к роли.
 
@@ -110,6 +120,14 @@ def warehouse_client():
 def shift_supervisor_client():
     """TestClient с авторизацией начальника смены (dependency override)."""
     with _RoleClient(app, _shift_supervisor_user_row()) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def warehouse_head_client():
+    """TestClient с авторизацией начальника склада (dependency override)."""
+    with _RoleClient(app, _warehouse_head_user_row()) as c:
         yield c
     app.dependency_overrides.clear()
 

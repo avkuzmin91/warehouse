@@ -9,6 +9,12 @@ from fastapi import HTTPException, status
 # Сообщение для 403: одна строка — проще сопоставлять в тестах и логах.
 FORBIDDEN_DETAIL = "Недостаточно прав"
 
+# Роли склада (осторожно с именами): "warehouse_manager" — это Кладовщик,
+# "shift_supervisor" — Начальник смены, а "warehouse_head" — Начальник склада,
+# который объединяет права обоих. Поэтому warehouse_head добавлен в каждую проверку,
+# где встречается warehouse_manager ИЛИ shift_supervisor, и НЕ добавлен туда, где
+# доступ только у admin/manager (создание документов, стоимости, финансы, приоритет).
+
 
 def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
     """Значение users.client_id из результата SELECT (доступ по ключу, без .get)."""
@@ -23,12 +29,12 @@ def user_client_id_opt(user: Mapping[str, Any]) -> str | None:
 
 
 def ensure_backoffice_account(user: Mapping[str, Any]) -> None:
-    """Админ-разделы бэк-офиса (справочники, товары): admin, manager, warehouse_manager.
+    """Админ-разделы бэк-офиса (справочники, товары): admin, manager, warehouse_manager, warehouse_head.
 
     Это НЕ проверка «только admin» — для строго админских операций
     (управление пользователями) используется отдельная проверка role == "admin".
     """
-    if user["role"] not in ("admin", "manager", "warehouse_manager"):
+    if user["role"] not in ("admin", "manager", "warehouse_manager", "warehouse_head"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -36,7 +42,7 @@ def ensure_backoffice_account(user: Mapping[str, Any]) -> None:
 
 
 def ensure_manager_staff(user: Mapping[str, Any]) -> None:
-    if user["role"] not in ("manager", "admin", "warehouse_manager"):
+    if user["role"] not in ("manager", "admin", "warehouse_manager", "warehouse_head"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -44,7 +50,7 @@ def ensure_manager_staff(user: Mapping[str, Any]) -> None:
 
 
 def ensure_shipment_view_access(user: Mapping[str, Any]) -> None:
-    if user["role"] not in ("manager", "admin", "warehouse_manager", "shift_supervisor"):
+    if user["role"] not in ("manager", "admin", "warehouse_manager", "shift_supervisor", "warehouse_head"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -56,8 +62,8 @@ def ensure_dashboard_access(user: Mapping[str, Any]) -> None:
 
 
 def ensure_packing_access(user: Mapping[str, Any]) -> None:
-    """Внесение результата упаковки: менеджерский состав и начальник смены."""
-    if user["role"] not in ("manager", "admin", "shift_supervisor"):
+    """Внесение результата упаковки: менеджерский состав, начальник смены и начальник склада."""
+    if user["role"] not in ("manager", "admin", "shift_supervisor", "warehouse_head"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
@@ -65,8 +71,8 @@ def ensure_packing_access(user: Mapping[str, Any]) -> None:
 
 
 def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
-    """Складские действия (приёмка, разгрузка рейса): кладовщик и менеджерский состав."""
-    if user["role"] not in ("warehouse_manager", "manager", "admin"):
+    """Складские действия (приёмка, разгрузка рейса): кладовщик, начальник склада и менеджерский состав."""
+    if user["role"] not in ("warehouse_manager", "manager", "admin", "warehouse_head"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,

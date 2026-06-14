@@ -13,6 +13,7 @@ from security import (
     ensure_packing_access,
     ensure_shipment_priority_access,
     ensure_shipment_view_access,
+    ensure_warehouse_staff,
 )
 
 
@@ -31,7 +32,7 @@ def test_ensure_backoffice_rejects_plain_user():
     assert ctx.value.detail == FORBIDDEN_DETAIL
 
 
-@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager"])
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "warehouse_head"])
 def test_ensure_backoffice_accepts_privileged_roles(role: str):
     ensure_backoffice_account(
         {
@@ -58,7 +59,7 @@ def test_ensure_manager_rejects_plain_user():
     assert ctx.value.status_code == 403
 
 
-@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager"])
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "warehouse_head"])
 def test_ensure_manager_accepts_staff(role: str):
     ensure_manager_staff(
         {
@@ -71,7 +72,7 @@ def test_ensure_manager_accepts_staff(role: str):
     )
 
 
-@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "shift_supervisor"])
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "shift_supervisor", "warehouse_head"])
 def test_ensure_shipment_view_accepts_shift_supervisor(role: str):
     ensure_shipment_view_access(
         {
@@ -111,7 +112,7 @@ def test_ensure_shipment_priority_accepts_managers(role: str):
     )
 
 
-@pytest.mark.parametrize("role", ["warehouse_manager", "shift_supervisor", "user", "client"])
+@pytest.mark.parametrize("role", ["warehouse_manager", "shift_supervisor", "warehouse_head", "user", "client"])
 def test_ensure_shipment_priority_rejects_non_managers(role: str):
     with pytest.raises(HTTPException) as ctx:
         ensure_shipment_priority_access(
@@ -140,7 +141,7 @@ def test_ensure_document_create_accepts_managers(role: str):
     )
 
 
-@pytest.mark.parametrize("role", ["warehouse_manager", "shift_supervisor", "user", "client"])
+@pytest.mark.parametrize("role", ["warehouse_manager", "shift_supervisor", "warehouse_head", "user", "client"])
 def test_ensure_document_create_rejects_non_managers(role: str):
     with pytest.raises(HTTPException) as ctx:
         ensure_document_create_access(
@@ -156,7 +157,7 @@ def test_ensure_document_create_rejects_non_managers(role: str):
     assert ctx.value.detail == FORBIDDEN_DETAIL
 
 
-@pytest.mark.parametrize("role", ["admin", "manager", "shift_supervisor"])
+@pytest.mark.parametrize("role", ["admin", "manager", "shift_supervisor", "warehouse_head"])
 def test_ensure_packing_accepts_qc_roles(role: str):
     ensure_packing_access(
         {
@@ -173,6 +174,35 @@ def test_ensure_packing_accepts_qc_roles(role: str):
 def test_ensure_packing_rejects_warehouse_and_plain_roles(role: str):
     with pytest.raises(HTTPException) as ctx:
         ensure_packing_access(
+            {
+                "id": "1",
+                "email": "u@x",
+                "role": role,
+                "created_at": "",
+                "client_id": None,
+            }
+        )
+    assert ctx.value.status_code == 403
+    assert ctx.value.detail == FORBIDDEN_DETAIL
+
+
+@pytest.mark.parametrize("role", ["admin", "manager", "warehouse_manager", "warehouse_head"])
+def test_ensure_warehouse_staff_accepts_warehouse_roles(role: str):
+    ensure_warehouse_staff(
+        {
+            "id": "1",
+            "email": "u@x",
+            "role": role,
+            "created_at": "",
+            "client_id": None,
+        }
+    )
+
+
+@pytest.mark.parametrize("role", ["shift_supervisor", "user", "client"])
+def test_ensure_warehouse_staff_rejects_others(role: str):
+    with pytest.raises(HTTPException) as ctx:
+        ensure_warehouse_staff(
             {
                 "id": "1",
                 "email": "u@x",

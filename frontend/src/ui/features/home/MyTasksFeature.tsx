@@ -65,6 +65,7 @@ function taskSub(t: TaskItem): string {
 const ROLE_LABEL: Record<string, string> = {
   warehouse_manager: 'кладовщик',
   shift_supervisor: 'начальник смены',
+  warehouse_head: 'начальник склада',
   manager: 'менеджер',
   admin: 'администратор',
   client: 'клиент',

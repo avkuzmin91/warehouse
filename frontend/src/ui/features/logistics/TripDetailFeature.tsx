@@ -375,7 +375,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       />
     )
   } else if (status === 'awaiting_arrival' || status === 'unloading') {
-    const isWarehouseTaskView = user?.role === 'warehouse_manager'
+    const isWarehouseTaskView = user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
     view = (
       isWarehouseTaskView ? (
         <AwaitingView

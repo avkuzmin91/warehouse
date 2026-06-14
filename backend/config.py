@@ -154,9 +154,9 @@ SHIPMENT_TRANSITIONS: dict[str, str] = {
 # В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
 # начальник смены упаковал годный/брак и передаёт кладовщику.
 SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
-    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_manager"}),
-    SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager"}),
-    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor"}),
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
+    SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
+    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor", "warehouse_head"}),
 }
 
 # Аннулировать можно только до передачи на упаковку включительно.
@@ -184,7 +184,7 @@ SHIPMENT_TRANSITIONS_DEFECT: dict[str, str] = {
 }
 
 SHIPMENT_TRANSITION_ROLES_DEFECT: dict[str, frozenset[str]] = {
-    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "warehouse_manager"}),
+    SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
 }
 
 # До подготовки кладовщиком остатки не двигаются; из «Ожидает рейс» аннулирование
