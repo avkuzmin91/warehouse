@@ -20,8 +20,15 @@ depends_on = None
 def upgrade() -> None:
     from alembic import op
 
-    op.execute("ALTER TABLE unloading_zones ADD COLUMN is_shipping_zone INTEGER NOT NULL DEFAULT 0")
-    # Засеять «Зону отгрузки», если ни одной ещё не отмечено.
+    op.execute("ALTER TABLE unloading_zones ADD COLUMN IF NOT EXISTS is_shipping_zone INTEGER NOT NULL DEFAULT 0")
+    # Если зона с именем «Зона отгрузки» уже есть (например, заведена вручную в справочнике),
+    # пометить её как зону отгрузки и реанимировать — иначе INSERT упадёт на UNIQUE(name).
+    op.execute("""
+        UPDATE unloading_zones
+        SET is_shipping_zone = 1, is_active = 1, is_deleted = 0
+        WHERE name = 'Зона отгрузки'
+    """)
+    # Иначе засеять «Зону отгрузки», если активной ещё нет.
     op.execute("""
         INSERT INTO unloading_zones (id, name, is_active, is_shipping_zone, created_at)
         SELECT gen_random_uuid()::text, 'Зона отгрузки', 1, 1, NOW()::text
