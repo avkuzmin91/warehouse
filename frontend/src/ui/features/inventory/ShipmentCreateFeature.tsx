@@ -24,7 +24,7 @@ import type { FilePreviewMeta } from './shipmentDetail/shared/types'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
 import { fmtYmdAsDmy } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canViewCosts } from '../../../utils/access'
+import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
@@ -50,6 +50,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const { clients } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canCreate = canCreateDocuments(user)
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const storeOptions: ComboboxOption[] = clientStores.map((s) => ({ value: s.id, label: s.name }))
@@ -208,6 +209,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     }
     setShowBlockReasons(false)
     void handleSave(true)
+  }
+
+  if (!canCreate) {
+    return (
+      <div className="page">
+        <div style={{ padding: 32, color: 'var(--c-text-subtle)' }}>Недостаточно прав для создания отгрузок.</div>
+      </div>
+    )
   }
 
   return (

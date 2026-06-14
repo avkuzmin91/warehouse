@@ -22,6 +22,8 @@ import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
 import { fmtDate } from '../../utils/format'
 import { useLookups } from '../../hooks/useLookups'
+import { useCurrentUser } from '../../hooks/useCurrentUser'
+import { canCreateDocuments } from '../../utils/access'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
@@ -41,6 +43,8 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
 
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
+  const { user } = useCurrentUser()
+  const canCreate = canCreateDocuments(user)
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
@@ -147,9 +151,11 @@ export function InventoryReceiptsListPage() {
               ><Icon name="grid" size={13} />Канбан</button>
             </div>
           )}
-          <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
-            <Icon name="plus" size={14} />Новое поступление
-          </button>
+          {canCreate && (
+            <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
+              <Icon name="plus" size={14} />Новое поступление
+            </button>
+          )}
         </>
       }
       filters={
@@ -288,7 +294,7 @@ export function InventoryReceiptsListPage() {
                       title="Документов нет"
                       sub={isOverdueFilter ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
                       action={
-                        !statusFilter ? (
+                        canCreate && !statusFilter ? (
                           <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
                             <Icon name="plus" size={14} />Новое поступление
                           </button>

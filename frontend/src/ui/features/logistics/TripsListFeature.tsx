@@ -17,7 +17,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
-import { canViewCosts } from '../../../utils/access'
+import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -103,6 +103,7 @@ export function TripsListFeature() {
   const { carriers } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canCreate = canCreateDocuments(user)
 
   const [typeRaw, setType] = useFilterParam('type', '')
   const typeFilter: '' | TripDirection = typeRaw === 'outbound' || typeRaw === 'inbound' ? typeRaw : ''
@@ -140,6 +141,7 @@ export function TripsListFeature() {
       title="Рейсы"
       subtitle="Транспортные рейсы поступлений и отгрузок"
       actions={
+        canCreate ? (
         <Dropdown
           trigger={
             <button className="btn primary" type="button">
@@ -165,6 +167,7 @@ export function TripsListFeature() {
             },
           ]}
         />
+        ) : undefined
       }
     >
       <div className="kpi-grid" style={{ marginBottom: 16 }}>

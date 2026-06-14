@@ -29,6 +29,7 @@ from config import (
 )
 from dbconn import get_connection, like_substring_param
 from modules.auth.service import (
+    get_current_document_creator,
     get_current_manager,
     get_current_packer,
     get_current_shipment_viewer,
@@ -143,7 +144,7 @@ def _resolve_line_store(conn, client_id: str | None, store_id: str | None) -> tu
 
 
 @router.post("/shipments")
-def create_shipment(body: ShipmentDocCreate, user=Depends(_get_manager)):
+def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_document_creator)):
     if body.logistics_cost is not None:
         ensure_cost_access(user)
     uid = str(user["id"])

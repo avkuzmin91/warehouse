@@ -252,11 +252,21 @@ def test_manager_edits_arrival_resyncs_receipt(admin_client, client_id):
     assert rec["doc"]["actual_arrival_date"] == "2025-06-07"
 
 
-def test_actual_arrival_editable_without_trip(warehouse_client, client_id):
-    free_receipt = _planned_receipt(warehouse_client, client_id)
+def test_actual_arrival_editable_without_trip(admin_client, warehouse_client, client_id):
+    free_receipt = _planned_receipt(admin_client, client_id)  # создаёт менеджерский состав
     ok = warehouse_client.patch(f"/receipts/{free_receipt}/actual-arrival", json={"actual_arrival_date": "2026-06-06"})
     assert ok.status_code == 200, ok.text
     assert warehouse_client.get(f"/receipts/{free_receipt}").json()["doc"]["actual_arrival_date"] == "2026-06-06"
+
+
+def test_warehouse_cannot_create_documents(warehouse_client, client_id):
+    """Кладовщику запрещено создавать рейсы, поступления и отгрузки (403)."""
+    r = warehouse_client.post("/receipts", json={"client_id": client_id, "lines": []})
+    assert r.status_code == 403, r.text
+    s = warehouse_client.post("/shipments", json={"client_id": client_id, "client_name": "C", "lines": []})
+    assert s.status_code == 403, s.text
+    t = warehouse_client.post("/trips", json={"receipt_doc_ids": []})
+    assert t.status_code == 403, t.text
 
 
 def test_actual_arrival_blocked_with_trip(admin_client, client_id):

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Kbd } from '../primitives/Kbd'
 import { Icon } from '../primitives/Icon'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
-import { canManageUsers } from '../../utils/access'
+import { canCreateDocuments, canManageUsers } from '../../utils/access'
 
 interface CmdItem {
   section: string
@@ -12,6 +12,7 @@ interface CmdItem {
   sub: string
   to?: string
   usersAdminOnly?: boolean
+  createOnly?: boolean
 }
 
 const ALL_CMDS: CmdItem[] = [
@@ -22,8 +23,8 @@ const ALL_CMDS: CmdItem[] = [
   { section: 'Навигация', icon: 'boxes', label: 'Остатки', sub: 'Что и где лежит', to: '/inventory/balances' },
   { section: 'Навигация', icon: 'book', label: 'Справочники', sub: 'Товары, цвета, размеры, клиенты', to: '/dictionaries' },
   { section: 'Навигация', icon: 'users', label: 'Пользователи и роли', sub: 'Управление доступом', to: '/dictionaries/users', usersAdminOnly: true },
-  { section: 'Действия', icon: 'plus', label: 'Новое поступление', sub: 'Создать черновик документа', to: '/inventory/receipts/new' },
-  { section: 'Действия', icon: 'plus', label: 'Новая отгрузка', sub: 'Заявка от клиента', to: '/inventory/shipments/new' },
+  { section: 'Действия', icon: 'plus', label: 'Новое поступление', sub: 'Создать черновик документа', to: '/inventory/receipts/new', createOnly: true },
+  { section: 'Действия', icon: 'plus', label: 'Новая отгрузка', sub: 'Заявка от клиента', to: '/inventory/shipments/new', createOnly: true },
   { section: 'Аккаунт', icon: 'lock', label: 'Сменить пароль', sub: '', to: '/account/password' },
 ]
 
@@ -47,7 +48,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   const lq = q.toLowerCase()
   const filtered = ALL_CMDS.filter(
-    (c) => (!c.usersAdminOnly || canManageUsers(user)) && (!lq || c.label.toLowerCase().includes(lq) || c.sub.toLowerCase().includes(lq)),
+    (c) =>
+      (!c.usersAdminOnly || canManageUsers(user)) &&
+      (!c.createOnly || canCreateDocuments(user)) &&
+      (!lq || c.label.toLowerCase().includes(lq) || c.sub.toLowerCase().includes(lq)),
   )
 
   const grouped = filtered.reduce<Record<string, CmdItem[]>>((acc, c) => {

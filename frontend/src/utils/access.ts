@@ -28,6 +28,10 @@ export function canEditShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager'
 }
 
+export function canCreateDocuments(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+}
+
 export function canPackShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'shift_supervisor'
 }

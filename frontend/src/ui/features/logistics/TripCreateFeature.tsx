@@ -10,7 +10,7 @@ import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canViewCosts } from '../../../utils/access'
+import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { isDateTimeComplete, isDateTimeBefore } from './components/dateTimeValue'
 import { PlanningForm } from './tripDetail/PlanningForm'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
@@ -38,6 +38,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   const { warehouses, carriers, vehicleTypes } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canCreate = canCreateDocuments(user)
   const outbound = isOutbound(direction)
   const defect = outbound && cargoType === 'defect'
   const lex = tripLexicon(direction)
@@ -190,6 +191,14 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
     if (blockReasons.length > 0) { setShowBlockReasons(true); return }
     setShowBlockReasons(false)
     saveTrip({ handoff: true })
+  }
+
+  if (!canCreate) {
+    return (
+      <div className="page">
+        <div style={{ padding: 32, color: 'var(--c-text-subtle)' }}>Недостаточно прав для создания рейсов.</div>
+      </div>
+    )
   }
 
   return (
