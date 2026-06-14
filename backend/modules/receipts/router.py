@@ -30,7 +30,11 @@ from config import (
     TRIP_STATUS_CANCELLED,
 )
 from dbconn import get_connection, like_substring_param
-from modules.auth.service import get_current_manager, get_current_warehouse
+from modules.auth.service import (
+    get_current_document_creator,
+    get_current_manager,
+    get_current_warehouse,
+)
 from modules.receipts.schemas import (
     ReceiptActualArrivalUpdate,
     ReceiptArrivePayload,
@@ -102,7 +106,7 @@ def _receipt_op_comment_for_user(comment: str | None, user) -> str | None:
 
 
 @router.post("/receipts")
-def create_receipt(payload: ReceiptDocCreate, user=Depends(_get_manager)):
+def create_receipt(payload: ReceiptDocCreate, user=Depends(get_current_document_creator)):
     if payload.logistics_cost is not None:
         ensure_cost_access(user)
     uid = str(user["id"])

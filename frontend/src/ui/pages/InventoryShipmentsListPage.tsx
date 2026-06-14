@@ -29,7 +29,7 @@ import { fmtDateShort as fmtDate } from '../../utils/format'
 import { useLookups } from '../../hooks/useLookups'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
-import { canEditShipments } from '../../utils/access'
+import { canCreateDocuments, canEditShipments } from '../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -69,6 +69,7 @@ export function InventoryShipmentsListPage() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const canEdit = canEditShipments(user)
+  const canCreate = canCreateDocuments(user)
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
@@ -185,7 +186,7 @@ export function InventoryShipmentsListPage() {
               ><Icon name="grid" size={13} />Канбан</button>
             </div>
           )}
-          {canEdit && (
+          {canCreate && (
             <Dropdown
               trigger={
                 <button className="btn primary">

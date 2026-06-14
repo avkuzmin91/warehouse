@@ -24,7 +24,7 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canViewCosts } from '../../../utils/access'
+import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
 import { DocHeader } from '../shared/process/DocHeader'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
@@ -62,6 +62,7 @@ export function ReceiptCreateFeature() {
   const { clients: clientsAll } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canCreate = canCreateDocuments(user)
   const clients: DictionaryItem[] = clientsAll.filter((c) => c.is_active && !c.is_deleted)
 
   const totalQty = lines.reduce((s, l) => s + l.planned_qty, 0)
@@ -115,6 +116,15 @@ export function ReceiptCreateFeature() {
 
   function handleUpdateQty(id: number, qty: number) {
     setLines((ls) => ls.map((l) => l._id === id ? { ...l, planned_qty: qty } : l))
+  }
+
+  if (!canCreate) {
+    return (
+      <div className="page">
+        <DocHeader badges={null} role="manager" title="Новое поступление" onBack={() => navigate(backTarget)} />
+        <div style={{ padding: 32, color: 'var(--c-text-subtle)' }}>Недостаточно прав для создания поступлений.</div>
+      </div>
+    )
   }
 
   return (

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from security import (
     FORBIDDEN_DETAIL,
     ensure_backoffice_account,
+    ensure_document_create_access,
     ensure_manager_staff,
     ensure_packing_access,
     ensure_shipment_priority_access,
@@ -114,6 +115,35 @@ def test_ensure_shipment_priority_accepts_managers(role: str):
 def test_ensure_shipment_priority_rejects_non_managers(role: str):
     with pytest.raises(HTTPException) as ctx:
         ensure_shipment_priority_access(
+            {
+                "id": "1",
+                "email": "u@x",
+                "role": role,
+                "created_at": "",
+                "client_id": None,
+            }
+        )
+    assert ctx.value.status_code == 403
+    assert ctx.value.detail == FORBIDDEN_DETAIL
+
+
+@pytest.mark.parametrize("role", ["admin", "manager"])
+def test_ensure_document_create_accepts_managers(role: str):
+    ensure_document_create_access(
+        {
+            "id": "1",
+            "email": "u@x",
+            "role": role,
+            "created_at": "",
+            "client_id": None,
+        }
+    )
+
+
+@pytest.mark.parametrize("role", ["warehouse_manager", "shift_supervisor", "user", "client"])
+def test_ensure_document_create_rejects_non_managers(role: str):
+    with pytest.raises(HTTPException) as ctx:
+        ensure_document_create_access(
             {
                 "id": "1",
                 "email": "u@x",

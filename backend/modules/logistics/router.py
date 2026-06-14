@@ -35,7 +35,11 @@ from config import (
     trip_status_ru,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_manager, get_current_warehouse
+from modules.auth.service import (
+    get_current_document_creator,
+    get_current_manager,
+    get_current_warehouse,
+)
 from modules.logistics.schemas import (
     TripArrivalPayload,
     TripCostPayload,
@@ -139,7 +143,7 @@ def _fetch_doc(conn, trip_id: str):
 
 
 @router.post("/trips")
-def create_trip(payload: TripDocCreate, user=Depends(get_current_manager)):
+def create_trip(payload: TripDocCreate, user=Depends(get_current_document_creator)):
     if payload.cost_estimate is not None:
         ensure_cost_access(user)
     direction = (payload.direction or TRIP_DIRECTION_INBOUND).strip()

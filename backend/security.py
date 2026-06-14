@@ -73,6 +73,19 @@ def ensure_warehouse_staff(user: Mapping[str, Any]) -> None:
         )
 
 
+def can_create_documents(user: Mapping[str, Any]) -> bool:
+    """Создание документов (рейсы, поступления, отгрузки) — менеджерский состав, не кладовщик."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_document_create_access(user: Mapping[str, Any]) -> None:
+    if not can_create_documents(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
