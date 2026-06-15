@@ -152,3 +152,27 @@ def ensure_planned_arrival_access(user: Mapping[str, Any]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
         )
+
+
+def ensure_timesheet_access(user: Mapping[str, Any]) -> None:
+    """Табель (план/факт) и справочник сотрудников: начальник смены ведёт табель,
+    плюс менеджерский состав. warehouse_head включает права начальника смены."""
+    if user["role"] not in ("manager", "admin", "shift_supervisor", "warehouse_head"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def can_view_payroll(user: Mapping[str, Any]) -> bool:
+    """Деньги табеля (ставки, заработок, выплаты) — только менеджер и админ,
+    как и прочие стоимости (`can_view_costs`). Начальник смены сумм не видит."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_payroll_access(user: Mapping[str, Any]) -> None:
+    if not can_view_payroll(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )

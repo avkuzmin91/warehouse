@@ -55,6 +55,7 @@ const SIMPLE_API_PATHS: Record<string, string> = {
   warehouses: '/warehouses',
   carriers: '/carriers',
   'vehicle-types': '/vehicle-types',
+  positions: '/positions',
   reasons: '/defect-reasons',
 }
 function _apiPath(apiType: string) {
@@ -67,7 +68,7 @@ interface SimpleDictSheetProps {
   onSaved: () => void
   isNew: boolean
   kind: string
-  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'reasons'
+  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
   initial?: AnyDictItem | null
 }
 

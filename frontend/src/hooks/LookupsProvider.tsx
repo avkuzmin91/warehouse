@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import {
   getInventoryCarriers,
   getInventoryClients,
+  getInventoryPositions,
   getInventorySuppliers,
   getInventoryUnloadingZones,
   getInventoryVehicleTypes,
@@ -23,6 +24,7 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
   const [warehouses,     setWarehouses]     = useState<DictionaryItem[]>([])
   const [unloadingZones, setUnloadingZones] = useState<DictionaryItem[]>([])
   const [vehicleTypes,   setVehicleTypes]   = useState<DictionaryItem[]>([])
+  const [positions,      setPositions]      = useState<DictionaryItem[]>([])
   const [loading,        setLoading]        = useState(true)
   const [reloadTick,     setReloadTick]     = useState(0)
 
@@ -38,8 +40,9 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
       getInventoryWarehouses(ctrl.signal).catch(() => [] as DictionaryItem[]),
       getInventoryUnloadingZones(ctrl.signal).catch(() => [] as DictionaryItem[]),
       getInventoryVehicleTypes(ctrl.signal).catch(() => [] as DictionaryItem[]),
+      getInventoryPositions(ctrl.signal).catch(() => [] as DictionaryItem[]),
     ])
-      .then(([cl, su, ca, wh, zo, vt]) => {
+      .then(([cl, su, ca, wh, zo, vt, po]) => {
         if (ctrl.signal.aborted) return
         setClients(cl)
         setSuppliers(su)
@@ -47,6 +50,7 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
         setWarehouses(wh)
         setUnloadingZones(zo)
         setVehicleTypes(vt)
+        setPositions(po)
         setLoading(false)
       })
       .catch(() => { if (!ctrl.signal.aborted) setLoading(false) })
@@ -54,7 +58,7 @@ export function LookupsProvider({ children }: { children: ReactNode }) {
   }, [reloadTick])
 
   return (
-    <LookupsContext.Provider value={{ clients, suppliers, carriers, warehouses, unloadingZones, vehicleTypes, loading, reload }}>
+    <LookupsContext.Provider value={{ clients, suppliers, carriers, warehouses, unloadingZones, vehicleTypes, positions, loading, reload }}>
       {children}
     </LookupsContext.Provider>
   )

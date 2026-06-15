@@ -6,7 +6,7 @@ import { Avatar, getInitials } from '../primitives/Avatar'
 import { authLogout } from '../../api/sessionAuth'
 import type { IconName } from '../primitives/Icon'
 import type { User } from '../../api/typesUser'
-import { canManageUsers } from '../../utils/access'
+import { canManageUsers, canManageTimesheet, canViewPayroll } from '../../utils/access'
 
 interface NavItem {
   to: string
@@ -26,6 +26,13 @@ const OPS_NAV: NavItem[] = [
 
 const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
+]
+
+const TIMESHEET_NAV: NavItem[] = [
+  { to: '/timesheet', icon: 'clock', label: 'Табель' },
+  { to: '/timesheet/planning', icon: 'calendar', label: 'Планирование' },
+  { to: '/timesheet/payroll', icon: 'wallet', label: 'Выплаты' },
+  { to: '/timesheet/employees', icon: 'users', label: 'Сотрудники' },
 ]
 
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
@@ -78,6 +85,8 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
   const hasFinanceAccess = user?.role === 'admin' || user?.role === 'manager'
+  const hasTimesheetAccess = canManageTimesheet(user)
+  const canSeePayroll = canViewPayroll(user)
 
   const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
   const initials = getInitials(displayName)
@@ -157,6 +166,16 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
               {FINANCE_NAV.map((item) => (
                 <NavItem key={item.to} {...item} collapsed={collapsed} />
               ))}
+            </>
+          )}
+          {hasTimesheetAccess && (
+            <>
+              {!collapsed && <div className="sidebar-section">Табель</div>}
+              {TIMESHEET_NAV
+                .filter((item) => item.to !== '/timesheet/payroll' || canSeePayroll)
+                .map((item) => (
+                  <NavItem key={item.to} {...item} collapsed={collapsed} />
+                ))}
             </>
           )}
           {hasAdminAccess && (

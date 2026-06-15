@@ -88,6 +88,10 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
         const res = await fetchSimpleDictionaryPage('/vehicle-types', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
         onTotalLoaded(res.total)
+      } else if (typeId === 'positions') {
+        const res = await fetchSimpleDictionaryPage('/positions', 'name', { page: 1, limit: 100, name: q || undefined })
+        setItems(res.items)
+        onTotalLoaded(res.total)
       } else if (typeId === 'reasons') {
         const res = await fetchSimpleDictionaryPage('/defect-reasons', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)

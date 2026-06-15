@@ -5,6 +5,7 @@ import { authRoutes } from './routes/auth'
 import { inventoryRoutes } from './routes/inventory'
 import { logisticsRoutes } from './routes/logistics'
 import { financeRoutes } from './routes/finance'
+import { timesheetRoutes } from './routes/timesheet'
 import { cabinetRoutes } from './routes/cabinet'
 import { adminRoutes } from './routes/admin'
 import { AppLayout } from './layouts/AppLayout'
@@ -30,6 +31,7 @@ export function App() {
             {inventoryRoutes}
             {logisticsRoutes}
             {financeRoutes}
+            {timesheetRoutes}
             {cabinetRoutes}
           </Route>
           <Route path="*" element={<Navigate to="/auth" replace />} />

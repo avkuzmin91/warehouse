@@ -8,6 +8,7 @@ export interface LookupsState {
   warehouses:     DictionaryItem[]
   unloadingZones: DictionaryItem[]
   vehicleTypes:   DictionaryItem[]
+  positions:      DictionaryItem[]
   /** true пока хотя бы один лукап в процессе первой загрузки. */
   loading:        boolean
   /** Принудительно перечитать все лукапы (например, после правки справочника в админке). */
@@ -23,6 +24,7 @@ export const LookupsContext = createContext<LookupsState>({
   warehouses:     [],
   unloadingZones: [],
   vehicleTypes:   [],
+  positions:      [],
   loading:        true,
   reload:         NOOP,
 })

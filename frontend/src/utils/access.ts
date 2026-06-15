@@ -35,3 +35,13 @@ export function canCreateDocuments(user: User | null | undefined): boolean {
 export function canPackShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'shift_supervisor' || user?.role === 'warehouse_head'
 }
+
+// Табель: план/факт ведёт начальник смены (+ начальник склада) и менеджерский состав.
+export function canManageTimesheet(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'shift_supervisor' || user?.role === 'warehouse_head'
+}
+
+// Деньги табеля (ставки, заработок, выплаты) — только менеджер и админ.
+export function canViewPayroll(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+}

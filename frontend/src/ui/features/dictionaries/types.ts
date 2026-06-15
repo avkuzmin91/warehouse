@@ -12,6 +12,7 @@ export type DictionaryTypeId =
   | 'reasons'
   | 'carriers'
   | 'vehicle-types'
+  | 'positions'
 
 export type DictionaryKind = 'rich' | 'simple' | 'empty'
 export type DictionaryGroup = 'main' | 'system'
@@ -37,5 +38,6 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
   { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },
+  { id: 'positions',     name: 'Должности',     icon: 'users',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Должность' },
   { id: 'product-types', name: 'Типы товаров',  icon: 'tag',      kind: 'simple', group: 'system', createLabel: 'Создать запись', sheetKind: 'Тип товара' },
 ]

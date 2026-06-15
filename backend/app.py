@@ -22,6 +22,7 @@ from modules.dashboard.router import router as dashboard_router
 from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
 from modules.invoices.router import router as invoices_router
+from modules.timesheet.router import router as timesheet_router
 from modules.logistics.router import router as logistics_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
@@ -56,6 +57,27 @@ def _ensure_runtime_schema() -> None:
         conn.execute("""
             ALTER TABLE IF EXISTS products
                 ADD COLUMN IF NOT EXISTS weight_grams INTEGER
+        """)
+        # Орг. структура табеля: справочник должностей + связь сотрудника с учёткой/руководителем.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id            TEXT PRIMARY KEY,
+                name          TEXT UNIQUE NOT NULL,
+                is_active     INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT NOT NULL,
+                creator_id    TEXT,
+                updated_at    TEXT,
+                updated_by_id TEXT,
+                is_deleted    INTEGER NOT NULL DEFAULT 0,
+                deleted_at    TEXT,
+                deleted_by_id TEXT
+            )
+        """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS employees
+                ADD COLUMN IF NOT EXISTS position_id        TEXT,
+                ADD COLUMN IF NOT EXISTS user_id            TEXT,
+                ADD COLUMN IF NOT EXISTS supervisor_user_id TEXT
         """)
         # Логистика (рейсы) + справочник «Тип кузова» — на случай dev-старта без alembic.
         conn.execute("""
@@ -211,6 +233,90 @@ def _ensure_runtime_schema() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_files_invoice ON invoice_files(invoice_id)")
+        # Табель и выплаты — на случай dev-старта без alembic.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS employees (
+                id          TEXT PRIMARY KEY,
+                full_name   TEXT NOT NULL,
+                position    TEXT,
+                status      TEXT NOT NULL DEFAULT 'active',
+                hired_on    TEXT,
+                created_at  TEXT NOT NULL,
+                created_by  TEXT,
+                updated_at  TEXT,
+                is_deleted  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS employee_rates (
+                id             TEXT PRIMARY KEY,
+                employee_id    TEXT NOT NULL REFERENCES employees(id),
+                rate_kopecks   INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_employee_rates_emp "
+            "ON employee_rates(employee_id, effective_from)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS timesheet_entries (
+                id            TEXT PRIMARY KEY,
+                employee_id   TEXT NOT NULL REFERENCES employees(id),
+                work_date     TEXT NOT NULL,
+                planned_start TEXT,
+                planned_end   TEXT,
+                actual_start  TEXT,
+                actual_end    TEXT,
+                is_absent     INTEGER NOT NULL DEFAULT 0,
+                note          TEXT,
+                created_at    TEXT NOT NULL,
+                created_by    TEXT,
+                updated_at    TEXT,
+                is_deleted    INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timesheet_entries_date ON timesheet_entries(work_date)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_timesheet_entries_emp_date_unique "
+            "ON timesheet_entries(employee_id, work_date) WHERE is_deleted = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS timesheet_ops (
+                id         TEXT PRIMARY KEY,
+                entry_id   TEXT NOT NULL REFERENCES timesheet_entries(id),
+                op_type    TEXT NOT NULL,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timesheet_ops_entry ON timesheet_ops(entry_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS payroll_payments (
+                id             TEXT PRIMARY KEY,
+                employee_id    TEXT NOT NULL REFERENCES employees(id),
+                amount_kopecks INTEGER NOT NULL,
+                kind           TEXT NOT NULL DEFAULT 'settlement',
+                paid_on        TEXT,
+                period_start   TEXT,
+                period_end     TEXT,
+                comment        TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_payroll_payments_emp ON payroll_payments(employee_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payroll_payments_period "
+            "ON payroll_payments(period_start, period_end)"
+        )
         conn.commit()
 
 
@@ -358,6 +464,7 @@ app.include_router(shipments_router)
 app.include_router(balances_router)
 app.include_router(cabinet_router)
 app.include_router(invoices_router)
+app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
 app.include_router(dashboard_router)

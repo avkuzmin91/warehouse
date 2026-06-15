@@ -50,7 +50,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 МБ
 DICTIONARY_TABLES = frozenset({
     "clients", "colors", "sizes", "product_types", "suppliers",
     "unloading_zones", "warehouses", "carriers", "defect_reasons",
-    "vehicle_types",
+    "vehicle_types", "positions",
 })
 
 # Системный справочник «актуальность записи»
@@ -419,6 +419,61 @@ INVOICE_OP_AMOUNT_CHANGE   = "amount_change"
 INVOICE_OP_PAYMENT         = "payment"
 INVOICE_OP_CLOSE           = "close"
 INVOICE_OP_CANCEL          = "cancel"
+
+# ---------------------------------------------------------------------------
+# Табель учёта рабочего времени и выплаты
+# ---------------------------------------------------------------------------
+# Ставка (employee_rates.rate_kopecks) и суммы выплат (payroll_payments.amount_kopecks)
+# хранятся в КОПЕЙКАХ как INTEGER — как в модуле счетов, чтобы денежный учёт не
+# накапливал ошибки округления float.
+
+# Базовая смена и вычет обеда — основа расчёта часов за день.
+TIMESHEET_DEFAULT_SHIFT_START = "08:00"
+TIMESHEET_DEFAULT_SHIFT_END   = "20:00"
+TIMESHEET_LUNCH_HOURS         = 1.0   # вычет обеда: часы за день = (уход − приход) − 1 ч
+
+# Статус сотрудника в справочнике
+EMPLOYEE_STATUS_ACTIVE   = "active"
+EMPLOYEE_STATUS_ARCHIVED = "archived"
+EMPLOYEE_STATUS_LABELS: dict[str, str] = {
+    EMPLOYEE_STATUS_ACTIVE:   "Активен",
+    EMPLOYEE_STATUS_ARCHIVED: "В архиве",
+}
+
+# Статус дня (производный, для UI). Хранится только is_absent; остальное считается.
+#   worked  — есть факт по плану
+#   planned — план есть, факта нет, день не закрыт (сегодня/будущее)
+#   absent  — «не вышел» (план был, факта нет на прошедший день или отмечено явно)
+#   noplan  — факт есть, плана не было
+#   off     — выходной / нет записи
+TIMESHEET_DAY_WORKED  = "worked"
+TIMESHEET_DAY_PLANNED = "planned"
+TIMESHEET_DAY_ABSENT  = "absent"
+TIMESHEET_DAY_NOPLAN  = "noplan"
+TIMESHEET_DAY_OFF     = "off"
+TIMESHEET_DAY_LABELS: dict[str, str] = {
+    TIMESHEET_DAY_WORKED:  "Отработал",
+    TIMESHEET_DAY_PLANNED: "Запланирован",
+    TIMESHEET_DAY_ABSENT:  "Не вышел",
+    TIMESHEET_DAY_NOPLAN:  "Без плана",
+    TIMESHEET_DAY_OFF:     "Выходной",
+}
+
+# Типы операций журнала табеля (append-only)
+TIMESHEET_OP_PLAN_SET     = "plan_set"
+TIMESHEET_OP_FACT_SET     = "fact_set"
+TIMESHEET_OP_ABSENT_MARK  = "absent_mark"
+TIMESHEET_OP_ABSENT_CLEAR = "absent_clear"
+TIMESHEET_OP_NOTE         = "note"
+TIMESHEET_OP_CLEARED      = "cleared"
+
+# Типы выплат
+PAYROLL_KIND_SETTLEMENT = "settlement"   # пятничный расчёт за неделю
+PAYROLL_KIND_ADVANCE    = "advance"      # аванс по просьбе среди недели
+PAYROLL_KIND_LABELS: dict[str, str] = {
+    PAYROLL_KIND_SETTLEMENT: "Расчёт",
+    PAYROLL_KIND_ADVANCE:    "Аванс",
+}
 
 # ---------------------------------------------------------------------------
 # Кабинет клиента — границы видимости
