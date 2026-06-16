@@ -116,7 +116,7 @@ export function InventoryReceiptsListPage() {
   const STATUS_OPTIONS = [
     { value: '', label: 'Все статусы' },
     { value: 'overdue', label: 'Просрочка' },
-    ...([...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft'), 'cancelled'] as ReceiptStatus[])
+    ...([...RECEIPT_STATUS_ORDER.filter((s) => s !== 'draft'), 'partially_received', 'cancelled'] as ReceiptStatus[])
       .map((s) => ({ value: s, label: RECEIPT_STATUS_LABELS[s] })),
   ]
 
@@ -349,7 +349,7 @@ export function InventoryReceiptsListPage() {
                       <Td>
                         {(() => {
                           const pct = item.total_planned > 0 ? Math.min(100, Math.floor(item.total_accepted_qty / item.total_planned * 100)) : 0
-                          const isActive = item.status === 'done'
+                          const isActive = item.status === 'on_review' || item.status === 'partially_received' || item.status === 'done'
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           return (
                             <div style={{ minWidth: 120 }}>

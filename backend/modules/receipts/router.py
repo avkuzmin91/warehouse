@@ -57,6 +57,7 @@ from modules.receipts.service import (
     list_receipt_lines,
     list_receipts_aggregated,
     next_doc_number,
+    receipt_alloc_remaining,
 )
 from security import can_view_costs, ensure_cost_access, ensure_planned_arrival_access
 
@@ -324,6 +325,41 @@ def list_receipt_lines_view(
         for r in rows
     ]
     return ReceiptLinesResponse(items=items, total=total, page=page, limit=limit)
+
+
+@router.get("/receipts/{doc_id}/trip-alloc-remaining")
+def receipt_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
+    """Остаток к распределению по строкам поступления для привязки к рейсу.
+
+    remaining = план − уже распределённое в активные рейсы. Шторка привязки к
+    рейсу берёт его как значение по умолчанию и верхнюю границу.
+    """
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT id FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        remaining = receipt_alloc_remaining(conn, doc_id)
+        lines = conn.execute(
+            "SELECT id, product_sku, product_name, color_name, size_name, planned_qty, accepted_qty "
+            "FROM receipt_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
+            (doc_id,),
+        ).fetchall()
+    items = [
+        {
+            "line_id": str(ln["id"]),
+            "product_sku": ln["product_sku"],
+            "product_name": ln["product_name"],
+            "color": ln["color_name"],
+            "variant": " · ".join(x for x in [ln["color_name"], ln["size_name"]] if x) or None,
+            "planned_qty": int(ln["planned_qty"] or 0),
+            "accepted_qty": int(ln["accepted_qty"] or 0),
+            "remaining": int(remaining.get(str(ln["id"]), 0)),
+        }
+        for ln in lines
+    ]
+    return {"lines": items}
 
 
 @router.get("/receipts/{doc_id}", response_model=ReceiptDetailResponse)

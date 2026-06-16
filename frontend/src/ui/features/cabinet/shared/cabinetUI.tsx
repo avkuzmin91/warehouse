@@ -16,6 +16,7 @@ export function cabinetReceiptTrack(status: CabinetReceiptStatus): TrackState | 
   const idx: Record<Exclude<CabinetReceiptStatus, 'cancelled'>, number> = {
     planned: 0,
     on_intake: 1,
+    partially_received: 1,
     on_review: 2,
     done: 3,
   }
@@ -31,6 +32,7 @@ export function cabinetShipmentTrack(status: CabinetShipmentStatus, cargoType: C
       on_packing: 0,
       relocating: 1,
       awaiting_trip: 2,
+      partially_shipped: 3,
       shipped: 3,
     }
     return { steps, activeIdx: idx[status] }
@@ -41,6 +43,7 @@ export function cabinetShipmentTrack(status: CabinetShipmentStatus, cargoType: C
     on_packing: 1,
     relocating: 2,
     awaiting_trip: 2,
+    partially_shipped: 3,
     shipped: 3,
   }
   return { steps, activeIdx: idx[status] }

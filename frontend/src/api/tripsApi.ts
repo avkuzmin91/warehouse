@@ -46,6 +46,16 @@ export type TripDoc = {
   updated_at: string | null
 }
 
+export type TripReceiptAlloc = {
+  line_id: string
+  product_sku: string | null
+  product_name: string | null
+  variant: string | null
+  qty: number          // привозит этот рейс
+  planned_qty: number  // план по строке
+  accepted_qty: number // принято всего (по всем рейсам)
+}
+
 export type TripReceiptItem = {
   line_id: string
   receipt_doc_id: string
@@ -53,6 +63,23 @@ export type TripReceiptItem = {
   receipt_status: string | null
   client_id: string | null
   client_name: string | null
+  allocated_qty: number
+  allocations: TripReceiptAlloc[]
+}
+
+export type TripReceiptLinkItem = {
+  receipt_doc_id: string
+  allocations: { line_id: string; qty: number }[]
+}
+
+export type TripShipmentAlloc = {
+  line_id: string
+  product_sku: string | null
+  product_name: string | null
+  variant: string | null
+  qty: number          // увозит этот рейс
+  line_qty: number     // план по строке
+  shipped_qty: number  // отгружено всего (по всем рейсам)
 }
 
 export type TripShipmentItem = {
@@ -62,6 +89,13 @@ export type TripShipmentItem = {
   shipment_status: string | null
   client_id: string | null
   client_name: string | null
+  allocated_qty: number
+  allocations: TripShipmentAlloc[]
+}
+
+export type TripShipmentLinkItem = {
+  shipment_doc_id: string
+  allocations: { line_id: string; qty: number }[]
 }
 
 export type TripOp = {
@@ -185,10 +219,10 @@ export function updateTrip(tripId: string, payload: TripUpdatePayload) {
   })
 }
 
-export function linkTripReceipts(tripId: string, receiptDocIds: string[]) {
+export function linkTripReceipts(tripId: string, items: TripReceiptLinkItem[]) {
   return request<{ message: string }>(`/trips/${tripId}/receipts`, {
     method: 'POST',
-    body: JSON.stringify({ receipt_doc_ids: receiptDocIds }),
+    body: JSON.stringify({ items }),
   })
 }
 
@@ -198,10 +232,10 @@ export function unlinkTripReceipt(tripId: string, receiptDocId: string) {
   })
 }
 
-export function linkTripShipments(tripId: string, shipmentDocIds: string[]) {
+export function linkTripShipments(tripId: string, items: TripShipmentLinkItem[]) {
   return request<{ message: string }>(`/trips/${tripId}/shipments`, {
     method: 'POST',
-    body: JSON.stringify({ shipment_doc_ids: shipmentDocIds }),
+    body: JSON.stringify({ items }),
   })
 }
 

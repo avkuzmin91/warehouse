@@ -4,6 +4,7 @@ export type DictionaryItem = {
   color_hex?: string | null
   is_packing_zone?: boolean
   is_shipping_zone?: boolean
+  is_receiving_zone?: boolean
   is_active: boolean
   is_deleted?: boolean
   deleted_at?: string | null

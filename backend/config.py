@@ -61,17 +61,19 @@ RECORD_ACTUALITY_NO_ID = "00000000-0000-4000-8000-000000000002"
 # Поступления (receipt_*)
 # ---------------------------------------------------------------------------
 
-RECEIPT_STATUS_DRAFT     = "draft"
-RECEIPT_STATUS_PLANNED   = "planned"
-RECEIPT_STATUS_ON_INTAKE = "on_intake"
-RECEIPT_STATUS_ON_REVIEW = "on_review"
-RECEIPT_STATUS_DONE      = "done"
-RECEIPT_STATUS_CANCELLED = "cancelled"
+RECEIPT_STATUS_DRAFT             = "draft"
+RECEIPT_STATUS_PLANNED           = "planned"
+RECEIPT_STATUS_ON_INTAKE         = "on_intake"
+RECEIPT_STATUS_PARTIALLY_RECEIVED = "partially_received"
+RECEIPT_STATUS_ON_REVIEW         = "on_review"
+RECEIPT_STATUS_DONE              = "done"
+RECEIPT_STATUS_CANCELLED         = "cancelled"
 
 RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
     RECEIPT_STATUS_DRAFT,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
@@ -85,12 +87,13 @@ RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
-    RECEIPT_STATUS_DRAFT:     "Создание",
-    RECEIPT_STATUS_PLANNED:   "В плане",
-    RECEIPT_STATUS_ON_INTAKE: "Принят",
-    RECEIPT_STATUS_ON_REVIEW: "На проверке",
-    RECEIPT_STATUS_DONE:      "Завершён",
-    RECEIPT_STATUS_CANCELLED: "Аннулирован",
+    RECEIPT_STATUS_DRAFT:             "Создание",
+    RECEIPT_STATUS_PLANNED:           "В плане",
+    RECEIPT_STATUS_ON_INTAKE:         "Принят",
+    RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
+    RECEIPT_STATUS_ON_REVIEW:         "На проверке",
+    RECEIPT_STATUS_DONE:              "Завершён",
+    RECEIPT_STATUS_CANCELLED:         "Аннулирован",
 }
 
 # Типы операций журнала поступлений (QC убран — годность определяется при упаковке)
@@ -113,13 +116,14 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # Отгрузки (shipment_*)
 # ---------------------------------------------------------------------------
 
-SHIPMENT_STATUS_DRAFT         = "draft"
-SHIPMENT_STATUS_PACKING       = "packing"
-SHIPMENT_STATUS_ON_PACKING    = "on_packing"
-SHIPMENT_STATUS_RELOCATING    = "relocating"
-SHIPMENT_STATUS_AWAITING_TRIP = "awaiting_trip"
-SHIPMENT_STATUS_SHIPPED       = "shipped"
-SHIPMENT_STATUS_CANCELLED     = "cancelled"
+SHIPMENT_STATUS_DRAFT             = "draft"
+SHIPMENT_STATUS_PACKING           = "packing"
+SHIPMENT_STATUS_ON_PACKING        = "on_packing"
+SHIPMENT_STATUS_RELOCATING        = "relocating"
+SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
+SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
+SHIPMENT_STATUS_SHIPPED           = "shipped"
+SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
@@ -127,18 +131,20 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_CANCELLED,
 ]
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:         "Создание",
-    SHIPMENT_STATUS_PACKING:       "В плане",
-    SHIPMENT_STATUS_ON_PACKING:    "На упаковке",
-    SHIPMENT_STATUS_RELOCATING:    "Перемещение",
-    SHIPMENT_STATUS_AWAITING_TRIP: "Ожидает рейс",
-    SHIPMENT_STATUS_SHIPPED:       "Завершён",
-    SHIPMENT_STATUS_CANCELLED:     "Аннулирован",
+    SHIPMENT_STATUS_DRAFT:             "Создание",
+    SHIPMENT_STATUS_PACKING:           "В плане",
+    SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
+    SHIPMENT_STATUS_RELOCATING:        "Перемещение",
+    SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
+    SHIPMENT_STATUS_SHIPPED:           "Завершён",
+    SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
 
 # Плановые переходы через /advance. relocating → awaiting_trip не здесь: его делает
@@ -483,6 +489,7 @@ PAYROLL_KIND_LABELS: dict[str, str] = {
 CABINET_RECEIPT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
@@ -493,6 +500,7 @@ CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_CANCELLED,
 })

@@ -156,6 +156,7 @@ export function ShipmentDetailFeature() {
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
   const isAwaitingTrip = status === 'awaiting_trip'
+  const isPartiallyShipped = status === 'partially_shipped'
   // Состав и план редактируются до передачи на упаковку (черновик и «В плане»).
   const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
@@ -702,6 +703,12 @@ export function ShipmentDetailFeature() {
         </Alert>
       )}
 
+      {isPartiallyShipped && (
+        <Alert tone="warning" style={{ marginBottom: 16 }}>
+          Часть отгрузки уже уехала. Остаток лежит «Готов к отгрузке» и ожидает следующих рейсов — спишется при их отправке.
+        </Alert>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
         {/* Left — фазы */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -938,7 +945,7 @@ export function ShipmentDetailFeature() {
             />
           )}
 
-          {(isAwaitingTrip || status === 'shipped') && (
+          {(isAwaitingTrip || isPartiallyShipped || status === 'shipped') && (
             <RelocationPanel
               docId={docId!}
               lines={doc.lines}
@@ -1015,6 +1022,22 @@ export function ShipmentDetailFeature() {
               </button>
               <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
                 Дата отгрузки (факт) и списание остатков проставляются при отправке рейса.
+              </div>
+            </Panel>
+          )}
+
+          {isPartiallyShipped && (
+            <Panel icon="chart" title="Отгрузка по рейсам">
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label="Отгружено" mono>
+                  <span style={{ color: 'var(--c-success)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
+                </ReadRow>
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Осталось увезти" mono strong>
+                    {Math.max(0, planTotal - doc.lines.reduce((s, l) => s + l.shipped_qty, 0))} шт
+                  </ReadRow>
+                </div>
               </div>
             </Panel>
           )}

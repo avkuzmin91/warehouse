@@ -1,35 +1,38 @@
 import { request, requestForm } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'shipped' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
-  draft:         'Создание',
-  packing:       'В плане',
-  on_packing:    'На упаковке',
-  relocating:    'Перемещение',
-  awaiting_trip: 'Ожидает рейс',
-  shipped:       'Завершён',
-  cancelled:     'Аннулирован',
+  draft:             'Создание',
+  packing:           'В плане',
+  on_packing:        'На упаковке',
+  relocating:        'Перемещение',
+  awaiting_trip:     'Ожидает рейс',
+  partially_shipped: 'Частично отгружено',
+  shipped:           'Завершён',
+  cancelled:         'Аннулирован',
 }
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
-  draft:         'Создан',
-  packing:       'Передан на упаковку',
-  on_packing:    'Упакован',
-  relocating:    'Передан кладовщику',
-  awaiting_trip: 'Готов к рейсу',
-  shipped:       'Завершён',
-  cancelled:     'Аннулирован',
+  draft:             'Создан',
+  packing:           'Передан на упаковку',
+  on_packing:        'Упакован',
+  relocating:        'Передан кладовщику',
+  awaiting_trip:     'Готов к рейсу',
+  partially_shipped: 'Частично отгружено',
+  shipped:           'Завершён',
+  cancelled:         'Аннулирован',
 }
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
-  draft:         '',
-  packing:       'info',
-  on_packing:    'info',
-  relocating:    'info',
-  awaiting_trip: 'warning',
-  shipped:       'success',
-  cancelled:     'danger',
+  draft:             '',
+  packing:           'info',
+  on_packing:        'info',
+  relocating:        'info',
+  awaiting_trip:     'warning',
+  partially_shipped: 'warning',
+  shipped:           'success',
+  cancelled:         'danger',
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
@@ -55,9 +58,13 @@ export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' 
   return ''
 }
 
-/** Статусы отгрузок, доступные для привязки к рейсу: любые, кроме завершённых (shipped/cancelled). */
+/** Статусы отгрузок, доступные для привязки к рейсу: только готовые к рейсу.
+ *  В рейс кладём то, что физически готово к отгрузке («Ожидает рейс» / «Частично
+ *  отгружено»); количество ограничено фактическим готовым остатком (см. бэкенд
+ *  shipment_alloc_remaining). Ещё не подготовленные отгрузки (draft/packing/…) в
+ *  кандидаты не попадают — нельзя грузить машину тем, что склад не упаковал. */
 export const SHIPMENT_TRIP_SELECTABLE_STATUSES: ShipmentStatus[] = [
-  'draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip',
+  'awaiting_trip', 'partially_shipped',
 ]
 
 export type ShipmentCargoType = 'good' | 'defect'
@@ -129,6 +136,10 @@ export type ShipmentListItem = {
   total_qty:      number
   total_shipped_qty?: number
   total_packed_qty?: number
+  /** Свободный к распределению остаток: готовый к отгрузке (по качеству груза) минус
+   *  уже зарезервированное в активные ещё-не-уехавшие рейсы. Совпадает с `max` строк
+   *  в модале распределения (см. shipment_alloc_remaining на бэкенде). */
+  total_free_qty?: number
   lines_with_shipped_qty?: number
   lines_with_packed_qty?: number
   lines_with_zone?: number
@@ -295,6 +306,22 @@ export function listShipmentLines(params: ShipmentListParams = {}, signal?: Abor
 
 export function getShipment(id: string) {
   return request<ShipmentDetail>(`/shipments/${id}`)
+}
+
+export type ShipmentTripRemainingLine = {
+  line_id: string
+  product_sku: string | null
+  product_name: string | null
+  color: string | null
+  variant: string | null
+  qty: number
+  shipped_qty: number
+  remaining: number
+}
+
+/** Остаток к распределению по строкам отгрузки для привязки к рейсу. */
+export function getShipmentTripRemaining(id: string, signal?: AbortSignal) {
+  return request<{ lines: ShipmentTripRemainingLine[] }>(`/shipments/${id}/trip-alloc-remaining`, { signal })
 }
 
 export function createShipment(body: ShipmentDocCreate) {

@@ -6,19 +6,23 @@ import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import type { BadgeTone } from '../../../primitives/Badge'
 import { ReceiptLinesTable } from './ReceiptLinesTable'
+import type { TripReceiptAlloc } from '../../../../api/tripsApi'
 
 export type ExpandableReceiptData = {
   receipt_doc_id: string
   number: string | null
   client: string | null
   status?: string | null
+  allocated_qty?: number
+  allocations?: TripReceiptAlloc[]
 }
 
 const STATUS_RU: Record<string, string> = {
-  planned: 'В плане', on_intake: 'Принят', on_review: 'На проверке', done: 'Поступил',
+  planned: 'В плане', on_intake: 'Принят', partially_received: 'Частично принято',
+  on_review: 'На проверке', done: 'Поступил',
 }
 const STATUS_TONE: Record<string, BadgeTone> = {
-  planned: '', on_intake: 'info', on_review: 'warning', done: 'success',
+  planned: '', on_intake: 'info', partially_received: 'warning', on_review: 'warning', done: 'success',
 }
 
 function LinesBody({ docId }: { docId: string }) {
@@ -39,6 +43,10 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
   // Состав грузим лениво: монтируем тело только после первого раскрытия.
   const [everOpened, setEverOpened] = useState(open)
   if (open && !everOpened) setEverOpened(true)
+
+  const allocs = r.allocations ?? []
+  const hasAllocs = allocs.length > 0
+  const tripQty = allocs.reduce((s, a) => s + a.qty, 0)
 
   return (
     <div
@@ -72,6 +80,9 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
                 {r.client ?? 'Без клиента'}
               </span>
               {r.number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{r.number}</span>}
+              {(r.allocated_qty ?? 0) > 0 && (
+                <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>· {r.allocated_qty} шт в рейсе</span>
+              )}
             </div>
           </div>
         </button>
@@ -104,7 +115,34 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
       <div className={`exp-wrap${open ? ' open' : ''}`}>
         <div className="exp-inner">
           <div style={{ padding: '12px 14px', borderTop: '1px solid var(--c-border)' }}>
-            {everOpened && <LinesBody docId={r.receipt_doc_id} />}
+            {hasAllocs ? (
+              <div>
+                <div className="t-sub" style={{ marginBottom: 6 }}>В этом рейсе</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {allocs.map((a) => (
+                    <div key={a.line_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                      <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span className="mono" style={{ color: 'var(--c-text-subtle)' }}>{a.product_sku}</span>{' '}{a.product_name}
+                        {a.variant ? <span style={{ color: 'var(--c-text-subtle)' }}> · {a.variant}</span> : null}
+                      </span>
+                      <span className="num" style={{ fontWeight: 500 }}>{a.qty} шт</span>
+                      <span className="t-sub" style={{ width: 118, flexShrink: 0, textAlign: 'right' }}>принято {a.accepted_qty}/{a.planned_qty}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                  marginTop: 8, paddingTop: 8, borderTop: '1.5px solid var(--c-border-strong)', color: 'var(--c-text-subtle)', fontSize: 12.5,
+                }}>
+                  <span>Итого</span>
+                  <span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>
+                    {allocs.length} SKU · {tripQty} шт
+                  </span>
+                </div>
+              </div>
+            ) : (
+              everOpened && <LinesBody docId={r.receipt_doc_id} />
+            )}
 
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',

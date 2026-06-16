@@ -69,9 +69,10 @@ def test_trip_full_flow_cascades_receipt_to_intake(admin_client, client_id):
     assert unload.status_code == 200, unload.text
     assert unload.json()["message"] == "costing"
 
-    # Каскад: привязанное поступление переведено planned → on_intake.
+    # Каскад: рейс привёз поступление и принял его. Без строк приёмка пустая →
+    # сразу «Завершён» (зеркало no-lines отгрузки → shipped).
     rec = admin_client.get(f"/receipts/{receipt_id}").json()
-    assert rec["doc"]["status"] == "on_intake"
+    assert rec["doc"]["status"] == "done"
 
     cost = admin_client.post(f"/trips/{trip_id}/cost", json={
         "logistics_cost_actual": 12000, "waiting_cost": 1500, "waiting_minutes": 90,
@@ -165,17 +166,21 @@ def test_handoff_rejects_eta_before_transport_ordered(admin_client, client_id):
     assert "раньше" in bad.json()["detail"]
 
 
-def test_receipt_cannot_be_linked_to_two_trips(admin_client, client_id):
+def test_receipt_can_be_linked_to_multiple_trips(admin_client, client_id):
+    # Поступление можно дробить по нескольким рейсам (распределение по строкам).
     receipt_id = _planned_receipt(admin_client, client_id)
     t1 = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
     assert t1
-    t2 = admin_client.post("/trips", json={})
-    trip2 = t2.json()["message"]
-    dup = admin_client.post(f"/trips/{trip2}/receipts", json={"receipt_doc_ids": [receipt_id]})
-    assert dup.status_code == 400, dup.text
+    t2 = admin_client.post("/trips", json={}).json()["message"]
+    # Та же поступление — во второй рейс: теперь разрешено.
+    second = admin_client.post(f"/trips/{t2}/receipts", json={"items": [{"receipt_doc_id": receipt_id, "allocations": []}]})
+    assert second.status_code == 200, second.text
+    # Повторная привязка к тому же рейсу — идемпотентна.
+    again = admin_client.post(f"/trips/{t1}/receipts", json={"items": [{"receipt_doc_id": receipt_id, "allocations": []}]})
+    assert again.status_code == 200, again.text
 
 
-def test_receipt_candidates_exclude_receipts_linked_to_other_trips(admin_client, client_id):
+def test_receipt_candidates_include_receipts_linked_to_other_trips(admin_client, client_id):
     own_receipt = _planned_receipt(admin_client, client_id)
     other_receipt = _planned_receipt(admin_client, client_id)
     free_receipt = _planned_receipt(admin_client, client_id)
@@ -186,9 +191,9 @@ def test_receipt_candidates_exclude_receipts_linked_to_other_trips(admin_client,
     current = admin_client.get(f"/receipts?status=planned&available_for_trip_id={own_trip}&limit=100")
     assert current.status_code == 200, current.text
     current_ids = {item["id"] for item in current.json()["items"]}
-    assert own_receipt in current_ids
+    assert own_receipt not in current_ids       # привязано к этому рейсу
+    assert other_receipt in current_ids         # привязано к другому рейсу — остаётся кандидатом
     assert free_receipt in current_ids
-    assert other_receipt not in current_ids
 
     new_trip = admin_client.get("/receipts?status=planned&unlinked_to_trip=true&limit=100")
     assert new_trip.status_code == 200, new_trip.text
@@ -196,6 +201,124 @@ def test_receipt_candidates_exclude_receipts_linked_to_other_trips(admin_client,
     assert free_receipt in new_trip_ids
     assert own_receipt not in new_trip_ids
     assert other_receipt not in new_trip_ids
+
+
+# --- Дробление поступления по нескольким inbound-рейсам ---
+
+def _planned_receipt_with_line(admin_client, client_id: str, planned: int = 10):
+    """Поступление в «В плане» с одной строкой и проставленной зоной хранения."""
+    import uuid as _uuid
+    pid = str(_uuid.uuid4())
+    cid = str(_uuid.uuid4())
+    zone_id = str(_uuid.uuid4())
+    r = admin_client.post("/receipts", json={
+        "client_id": client_id, "client_name": "Test Client",
+        "lines": [{"product_id": pid, "product_name": "Товар", "product_sku": "SKU-RIN",
+                   "color_id": cid, "color_name": "Red", "size_id": None, "size_name": None,
+                   "planned_qty": planned}],
+    })
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    assert admin_client.post(f"/receipts/{doc_id}/advance").json()["message"] == "planned"
+    line_id = admin_client.get(f"/receipts/{doc_id}").json()["lines"][0]["id"]
+    patch = admin_client.patch(f"/receipts/{doc_id}/lines/{line_id}",
+                               json={"storage_zone_id": zone_id, "storage_zone_name": "Зона П"})
+    assert patch.status_code == 200, patch.text
+    return doc_id, line_id, pid, cid, zone_id
+
+
+def _storage_good_in_zone(client_id: str, pid: str, color_id: str, zone_id: str) -> int:
+    from dbconn import get_connection
+    from modules.balances.service import get_available_in_zone
+    with get_connection() as conn:
+        return get_available_in_zone(
+            conn, product_id=pid, color_id=color_id, size_id=None,
+            client_id=client_id, zone_id=zone_id, op="storage", quality="good",
+        )
+
+
+def _bare_inbound_trip(admin_client) -> str:
+    create = admin_client.post("/trips", json={
+        "direction": "inbound",
+        "origin_id": "wh-1", "origin_name": "Москва",
+        "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
+        "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "vehicle_number": "А123ВС 77", "cost_estimate": 10000,
+        "transport_ordered_at": "2026-06-01T10:00", "eta": "2026-06-02T08:00",
+    })
+    assert create.status_code == 200, create.text
+    return create.json()["message"]
+
+
+def _drive_inbound_to_costing(admin_client, trip_id: str) -> None:
+    assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+    assert admin_client.post(f"/trips/{trip_id}/arrival", json={}).json()["message"] == "unloading"
+    unload = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
+    assert unload.status_code == 200, unload.text
+
+
+def test_receipt_split_across_two_trips(admin_client, client_id):
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+
+    t1 = _bare_inbound_trip(admin_client)
+    link1 = admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    assert link1.status_code == 200, link1.text
+
+    t2 = _bare_inbound_trip(admin_client)
+    link2 = admin_client.post(f"/trips/{t2}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 4}]}],
+    })
+    assert link2.status_code == 200, link2.text
+
+    # Первый рейс привёз 6 → «Частично принято», на хранении 6.
+    _drive_inbound_to_costing(admin_client, t1)
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "partially_received"
+    assert rec["lines"][0]["accepted_qty"] == 6
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
+
+    # Второй рейс привёз остаток 4 → «Завершён», на хранении 10.
+    _drive_inbound_to_costing(admin_client, t2)
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 10
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
+
+
+def test_link_receipt_rejects_over_allocation(admin_client, client_id):
+    doc_id, line_id, _pid, _cid, _zone = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    t1 = _bare_inbound_trip(admin_client)
+    ok = admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 7}]}],
+    })
+    assert ok.status_code == 200, ok.text
+    t2 = _bare_inbound_trip(admin_client)
+    bad = admin_client.post(f"/trips/{t2}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    assert bad.status_code == 400, bad.text
+    assert "остаток" in bad.json()["detail"].lower()
+
+
+def test_cancel_inbound_trip_reverses_receipt_intake(admin_client, client_id):
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    _drive_inbound_to_costing(admin_client, t1)
+    assert admin_client.get(f"/receipts/{doc_id}").json()["doc"]["status"] == "partially_received"
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
+
+    # Отмена рейса после разгрузки снимает приёмку с хранения и откатывает статус.
+    cancel = admin_client.post(f"/trips/{t1}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "planned"
+    assert rec["lines"][0]["accepted_qty"] == 0
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 0
 
 
 def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
@@ -211,9 +334,11 @@ def test_tasks_endpoint_lists_costing_trip(admin_client, client_id):
     with get_connection() as conn:
         items = list_my_tasks(conn, user={"role": "admin"})
     kinds = {(t["doc_id"], t["kind"]) for t in items}
-    # рейс в costing → задача менеджеру; поступление в on_intake → задача кладовщику
+    # Рейс в costing → задача менеджеру. Поступление без строк рейс принял сразу
+    # (приёмка автоматическая при разгрузке — отдельной intake-задачи нет).
     assert (trip_id, "trip_cost") in kinds
-    assert (receipt_id, "receipt_intake") in kinds
+    assert (receipt_id, "receipt_intake") not in kinds
+    assert admin_client.get(f"/receipts/{receipt_id}").json()["doc"]["status"] == "done"
 
 
 def test_unload_copies_actual_arrival_to_receipt(admin_client, client_id):

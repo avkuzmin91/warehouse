@@ -28,6 +28,9 @@ from config import (
     SHIPMENT_TRANSITION_ROLES_DEFECT,
     SHIPMENT_TRANSITIONS,
     SHIPMENT_TRANSITIONS_DEFECT,
+    TRIP_STATUS_AWAITING_ARRIVAL,
+    TRIP_STATUS_DRAFT,
+    TRIP_STATUS_UNLOADING,
 )
 from dbconn import like_substring_param
 
@@ -58,31 +61,58 @@ def normalize_cargo_type(raw: str | None) -> str:
     return s if s in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT) else SHIPMENT_CARGO_GOOD
 
 
-def _line_ready_by_zone(connection, line_id: str) -> list[dict]:
-    """Net «Готов к отгрузке» строки по местам (раскладка минус уже списанное)."""
+def _doc_ready_quality(connection, doc_id: str) -> str:
+    """Качество готового остатка отгрузки: рейс товара → годный, рейс брака → брак."""
+    row = connection.execute(
+        "SELECT cargo_type FROM shipment_docs WHERE id = ?", (doc_id,)
+    ).fetchone()
+    cargo = normalize_cargo_type(row["cargo_type"] if row else None)
+    return INV_Q_DEFECT if cargo == SHIPMENT_CARGO_DEFECT else INV_Q_GOOD
+
+
+def _line_ready_by_zone(connection, line_id: str, quality: str) -> list[dict]:
+    """Net «Готов к отгрузке» строки по местам (раскладка минус уже списанное).
+
+    Только нужного качества: для отгрузки товара — годный (`good`), для отгрузки
+    брака — брак (`defect`). Готовый остаток считается по качеству, а не «по
+    упакованному вообще», иначе годный и брак смешивались бы в одной мере.
+    """
     rows = connection.execute(
         """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
                SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
                FROM zone_relocations
-               WHERE shipment_line_id = ? AND to_op = ?
+               WHERE shipment_line_id = ? AND to_op = ? AND to_quality = ?
                UNION ALL
                SELECT from_zone_id, from_zone_name, -qty
                FROM zone_relocations
-               WHERE shipment_line_id = ? AND from_op = ?
+               WHERE shipment_line_id = ? AND from_op = ? AND from_quality = ?
            ) t
            GROUP BY zone_id HAVING SUM(net) > 0
            ORDER BY SUM(net) DESC""",
-        (line_id, INV_OP_READY, line_id, INV_OP_READY),
+        (line_id, INV_OP_READY, quality, line_id, INV_OP_READY, quality),
     ).fetchall()
     return [{"zone_id": r["zone_id"], "zone_name": r["zone_name"], "net": int(r["net"])} for r in rows]
 
 
-def consume_stock_for_shipment(connection, doc_id: str, user_id: str) -> None:
+def consume_stock_for_shipment(
+    connection, doc_id: str, user_id: str,
+    *, alloc: dict[str, int] | None = None, trip_id: str | None = None,
+) -> None:
     """Списание остатков при отправке рейса: журнальные движения (… → shipped).
 
     Без commit — коммитит вызывающий (каскад рейса).
     Годный груз списывается из мест раскладки (ready/good по строке);
     брак — из зоны отгрузки, куда его подготовил кладовщик (ready/defect).
+
+    `alloc` — сколько каждой строки увозит этот рейс {shipment_line_id: qty}.
+    При `alloc=None` списывается весь готовый остаток (поведение для отгрузки,
+    целиком уезжающей одним рейсом). `shipped_qty` накапливается (инкремент), так
+    отгрузка может уезжать несколькими рейсами (их число не ограничено). `trip_id`
+    пишется в журнал для точного сторно при отмене рейса.
+
+    Распределение в рейс ограничено фактически готовым остатком ещё на привязке
+    (`shipment_alloc_remaining`), поэтому `target > available` здесь — нарушение
+    инварианта (гонка/ручная правка остатков): падаем, а не списываем «как-нибудь».
     """
     from modules.balances.service import insert_inventory_move
 
@@ -93,6 +123,8 @@ def consume_stock_for_shipment(connection, doc_id: str, user_id: str) -> None:
     cargo_type = normalize_cargo_type(doc_row["cargo_type"] if doc_row else None)
     client_id = doc_row["client_id"] if doc_row else None
     client_name = doc_row["client_name"] if doc_row else None
+    quality = INV_Q_DEFECT if cargo_type == SHIPMENT_CARGO_DEFECT else INV_Q_GOOD
+    comment_prefix = "Отгрузка брака" if cargo_type == SHIPMENT_CARGO_DEFECT else "Отгрузка"
 
     lines = connection.execute(
         "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0",
@@ -101,46 +133,99 @@ def consume_stock_for_shipment(connection, doc_id: str, user_id: str) -> None:
 
     for line in lines:
         line_id = str(line["id"])
-        if cargo_type == SHIPMENT_CARGO_DEFECT:
-            # Брак подготовлен кладовщиком: лежит как ready/defect в зоне отгрузки.
-            shipped_total = 0
-            for src in _line_ready_by_zone(connection, line_id):
-                insert_inventory_move(
-                    connection,
-                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                    color_id=line["color_id"], color_name=line["color_name"],
-                    size_id=line["size_id"], size_name=line["size_name"],
-                    client_id=client_id, client_name=client_name,
-                    from_op=INV_OP_READY, to_op=INV_OP_SHIPPED,
-                    from_quality=INV_Q_DEFECT, to_quality=INV_Q_DEFECT,
-                    from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
-                    to_zone_id=None, to_zone_name=None,
-                    qty=src["net"], user_id=user_id, shipment_line_id=line_id,
-                    comment=f"Отгрузка брака: {src['net']} шт.",
-                )
-                shipped_total += src["net"]
-        else:
-            shipped_total = 0
-            for src in _line_ready_by_zone(connection, line_id):
-                insert_inventory_move(
-                    connection,
-                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                    color_id=line["color_id"], color_name=line["color_name"],
-                    size_id=line["size_id"], size_name=line["size_name"],
-                    client_id=client_id, client_name=client_name,
-                    from_op=INV_OP_READY, to_op=INV_OP_SHIPPED,
-                    from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-                    from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
-                    to_zone_id=None, to_zone_name=None,
-                    qty=src["net"], user_id=user_id, shipment_line_id=line_id,
-                    comment=f"Отгрузка: {src['net']} шт.",
-                )
-                shipped_total += src["net"]
+        zones = _line_ready_by_zone(connection, line_id, quality)
+        available = sum(z["net"] for z in zones)
+        target = int(alloc.get(line_id, 0)) if alloc is not None else available
+        if target <= 0:
+            continue
+        if target > available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Недостаточно готового остатка для отгрузки: нужно {target}, готово {available}",
+            )
+
+        shipped_total = 0
+        remaining = target
+        for src in zones:
+            if remaining <= 0:
+                break
+            take = min(remaining, src["net"])
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=client_name,
+                from_op=INV_OP_READY, to_op=INV_OP_SHIPPED,
+                from_quality=quality, to_quality=quality,
+                from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
+                to_zone_id=None, to_zone_name=None,
+                qty=take, user_id=user_id, shipment_line_id=line_id, trip_id=trip_id,
+                comment=f"{comment_prefix}: {take} шт.",
+            )
+            shipped_total += take
+            remaining -= take
 
         connection.execute(
-            "UPDATE shipment_lines SET shipped_qty = ? WHERE id = ?",
+            "UPDATE shipment_lines SET shipped_qty = COALESCE(shipped_qty, 0) + ? WHERE id = ?",
             (shipped_total, line_id),
         )
+
+
+def shipment_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
+    """Остаток к распределению по строкам отгрузки — ПО ФАКТУ готового остатка.
+
+    remaining[line] = физически готовый к отгрузке остаток (нетто `ready` по местам,
+    та же мера, что списывает погрузка) − распределённое в активные, но ещё НЕ
+    уехавшие рейсы (draft/awaiting_arrival/unloading). Уехавшие рейсы (costing/closed)
+    уже списали свой груз из `ready`, их аллокацию повторно не вычитаем; отменённые —
+    не считаем вовсе. Так в рейс нельзя поставить больше, чем реально готово: раньше
+    гейт считался от плана отгрузки и допускал перекос план↔факт (можно было выбрать
+    5 при готовых 3 — погрузка падала с ошибкой).
+    """
+    quality = _doc_ready_quality(connection, doc_id)
+    rows = connection.execute(
+        "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchall()
+    result: dict[str, int] = {}
+    for r in rows:
+        line_id = str(r["id"])
+        ready = sum(z["net"] for z in _line_ready_by_zone(connection, line_id, quality))
+        pending = connection.execute(
+            """SELECT COALESCE(SUM(ta.qty), 0) AS q FROM trip_alloc ta
+               JOIN trip_lines tl ON tl.id = ta.trip_line_id
+               JOIN trip_docs td ON td.id = tl.trip_id
+               WHERE ta.shipment_line_id = ?
+                 AND COALESCE(ta.is_deleted, 0) = 0
+                 AND COALESCE(tl.is_deleted, 0) = 0
+                 AND td.status IN (?, ?, ?)""",
+            (line_id, TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING),
+        ).fetchone()
+        result[line_id] = max(0, ready - int(pending["q"]))
+    return result
+
+
+def shipment_fully_shipped(connection, doc_id: str) -> bool:
+    """True, если отгрузке больше нечего везти — весь подготовленный остаток уехал.
+
+    Завершение по ФАКТУ, не по плану: документ закрывается, когда по всем строкам не
+    осталось готового остатка (`ready`-нетто = 0). Покрывает обычный случай (увезли
+    весь план) и случай «подготовлено меньше плана» (заказ 10, готово 8): после
+    отгрузки всех 8 догрузить нечем — в статусах awaiting_trip/partially_shipped
+    `finish_relocation` уже не запустить, — поэтому отгрузка завершается, а не зависает
+    в «Частично отгружено». Аллокации в ещё-не-уехавшие рейсы физически лежат в
+    `ready` (нетто > 0) → пока такие есть, отгрузка не закрывается.
+    """
+    quality = _doc_ready_quality(connection, doc_id)
+    lines = connection.execute(
+        "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchall()
+    for ln in lines:
+        if sum(z["net"] for z in _line_ready_by_zone(connection, str(ln["id"]), quality)) > 0:
+            return False
+    return True
 
 
 def _check_duplicate_lines(connection, doc_id: str) -> None:

@@ -404,6 +404,18 @@ def get_shipping_zone(connection) -> tuple[str, str]:
     return str(row["id"]), str(row["name"])
 
 
+def get_receiving_zone(connection) -> tuple[str, str]:
+    """(id, name) выделенной «Зоны приёмки» — буфер для приёмки рейсом без места. 400, если не настроена."""
+    row = connection.execute(
+        "SELECT id, name FROM unloading_zones "
+        "WHERE is_receiving_zone = 1 AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at LIMIT 1"
+    ).fetchone()
+    if not row:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Не настроена «Зона приёмки» (отметьте зону в справочнике)")
+    return str(row["id"]), str(row["name"])
+
+
 def insert_inventory_move(
     connection,
     *,
@@ -419,7 +431,7 @@ def insert_inventory_move(
     shipment_line_id: str | None = None, comment: str | None = None,
     packed_date: str | None = None, pack_entry_id: str | None = None,
     reverses_id: str | None = None, receipt_line_id: str | None = None,
-    reason: str | None = None,
+    reason: str | None = None, trip_id: str | None = None,
 ) -> None:
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
@@ -438,13 +450,13 @@ def insert_inventory_move(
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
             client_id,client_name,from_op,to_op,from_quality,to_quality,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
-            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_op, to_op, from_quality, to_quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
-         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason),
+         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id),
     )
 
 

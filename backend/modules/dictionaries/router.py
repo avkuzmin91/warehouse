@@ -39,6 +39,7 @@ from .service import (
     list_product_types_page,
     list_sizes_page,
     set_packing_zone,
+    set_receiving_zone,
     set_shipping_zone,
     update_dictionary_item,
     update_client_store,
@@ -330,6 +331,12 @@ def set_unloading_zone_packing(item_id: str, admin=Depends(get_current_admin)):
 def set_unloading_zone_shipping(item_id: str, admin=Depends(get_current_admin)):
     _ = admin
     return set_shipping_zone(item_id)
+
+
+@router.post("/unloading-zones/{item_id}/set-receiving", response_model=MessageResponse)
+def set_unloading_zone_receiving(item_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    return set_receiving_zone(item_id)
 
 
 # ── Warehouses ────────────────────────────────────────────────────────────────

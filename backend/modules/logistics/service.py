@@ -6,14 +6,22 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
-    RECEIPT_OP_INTAKE_START,
-    RECEIPT_STATUS_ON_INTAKE,
+    INV_OP_INTAKE,
+    INV_OP_READY,
+    INV_OP_SHIPPED,
+    INV_OP_STORAGE,
+    RECEIPT_OP_ARRIVAL_FIX,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
+    RECEIPT_STATUS_RU,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_CANCELLED,
+    SHIPMENT_STATUS_LABELS,
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
     TRIP_OP_RECEIPT_LINK,
     TRIP_OP_SHIPMENT_LINK,
@@ -111,19 +119,27 @@ def list_trips_aggregated(
     return total, [dict(r) for r in rows]
 
 
-def link_receipts(connection, trip_id: str, receipt_doc_ids: list[str], uid: str) -> int:
-    """Привязывает поступления к рейсу. Возвращает число новых привязок.
+def link_receipts(connection, trip_id: str, items: list[dict], uid: str) -> int:
+    """Привязывает поступления к inbound-рейсу с распределением по строкам.
 
-    Валидация: поступление существует, не удалено и не привязано к другому
-    активному рейсу.
+    items: [{receipt_doc_id, allocations: [{line_id, qty}]}]. Пустой allocations —
+    берём весь остаток по каждой строке. Одно поступление может приезжать
+    несколькими рейсами; гейт qty ≤ остаток (план − уже распределённое).
+    Зеркало link_shipments.
     """
-    ids = [str(x).strip() for x in receipt_doc_ids if str(x).strip()]
-    if not ids:
+    from modules.receipts.service import receipt_alloc_remaining
+
+    norm: list[tuple[str, list]] = []
+    for it in items:
+        rid = str(it.get("receipt_doc_id") or "").strip()
+        if rid:
+            norm.append((rid, it.get("allocations") or []))
+    if not norm:
         return 0
 
     linked_numbers: list[str] = []
     now = _now()
-    for rid in ids:
+    for rid, allocations in norm:
         rec = connection.execute(
             "SELECT id, doc_number, client_id FROM receipt_docs WHERE id = ? AND is_deleted = 0",
             (rid,),
@@ -131,28 +147,67 @@ def link_receipts(connection, trip_id: str, receipt_doc_ids: list[str], uid: str
         if not rec:
             raise HTTPException(status_code=400, detail=f"Поступление не найдено: {rid}")
 
+        # Уже привязано к ЭТОМУ рейсу — заменяем распределение: убираем прежние строки,
+        # остаток пересчитываем уже без них (чтобы правка количеств не упёрлась в свой же остаток).
         existing = connection.execute(
-            "SELECT trip_id FROM trip_lines WHERE receipt_doc_id = ? AND is_deleted = 0",
-            (rid,),
+            "SELECT id FROM trip_lines WHERE trip_id = ? AND receipt_doc_id = ? AND is_deleted = 0",
+            (trip_id, rid),
         ).fetchone()
         if existing:
-            if str(existing["trip_id"]) == trip_id:
-                continue  # уже привязано к этому рейсу — пропускаем
-            raise HTTPException(
-                status_code=400,
-                detail=f"Поступление {rec['doc_number']} уже привязано к другому рейсу",
+            connection.execute(
+                "UPDATE trip_alloc SET is_deleted = 1 WHERE trip_line_id = ? AND COALESCE(is_deleted, 0) = 0",
+                (str(existing["id"]),),
             )
 
-        client_id = rec["client_id"]
-        client_row = connection.execute(
-            "SELECT name FROM clients WHERE id = ?", (client_id,)
-        ).fetchone()
-        connection.execute(
-            "INSERT INTO trip_lines (id, trip_id, receipt_doc_id, client_id, client_name, created_at, created_by) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), trip_id, rid, client_id,
-             client_row["name"] if client_row else None, now, uid),
-        )
+        remaining = receipt_alloc_remaining(connection, rid)
+        if allocations:
+            alloc_map: dict[str, int] = {}
+            for a in allocations:
+                lid = str(a.get("line_id") or "").strip()
+                qty = int(a.get("qty") or 0)
+                if not lid or qty <= 0:
+                    continue
+                if lid not in remaining:
+                    raise HTTPException(status_code=400, detail="Строка не принадлежит поступлению")
+                if qty > remaining[lid]:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Превышен остаток по строке поступления {rec['doc_number']}: "
+                            f"можно не больше {remaining[lid]} шт."
+                        ),
+                    )
+                alloc_map[lid] = alloc_map.get(lid, 0) + qty
+        else:
+            alloc_map = {lid: rem for lid, rem in remaining.items() if rem > 0}
+
+        # Пустой alloc_map допустим для поступления без строк; со строками — ошибка.
+        if not alloc_map and remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Нет остатка для распределения по поступлению {rec['doc_number']}",
+            )
+
+        if existing:
+            trip_line_id = str(existing["id"])
+        else:
+            client_id = rec["client_id"]
+            client_row = connection.execute(
+                "SELECT name FROM clients WHERE id = ?", (client_id,)
+            ).fetchone()
+            trip_line_id = str(uuid4())
+            connection.execute(
+                "INSERT INTO trip_lines (id, trip_id, receipt_doc_id, client_id, client_name, created_at, created_by) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (trip_line_id, trip_id, rid, client_id,
+                 client_row["name"] if client_row else None, now, uid),
+            )
+        for lid, qty in alloc_map.items():
+            connection.execute(
+                "INSERT INTO trip_alloc (id, trip_line_id, receipt_line_id, qty, created_at, created_by) "
+                "VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), trip_line_id, lid, qty, now, uid),
+            )
         linked_numbers.append(str(rec["doc_number"]))
 
     if linked_numbers:
@@ -165,15 +220,22 @@ def link_receipts(connection, trip_id: str, receipt_doc_ids: list[str], uid: str
     return len(linked_numbers)
 
 
-def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: str) -> int:
-    """Привязывает отгрузки к outbound-рейсу. Возвращает число новых привязок.
+def link_shipments(connection, trip_id: str, items: list[dict], uid: str) -> int:
+    """Привязывает отгрузки к outbound-рейсу с распределением по строкам.
 
-    Зеркало link_receipts: отгрузка существует, не удалена и не привязана к
-    другому активному рейсу. Дополнительно тип груза отгрузки должен совпадать с
-    типом груза рейса (рейс товара везёт только товар, рейс брака — только брак).
+    items: [{shipment_doc_id, allocations: [{line_id, qty}]}]. Пустой allocations —
+    берём весь остаток по каждой строке. Одна отгрузка может ехать несколькими
+    рейсами; гейт qty ≤ остаток (план − уже распределённое в любые рейсы). Тип
+    груза отгрузки должен совпадать с типом груза рейса.
     """
-    ids = [str(x).strip() for x in shipment_doc_ids if str(x).strip()]
-    if not ids:
+    from modules.shipments.service import shipment_alloc_remaining
+
+    norm: list[tuple[str, list]] = []
+    for it in items:
+        sid = str(it.get("shipment_doc_id") or "").strip()
+        if sid:
+            norm.append((sid, it.get("allocations") or []))
+    if not norm:
         return 0
 
     trip_row = connection.execute(
@@ -183,7 +245,7 @@ def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: s
 
     linked_numbers: list[str] = []
     now = _now()
-    for sid in ids:
+    for sid, allocations in norm:
         ship = connection.execute(
             "SELECT id, doc_number, client_id, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0",
             (sid,),
@@ -201,28 +263,68 @@ def link_shipments(connection, trip_id: str, shipment_doc_ids: list[str], uid: s
                 ),
             )
 
+        # Уже привязана к ЭТОМУ рейсу — заменяем распределение: убираем прежние строки,
+        # остаток пересчитываем уже без них (чтобы правка количеств не упёрлась в свой же остаток).
         existing = connection.execute(
-            "SELECT trip_id FROM trip_lines WHERE shipment_doc_id = ? AND is_deleted = 0",
-            (sid,),
+            "SELECT id FROM trip_lines WHERE trip_id = ? AND shipment_doc_id = ? AND is_deleted = 0",
+            (trip_id, sid),
         ).fetchone()
         if existing:
-            if str(existing["trip_id"]) == trip_id:
-                continue
-            raise HTTPException(
-                status_code=400,
-                detail=f"Отгрузка {ship['doc_number']} уже привязана к другому рейсу",
+            connection.execute(
+                "UPDATE trip_alloc SET is_deleted = 1 WHERE trip_line_id = ? AND COALESCE(is_deleted, 0) = 0",
+                (str(existing["id"]),),
             )
 
-        client_id = ship["client_id"]
-        client_row = connection.execute(
-            "SELECT name FROM clients WHERE id = ?", (client_id,)
-        ).fetchone()
-        connection.execute(
-            "INSERT INTO trip_lines (id, trip_id, shipment_doc_id, client_id, client_name, created_at, created_by) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), trip_id, sid, client_id,
-             client_row["name"] if client_row else None, now, uid),
-        )
+        remaining = shipment_alloc_remaining(connection, sid)
+        if allocations:
+            alloc_map: dict[str, int] = {}
+            for a in allocations:
+                lid = str(a.get("line_id") or "").strip()
+                qty = int(a.get("qty") or 0)
+                if not lid or qty <= 0:
+                    continue
+                if lid not in remaining:
+                    raise HTTPException(status_code=400, detail="Строка не принадлежит отгрузке")
+                if qty > remaining[lid]:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Превышен остаток по строке отгрузки {ship['doc_number']}: "
+                            f"можно не больше {remaining[lid]} шт."
+                        ),
+                    )
+                alloc_map[lid] = alloc_map.get(lid, 0) + qty
+        else:
+            alloc_map = {lid: rem for lid, rem in remaining.items() if rem > 0}
+
+        # Пустой alloc_map допустим для отгрузки без строк (каскад спишет ноль);
+        # для отгрузки со строками пустой остаток — ошибка (нечего везти).
+        if not alloc_map and remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Нет остатка для распределения по отгрузке {ship['doc_number']}",
+            )
+
+        if existing:
+            trip_line_id = str(existing["id"])
+        else:
+            client_id = ship["client_id"]
+            client_row = connection.execute(
+                "SELECT name FROM clients WHERE id = ?", (client_id,)
+            ).fetchone()
+            trip_line_id = str(uuid4())
+            connection.execute(
+                "INSERT INTO trip_lines (id, trip_id, shipment_doc_id, client_id, client_name, created_at, created_by) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (trip_line_id, trip_id, sid, client_id,
+                 client_row["name"] if client_row else None, now, uid),
+            )
+        for lid, qty in alloc_map.items():
+            connection.execute(
+                "INSERT INTO trip_alloc (id, trip_line_id, shipment_line_id, qty, created_at, created_by) "
+                "VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), trip_line_id, lid, qty, now, uid),
+            )
         linked_numbers.append(str(ship["doc_number"]))
 
     if linked_numbers:
@@ -259,13 +361,20 @@ def sync_actual_ship_date(connection, trip_id: str, arrived_at: str | None) -> N
 
 
 def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: str) -> int:
-    """При завершении разгрузки рейса: привязанные поступления planned → on_intake.
+    """При завершении разгрузки inbound-рейса: принимаем аллокацию рейса по каждому
+    привязанному поступлению.
 
-    Возвращает число переведённых поступлений. Идёт в той же транзакции, что и
-    смена статуса рейса (вызывающий делает commit).
+    Каждый рейс ПРИВОЗИТ свою часть: пишем приход (intake → storage) на
+    распределённое в этот рейс количество (trip_alloc) и накапливаем accepted_qty.
+    Поступление, принявшее весь план, → done «Завершён»; иначе → partially_received
+    «Частично принято» (остаток приедет следующими рейсами). Зеркало
+    cascade_shipments_to_shipped. Идёт в одной транзакции со сменой статуса рейса.
     """
+    from modules.receipts.service import receipt_fully_received, receive_stock_for_receipt
+
     lines = connection.execute(
-        "SELECT receipt_doc_id FROM trip_lines WHERE trip_id = ? AND is_deleted = 0",
+        "SELECT id, receipt_doc_id FROM trip_lines "
+        "WHERE trip_id = ? AND is_deleted = 0 AND receipt_doc_id IS NOT NULL",
         (trip_id,),
     ).fetchall()
     now = _now()
@@ -275,19 +384,118 @@ def cascade_receipts_to_intake(connection, trip_id: str, trip_number: str, uid: 
         rec = connection.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (rid,)
         ).fetchone()
-        if not rec or str(rec["status"]) != RECEIPT_STATUS_PLANNED:
+        if not rec or str(rec["status"]) not in (
+            RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_PARTIALLY_RECEIVED
+        ):
             continue
+
+        alloc_rows = connection.execute(
+            "SELECT receipt_line_id, qty FROM trip_alloc "
+            "WHERE trip_line_id = ? AND COALESCE(is_deleted, 0) = 0 AND receipt_line_id IS NOT NULL",
+            (str(ln["id"]),),
+        ).fetchall()
+        alloc = {str(r["receipt_line_id"]): int(r["qty"]) for r in alloc_rows}
+
+        receive_stock_for_receipt(connection, rid, uid, alloc=alloc, trip_id=trip_id)
+
+        done = receipt_fully_received(connection, rid)
+        new_status = RECEIPT_STATUS_DONE if done else RECEIPT_STATUS_PARTIALLY_RECEIVED
+        prev_ru = RECEIPT_STATUS_RU.get(str(rec["status"]), str(rec["status"]))
+        new_ru = RECEIPT_STATUS_RU[new_status]
         connection.execute(
             "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (RECEIPT_STATUS_ON_INTAKE, now, rid),
+            (new_status, now, rid),
         )
         connection.execute(
             "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), rid, RECEIPT_OP_INTAKE_START,
-             f"В плане → Принят (разгрузка рейса {trip_number})", now, uid),
+            (str(uuid4()), rid, RECEIPT_OP_ARRIVAL_FIX,
+             f"{prev_ru} → {new_ru} (разгрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved
+
+
+def reverse_receipt_intake_for_trip(connection, trip_id: str, uid: str) -> None:
+    """Сторно приёмки при отмене inbound-рейса: возврат storage → intake.
+
+    На каждое движение приёмки этого рейса пишем обратное (то же место и
+    количество, привязка reverses_id), уменьшаем accepted_qty и откатываем статус
+    поступления: → partially_received, если по другим рейсам что-то уже принято,
+    иначе planned. Зеркало reverse_shipment_consume_for_trip. Без commit.
+    """
+    from modules.balances.service import insert_inventory_move
+
+    moves = connection.execute(
+        "SELECT * FROM zone_relocations "
+        "WHERE trip_id = ? AND from_op = ? AND to_op = ? AND reverses_id IS NULL",
+        (trip_id, INV_OP_INTAKE, INV_OP_STORAGE),
+    ).fetchall()
+    if not moves:
+        return
+    now = _now()
+    returned_by_line: dict[str, int] = {}
+    for mv in moves:
+        already = connection.execute(
+            "SELECT 1 FROM zone_relocations WHERE reverses_id = ? LIMIT 1", (str(mv["id"]),)
+        ).fetchone()
+        if already:
+            continue
+        insert_inventory_move(
+            connection,
+            product_id=str(mv["product_id"]), product_name=mv["product_name"], product_sku=mv["product_sku"],
+            color_id=mv["color_id"], color_name=mv["color_name"],
+            size_id=mv["size_id"], size_name=mv["size_name"],
+            client_id=mv["client_id"], client_name=mv["client_name"],
+            from_op=INV_OP_STORAGE, to_op=INV_OP_INTAKE,
+            from_quality=str(mv["to_quality"]), to_quality=str(mv["from_quality"]),
+            from_zone_id=mv["to_zone_id"], from_zone_name=mv["to_zone_name"],
+            to_zone_id=mv["from_zone_id"], to_zone_name=mv["from_zone_name"],
+            qty=int(mv["qty"]), user_id=uid,
+            receipt_line_id=mv["receipt_line_id"], trip_id=trip_id,
+            reverses_id=str(mv["id"]),
+            comment=f"Возврат приёмки при отмене рейса: {int(mv['qty'])} шт.",
+        )
+        lid = mv["receipt_line_id"]
+        if lid:
+            returned_by_line[str(lid)] = returned_by_line.get(str(lid), 0) + int(mv["qty"])
+
+    affected_docs: set[str] = set()
+    for lid, qty in returned_by_line.items():
+        connection.execute(
+            "UPDATE receipt_lines SET accepted_qty = GREATEST(COALESCE(accepted_qty, 0) - ?, 0) WHERE id = ?",
+            (qty, lid),
+        )
+        doc = connection.execute("SELECT doc_id FROM receipt_lines WHERE id = ?", (lid,)).fetchone()
+        if doc:
+            affected_docs.add(str(doc["doc_id"]))
+
+    for rid in affected_docs:
+        cur = connection.execute(
+            "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (rid,)
+        ).fetchone()
+        if not cur or str(cur["status"]) not in (
+            RECEIPT_STATUS_DONE, RECEIPT_STATUS_PARTIALLY_RECEIVED
+        ):
+            continue
+        any_accepted = connection.execute(
+            "SELECT COALESCE(SUM(accepted_qty), 0) AS s FROM receipt_lines "
+            "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (rid,),
+        ).fetchone()
+        new_status = (
+            RECEIPT_STATUS_PARTIALLY_RECEIVED if int(any_accepted["s"]) > 0 else RECEIPT_STATUS_PLANNED
+        )
+        prev_ru = RECEIPT_STATUS_RU.get(str(cur["status"]), str(cur["status"]))
+        new_ru = RECEIPT_STATUS_RU[new_status]
+        connection.execute(
+            "UPDATE receipt_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, now, rid),
+        )
+        connection.execute(
+            "INSERT INTO receipt_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), rid, RECEIPT_OP_ARRIVAL_FIX,
+             f"{prev_ru} → {new_ru} (отмена рейса)", now, uid),
+        )
 
 
 def assert_shipments_ready_for_load(connection, trip_id: str) -> None:
@@ -306,7 +514,11 @@ def assert_shipments_ready_for_load(connection, trip_id: str) -> None:
     blocking = [
         str(r["doc_number"])
         for r in rows
-        if str(r["status"]) not in (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_STATUS_CANCELLED)
+        if str(r["status"]) not in (
+            SHIPMENT_STATUS_AWAITING_TRIP,
+            SHIPMENT_STATUS_PARTIALLY_SHIPPED,
+            SHIPMENT_STATUS_CANCELLED,
+        )
     ]
     if blocking:
         raise HTTPException(
@@ -316,17 +528,22 @@ def assert_shipments_ready_for_load(connection, trip_id: str) -> None:
 
 
 def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid: str) -> int:
-    """При завершении погрузки outbound-рейса: привязанные отгрузки awaiting_trip → shipped.
+    """При завершении погрузки outbound-рейса: списываем аллокацию рейса по каждой
+    привязанной отгрузке.
 
-    Зеркало cascade_receipts_to_intake, но переводит сразу в финальный shipped.
-    Списание — журнальными движениями (… → shipped): годный груз уходит из мест
-    раскладки («Готов к отгрузке»), брак-отгрузка — напрямую со хранения.
-    Идёт в одной транзакции со сменой статуса рейса.
+    Отгрузка, увёзшая весь план, → shipped «Завершён»; иначе → partially_shipped
+    «Частично отгружено» (остаток поедет следующими рейсами). Списание —
+    журнальными движениями (… → shipped) на распределённое в этот рейс количество
+    (trip_alloc). Идёт в одной транзакции со сменой статуса рейса.
     """
-    from modules.shipments.service import _check_duplicate_lines, consume_stock_for_shipment
+    from modules.shipments.service import (
+        _check_duplicate_lines,
+        consume_stock_for_shipment,
+        shipment_fully_shipped,
+    )
 
     lines = connection.execute(
-        "SELECT shipment_doc_id FROM trip_lines "
+        "SELECT id, shipment_doc_id FROM trip_lines "
         "WHERE trip_id = ? AND is_deleted = 0 AND shipment_doc_id IS NOT NULL",
         (trip_id,),
     ).fetchall()
@@ -337,24 +554,127 @@ def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid
         ship = connection.execute(
             "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
         ).fetchone()
-        if not ship or str(ship["status"]) != SHIPMENT_STATUS_AWAITING_TRIP:
+        if not ship or str(ship["status"]) not in (
+            SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_STATUS_PARTIALLY_SHIPPED
+        ):
             continue
         _check_duplicate_lines(connection, sid)
-        consume_stock_for_shipment(connection, sid, uid)
-        connection.execute(
-            "UPDATE shipment_docs SET status = ?, priority_rank = NULL, updated_at = ? WHERE id = ?",
-            (SHIPMENT_STATUS_SHIPPED, now, sid),
-        )
-        if ship.get("priority_rank") is not None:
+
+        alloc_rows = connection.execute(
+            "SELECT shipment_line_id, qty FROM trip_alloc "
+            "WHERE trip_line_id = ? AND COALESCE(is_deleted, 0) = 0 AND shipment_line_id IS NOT NULL",
+            (str(ln["id"]),),
+        ).fetchall()
+        alloc = {str(r["shipment_line_id"]): int(r["qty"]) for r in alloc_rows}
+
+        consume_stock_for_shipment(connection, sid, uid, alloc=alloc, trip_id=trip_id)
+
+        done = shipment_fully_shipped(connection, sid)
+        new_status = SHIPMENT_STATUS_SHIPPED if done else SHIPMENT_STATUS_PARTIALLY_SHIPPED
+        prev_ru = SHIPMENT_STATUS_LABELS.get(str(ship["status"]), str(ship["status"]))
+        new_ru = SHIPMENT_STATUS_LABELS[new_status]
+        if done:
             connection.execute(
-                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                (str(uuid4()), sid, SHIPMENT_OP_PRIORITY_UPDATE,
-                 "Приоритет снят: отгрузка завершена", now, uid),
+                "UPDATE shipment_docs SET status = ?, priority_rank = NULL, updated_at = ? WHERE id = ?",
+                (new_status, now, sid),
+            )
+            if ship.get("priority_rank") is not None:
+                connection.execute(
+                    "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                    (str(uuid4()), sid, SHIPMENT_OP_PRIORITY_UPDATE,
+                     "Приоритет снят: отгрузка завершена", now, uid),
+                )
+        else:
+            connection.execute(
+                "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+                (new_status, now, sid),
             )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), sid, "advance",
-             f"Ожидает рейс → Завершён (погрузка рейса {trip_number})", now, uid),
+             f"{prev_ru} → {new_ru} (погрузка рейса {trip_number})", now, uid),
         )
         moved += 1
     return moved
+
+
+def reverse_shipment_consume_for_trip(connection, trip_id: str, uid: str) -> None:
+    """Сторно частичного списания при отмене outbound-рейса: возврат shipped → ready.
+
+    На каждое движение списания этого рейса пишем обратное (то же место и
+    количество, привязка reverses_id), уменьшаем shipped_qty и откатываем статус
+    отгрузки: → partially_shipped, если по другим рейсам что-то уже уехало, иначе
+    awaiting_trip. Без commit — коммитит вызывающий.
+    """
+    from modules.balances.service import insert_inventory_move
+
+    moves = connection.execute(
+        "SELECT * FROM zone_relocations WHERE trip_id = ? AND to_op = ? AND reverses_id IS NULL",
+        (trip_id, INV_OP_SHIPPED),
+    ).fetchall()
+    if not moves:
+        return
+    now = _now()
+    returned_by_line: dict[str, int] = {}
+    for mv in moves:
+        already = connection.execute(
+            "SELECT 1 FROM zone_relocations WHERE reverses_id = ? LIMIT 1", (str(mv["id"]),)
+        ).fetchone()
+        if already:
+            continue
+        insert_inventory_move(
+            connection,
+            product_id=str(mv["product_id"]), product_name=mv["product_name"], product_sku=mv["product_sku"],
+            color_id=mv["color_id"], color_name=mv["color_name"],
+            size_id=mv["size_id"], size_name=mv["size_name"],
+            client_id=mv["client_id"], client_name=mv["client_name"],
+            from_op=INV_OP_SHIPPED, to_op=INV_OP_READY,
+            from_quality=str(mv["to_quality"]), to_quality=str(mv["from_quality"]),
+            from_zone_id=None, from_zone_name=None,
+            to_zone_id=mv["from_zone_id"], to_zone_name=mv["from_zone_name"],
+            qty=int(mv["qty"]), user_id=uid,
+            shipment_line_id=mv["shipment_line_id"], trip_id=trip_id,
+            reverses_id=str(mv["id"]),
+            comment=f"Возврат при отмене рейса: {int(mv['qty'])} шт.",
+        )
+        lid = mv["shipment_line_id"]
+        if lid:
+            returned_by_line[str(lid)] = returned_by_line.get(str(lid), 0) + int(mv["qty"])
+
+    affected_docs: set[str] = set()
+    for lid, qty in returned_by_line.items():
+        connection.execute(
+            "UPDATE shipment_lines SET shipped_qty = GREATEST(COALESCE(shipped_qty, 0) - ?, 0) WHERE id = ?",
+            (qty, lid),
+        )
+        doc = connection.execute("SELECT doc_id FROM shipment_lines WHERE id = ?", (lid,)).fetchone()
+        if doc:
+            affected_docs.add(str(doc["doc_id"]))
+
+    for sid in affected_docs:
+        cur = connection.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
+        ).fetchone()
+        if not cur or str(cur["status"]) not in (
+            SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_PARTIALLY_SHIPPED
+        ):
+            continue
+        any_shipped = connection.execute(
+            "SELECT COALESCE(SUM(shipped_qty), 0) AS s FROM shipment_lines "
+            "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (sid,),
+        ).fetchone()
+        new_status = (
+            SHIPMENT_STATUS_PARTIALLY_SHIPPED if int(any_shipped["s"]) > 0 else SHIPMENT_STATUS_AWAITING_TRIP
+        )
+        prev_ru = SHIPMENT_STATUS_LABELS.get(str(cur["status"]), str(cur["status"]))
+        new_ru = SHIPMENT_STATUS_LABELS[new_status]
+        connection.execute(
+            "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, now, sid),
+        )
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), sid, "advance",
+             f"{prev_ru} → {new_ru} (отмена рейса)", now, uid),
+        )

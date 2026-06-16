@@ -137,6 +137,10 @@ export function setUnloadingZoneShipping(id: string) {
   return request<{ message: string }>(`/unloading-zones/${id}/set-shipping`, { method: 'POST' })
 }
 
+export function setUnloadingZoneReceiving(id: string) {
+  return request<{ message: string }>(`/unloading-zones/${id}/set-receiving`, { method: 'POST' })
+}
+
 export function createSimpleDictionaryItem(
   apiPath: string,
   payload: { name: string; is_active: boolean; color_hex?: string | null },

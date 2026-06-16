@@ -17,8 +17,8 @@ import {
   isOutbound,
   tripLexicon,
 } from '../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor } from '../../../api/tripsApi'
-import { getReceipts, createReceipt, advanceReceiptStatus } from '../../../api/receiptsApi'
+import type { TripDetail, TripLoadFactor, TripShipmentLinkItem, TripReceiptLinkItem } from '../../../api/tripsApi'
+import { getReceipts, createReceipt, advanceReceiptStatus, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
@@ -127,7 +127,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
-      getReceipts({ status: 'planned', limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
+      getReceipts({ status: RECEIPT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
         .catch(() => {})
     }
@@ -244,8 +244,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     }
   }
 
-  const handleLink = (receiptIds: string[]) =>
-    runThrowing(() => linkTripReceipts(tripId, receiptIds))
+  const handleLink = (items: TripReceiptLinkItem[]) =>
+    runThrowing(() => linkTripReceipts(tripId, items))
 
   const handleCreate = (f: CreateReceiptFormValue) =>
     runThrowing(async () => {
@@ -261,13 +261,26 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       })
       const docId = res.message
       await advanceReceiptStatus(docId)
-      await linkTripReceipts(tripId, [docId])
+      await linkTripReceipts(tripId, [{ receipt_doc_id: docId, allocations: [] }])
     })
 
   const handleUnlink = (receiptDocId: string) => run(() => unlinkTripReceipt(tripId, receiptDocId))
 
-  const handleLinkShipments = (shipmentIds: string[]) =>
-    runThrowing(() => linkTripShipments(tripId, shipmentIds))
+  // Сохранение распределения из модала: привязка/замена выбранных + отвязка убранных, один reload.
+  const handleSaveReceiptDistribution = (items: TripReceiptLinkItem[], removed: string[]) =>
+    runThrowing(async () => {
+      if (items.length) await linkTripReceipts(tripId, items)
+      for (const id of removed) await unlinkTripReceipt(tripId, id)
+    })
+
+  const handleLinkShipments = (items: TripShipmentLinkItem[]) =>
+    runThrowing(() => linkTripShipments(tripId, items))
+
+  const handleSaveShipmentDistribution = (items: TripShipmentLinkItem[], removed: string[]) =>
+    runThrowing(async () => {
+      if (items.length) await linkTripShipments(tripId, items)
+      for (const id of removed) await unlinkTripShipment(tripId, id)
+    })
   const handleUnlinkShipment = async (shipmentDocId: string) => {
     // В погрузке открепление необратимо: привязать отгрузку обратно к этому рейсу уже нельзя.
     if (detail?.doc.status === 'unloading') {
@@ -304,6 +317,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     onLink: handleLink,
     onCreate: handleCreate,
     onUnlink: handleUnlink,
+    onSaveDistribution: handleSaveReceiptDistribution,
+    presetsLinked: true,
     busy,
   }
 
@@ -319,6 +334,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     tripDestination: doc.origin_name,
     onLink: handleLinkShipments,
     onUnlink: handleUnlinkShipment,
+    onSaveDistribution: handleSaveShipmentDistribution,
+    presetsLinked: true,
     busy,
   }
   const shipmentEnrich: ShipmentEnrich = {}

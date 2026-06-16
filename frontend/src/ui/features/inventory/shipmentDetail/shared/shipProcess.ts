@@ -15,6 +15,7 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
   awaiting_trip: { role: 'manager',    icon: 'clock',    sub: 'привязка и отправка рейса' },
+  partially_shipped: { role: 'manager', icon: 'truckOut', sub: 'часть уехала, остаток ждёт рейс' },
   shipped:       { role: null,         icon: 'truckOut', sub: 'списан при отправке рейса' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
@@ -60,7 +61,9 @@ const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null;
 export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], cargoType: ShipmentCargoType = 'good'): ProcessStep[] {
   const order = cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
   const isShipped = status === 'shipped'
-  const curIdx = status === 'cancelled' ? 1 : order.indexOf(status)
+  // «Частично отгружено» нет в линейном маршруте: показываем как активную финальную отправку.
+  const railStatus: ShipmentStatus = status === 'partially_shipped' ? 'shipped' : status
+  const curIdx = status === 'cancelled' ? 1 : order.indexOf(railStatus)
   const ts = getStepTimestamps(ops)
   return order.map((s, i) => {
     const state: ProcessStep['state'] = isShipped || i < curIdx ? 'done' : i === curIdx ? 'active' : 'future'

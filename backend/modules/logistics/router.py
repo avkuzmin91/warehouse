@@ -52,7 +52,9 @@ from modules.logistics.schemas import (
     TripListItem,
     TripListResponse,
     TripOpResponse,
+    TripReceiptAllocItem,
     TripReceiptItem,
+    TripShipmentAllocItem,
     TripShipmentItem,
     TripShipmentLinkPayload,
     TripUnloadPayload,
@@ -65,6 +67,8 @@ from modules.logistics.service import (
     link_shipments,
     list_trips_aggregated,
     next_trip_number,
+    reverse_receipt_intake_for_trip,
+    reverse_shipment_consume_for_trip,
     sync_actual_arrival,
     sync_actual_ship_date,
 )
@@ -193,9 +197,17 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_document_creato
         )
         if direction == TRIP_DIRECTION_OUTBOUND:
             if payload.shipment_doc_ids:
-                link_shipments(conn, trip_id, payload.shipment_doc_ids, uid)
+                link_shipments(
+                    conn, trip_id,
+                    [{"shipment_doc_id": sid, "allocations": []} for sid in payload.shipment_doc_ids],
+                    uid,
+                )
         elif payload.receipt_doc_ids:
-            link_receipts(conn, trip_id, payload.receipt_doc_ids, uid)
+            link_receipts(
+                conn, trip_id,
+                [{"receipt_doc_id": rid, "allocations": []} for rid in payload.receipt_doc_ids],
+                uid,
+            )
         conn.commit()
     return {"message": trip_id}
 
@@ -252,6 +264,8 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         is_outbound = str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND
         receipt_rows = []
         shipment_rows = []
+        alloc_rows = []
+        recv_alloc_rows = []
         if is_outbound:
             shipment_rows = conn.execute(
                 """
@@ -261,6 +275,19 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 LEFT JOIN shipment_docs s ON s.id = l.shipment_doc_id
                 WHERE l.trip_id = ? AND l.is_deleted = 0
                 ORDER BY l.created_at
+                """,
+                (trip_id,),
+            ).fetchall()
+            alloc_rows = conn.execute(
+                """
+                SELECT ta.trip_line_id, ta.qty,
+                       sl.id AS shipment_line_id, sl.product_sku, sl.product_name,
+                       sl.color_name, sl.size_name, sl.qty AS line_qty, sl.shipped_qty
+                FROM trip_alloc ta
+                JOIN trip_lines l ON l.id = ta.trip_line_id
+                JOIN shipment_lines sl ON sl.id = ta.shipment_line_id
+                WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
+                ORDER BY sl.product_sku
                 """,
                 (trip_id,),
             ).fetchall()
@@ -276,12 +303,39 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 """,
                 (trip_id,),
             ).fetchall()
+            recv_alloc_rows = conn.execute(
+                """
+                SELECT ta.trip_line_id, ta.qty,
+                       rl.id AS receipt_line_id, rl.product_sku, rl.product_name,
+                       rl.color_name, rl.size_name, rl.planned_qty, rl.accepted_qty
+                FROM trip_alloc ta
+                JOIN trip_lines l ON l.id = ta.trip_line_id
+                JOIN receipt_lines rl ON rl.id = ta.receipt_line_id
+                WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
+                ORDER BY rl.product_sku
+                """,
+                (trip_id,),
+            ).fetchall()
         ops_rows = conn.execute(
             "SELECT o.*, u.email AS user_email FROM trip_ops o "
             "LEFT JOIN users u ON u.id = o.created_by WHERE o.trip_id = ? ORDER BY o.created_at DESC",
             (trip_id,),
         ).fetchall()
 
+    recv_alloc_by_line: dict[str, list[TripReceiptAllocItem]] = {}
+    for a in recv_alloc_rows:
+        variant = " · ".join(x for x in [a["color_name"], a["size_name"]] if x) or None
+        recv_alloc_by_line.setdefault(str(a["trip_line_id"]), []).append(
+            TripReceiptAllocItem(
+                line_id=str(a["receipt_line_id"]),
+                product_sku=a["product_sku"],
+                product_name=a["product_name"],
+                variant=variant,
+                qty=int(a["qty"] or 0),
+                planned_qty=int(a["planned_qty"] or 0),
+                accepted_qty=int(a["accepted_qty"] or 0),
+            )
+        )
     receipts = [
         TripReceiptItem(
             line_id=str(r["line_id"]),
@@ -290,9 +344,25 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             receipt_status=r["receipt_status"],
             client_id=r["client_id"],
             client_name=r["client_name"],
+            allocations=recv_alloc_by_line.get(str(r["line_id"]), []),
+            allocated_qty=sum(al.qty for al in recv_alloc_by_line.get(str(r["line_id"]), [])),
         )
         for r in receipt_rows
     ]
+    alloc_by_line: dict[str, list[TripShipmentAllocItem]] = {}
+    for a in alloc_rows:
+        variant = " · ".join(x for x in [a["color_name"], a["size_name"]] if x) or None
+        alloc_by_line.setdefault(str(a["trip_line_id"]), []).append(
+            TripShipmentAllocItem(
+                line_id=str(a["shipment_line_id"]),
+                product_sku=a["product_sku"],
+                product_name=a["product_name"],
+                variant=variant,
+                qty=int(a["qty"] or 0),
+                line_qty=int(a["line_qty"] or 0),
+                shipped_qty=int(a["shipped_qty"] or 0),
+            )
+        )
     shipments = [
         TripShipmentItem(
             line_id=str(s["line_id"]),
@@ -301,6 +371,8 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             shipment_status=s["shipment_status"],
             client_id=s["client_id"],
             client_name=s["client_name"],
+            allocations=alloc_by_line.get(str(s["line_id"]), []),
+            allocated_qty=sum(al.qty for al in alloc_by_line.get(str(s["line_id"]), [])),
         )
         for s in shipment_rows
     ]
@@ -371,7 +443,14 @@ def link_trip_receipts(trip_id: str, payload: TripLinkPayload, user=Depends(get_
             raise HTTPException(status_code=400, detail="Поступления можно привязать только к рейсу поступления")
         if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
             raise HTTPException(status_code=400, detail="Привязать поступления можно до начала разгрузки")
-        link_receipts(conn, trip_id, payload.receipt_doc_ids, uid)
+        items = [
+            {
+                "receipt_doc_id": it.receipt_doc_id,
+                "allocations": [{"line_id": a.line_id, "qty": a.qty} for a in it.allocations],
+            }
+            for it in payload.items
+        ]
+        link_receipts(conn, trip_id, items, uid)
         conn.commit()
     return {"message": "ok"}
 
@@ -410,7 +489,14 @@ def link_trip_shipments(trip_id: str, payload: TripShipmentLinkPayload, user=Dep
             raise HTTPException(status_code=400, detail="Отгрузки можно привязать только к рейсу отгрузки")
         if str(doc_row["status"]) not in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL):
             raise HTTPException(status_code=400, detail="Привязать отгрузки можно до начала погрузки")
-        link_shipments(conn, trip_id, payload.shipment_doc_ids, uid)
+        items = [
+            {
+                "shipment_doc_id": it.shipment_doc_id,
+                "allocations": [{"line_id": a.line_id, "qty": a.qty} for a in it.allocations],
+            }
+            for it in payload.items
+        ]
+        link_shipments(conn, trip_id, items, uid)
         conn.commit()
     return {"message": "ok"}
 
@@ -667,6 +753,12 @@ def cancel_trip(trip_id: str, user=Depends(get_current_manager)):
         if current in (TRIP_STATUS_CLOSED, TRIP_STATUS_CANCELLED):
             raise HTTPException(status_code=400, detail="Рейс уже в финальном статусе")
         now = _now()
+        # Если рейс уже двигал остаток (был в «Уточнение стоимости») — вернуть назад:
+        # отгрузка списанное → «Готов»; поступление принятое → снять с хранения.
+        if str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND:
+            reverse_shipment_consume_for_trip(conn, trip_id, uid)
+        else:
+            reverse_receipt_intake_for_trip(conn, trip_id, uid)
         conn.execute(
             "UPDATE trip_docs SET status = ?, assignee_role = NULL, updated_at = ? WHERE id = ?",
             (TRIP_STATUS_CANCELLED, now, trip_id),

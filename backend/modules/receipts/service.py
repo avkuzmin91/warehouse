@@ -3,12 +3,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from fastapi import HTTPException
+
 from config import (
+    INV_OP_INTAKE,
+    INV_OP_STORAGE,
+    INV_Q_GOOD,
+    RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_PLAN_FIX,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
     RECEIPT_STATUS_TRANSITIONS,
+    TRIP_STATUS_CANCELLED,
 )
 from dbconn import like_substring_param
 
@@ -101,9 +108,18 @@ def list_receipts_aggregated(
         conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
         conds.append("d.arrival_date < ?")
         params.append(today)
-    elif status and status in statuses_all:
-        conds.append("d.status = ?")
-        params.append(status)
+    elif status:
+        # Поддерживаем как одно значение, так и CSV ("planned,partially_received" —
+        # кандидаты для привязки к рейсу).
+        requested = [s.strip() for s in str(status).split(",") if s.strip()]
+        allowed = [s for s in requested if s in statuses_all]
+        if len(allowed) == 1:
+            conds.append("d.status = ?")
+            params.append(allowed[0])
+        elif len(allowed) > 1:
+            placeholders = ",".join("?" for _ in allowed)
+            conds.append(f"d.status IN ({placeholders})")
+            params.extend(allowed)
     if search:
         s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
@@ -121,9 +137,11 @@ def list_receipts_aggregated(
         conds.append("d.arrival_date <= ?")
         params.append(date_to)
     if available_for_trip_id and str(available_for_trip_id).strip():
+        # Поступление может приезжать несколькими рейсами: исключаем только привязанные
+        # к ЭТОМУ рейсу; привязанные к другим рейсам остаются кандидатами (остаток).
         conds.append(
             "NOT EXISTS (SELECT 1 FROM trip_lines tl"
-            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id != ?)"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id = ?)"
         )
         params.append(str(available_for_trip_id).strip())
     elif unlinked_to_trip:
@@ -198,9 +216,18 @@ def list_receipt_lines(
         conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
         conds.append("d.arrival_date < ?")
         params.append(today)
-    elif status and status in statuses_all:
-        conds.append("d.status = ?")
-        params.append(status)
+    elif status:
+        # Поддерживаем как одно значение, так и CSV ("planned,partially_received" —
+        # кандидаты для привязки к рейсу).
+        requested = [s.strip() for s in str(status).split(",") if s.strip()]
+        allowed = [s for s in requested if s in statuses_all]
+        if len(allowed) == 1:
+            conds.append("d.status = ?")
+            params.append(allowed[0])
+        elif len(allowed) > 1:
+            placeholders = ",".join("?" for _ in allowed)
+            conds.append(f"d.status IN ({placeholders})")
+            params.extend(allowed)
     if search:
         s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
@@ -247,6 +274,111 @@ def list_receipt_lines(
     ).fetchall()
 
     return total, [dict(r) for r in rows]
+
+
+def receive_stock_for_receipt(
+    connection, doc_id: str, user_id: str,
+    *, alloc: dict[str, int] | None = None, trip_id: str | None = None,
+) -> None:
+    """Приёмка остатков при разгрузке inbound-рейса: журнал intake → storage.
+
+    Без commit — коммитит вызывающий (каскад рейса). `alloc` — сколько каждой строки
+    привёз этот рейс {receipt_line_id: qty}. При `alloc=None` принимается весь
+    непринятый план (план − accepted_qty). `accepted_qty` накапливается (инкремент),
+    поэтому поступление может приезжать несколькими рейсами. `trip_id` пишется в
+    журнал для точного сторно при отмене рейса. Зеркало consume_stock_for_shipment.
+    """
+    from modules.balances.service import get_receiving_zone, insert_inventory_move
+
+    doc_row = connection.execute(
+        "SELECT d.doc_number, d.client_id, cl.name AS client_name "
+        "FROM receipt_docs d LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.id = ?",
+        (doc_id,),
+    ).fetchone()
+    client_id = doc_row["client_id"] if doc_row else None
+    client_name = doc_row["client_name"] if doc_row else None
+    doc_number = doc_row["doc_number"] if doc_row else ""
+
+    lines = connection.execute(
+        "SELECT * FROM receipt_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchall()
+    now = _now()
+    # При разгрузке рейса кладовщик не назначает финальную полку построчно — товар без
+    # места приходуем в буферную «Зону приёмки» (раскладка на стеллажи — отдельным шагом).
+    receiving_zone: tuple[str, str] | None = None
+    for line in lines:
+        line_id = str(line["id"])
+        planned = int(line["planned_qty"] or 0)
+        already = int(line["accepted_qty"] or 0)
+        qty = int(alloc.get(line_id, 0)) if alloc is not None else max(planned - already, 0)
+        if qty <= 0:
+            continue
+        zone_id = line["storage_zone_id"]
+        zone_name = line["storage_zone_name"]
+        if not zone_id:
+            if receiving_zone is None:
+                receiving_zone = get_receiving_zone(connection)
+            zone_id, zone_name = receiving_zone
+            connection.execute(
+                "UPDATE receipt_lines SET storage_zone_id = ?, storage_zone_name = ? WHERE id = ?",
+                (zone_id, zone_name, line_id),
+            )
+        insert_inventory_move(
+            connection,
+            product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+            color_id=line["color_id"], color_name=line["color_name"],
+            size_id=line["size_id"], size_name=line["size_name"],
+            client_id=client_id, client_name=client_name,
+            from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+            from_zone_id=zone_id, from_zone_name=zone_name,
+            to_zone_id=zone_id, to_zone_name=zone_name,
+            qty=qty, user_id=user_id, receipt_line_id=line_id, trip_id=trip_id,
+            comment=f"Приёмка по поступлению {doc_number}: {qty} шт. (рейс)",
+        )
+        connection.execute(
+            "UPDATE receipt_lines SET accepted_qty = COALESCE(accepted_qty, 0) + ? WHERE id = ?",
+            (qty, line_id),
+        )
+        connection.execute(
+            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, line_id, RECEIPT_OP_ARRIVAL_ACCEPT, qty,
+             f"Принято рейсом: {qty} шт.", now, user_id),
+        )
+
+
+def receipt_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
+    """Остаток к распределению по строкам поступления: planned − активные trip_alloc.
+
+    Исключает аллокации отменённых рейсов. Гейт пере-аллокации при привязке к рейсу.
+    """
+    rows = connection.execute(
+        """SELECT rl.id AS line_id, rl.planned_qty AS planned,
+                  COALESCE((SELECT SUM(ta.qty) FROM trip_alloc ta
+                            JOIN trip_lines tl ON tl.id = ta.trip_line_id
+                            JOIN trip_docs td ON td.id = tl.trip_id
+                            WHERE ta.receipt_line_id = rl.id
+                              AND COALESCE(ta.is_deleted, 0) = 0
+                              AND COALESCE(tl.is_deleted, 0) = 0
+                              AND td.status != ?), 0) AS allocated
+           FROM receipt_lines rl
+           WHERE rl.doc_id = ? AND COALESCE(rl.is_deleted, 0) = 0""",
+        (TRIP_STATUS_CANCELLED, doc_id),
+    ).fetchall()
+    return {str(r["line_id"]): int(r["planned"]) - int(r["allocated"]) for r in rows}
+
+
+def receipt_fully_received(connection, doc_id: str) -> bool:
+    """True, если по всем строкам принято не меньше плана (приёмка завершена)."""
+    row = connection.execute(
+        """SELECT COUNT(*) AS pending
+           FROM receipt_lines
+           WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0
+             AND COALESCE(accepted_qty, 0) < planned_qty""",
+        (doc_id,),
+    ).fetchone()
+    return int(row["pending"]) == 0 if row else True
 
 
 def advance_receipt(connection, doc_id: str, user_id: str) -> str:

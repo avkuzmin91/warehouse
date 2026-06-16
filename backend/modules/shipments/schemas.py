@@ -211,6 +211,7 @@ class ShipmentListItem(BaseModel):
     total_qty:    int
     total_shipped_qty: int = 0
     total_packed_qty: int = 0
+    total_free_qty: int = 0
     lines_with_shipped_qty: int = 0
     lines_with_packed_qty: int = 0
     lines_with_zone: int = 0

@@ -13,6 +13,7 @@ export const RC_META: Record<ReceiptStatus, { role: ProcessRole | null; icon: Ic
   draft:     { role: 'manager',   icon: 'edit',     sub: 'состав и план поступления' },
   planned:   { role: 'manager',   icon: 'clock',    sub: 'ожидание прибытия товара' },
   on_intake: { role: 'warehouse', icon: 'forklift', sub: 'подсчёт и местоположения' },
+  partially_received: { role: 'warehouse', icon: 'forklift', sub: 'часть принята, остаток ждёт рейсов' },
   on_review: { role: 'warehouse', icon: 'box',      sub: '' },
   done:      { role: null,        icon: 'check',    sub: 'товар встал на остатки годным' },
   cancelled: { role: null,        icon: 'x',        sub: '' },
@@ -51,8 +52,12 @@ export function buildReceiptSteps(
   ops: ReceiptOp[] = [],
   opts: { awaitingTrip?: boolean; tripNumber?: string | null } = {},
 ): ProcessStep[] {
-  // Легаси on_review (QC убран) отображаем как завершённое поступление.
-  const effStatus: ReceiptStatus = status === 'on_review' ? 'done' : status
+  // Легаси on_review (QC убран) → завершённое; «Частично принято» в линейном
+  // маршруте показываем как активную приёмку (on_intake).
+  const effStatus: ReceiptStatus =
+    status === 'on_review' ? 'done'
+    : status === 'partially_received' ? 'on_intake'
+    : status
   const isDone = effStatus === 'done'
   const curIdx = effStatus === 'cancelled' ? 1 : RECEIPT_STATUS_ORDER.indexOf(effStatus)
   const ts = getStepTimestamps(ops)

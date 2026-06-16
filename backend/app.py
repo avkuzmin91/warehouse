@@ -141,8 +141,8 @@ def _ensure_runtime_schema() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_lines_trip ON trip_lines(trip_id)")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_lines_receipt_unique "
-            "ON trip_lines(receipt_doc_id) WHERE is_deleted = 0"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_lines_receipt_per_trip "
+            "ON trip_lines(trip_id, receipt_doc_id) WHERE is_deleted = 0 AND receipt_doc_id IS NOT NULL"
         )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS trip_ops (

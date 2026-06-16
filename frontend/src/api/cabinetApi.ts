@@ -4,8 +4,8 @@ import type { BalanceListResponse, BalanceSummary } from './balancesApi'
 
 // --- Types ---
 
-export type CabinetReceiptStatus = 'planned' | 'on_intake' | 'on_review' | 'done' | 'cancelled'
-export type CabinetShipmentStatus = 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'shipped' | 'cancelled'
+export type CabinetReceiptStatus = 'planned' | 'on_intake' | 'partially_received' | 'on_review' | 'done' | 'cancelled'
+export type CabinetShipmentStatus = 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 export type CabinetCargoType = 'good' | 'defect'
 
 export type CabinetOpItem = {
@@ -354,12 +354,13 @@ export function getCabinetProductVariants(productId: string, signal?: AbortSigna
 // --- Labels & helpers (клиентская лексика статусов) ---
 
 export const CABINET_RECEIPT_STATUS_ORDER: CabinetReceiptStatus[] = [
-  'planned', 'on_intake', 'on_review', 'done', 'cancelled',
+  'planned', 'on_intake', 'partially_received', 'on_review', 'done', 'cancelled',
 ]
 
 export const CABINET_RECEIPT_STATUS_LABELS: Record<CabinetReceiptStatus, string> = {
   planned: 'Ожидается',
   on_intake: 'Идёт приёмка',
+  partially_received: 'Частично принято',
   on_review: 'Проверка',
   done: 'Принято',
   cancelled: 'Аннулировано',
@@ -369,6 +370,7 @@ export function cabinetReceiptStatusTone(status: CabinetReceiptStatus): string {
   const map: Record<CabinetReceiptStatus, string> = {
     planned: 'info',
     on_intake: 'warning',
+    partially_received: 'warning',
     on_review: 'warning',
     done: 'success',
     cancelled: 'danger',
@@ -377,7 +379,7 @@ export function cabinetReceiptStatusTone(status: CabinetReceiptStatus): string {
 }
 
 export const CABINET_SHIPMENT_STATUS_ORDER: CabinetShipmentStatus[] = [
-  'packing', 'on_packing', 'relocating', 'awaiting_trip', 'shipped', 'cancelled',
+  'packing', 'on_packing', 'relocating', 'awaiting_trip', 'partially_shipped', 'shipped', 'cancelled',
 ]
 
 export const CABINET_SHIPMENT_STATUS_LABELS: Record<CabinetShipmentStatus, string> = {
@@ -385,6 +387,7 @@ export const CABINET_SHIPMENT_STATUS_LABELS: Record<CabinetShipmentStatus, strin
   on_packing: 'Упаковка',
   relocating: 'Готовится к отправке',
   awaiting_trip: 'Готовится к отправке',
+  partially_shipped: 'Частично отгружено',
   shipped: 'Отгружено',
   cancelled: 'Аннулировано',
 }
@@ -394,6 +397,7 @@ export const CABINET_DEFECT_SHIPMENT_STATUS_LABELS: Record<CabinetShipmentStatus
   on_packing: 'Упаковка',
   relocating: 'Подготовка возврата',
   awaiting_trip: 'Готов к возврату',
+  partially_shipped: 'Частично возвращено',
   shipped: 'Возвращено',
   cancelled: 'Аннулировано',
 }
@@ -409,6 +413,7 @@ export function cabinetShipmentStatusTone(status: CabinetShipmentStatus): string
     on_packing: 'info',
     relocating: 'accent',
     awaiting_trip: 'accent',
+    partially_shipped: 'accent',
     shipped: 'success',
     cancelled: 'danger',
   }

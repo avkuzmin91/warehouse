@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { TripReceiptItem } from '../../../../api/tripsApi'
-import type { ReceiptListItem } from '../../../../api/receiptsApi'
+import type { TripReceiptItem, TripReceiptLinkItem } from '../../../../api/tripsApi'
+import { RECEIPT_STATUS_LABELS, receiptStatusTone, getReceiptTripRemaining } from '../../../../api/receiptsApi'
+import type { ReceiptListItem, ReceiptStatus } from '../../../../api/receiptsApi'
+import { fmtDateShort } from '../../../../utils/format'
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import { ReceiptCard } from '../components/ReceiptCard'
-import { LinkReceiptDrawer } from './components/LinkReceiptDrawer'
+import { AllocModal } from './components/AllocModal'
+import type { AllocDoc, AllocLine, AllocItem } from './components/AllocModal'
 import type { CreateReceiptFormValue } from './components/CreateReceiptForm'
 import { Panel } from './panels'
 
@@ -16,9 +19,14 @@ export type ReceiptLink = {
   options: ReceiptListItem[]
   tripNumber: string
   tripOrigin: string | null
-  onLink: (receiptIds: string[]) => Promise<void>
+  onLink: (items: TripReceiptLinkItem[]) => Promise<void>
   onCreate?: (form: CreateReceiptFormValue) => Promise<void>
   onUnlink: (receiptDocId: string) => void
+  /** Сохранение распределения из модала: привязка/замена + отвязка убранных. */
+  onSaveDistribution: (items: TripReceiptLinkItem[], removedDocIds: string[]) => Promise<void>
+  /** Пресеты-аллокации уже учтены в trip_alloc (карточка рейса) → их прибавляем к остатку.
+   *  В создании рейса (false) распределение локальное, рейса ещё нет — не прибавляем. */
+  presetsLinked?: boolean
   busy?: boolean
 }
 
@@ -42,7 +50,8 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
   useEffect(() => { setOpen(new Set()) }, [resetKey])
 
   const canExpand = !!expandable && !!onOpen
-  const totalQty = receipts.reduce((s, r) => s + (enrich?.[r.receipt_doc_id]?.qty ?? 0), 0)
+  // В рейсе показываем распределённое количество (allocated_qty); для легаси-привязок — план из enrich.
+  const totalQty = receipts.reduce((s, r) => s + (r.allocated_qty || (enrich?.[r.receipt_doc_id]?.qty ?? 0)), 0)
   const allOpen = receipts.length > 0 && open.size === receipts.length
 
   const toggleOne = (id: string) => setOpen((prev) => {
@@ -86,6 +95,8 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
                   sku: e?.sku,
                   qty: e?.qty,
                   eta: e?.eta,
+                  allocatedQty: r.allocated_qty,
+                  allocations: r.allocations,
                 }}
                 expandable={canExpand}
                 expanded={open.has(r.receipt_doc_id)}
@@ -128,16 +139,57 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
 
       {footerNote && <div style={{ marginTop: 12 }}>{footerNote}</div>}
 
-      {link && (
-        <LinkReceiptDrawer
-          open={drawerOpen}
+      {link && drawerOpen && (
+        <AllocModal
+          open
           onClose={() => setDrawerOpen(false)}
           tripNumber={link.tripNumber}
-          tripOrigin={link.tripOrigin}
-          candidates={link.options}
+          tripDestination={link.tripOrigin}
+          lex={{ headerIcon: 'inbox', docsGen: 'поступления', addTitle: 'Поступления', flowLabel: 'Прибывает рейсом' }}
+          linkedDocs={receipts.map((r): AllocDoc => ({
+            doc_id: r.receipt_doc_id,
+            client: r.client_name,
+            doc_number: r.receipt_number,
+            status_label: RECEIPT_STATUS_LABELS[(r.receipt_status ?? '') as ReceiptStatus] ?? (r.receipt_status ?? ''),
+            status_tone: receiptStatusTone((r.receipt_status ?? '') as ReceiptStatus),
+          }))}
+          candidates={link.options.map((c): AllocDoc => ({
+            doc_id: c.id,
+            client: c.client_name,
+            doc_number: c.doc_number,
+            status_label: RECEIPT_STATUS_LABELS[c.status] ?? c.status,
+            status_tone: receiptStatusTone(c.status),
+            meta: c.arrival_date ? fmtDateShort(c.arrival_date) : null,
+            sub: `${c.sku_count} SKU · ${c.total_planned} шт`,
+          }))}
+          fetchLines={async (docId): Promise<AllocLine[]> => {
+            const presets = receipts.find((r) => r.receipt_doc_id === docId)?.allocations
+            const presetMap: Record<string, number> | null = presets && presets.length > 0
+              ? Object.fromEntries(presets.map((a) => [a.line_id, a.qty]))
+              : null
+            const res = await getReceiptTripRemaining(docId)
+            return res.lines.map((l): AllocLine => {
+              const preset = presetMap ? (presetMap[l.line_id] ?? 0) : null
+              const addBack = link.presetsLinked === false ? 0 : (preset ?? 0)
+              return {
+                line_id: l.line_id,
+                sku: l.product_sku,
+                name: l.product_name,
+                variant: l.variant,
+                color: l.color,
+                plan: l.planned_qty,
+                max: l.remaining + addBack,
+                preset,
+              }
+            })
+          }}
+          onConfirm={async (items: AllocItem[], removed) => {
+            await link.onSaveDistribution(
+              items.map((it) => ({ receipt_doc_id: it.doc_id, allocations: it.allocations })),
+              removed,
+            )
+          }}
           busy={link.busy}
-          onLink={link.onLink}
-          onCreate={link.onCreate}
         />
       )}
     </Panel>

@@ -35,12 +35,32 @@ class TripDocUpdate(BaseModel):
     comment: str | None = None
 
 
+class TripReceiptLineAlloc(BaseModel):
+    line_id: str
+    qty: int = Field(ge=1)
+
+
+class TripReceiptLinkItem(BaseModel):
+    receipt_doc_id: str
+    allocations: list[TripReceiptLineAlloc] = Field(default_factory=list)
+
+
 class TripLinkPayload(BaseModel):
-    receipt_doc_ids: list[str] = Field(default_factory=list)
+    items: list[TripReceiptLinkItem] = Field(default_factory=list)
+
+
+class TripShipmentLineAlloc(BaseModel):
+    line_id: str
+    qty: int = Field(ge=1)
+
+
+class TripShipmentLinkItem(BaseModel):
+    shipment_doc_id: str
+    allocations: list[TripShipmentLineAlloc] = Field(default_factory=list)
 
 
 class TripShipmentLinkPayload(BaseModel):
-    shipment_doc_ids: list[str] = Field(default_factory=list)
+    items: list[TripShipmentLinkItem] = Field(default_factory=list)
 
 
 class TripArrivalPayload(BaseModel):
@@ -96,6 +116,16 @@ class TripDocResponse(BaseModel):
     updated_at: str | None = None
 
 
+class TripReceiptAllocItem(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    variant: str | None = None
+    qty: int = 0           # привозит этот рейс
+    planned_qty: int = 0   # план по строке
+    accepted_qty: int = 0  # принято всего (по всем рейсам)
+
+
 class TripReceiptItem(BaseModel):
     line_id: str
     receipt_doc_id: str
@@ -103,6 +133,18 @@ class TripReceiptItem(BaseModel):
     receipt_status: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    allocated_qty: int = 0
+    allocations: list[TripReceiptAllocItem] = Field(default_factory=list)
+
+
+class TripShipmentAllocItem(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    variant: str | None = None
+    qty: int = 0          # увозит этот рейс
+    line_qty: int = 0     # план по строке
+    shipped_qty: int = 0  # отгружено всего (по всем рейсам)
 
 
 class TripShipmentItem(BaseModel):
@@ -112,6 +154,8 @@ class TripShipmentItem(BaseModel):
     shipment_status: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    allocated_qty: int = 0
+    allocations: list[TripShipmentAllocItem] = Field(default_factory=list)
 
 
 class TripOpResponse(BaseModel):

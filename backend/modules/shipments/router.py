@@ -25,6 +25,9 @@ from config import (
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUSES_ALL,
     SHIPMENT_TRANSITIONS,
+    TRIP_STATUS_AWAITING_ARRIVAL,
+    TRIP_STATUS_DRAFT,
+    TRIP_STATUS_UNLOADING,
     UPLOADS_DIR,
 )
 from dbconn import get_connection, like_substring_param
@@ -74,6 +77,7 @@ from modules.shipments.service import (
     return_line_from_packing,
     return_packing_pool_to_storage,
     reverse_packing_entry,
+    shipment_alloc_remaining,
 )
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
@@ -249,9 +253,11 @@ def list_shipments(
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
             conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if available_for_trip_id and available_for_trip_id.strip():
+            # Отгрузка может ехать несколькими рейсами: исключаем только привязанные
+            # к ЭТОМУ рейсу; привязанные к другим рейсам остаются кандидатами (остаток).
             conds.append(
                 "NOT EXISTS (SELECT 1 FROM trip_lines tl"
-                " WHERE tl.shipment_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id != ?)"
+                " WHERE tl.shipment_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id = ?)"
             )
             params.append(available_for_trip_id.strip())
         if status:
@@ -295,6 +301,10 @@ def list_shipments(
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
         order_by = _shipment_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
+        # Резерв в активные ещё-не-уехавшие рейсы (зеркало shipment_alloc_remaining).
+        active_trip_statuses = ", ".join(
+            f"'{s}'" for s in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING)
+        )
         rows = conn.execute(
             f"""SELECT d.*,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
@@ -313,6 +323,32 @@ def list_shipments(
                         JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
                         WHERE sl2.doc_id = d.id
                     ), 0) AS total_packed_qty,
+                    COALESCE((
+                        SELECT SUM(GREATEST(pl.ready - pl.pending, 0))
+                        FROM (
+                            SELECT sl3.id AS line_id,
+                                -- Нетто `ready` нужного качества: вошло в ready − вышло из ready,
+                                -- стороны считаем независимо, чтобы перекладка ready→ready (раскладка
+                                -- годного по местам) давала ноль, а не +qty (зеркало _line_ready_by_zone).
+                                COALESCE(SUM(CASE WHEN zr.to_op='ready'   AND zr.to_quality
+                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0)
+                                - COALESCE(SUM(CASE WHEN zr.from_op='ready' AND zr.from_quality
+                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0) AS ready,
+                                COALESCE((
+                                    SELECT SUM(ta.qty) FROM trip_alloc ta
+                                    JOIN trip_lines tl ON tl.id = ta.trip_line_id
+                                    JOIN trip_docs td ON td.id = tl.trip_id
+                                    WHERE ta.shipment_line_id = sl3.id
+                                      AND COALESCE(ta.is_deleted,0)=0
+                                      AND COALESCE(tl.is_deleted,0)=0
+                                      AND td.status IN ({active_trip_statuses})
+                                ), 0) AS pending
+                            FROM shipment_lines sl3
+                            LEFT JOIN zone_relocations zr ON zr.shipment_line_id = sl3.id
+                            WHERE sl3.doc_id = d.id AND COALESCE(sl3.is_deleted,0)=0
+                            GROUP BY sl3.id
+                        ) pl
+                    ), 0) AS total_free_qty,
                     COUNT(l.id) FILTER (
                         WHERE l.is_deleted=0 AND COALESCE(l.shipped_qty, 0) > 0
                     ) AS lines_with_shipped_qty,
@@ -347,6 +383,7 @@ def list_shipments(
             total_qty=int(r["total_qty"] or 0),
             total_shipped_qty=int(r["total_shipped_qty"] or 0),
             total_packed_qty=int(r["total_packed_qty"] or 0),
+            total_free_qty=int(r["total_free_qty"] or 0),
             lines_with_shipped_qty=int(r["lines_with_shipped_qty"] or 0),
             lines_with_packed_qty=int(r["lines_with_packed_qty"] or 0),
             lines_with_zone=int(r["lines_with_zone"] or 0),
@@ -452,6 +489,41 @@ def list_shipment_lines(
         for r in rows
     ]
     return ShipmentLinesResponse(items=items, total=total, page=page, limit=limit)
+
+
+@router.get("/shipments/{doc_id}/trip-alloc-remaining")
+def shipment_trip_alloc_remaining(doc_id: str, user=Depends(_get_viewer)):
+    """Остаток к распределению по строкам отгрузки для привязки к рейсу.
+
+    remaining = план − уже распределённое в активные рейсы. Шторка привязки к
+    рейсу берёт его как значение по умолчанию и верхнюю границу.
+    """
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        remaining = shipment_alloc_remaining(conn, doc_id)
+        lines = conn.execute(
+            "SELECT id, product_sku, product_name, color_name, size_name, qty, shipped_qty "
+            "FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
+            (doc_id,),
+        ).fetchall()
+    items = [
+        {
+            "line_id": str(ln["id"]),
+            "product_sku": ln["product_sku"],
+            "product_name": ln["product_name"],
+            "color": ln["color_name"],
+            "variant": " · ".join(x for x in [ln["color_name"], ln["size_name"]] if x) or None,
+            "qty": int(ln["qty"] or 0),
+            "shipped_qty": int(ln["shipped_qty"] or 0),
+            "remaining": int(remaining.get(str(ln["id"]), 0)),
+        }
+        for ln in lines
+    ]
+    return {"lines": items}
 
 
 @router.get("/shipments/{doc_id}", response_model=ShipmentDetailResponse)

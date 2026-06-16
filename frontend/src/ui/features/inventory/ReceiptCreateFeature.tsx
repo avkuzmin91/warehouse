@@ -96,7 +96,7 @@ export function ReceiptCreateFeature() {
       await advanceReceiptStatus(docId)
       if (tripParam) {
         // Создано из рейса — привязываем и возвращаемся к рейсу.
-        try { await linkTripReceipts(tripParam, [docId]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
+        try { await linkTripReceipts(tripParam, [{ receipt_doc_id: docId, allocations: [] }]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
         navigate(`/logistics/trips/${tripParam}`)
       } else if (returnToParam) {
         navigate(returnToParam)
