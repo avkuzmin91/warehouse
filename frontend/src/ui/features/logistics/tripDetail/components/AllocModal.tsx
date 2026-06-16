@@ -33,6 +33,8 @@ export type AllocLine = {
   max: number
   /** Текущее распределение в этот рейс; null для нового документа → дефолт = max. */
   preset: number | null
+  /** Магазин назначения строки (только отгрузки); null → колонка не показывается. */
+  store?: string | null
 }
 
 export type AllocItem = { doc_id: string; allocations: { line_id: string; qty: number }[] }
@@ -133,6 +135,8 @@ function LinesTable({ lines, qty, setQty, query }: {
     return { plan, max, q, over }
   }, [lines, qty])
 
+  const hasStore = useMemo(() => lines.some((l) => l.store), [lines])
+
   if (filtered.length === 0) {
     return <div className="alloc-empty"><div className="alloc-empty-ico" /><h3>Ничего не нашлось</h3><p>Измените запрос поиска по SKU или наименованию.</p></div>
   }
@@ -145,6 +149,7 @@ function LinesTable({ lines, qty, setQty, query }: {
           <th style={{ width: 104 }}>SKU</th>
           <th>Наименование</th>
           <th style={{ width: 150 }}>Вариант</th>
+          {hasStore && <th style={{ width: 150 }}>Магазин</th>}
           <th className="num" style={{ width: 66 }}>План</th>
           <th className="num" style={{ width: 78 }}>Остаток</th>
           <th className="num" style={{ width: 168 }}>В рейс</th>
@@ -163,6 +168,7 @@ function LinesTable({ lines, qty, setQty, query }: {
               <td><span className={`c-sku${groupStart ? '' : ' dim'}`}>{l.sku}</span></td>
               <td><span className={`c-name${groupStart ? '' : ' dim'}`}>{l.name}</span></td>
               <td>{l.variant && <span className="var-chip"><span className="var-sw" style={{ background: colorSwatch(l.color) }} />{l.variant}</span>}</td>
+              {hasStore && <td>{l.store ? <span className="c-name">{l.store}</span> : <span className="subtle">—</span>}</td>}
               <td className="c-num">{l.plan}</td>
               <td className="c-num"><span className="rem-cell"><span className={l.max === 0 ? 'rem-zero' : ''} style={{ fontWeight: l.max ? 500 : 400 }}>{l.max}</span></span></td>
               <td>
@@ -197,7 +203,7 @@ function LinesTable({ lines, qty, setQty, query }: {
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={3}>Итого по документу{query.trim() && <span className="subtle" style={{ fontWeight: 400 }}> · показано {filtered.length} из {lines.length}</span>}</td>
+          <td colSpan={hasStore ? 4 : 3}>Итого по документу{query.trim() && <span className="subtle" style={{ fontWeight: 400 }}> · показано {filtered.length} из {lines.length}</span>}</td>
           <td className="num">{totals.plan}</td>
           <td className="num">{totals.max}</td>
           <td className="num" style={{ color: totals.over ? 'var(--c-danger)' : totals.q > 0 ? 'var(--c-accent)' : 'inherit' }}>{totals.q}</td>
@@ -275,9 +281,11 @@ function MainPane({ doc, lines, qty, setQty, fillAll, clearAll, query, setQuery,
 }
 
 /* ---------------- candidate picker ---------------- */
-function Picker({ candidates, addedIds, onCancel, onAdd }: {
+function Picker({ candidates, addedIds, previewId, onHover, onCancel, onAdd }: {
   candidates: AllocDoc[]
   addedIds: string[]
+  previewId: string | null
+  onHover: (id: string) => void
   onCancel: () => void
   onAdd: (ids: string[]) => void
 }) {
@@ -305,7 +313,15 @@ function Picker({ candidates, addedIds, onCancel, onAdd }: {
       <div className="picker-list">
         {filtered.length === 0 && <div className="subtle" style={{ textAlign: 'center', padding: '20px 0', fontSize: 12.5 }}>Нет доступных документов</div>}
         {filtered.map((c) => (
-          <button type="button" key={c.doc_id} className={`cand${sel.has(c.doc_id) ? ' on' : ''}`} onClick={() => toggle(c.doc_id)}>
+          <button
+            type="button"
+            key={c.doc_id}
+            className={`cand${sel.has(c.doc_id) ? ' on' : ''}`}
+            style={previewId === c.doc_id && !sel.has(c.doc_id) ? { boxShadow: 'inset 3px 0 0 var(--c-accent)' } : undefined}
+            onClick={() => toggle(c.doc_id)}
+            onMouseEnter={() => onHover(c.doc_id)}
+            onFocus={() => onHover(c.doc_id)}
+          >
             <span className="cand-cb">{sel.has(c.doc_id) && <Icon name="check" size={12} />}</span>
             <span className="cand-body">
               <span className="cand-top">
@@ -328,6 +344,88 @@ function Picker({ candidates, addedIds, onCancel, onAdd }: {
   )
 }
 
+/* ---------------- candidate preview (read-only, right pane) ---------------- */
+function PreviewHint({ lex }: { lex: AllocLexicon }) {
+  return (
+    <div className="alloc-main">
+      <div className="alloc-empty">
+        <div className="alloc-empty-ico" />
+        <h3>Наведите на документ</h3>
+        <p>Наведите курсор на документ слева, чтобы увидеть его состав, затем добавьте {lex.docsGen} в рейс.</p>
+      </div>
+    </div>
+  )
+}
+
+function PreviewPane({ doc, lines, onAdd }: {
+  doc: AllocDoc
+  lines: AllocLine[] | undefined
+  onAdd: () => void
+}) {
+  const t = useMemo(() => {
+    let plan = 0, max = 0
+    for (const l of lines ?? []) { plan += l.plan; max += l.max }
+    return { plan, max }
+  }, [lines])
+  const hasStore = useMemo(() => (lines ?? []).some((l) => l.store), [lines])
+  let prevKey: string | null = null
+  return (
+    <div className="alloc-main">
+      <div className="main-head">
+        <div className="main-head-row">
+          <span className="badge" style={{ background: 'var(--c-bg-sunken)', color: 'var(--c-text-subtle)' }}><Icon name="eye" size={11} />Предпросмотр</span>
+          <span className="main-head-client">{doc.client ?? 'Без клиента'}</span>
+          <span className="mono subtle" style={{ fontSize: 12 }}>{doc.doc_number}</span>
+          <span className={`badge ${doc.status_tone}`} style={{ marginLeft: 2 }}><span className="dot" />{doc.status_label}</span>
+          <button type="button" className="btn primary sm" style={{ marginLeft: 'auto' }} onClick={onAdd}><Icon name="plus" size={13} /> Добавить в рейс</button>
+        </div>
+        <div className="main-stats">
+          <div className="main-stat"><div className="main-stat-label">План</div><div className="main-stat-val">{t.plan}<span className="unit">шт</span></div></div>
+          <div className="main-stat"><div className="main-stat-label">К распределению</div><div className="main-stat-val">{t.max}<span className="unit">шт</span></div></div>
+          <div className="main-stat"><div className="main-stat-label">Позиций</div><div className="main-stat-val">{lines?.length ?? 0}</div></div>
+        </div>
+      </div>
+      <div className="lines-scroll">
+        {lines == null
+          ? <div className="alloc-empty"><div className="alloc-empty-ico" /><h3>Загрузка состава…</h3><p /></div>
+          : lines.length === 0
+            ? <div className="alloc-empty"><div className="alloc-empty-ico" /><h3>Нет строк</h3><p>В документе нет позиций.</p></div>
+            : (
+              <table className="lt">
+                <thead>
+                  <tr>
+                    <th style={{ width: 104 }}>SKU</th>
+                    <th>Наименование</th>
+                    <th style={{ width: 150 }}>Вариант</th>
+                    {hasStore && <th style={{ width: 150 }}>Магазин</th>}
+                    <th className="num" style={{ width: 66 }}>План</th>
+                    <th className="num" style={{ width: 78 }}>Остаток</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((l) => {
+                    const key = `${l.sku}${l.name}`
+                    const groupStart = key !== prevKey
+                    prevKey = key
+                    return (
+                      <tr key={l.line_id} className={groupStart ? 'group-start' : ''}>
+                        <td><span className={`c-sku${groupStart ? '' : ' dim'}`}>{l.sku}</span></td>
+                        <td><span className={`c-name${groupStart ? '' : ' dim'}`}>{l.name}</span></td>
+                        <td>{l.variant && <span className="var-chip"><span className="var-sw" style={{ background: colorSwatch(l.color) }} />{l.variant}</span>}</td>
+                        {hasStore && <td>{l.store ? <span className="c-name">{l.store}</span> : <span className="subtle">—</span>}</td>}
+                        <td className="c-num">{l.plan}</td>
+                        <td className="c-num"><span className="rem-cell"><span className={l.max === 0 ? 'rem-zero' : ''} style={{ fontWeight: l.max ? 500 : 400 }}>{l.max}</span></span></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- root modal ---------------- */
 export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, linkedDocs, candidates, fetchLines, onConfirm, busy }: AllocModalProps) {
   const docMap = useMemo(() => {
@@ -341,6 +439,7 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
   const [activeId, setActiveId] = useState<string | null>(initialLinkedIds[0] ?? null)
   const [query, setQuery] = useState('')
   const [picking, setPicking] = useState(false)
+  const [previewId, setPreviewId] = useState<string | null>(null)
   const [qty, setQty] = useState<QtyMap>({})
   const [linesByDoc, setLinesByDoc] = useState<Record<string, AllocLine[]>>({})
   const [saving, setSaving] = useState(false)
@@ -360,11 +459,15 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
     }
   }
 
+  function openPicker() { setPicking(true); setPreviewId(null) }
+  function closePicker() { setPicking(false); setPreviewId(null) }
+  function preview(id: string) { setPreviewId(id); void loadLines(id) }
+
   // Загружаем строки всех уже привязанных документов при открытии (для прогресса в чипах)
   // и сразу показываем выбор документов рейса.
   useEffect(() => {
     if (!open) return
-    setPicking(true)
+    openPicker()
     for (const id of initialLinkedIds) void loadLines(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -379,7 +482,7 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
   function addDocs(ids: string[]) {
     setAddedIds((p) => [...p, ...ids])
     setActiveId(ids[0])
-    setPicking(false)
+    closePicker()
     for (const id of ids) void loadLines(id)
   }
   function removeDoc(id: string) {
@@ -430,7 +533,7 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
-      if (picking) setPicking(false)
+      if (picking) closePicker()
       else onClose()
     }
     if (open) window.addEventListener('keydown', onKey)
@@ -463,12 +566,16 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
               ))}
             </div>
             <div className="rail-foot">
-              <button type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={() => setPicking(true)}><Icon name="plus" size={14} /> Добавить</button>
+              <button type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={openPicker}><Icon name="plus" size={14} /> Добавить</button>
             </div>
-            {picking && <Picker candidates={candidates} addedIds={addedIds} onCancel={() => setPicking(false)} onAdd={addDocs} />}
+            {picking && <Picker candidates={candidates} addedIds={addedIds} previewId={previewId} onHover={preview} onCancel={closePicker} onAdd={addDocs} />}
           </div>
 
-          <MainPane doc={activeDoc} lines={activeLines} qty={qty} setQty={setLineQty} fillAll={fillAll} clearAll={clearAll} query={query} setQuery={setQuery} lex={lex} />
+          {picking && previewId && docMap[previewId] && !addedIds.includes(previewId)
+            ? <PreviewPane doc={docMap[previewId]} lines={linesByDoc[previewId]} onAdd={() => addDocs([previewId])} />
+            : picking && !previewId && addedIds.length === 0
+              ? <PreviewHint lex={lex} />
+              : <MainPane doc={activeDoc} lines={activeLines} qty={qty} setQty={setLineQty} fillAll={fillAll} clearAll={clearAll} query={query} setQuery={setQuery} lex={lex} />}
         </div>
 
         <div className="alloc-foot">

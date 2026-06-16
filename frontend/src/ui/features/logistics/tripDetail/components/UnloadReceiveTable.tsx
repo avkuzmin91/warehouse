@@ -4,8 +4,9 @@ import { Icon } from '../../../../primitives/Icon'
 import { Combobox } from '../../../../data/Combobox'
 
 /* Приёмка inbound-рейса при разгрузке: по каждой строке аллокации кладовщик вводит
- * фактически принятое и место хранения. По умолчанию принимаем всю аллокацию рейса;
- * принять больше привезённого этим рейсом нельзя (max = qty). Завершение разгрузки
+ * фактически принятое и место хранения. По умолчанию принимаем всю аллокацию рейса.
+ * Привезти меньше («недовоз») и больше плана («сверх плана») — обе ситуации нормальны:
+ * принятое вводится по факту, излишек поднимет аллокацию рейса. Завершение разгрузки
  * проводит приход — товар встаёт «На хранении». */
 export function UnloadReceiveTable({ receipts, zones, acceptByLine, zoneByLine, onAccept, onZone, showErrors }: {
   receipts: TripReceiptItem[]
@@ -40,6 +41,7 @@ export function UnloadReceiveTable({ receipts, zones, acceptByLine, zoneByLine, 
             const acc = acceptByLine[a.line_id] ?? a.qty
             const zoneId = zoneByLine[a.line_id] ?? ''
             const short = acc < a.qty
+            const surplus = acc > a.qty
             const zoneMissing = showErrors && acc > 0 && !zoneId
             return (
               <div
@@ -55,17 +57,17 @@ export function UnloadReceiveTable({ receipts, zones, acceptByLine, zoneByLine, 
                     {a.variant ? <span style={{ color: 'var(--c-text-subtle)' }}> · {a.variant}</span> : null}
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-                    привезли {a.qty} шт
+                    план рейса {a.qty} шт
                     {short ? <> · <span style={{ color: 'var(--c-warning)' }}>недовоз</span></> : null}
+                    {surplus ? <> · <span style={{ color: 'var(--c-accent)' }}>сверх плана +{acc - a.qty}</span></> : null}
                   </div>
                 </div>
                 <input
                   className="input sm num"
                   type="number"
                   min={0}
-                  max={a.qty}
                   value={acc}
-                  onChange={(e) => onAccept(a.line_id, Math.max(0, Math.min(a.qty, Math.floor(Number(e.target.value) || 0))))}
+                  onChange={(e) => onAccept(a.line_id, Math.max(0, Math.floor(Number(e.target.value) || 0)))}
                 />
                 <Combobox
                   value={zoneId || null}

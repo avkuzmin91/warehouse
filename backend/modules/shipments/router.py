@@ -507,7 +507,7 @@ def shipment_trip_alloc_remaining(doc_id: str, user=Depends(_get_viewer)):
             raise HTTPException(status_code=404, detail="Документ не найден")
         remaining = shipment_alloc_remaining(conn, doc_id)
         lines = conn.execute(
-            "SELECT id, product_sku, product_name, color_name, size_name, qty, shipped_qty "
+            "SELECT id, product_sku, product_name, color_name, size_name, qty, shipped_qty, store_name "
             "FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
             (doc_id,),
         ).fetchall()
@@ -521,6 +521,7 @@ def shipment_trip_alloc_remaining(doc_id: str, user=Depends(_get_viewer)):
             "qty": int(ln["qty"] or 0),
             "shipped_qty": int(ln["shipped_qty"] or 0),
             "remaining": int(remaining.get(str(ln["id"]), 0)),
+            "store_name": ln["store_name"],
         }
         for ln in lines
     ]

@@ -186,6 +186,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
                 plan: l.qty,
                 max: l.remaining + addBack,
                 preset,
+                store: l.store_name,
               }
             })
           }}

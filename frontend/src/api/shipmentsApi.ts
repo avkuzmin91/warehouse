@@ -318,6 +318,7 @@ export type ShipmentTripRemainingLine = {
   qty: number
   shipped_qty: number
   remaining: number
+  store_name: string | null
 }
 
 /** Остаток к распределению по строкам отгрузки для привязки к рейсу. */

@@ -372,7 +372,9 @@ def receive_receipts_for_trip(
 
     Кладовщик в шаге разгрузки посчитал фактически принятое по строкам аллокации
     рейса (accepted_by_line: receipt_line_id → шт.; по умолчанию — вся аллокация).
-    Принять больше, чем планировалось на рейс (trip_alloc), нельзя. На принятое
+    Привезти больше, чем планировалось на рейс, можно (нормальная ситуация): излишек
+    поднимает аллокацию рейса до факта, accepted_qty может превысить план поступления →
+    документ закрывается в done. На принятое
     пишем движение intake→storage@место (штамп trip_id+receipt_line_id), наращиваем
     receipt_lines.accepted_qty и пересчитываем статус поступления (partially_received
     /done). Счёт ручной — это не авто-приход по плану. Идёт в одной транзакции со
@@ -400,7 +402,7 @@ def receive_receipts_for_trip(
         ):
             continue
         alloc_rows = connection.execute(
-            "SELECT ta.qty, ta.receipt_line_id, "
+            "SELECT ta.id AS alloc_id, ta.qty, ta.receipt_line_id, "
             "rl.product_id, rl.product_name, rl.product_sku, rl.color_id, rl.color_name, "
             "rl.size_id, rl.size_name, rl.storage_zone_id, rl.storage_zone_name, rl.accepted_qty "
             "FROM trip_alloc ta JOIN receipt_lines rl ON rl.id = ta.receipt_line_id "
@@ -416,11 +418,7 @@ def receive_receipts_for_trip(
                 received = 0
             attrs = " / ".join(x for x in [a["color_name"], a["size_name"]] if x)
             label = f"{a['product_sku']}" + (f" ({attrs})" if attrs else "")
-            if received > alloc_qty:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Принято больше, чем планировалось на рейс ({label}): не больше {alloc_qty} шт.",
-                )
+            surplus = max(received - alloc_qty, 0)
             zone = zone_by_line.get(lid)
             zone_id = (zone.get("id") if zone else None) or a["storage_zone_id"]
             zone_name = (zone.get("name") if zone else None) or a["storage_zone_name"]
@@ -437,14 +435,23 @@ def receive_receipts_for_trip(
                 )
             if received <= 0:
                 continue
+            # Привезли больше, чем планировалось на рейс — нормальная ситуация. Поднимаем
+            # аллокацию рейса до фактически принятого: тогда «привезено рейсами»
+            # (arrived_qty_by_line) и «остаток к распределению» считаются от факта, а не
+            # от плана, и гейт корректировки приёмки не конфликтует с излишком.
+            if surplus > 0:
+                connection.execute(
+                    "UPDATE trip_alloc SET qty = ? WHERE id = ?", (received, str(a["alloc_id"])),
+                )
             new_accepted = int(a["accepted_qty"] or 0) + received
             connection.execute(
                 "UPDATE receipt_lines SET accepted_qty = ? WHERE id = ?", (new_accepted, lid),
             )
+            surplus_note = f", из них сверх плана рейса +{surplus}" if surplus > 0 else ""
             connection.execute(
                 "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (str(uuid4()), rid, lid, RECEIPT_OP_ARRIVAL_ACCEPT, received,
-                 f"Принято рейсом {trip_number}: +{received} шт. (итого {new_accepted}) ({label})", now, uid),
+                 f"Принято рейсом {trip_number}: +{received} шт.{surplus_note} (итого {new_accepted}) ({label})", now, uid),
             )
             insert_inventory_move(
                 connection,

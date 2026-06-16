@@ -368,10 +368,6 @@ def test_trip_receive_undership_then_close_short(admin_client, client_id):
     })
     admin_client.post(f"/trips/{t1}/handoff")
     admin_client.post(f"/trips/{t1}/arrival", json={})
-    # Принять больше аллокации нельзя.
-    over = _unload_with_receive(admin_client, t1, [{"line_id": line_id, "accepted_qty": 12}])
-    assert over.status_code == 400, over.text
-
     got = _unload_with_receive(admin_client, t1, [{"line_id": line_id, "accepted_qty": 8}])
     assert got.status_code == 200, got.text
     rec = admin_client.get(f"/receipts/{doc_id}").json()
@@ -386,6 +382,32 @@ def test_trip_receive_undership_then_close_short(admin_client, client_id):
     assert rec["doc"]["status"] == "done"
     # Недовезённое в сток не попадает — на хранении остаётся принятое.
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 8
+
+
+def test_trip_receive_overdelivery(admin_client, client_id):
+    # Привезли больше плана — нормальная ситуация. Кладовщик принимает факт (12 при
+    # плане 10): излишек поднимает аллокацию рейса, поступление закрывается в done,
+    # на хранении стоит всё принятое.
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 10}]}],
+    })
+    admin_client.post(f"/trips/{t1}/handoff")
+    admin_client.post(f"/trips/{t1}/arrival", json={})
+    got = _unload_with_receive(admin_client, t1, [{"line_id": line_id, "accepted_qty": 12}])
+    assert got.status_code == 200, got.text
+
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 12
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 12
+
+    # Аллокацию рейса подняли до факта: «привезено рейсом» = 12, остатка к
+    # распределению на новые рейсы нет.
+    trip = admin_client.get(f"/trips/{t1}").json()
+    assert trip["receipts"][0]["allocations"][0]["qty"] == 12
+    assert trip["receipts"][0]["received_qty"] == 12
 
 
 def test_shortage_close_short_gated_by_pending_trip_and_alloc(admin_client, client_id):
