@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -273,8 +274,9 @@ def test_cross_direction_linking_rejected(admin_client, client_id):
 
 
 def test_outbound_trip_cargo_type_stored_and_returned(admin_client, client_id):
+    tag = f"CARGOTYPE-{uuid.uuid4()}"  # изолирует рейс в общем списке
     trip_id = admin_client.post("/trips", json={
-        "direction": "outbound", "cargo_type": "defect", "origin_name": "Склад",
+        "direction": "outbound", "cargo_type": "defect", "origin_name": tag,
     }).json()["message"]
     # Поступление игнорирует тип груза — всегда 'good'.
     inbound = admin_client.post("/trips", json={
@@ -285,7 +287,7 @@ def test_outbound_trip_cargo_type_stored_and_returned(admin_client, client_id):
     assert detail["doc"]["cargo_type"] == "defect"
     assert admin_client.get(f"/trips/{inbound}").json()["doc"]["cargo_type"] == "good"
 
-    items = admin_client.get("/trips?direction=outbound&limit=200").json()["items"]
+    items = admin_client.get(f"/trips?direction=outbound&search={tag}&limit=200").json()["items"]
     assert any(t["id"] == trip_id and t["cargo_type"] == "defect" for t in items)
 
 
@@ -846,15 +848,17 @@ def test_defect_shipment_cancel_returns_stock(admin_client, client_id):
 
 
 def test_outbound_list_filter_by_direction(admin_client, client_id):
+    tag = f"DIRFILTER-{uuid.uuid4()}"  # общий маркер обоих рейсов: фильтр режет по direction, не по поиску
     shipment_id = _packing_shipment(admin_client, client_id)
     out_trip = admin_client.post("/trips", json={
-        "direction": "outbound", "shipment_doc_ids": [shipment_id],
+        "direction": "outbound", "origin_name": tag, "shipment_doc_ids": [shipment_id],
     }).json()["message"]
-    in_trip = admin_client.post("/trips", json={"direction": "inbound"}).json()["message"]
+    in_trip = admin_client.post("/trips", json={"direction": "inbound", "origin_name": tag}).json()["message"]
 
-    out_list = admin_client.get("/trips?direction=outbound&limit=200")
+    out_list = admin_client.get(f"/trips?direction=outbound&search={tag}&limit=200")
     assert out_list.status_code == 200, out_list.text
-    out_ids = {i["id"] for i in out_list.json()["items"]}
+    items = out_list.json()["items"]
+    out_ids = {i["id"] for i in items}
     assert out_trip in out_ids
     assert in_trip not in out_ids
-    assert all(i["direction"] == "outbound" for i in out_list.json()["items"])
+    assert all(i["direction"] == "outbound" for i in items)
