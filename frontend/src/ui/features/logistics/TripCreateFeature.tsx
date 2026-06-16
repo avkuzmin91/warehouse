@@ -129,10 +129,11 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       line_id: r.id, receipt_doc_id: r.id, receipt_number: r.doc_number,
       receipt_status: 'planned', client_id: r.client_id, client_name: r.client_name,
       allocated_qty: recvDistQty(r.id) ?? r.total_planned,
+      received_qty: 0,
       // Пресеты для повторного открытия модала: достаточно line_id+qty (детали строк не показываем).
       allocations: (recvDist.find((it) => it.receipt_doc_id === r.id)?.allocations ?? []).map((a) => ({
         line_id: a.line_id, product_sku: null, product_name: null, variant: null,
-        qty: a.qty, planned_qty: 0, accepted_qty: 0,
+        qty: a.qty, planned_qty: 0, accepted_qty: 0, received_qty: 0,
         storage_zone_id: null, storage_zone_name: null,
       })),
     }))
