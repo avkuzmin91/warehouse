@@ -67,8 +67,8 @@ export function CorrectReceivedDrawer({ docId, lines, open, onClose, onSaved }: 
     >
       {error && <Alert tone="danger" icon={false} style={{ marginBottom: 12 }}>{error}</Alert>}
       <Alert tone="info" style={{ marginBottom: 14 }}>
-        Нельзя превысить привезённое рейсами и нельзя уменьшить ниже того, что ещё лежит на складе
-        (остальное уже отгружено или перемещено).
+        Принятое можно указать не больше, чем привезли рейсами, и не меньше, чем сейчас лежит на складе:
+        то, что уже отгрузили или переместили, из приёмки убрать нельзя.
       </Alert>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

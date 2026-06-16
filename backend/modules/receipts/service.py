@@ -31,6 +31,37 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def ensure_receipt_line_unique(
+    connection, doc_id: str, product_id: str, color_id, size_id, *, product_name=None
+) -> None:
+    """Запрещает дубль товар+цвет+размер в одном поступлении.
+
+    Один и тот же SKU в одном цвете и размере — это одна строка плана; вторая такая
+    же задвоила бы приёмку и остатки. Сравнение по NULL через IS NULL, иначе строки
+    без цвета/размера не находились бы как дубли.
+    """
+    conds = ["doc_id = ?", "COALESCE(is_deleted, 0) = 0", "product_id = ?"]
+    params: list = [doc_id, product_id]
+    for col, val in (("color_id", color_id), ("size_id", size_id)):
+        if val is not None and str(val).strip() != "":
+            conds.append(f"{col} = ?"); params.append(val)
+        else:
+            conds.append(f"({col} IS NULL OR {col} = '')")
+    row = connection.execute(
+        f"SELECT product_name, color_name, size_name FROM receipt_lines "
+        f"WHERE {' AND '.join(conds)} LIMIT 1",
+        params,
+    ).fetchone()
+    if row:
+        name = str(product_name or row["product_name"] or "").strip() or "Товар"
+        variant = " / ".join(x for x in [row["color_name"], row["size_name"]] if x)
+        suffix = f" ({variant})" if variant else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"«{name}»{suffix} уже добавлен в поступление — измените количество в существующей строке",
+        )
+
+
 def next_doc_number(connection) -> str:
     """Генерирует следующий номер документа поступления.
 
@@ -420,16 +451,21 @@ def release_shortfall_for_redelivery(connection, doc_id: str, uid: str) -> int:
 
     Зеркальная close-short ветка той же развилки. Когда рейсы поступления приехали
     короче плана, но недостающее довезут новым рейсом, аллокации разгруженных рейсов
-    ужимаются до фактически принятого этим рейсом (intake→storage по штампу
-    trip_id+receipt_line_id). За счёт этого receipt_alloc_remaining снова > 0 — план
-    перестаёт быть разложенным на 100%, receipt_shortage_final гаснет, и освобождённый
-    остаток можно разложить на новый рейс (link_receipts). Сток не трогаем — принятое
-    уже лежит на остатках. Возвращает суммарно освобождённое кол-во. Без commit.
+    ужимаются до фактически принятого по строке. За базу берём принятое рейсом
+    (intake→storage по штампу trip_id+receipt_line_id), но итог сводим к accepted_qty
+    строки — корректировка приёмки менеджером (correct_received) меняет сток без штампа
+    trip_id, поэтому по одному штампу её не видно: реконсилим разницу по аллокациям,
+    иначе освободили бы недовоз «до пересчёта». За счёт этого receipt_alloc_remaining
+    снова > 0 — план перестаёт быть разложенным на 100%, receipt_shortage_final гаснет,
+    и освобождённый остаток можно разложить на новый рейс (link_receipts). Сток не
+    трогаем — принятое уже лежит на остатках. Возвращает суммарно освобождённое кол-во.
+    Без commit.
     """
     rows = connection.execute(
         """SELECT ta.id AS alloc_id, ta.qty AS alloc_qty, ta.receipt_line_id AS line_id,
                   td.id AS trip_id, td.trip_number,
                   rl.product_sku, rl.color_name, rl.size_name,
+                  COALESCE(rl.accepted_qty, 0) AS accepted,
                   COALESCE((SELECT SUM(zr.qty) FROM zone_relocations zr
                             WHERE zr.trip_id = td.id
                               AND zr.receipt_line_id = ta.receipt_line_id
@@ -443,30 +479,62 @@ def release_shortfall_for_redelivery(connection, doc_id: str, uid: str) -> int:
              AND COALESCE(tl.is_deleted, 0) = 0
              AND COALESCE(rl.is_deleted, 0) = 0
              AND td.status != ?
-             AND td.unload_finished_at IS NOT NULL""",
+             AND td.unload_finished_at IS NOT NULL
+           ORDER BY rl.id, td.id""",
         (INV_OP_INTAKE, INV_OP_STORAGE, doc_id, TRIP_STATUS_CANCELLED),
     ).fetchall()
     now = _now()
     released_total = 0
+
+    by_line: dict[str, list] = {}
     for r in rows:
-        alloc_qty = int(r["alloc_qty"] or 0)
-        delivered = int(r["delivered"] or 0)
-        gap = alloc_qty - delivered
-        if gap <= 0:
-            continue
-        connection.execute(
-            "UPDATE trip_alloc SET qty = ? WHERE id = ?", (delivered, str(r["alloc_id"]))
-        )
-        released_total += gap
-        attrs = " / ".join(x for x in [r["color_name"], r["size_name"]] if x)
-        label = f"{r['product_sku']}" + (f" ({attrs})" if attrs else "")
-        connection.execute(
-            "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, str(r["line_id"]), RECEIPT_OP_ARRIVAL_FIX, gap,
-             f"Ожидается довоз: освобождён недовоз {gap} шт. ({label}, рейс {r['trip_number']}: "
-             f"принято {delivered} из {alloc_qty} шт.)", now, uid),
-        )
+        by_line.setdefault(str(r["line_id"]), []).append(r)
+
+    for line_id, allocs in by_line.items():
+        accepted = int(allocs[0]["accepted"] or 0)
+        # База кредита рейсу — привезённое им (delivered), ограниченное аллокацией.
+        targets = {str(a["alloc_id"]): min(int(a["delivered"] or 0), int(a["alloc_qty"] or 0))
+                   for a in allocs}
+        # Корректировка приёмки не штампована trip_id — сводим суммарный кредит к accepted.
+        diff = accepted - sum(targets.values())
+        if diff < 0:
+            need = -diff
+            for a in allocs:
+                if need <= 0:
+                    break
+                aid = str(a["alloc_id"])
+                take = min(targets[aid], need)
+                targets[aid] -= take
+                need -= take
+        elif diff > 0:
+            add = diff
+            for a in allocs:
+                if add <= 0:
+                    break
+                aid = str(a["alloc_id"])
+                head = int(a["alloc_qty"] or 0) - targets[aid]
+                give = min(head, add)
+                targets[aid] += give
+                add -= give
+
+        for a in allocs:
+            aid = str(a["alloc_id"])
+            alloc_qty = int(a["alloc_qty"] or 0)
+            new_qty = targets[aid]
+            gap = alloc_qty - new_qty
+            if gap <= 0:
+                continue
+            connection.execute("UPDATE trip_alloc SET qty = ? WHERE id = ?", (new_qty, aid))
+            released_total += gap
+            attrs = " / ".join(x for x in [a["color_name"], a["size_name"]] if x)
+            label = f"{a['product_sku']}" + (f" ({attrs})" if attrs else "")
+            connection.execute(
+                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, line_id, RECEIPT_OP_ARRIVAL_FIX, gap,
+                 f"Ожидается довоз: освобождён недовоз {gap} шт. ({label}, рейс {a['trip_number']}: "
+                 f"принято {new_qty} из {alloc_qty} шт.)", now, uid),
+            )
     return released_total
 
 

@@ -56,6 +56,7 @@ from modules.receipts.service import (
     arrived_qty_by_line,
     compute_state,
     correct_received,
+    ensure_receipt_line_unique,
     list_receipt_lines,
     list_receipts_aggregated,
     next_doc_number,
@@ -149,6 +150,10 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(get_current_document_
         )
 
         for line in payload.lines:
+            ensure_receipt_line_unique(
+                conn, doc_id, line.product_id, line.color_id, line.size_id,
+                product_name=line.product_name,
+            )
             line_id = str(uuid4())
             conn.execute(
                 """
@@ -600,6 +605,10 @@ def add_receipt_line(doc_id: str, payload: ReceiptLineAdd, user=Depends(_get_man
             raise HTTPException(status_code=400, detail="Нельзя добавить строку в завершённый документ")
 
         _validate_receipt_line_has_color(payload)
+        ensure_receipt_line_unique(
+            conn, doc_id, payload.product_id, payload.color_id, payload.size_id,
+            product_name=payload.product_name,
+        )
         now = _now()
         line_id = str(uuid4())
         conn.execute(

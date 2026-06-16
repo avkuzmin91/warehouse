@@ -58,6 +58,11 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
   const plannedUnits = lines.reduce((s, l) => s + l.planned_qty, 0)
   const arrivedUnits = lines.reduce((s, l) => s + (l.accepted_qty ?? 0), 0)
   const acceptedPct = plannedUnits > 0 ? Math.floor((arrivedUnits / plannedUnits) * 100) : 0
+  const shortageUnits = Math.max(0, plannedUnits - arrivedUnits)
+  // Недостача показывается только после прибытия всех рейсов: завершённый документ
+  // (в т.ч. закрытый с недопоставкой) или гейт close-short (рейсы кончились, привезли
+  // меньше плана). Пока рейсы ещё едут — недовоз не финальный, недостачу не пишем.
+  const shortageFinal = doc.status === 'done' || detail.can_close_short
 
   const visibleOps = ops.filter((op) => {
     if (filterLine && op.line_id !== filterLine) return false
@@ -164,13 +169,24 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
                 <ReadRow label="Выполнение" mono>
                   <span style={{ color: acceptedPct >= 100 ? 'var(--c-success)' : 'var(--c-info)' }}>{acceptedPct}%</span>
                 </ReadRow>
+                {shortageFinal && shortageUnits > 0 && (
+                  <ReadRow label="Недостача" mono strong>
+                    <span style={{ color: 'var(--c-danger)' }}>{shortageUnits} шт</span>
+                  </ReadRow>
+                )}
               </div>
               <div className="prog" style={{ marginTop: 6 }}>
                 <div className="prog-fill" style={{ width: `${Math.min(100, acceptedPct)}%` }} />
               </div>
-              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
-                Товар принят и числится годным «На хранении». Брак фиксируется при упаковке отгрузки.
-              </div>
+              {!shortageFinal && shortageUnits > 0 ? (
+                <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                  Ожидаются рейсы — недостача определится после прибытия всех.
+                </div>
+              ) : (
+                <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
+                  Товар принят и числится годным «На хранении». Брак фиксируется при упаковке отгрузки.
+                </div>
+              )}
             </Panel>
           )}
         </div>

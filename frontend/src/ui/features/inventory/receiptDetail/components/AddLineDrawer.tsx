@@ -13,12 +13,14 @@ import { Select } from '../../../../primitives/Select'
 import {
   receiptLineColorRequired,
   receiptLineSizeRequired,
+  receiptLineVariantKey,
 } from '../../shared/receiptLineVariantRules'
 
 type Props = {
   docId: string
   clientId: string
   open: boolean
+  existingKeys?: string[]
   onClose: () => void
   onAdded: () => void
 }
@@ -26,7 +28,7 @@ type Props = {
 /**
  * Drawer для добавления строки в существующий документ поступления (draft/planned views).
  */
-export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props) {
+export function AddLineDrawer({ docId, clientId, open, existingKeys = [], onClose, onAdded }: Props) {
   const [products, setProducts] = useState<InventoryProductLookup[]>([])
   const [productId, setProductId] = useState('')
   const [colors, setColors] = useState<DictionaryItem[]>([])
@@ -73,6 +75,11 @@ export function AddLineDrawer({ docId, clientId, open, onClose, onAdded }: Props
     if (needsColor && !colorId) { setError('Выберите цвет'); return }
     if (needsSize && !sizeId) { setError('Выберите размер — он обязателен для этого типа товара'); return }
     if (qty < 1) { setError('Количество должно быть не меньше 1'); return }
+    const variantKey = receiptLineVariantKey({ product_id: selectedProduct.id, color_id: colorId || null, size_id: sizeId || null })
+    if (existingKeys.includes(variantKey)) {
+      setError('Этот товар с таким цветом и размером уже добавлен — измените количество в существующей строке')
+      return
+    }
     setError('')
     setSaving(true)
     try {

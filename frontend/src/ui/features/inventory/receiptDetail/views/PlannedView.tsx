@@ -25,6 +25,7 @@ import { DocHeader } from '../../../shared/process/DocHeader'
 import { Panel, ReadRow } from '../../../shared/process/processUI'
 import { receiptStatusRole } from '../shared/receiptProcess'
 import { AddLineDrawer } from '../components/AddLineDrawer'
+import { receiptLineVariantKey } from '../../shared/receiptLineVariantRules'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
@@ -309,6 +310,7 @@ export function PlannedView({ docId, detail, onReload, onCancel, advancing }: Pr
         docId={docId}
         clientId={doc.client_id}
         open={showAddLine}
+        existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
       />

@@ -92,6 +92,47 @@ def test_add_receipt_line_rejects_line_without_color(admin_client, client_id):
     assert r.json()["detail"] == "Укажите цвет товара"
 
 
+def test_create_receipt_rejects_duplicate_variant(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line()
+    payload["lines"] = [line, dict(line)]
+
+    r = admin_client.post("/receipts", json=payload)
+
+    assert r.status_code == 400, r.text
+    assert "уже добавлен" in r.json()["detail"]
+
+
+def test_add_receipt_line_rejects_duplicate_variant(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line()
+    payload["lines"] = [line]
+    created = admin_client.post("/receipts", json=payload)
+    assert created.status_code == 200, created.text
+    doc_id = created.json()["message"]
+
+    r = admin_client.post(f"/receipts/{doc_id}/lines", json=dict(line))
+
+    assert r.status_code == 400, r.text
+    assert "уже добавлен" in r.json()["detail"]
+
+
+def test_add_receipt_line_allows_different_variant(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line()
+    payload["lines"] = [line]
+    created = admin_client.post("/receipts", json=payload)
+    assert created.status_code == 200, created.text
+    doc_id = created.json()["message"]
+
+    other = dict(line)
+    other["color_id"] = str(uuid.uuid4())
+    other["color_name"] = "Blue"
+    r = admin_client.post(f"/receipts/{doc_id}/lines", json=other)
+
+    assert r.status_code == 200, r.text
+
+
 def test_receipt_advance_to_planned(admin_client, client_id):
     """Единственный ручной переход — draft → planned. Дальше двигает рейс."""
     payload = _make_receipt_payload(client_id)

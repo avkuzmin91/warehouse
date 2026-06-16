@@ -26,6 +26,7 @@ import { DocHeader } from '../../../shared/process/DocHeader'
 import { PrimaryAction } from '../../../shared/process/PrimaryAction'
 import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../../../shared/process/processUI'
 import { AddLineDrawer } from '../components/AddLineDrawer'
+import { receiptLineVariantKey } from '../../shared/receiptLineVariantRules'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
@@ -289,6 +290,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         docId={docId}
         clientId={clientId}
         open={showAddLine}
+        existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
         onAdded={async () => { setShowAddLine(false); await onReload() }}
       />

@@ -501,6 +501,46 @@ def test_trip_undership_expect_redelivery_then_new_trip(admin_client, client_id)
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
 
 
+def test_expect_redelivery_accounts_for_received_correction(admin_client, client_id):
+    # Рейс привёз/принял 8 из плана 10, затем менеджер пересчитал приёмку вниз до 6.
+    # «Ожидается довоз» должен учесть пересчёт: освободить 4 (10−6), а не 2 (10−8) «до
+    # пересчёта». Иначе на новый рейс разложится только 2 и поступление не закроется.
+    doc_id, line_id, pid, cid, zone_id = _received_line(admin_client, client_id, planned=10, accepted=8)
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "partially_received"
+
+    down = _correct(admin_client, doc_id, line_id, 6)
+    assert down.status_code == 200, down.text
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
+
+    released = admin_client.post(f"/receipts/{doc_id}/expect-redelivery")
+    assert released.status_code == 200, released.text
+
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "partially_received"
+    assert rec["can_close_short"] is False
+    assert rec["lines"][0]["accepted_qty"] == 6
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
+
+    # Освободилось ровно 4: 5 на новый рейс не лезет, 4 — да.
+    t2 = _bare_inbound_trip(admin_client)
+    over = admin_client.post(f"/trips/{t2}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    assert over.status_code == 400, over.text
+    ok = admin_client.post(f"/trips/{t2}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 4}]}],
+    })
+    assert ok.status_code == 200, ok.text
+
+    # Довоз приехал полностью → поступление завершено, на хранении весь план.
+    _drive_inbound_to_costing(admin_client, t2)
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 10
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
+
+
 def test_expect_redelivery_gated_like_close_short(admin_client, client_id):
     # Пока рейс ещё может что-то довезти — освобождать недовоз нельзя (как и close-short).
     doc_id, line_id, _pid, _cid, _zone = _planned_receipt_with_line(admin_client, client_id, planned=10)
