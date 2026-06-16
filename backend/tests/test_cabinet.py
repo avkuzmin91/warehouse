@@ -251,7 +251,7 @@ def test_shipments_isolation_and_projection(admin_client, cabinet_client, own_cl
     assert own_draft not in ids
     assert foreign_packing not in ids
     for item in items:
-        for hidden in ("logistics_cost", "priority_rank", "client_id", "client_name", "destination"):
+        for hidden in ("logistics_cost", "priority_rank", "client_id", "client_name", "destination", "carrier"):
             assert hidden not in item, f"в списке утёк ключ {hidden}"
         assert "store_names" in item
 
@@ -261,8 +261,7 @@ def test_shipments_isolation_and_projection(admin_client, cabinet_client, own_cl
     detail = cabinet_client.get(f"/cabinet/shipments/{own_packing}")
     assert detail.status_code == 200, detail.text
     data = detail.json()
-    assert data["doc"]["carrier"] == "Перевозчик Т"
-    for hidden in ("logistics_cost", "priority_rank", "comment", "trip_id", "trip_number", "created_by", "destination"):
+    for hidden in ("logistics_cost", "priority_rank", "comment", "trip_id", "trip_number", "created_by", "destination", "carrier"):
         assert hidden not in data["doc"], f"в doc утёк ключ {hidden}"
     for line in data["lines"]:
         for hidden in ("storage_zone_id", "storage_zone_name", "placements", "available_for_pack", "store_id"):

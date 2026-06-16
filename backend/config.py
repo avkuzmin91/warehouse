@@ -124,6 +124,10 @@ SHIPMENT_STATUS_RELOCATING        = "relocating"
 SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
 SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
 SHIPMENT_STATUS_SHIPPED           = "shipped"
+# Завершено без отгрузки: после упаковки годного 0 (весь товар оказался браком),
+# рейс не нужен. Терминальный исход, отдельный от `shipped` — иначе попадёт в
+# кандидаты на счёт (финансы берут строго `shipped`) и в метрику реальных отгрузок.
+SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
@@ -134,8 +138,16 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
+
+# Терминальные статусы отгрузки (документ завершён, дальше не двигается).
+SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
+    SHIPMENT_STATUS_CANCELLED,
+})
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:             "Создание",
@@ -145,6 +157,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
     SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
     SHIPMENT_STATUS_SHIPPED:           "Завершён",
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
 

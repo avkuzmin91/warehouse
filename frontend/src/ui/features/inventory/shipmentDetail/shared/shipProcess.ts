@@ -17,6 +17,7 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   awaiting_trip: { role: 'manager',    icon: 'clock',    sub: 'привязка и отправка рейса' },
   partially_shipped: { role: 'manager', icon: 'truckOut', sub: 'часть уехала, остаток ждёт рейс' },
   shipped:       { role: null,         icon: 'truckOut', sub: 'списан при отправке рейса' },
+  completed_no_goods: { role: null,    icon: 'check',    sub: 'завершено без отгрузки: весь товар брак' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
 
@@ -30,6 +31,9 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
   const ts: Partial<Record<ShipmentStatus, string>> = {}
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
+    // Раскладка/подготовка («relocate») переводит документ в «Ожидает рейс»,
+    // но это не 'advance'-операция — фиксируем отметку отдельно.
+    if (op.op_type === 'relocate' && !ts.awaiting_trip) ts.awaiting_trip = op.created_at
     if (op.op_type !== 'advance') continue
     const comment = op.comment ?? ''
     for (const s of SHIPMENT_STATUS_ORDER) {
@@ -60,13 +64,25 @@ const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null;
 /** Шаги маршрута отгрузки для ProcessRail. */
 export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], cargoType: ShipmentCargoType = 'good'): ProcessStep[] {
   const order = cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
-  const isShipped = status === 'shipped'
+  // «Завершено без отгрузки» (весь товар брак) — терминал «Завершён»: маршрут пройден целиком.
+  const isShipped = status === 'shipped' || status === 'completed_no_goods'
+  const isCancelled = status === 'cancelled'
   // «Частично отгружено» нет в линейном маршруте: показываем как активную финальную отправку.
   const railStatus: ShipmentStatus = status === 'partially_shipped' ? 'shipped' : status
-  const curIdx = status === 'cancelled' ? 1 : order.indexOf(railStatus)
+  const curIdx = order.indexOf(railStatus)
   const ts = getStepTimestamps(ops)
+  // У аннулированного «текущего» шага нет: отмену можно сделать с разных этапов
+  // (вплоть до «Ожидает рейс»). Показываем реально пройденный путь по отметкам
+  // журнала как done, без активного шага — иначе линия выглядит как «сейчас в плане».
+  const reachedIdx = isCancelled
+    ? order.reduce((max, s, i) => (ts[s] != null ? i : max), 0)
+    : -1
   return order.map((s, i) => {
-    const state: ProcessStep['state'] = isShipped || i < curIdx ? 'done' : i === curIdx ? 'active' : 'future'
+    const state: ProcessStep['state'] = isShipped
+      ? 'done'
+      : isCancelled
+        ? (i <= reachedIdx ? 'done' : 'future')
+        : i < curIdx ? 'done' : i === curIdx ? 'active' : 'future'
     const m = (cargoType === 'defect' ? SH_META_DEFECT[s] : undefined) ?? SH_META[s]
     const doneTitle = (cargoType === 'defect' ? SH_META_DEFECT[s]?.doneTitle : undefined) ?? SHIPMENT_STEP_DONE_LABELS[s]
     return {

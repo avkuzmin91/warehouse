@@ -206,6 +206,18 @@ def shipment_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     return result
 
 
+def doc_ready_total(connection, doc_id: str, quality: str) -> int:
+    """Суммарный готовый к отгрузке остаток документа (ready-нетто) нужного качества."""
+    lines = connection.execute(
+        "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchall()
+    return sum(
+        sum(z["net"] for z in _line_ready_by_zone(connection, str(l["id"]), quality))
+        for l in lines
+    )
+
+
 def shipment_fully_shipped(connection, doc_id: str) -> bool:
     """True, если отгрузке больше нечего везти — весь подготовленный остаток уехал.
 

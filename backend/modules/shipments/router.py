@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from config import (
+    INV_Q_GOOD,
     MAX_UPLOAD_BYTES,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
@@ -18,11 +19,14 @@ from config import (
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REVERT_TRANSITIONS,
+    SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_CANCELLED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_TERMINAL_STATUSES,
     SHIPMENT_STATUSES_ALL,
     SHIPMENT_TRANSITIONS,
     TRIP_STATUS_AWAITING_ARRIVAL,
@@ -64,6 +68,7 @@ from modules.shipments.schemas import (
 )
 from modules.shipments.service import (
     advance_shipment,
+    doc_ready_total,
     finish_defect_relocation,
     finish_relocation,
     line_on_packing_qty,
@@ -91,7 +96,7 @@ _get_warehouse = get_current_warehouse
 
 _ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
 _FILE_EDIT_ROLES = {"admin", "manager"}
-_FILE_FINAL_STATUSES = {SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED}
+_FILE_FINAL_STATUSES = SHIPMENT_TERMINAL_STATUSES
 
 
 def _shipment_priority_order(alias: str = "d") -> str:
@@ -221,7 +226,7 @@ def shipments_summary(
     today = date.today().isoformat()
     return {
         "all":     len(rows),
-        "done":    sum(1 for r in rows if r["status"] in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED)),
+        "done":    sum(1 for r in rows if r["status"] in SHIPMENT_TERMINAL_STATUSES),
         "packing": sum(1 for r in rows if r["status"] == SHIPMENT_STATUS_PACKING),
         "overdue": sum(
             1 for r in rows
@@ -271,7 +276,7 @@ def list_shipments(
                 placeholders = ",".join("?" for _ in allowed)
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
             if allowed and all(
-                s not in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED) for s in allowed
+                s not in SHIPMENT_TERMINAL_STATUSES for s in allowed
             ):
                 use_priority_order = True
         if overdue:
@@ -692,7 +697,7 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) in (SHIPMENT_STATUS_SHIPPED, SHIPMENT_STATUS_CANCELLED):
+        if str(row["status"]) in SHIPMENT_TERMINAL_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя менять приоритет завершённой или аннулированной отгрузки")
 
         old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
@@ -979,6 +984,46 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
         )
         conn.commit()
     return {"message": SHIPMENT_STATUS_CANCELLED}
+
+
+@router.post("/shipments/{doc_id}/complete-no-goods")
+def complete_shipment_no_goods(doc_id: str, user=Depends(_get_manager)):
+    """Завершить товарную отгрузку без отгрузки: после упаковки годного 0 (весь
+    товар оказался браком), рейс не нужен. Цикл фактически отработан — это исход,
+    а не аннулирование. Брак уже вернулся на хранение при раскладке, остатки не
+    трогаем. Терминальный статус completed_no_goods (вне `shipped` → не идёт в счета).
+    """
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status, cargo_type, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if normalize_cargo_type(row["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
+            raise HTTPException(status_code=400, detail="Брак-отгрузку так завершить нельзя")
+        if str(row["status"]) != SHIPMENT_STATUS_AWAITING_TRIP:
+            raise HTTPException(status_code=400, detail="Завершить без отгрузки можно только в статусе «Ожидает рейс»")
+        if doc_ready_total(conn, doc_id, INV_Q_GOOD) > 0:
+            raise HTTPException(status_code=400, detail="Есть годный товар к отгрузке — нужен рейс, завершить без отгрузки нельзя")
+        conn.execute(
+            "UPDATE shipment_docs SET status=?, priority_rank=NULL, updated_at=? WHERE id=?",
+            (SHIPMENT_STATUS_COMPLETED_NO_GOODS, now, doc_id),
+        )
+        if row.get("priority_rank") is not None:
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE,
+                 "Приоритет снят: отгрузка завершена без отгрузки", now, uid),
+            )
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, "complete",
+             "Завершено без отгрузки: весь товар оказался браком, годного к отгрузке нет.", now, uid),
+        )
+        conn.commit()
+    return {"message": SHIPMENT_STATUS_COMPLETED_NO_GOODS}
 
 
 @router.post("/shipments/{doc_id}/revert")

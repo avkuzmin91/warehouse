@@ -707,3 +707,78 @@ def test_cancel_in_plan_returns_packing_pool_to_storage(api, client_id):
     # Пул с упаковки вернулся в исходную зону, на упаковке пусто.
     assert _balance(client_id, pos) == (0, 0, 20, 0)
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 20
+
+
+def test_all_defect_shipment_manager_complete(api, client_id):
+    """Товарная отгрузка, где после упаковки весь товар оказался браком (0 годного):
+    зависает в awaiting_trip, менеджеру падает задача «Завершить», завершение даёт
+    терминальный статус completed_no_goods (не shipped → не идёт в счета)."""
+    from modules.tasks.service import list_my_tasks
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    defect_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)      # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"defect_delta": 10, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)   # on_packing → relocating
+
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [], "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 10}]},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    # Готового годного к отгрузке нет; брак вернулся на хранение.
+    assert _balance(client_id, pos) == (0, 10, 0, 0)
+
+    # Менеджеру падает задача завершить; кладовщик такой задачи не видит.
+    with get_connection() as conn:
+        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
+        wh_tasks = list_my_tasks(conn, user={"role": "warehouse_manager"})
+    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks), mgr_tasks
+    assert not any(t["kind"] == "shipment_complete_no_goods" for t in wh_tasks)
+
+    # Менеджер завершает зависшую отгрузку без рейса.
+    _as(_ADMIN)
+    completed = api.post(f"/shipments/{doc_id}/complete-no-goods")
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["message"] == "completed_no_goods"
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "completed_no_goods"
+
+    # После завершения задача исчезает (статус не awaiting_trip).
+    with get_connection() as conn:
+        mgr_tasks2 = list_my_tasks(conn, user={"role": "manager"})
+    assert not any(t["doc_id"] == doc_id for t in mgr_tasks2)
+
+
+def test_normal_awaiting_trip_not_completable_and_no_defect_task(api, client_id):
+    """Обычная товарная отгрузка с готовым годным в awaiting_trip: задачи «Завершить» нет,
+    через complete-no-goods её не закрыть — она ждёт реальный рейс."""
+    from modules.tasks.service import list_my_tasks
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+
+    with get_connection() as conn:
+        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
+    assert not any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks)
+
+    _as(_ADMIN)
+    blocked = api.post(f"/shipments/{doc_id}/complete-no-goods")
+    assert blocked.status_code == 400, blocked.text
