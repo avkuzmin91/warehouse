@@ -39,5 +39,6 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
   { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },
   { id: 'positions',     name: 'Должности',     icon: 'users',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Должность' },
+  { id: 'reasons',       name: 'Причины брака', icon: 'alert',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Причина брака' },
   { id: 'product-types', name: 'Типы товаров',  icon: 'tag',      kind: 'simple', group: 'system', createLabel: 'Создать запись', sheetKind: 'Тип товара' },
 ]
