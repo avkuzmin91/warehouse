@@ -115,8 +115,8 @@ def employee():
         from uuid import uuid4
         eid = str(uuid4())
         conn.execute(
-            "INSERT INTO employees (id,full_name,position,status,supervisor_user_id,created_at) "
-            "VALUES (?,?,?, 'active', 'test-manager-id', NOW())",
+            "INSERT INTO employees (id,full_name,position,status,created_at) "
+            "VALUES (?,?,?, 'active', NOW())",
             (eid, "Тестов Тест Тестович", "Грузчик"),
         )
         conn.execute(
@@ -138,15 +138,14 @@ def employee():
         conn.commit()
 
 
-def _make_employee(full_name: str, supervisor_user_id: str | None = None,
-                   user_id: str | None = None) -> str:
+def _make_employee(full_name: str, user_id: str | None = None) -> str:
     from uuid import uuid4
     eid = str(uuid4())
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO employees (id,full_name,status,supervisor_user_id,user_id,created_at) "
-            "VALUES (?,?, 'active', ?, ?, NOW())",
-            (eid, full_name, supervisor_user_id, user_id),
+            "INSERT INTO employees (id,full_name,status,user_id,created_at) "
+            "VALUES (?,?, 'active', ?, NOW())",
+            (eid, full_name, user_id),
         )
         conn.commit()
     return eid
@@ -166,19 +165,19 @@ def _delete_employee(eid: str) -> None:
 
 @pytest.fixture
 def sup_employee():
-    """Подчинённый начальника смены (test-shift-supervisor-id)."""
-    eid = _make_employee("Упаковщиков Упак Упакович", supervisor_user_id="test-shift-supervisor-id")
+    """Активный сотрудник для проверок начальника смены."""
+    eid = _make_employee("Упаковщиков Упак Упакович")
     yield eid
     _delete_employee(eid)
 
 
 @pytest.fixture
 def team():
-    """Подчинённые разных руководителей: начсмены, начсклада и менеджера."""
+    """Трое активных сотрудников. В плоской модели табеля все доступны любой роли."""
     ids = {
-        "sup": _make_employee("Упаковщиков Упак", supervisor_user_id="test-shift-supervisor-id"),
-        "other": _make_employee("Грузчиков Груз", supervisor_user_id="test-warehouse-head-id"),
-        "mgr": _make_employee("Помощников Пом", supervisor_user_id="test-manager-id"),
+        "a": _make_employee("Упаковщиков Упак"),
+        "b": _make_employee("Грузчиков Груз"),
+        "c": _make_employee("Помощников Пом"),
     }
     yield ids
     for eid in ids.values():
@@ -288,27 +287,30 @@ def test_fact_rejected_for_future_day(manager_client, employee):
     }).status_code == 400
 
 
-# ── Орг. структура: доступ по подчинению ──────────────────────────────────────
+# ── Плоская модель доступа: все роли табеля видят и правят всех ────────────────
 
-def test_supervisor_sees_only_subordinates(shift_supervisor_client, team):
+def test_shift_supervisor_sees_all_employees(shift_supervisor_client, team):
     body = shift_supervisor_client.get(f"/timesheet/week?week={WEEK}").json()
     ids = {r["employee_id"] for r in body["rows"]}
-    assert team["sup"] in ids
-    assert team["other"] not in ids        # чужой руководитель
-    assert team["mgr"] not in ids
+    assert {team["a"], team["b"], team["c"]} <= ids
 
 
-def test_supervisor_cannot_edit_foreign_employee(shift_supervisor_client, team):
+def test_shift_supervisor_can_edit_any_employee(shift_supervisor_client, team):
     r = shift_supervisor_client.put("/timesheet/entry", json={
-        "employee_id": team["other"], "work_date": WORK_DATE,
+        "employee_id": team["b"], "work_date": WORK_DATE,
         "planned_start": "08:00", "planned_end": "20:00",
     })
-    assert r.status_code == 403, r.text
+    assert r.status_code == 200, r.text
 
 
-def test_supervisor_can_edit_own_subordinate(shift_supervisor_client, team):
-    r = shift_supervisor_client.put("/timesheet/entry", json={
-        "employee_id": team["sup"], "work_date": WORK_DATE,
+def test_warehouse_head_sees_all_and_edits_without_money(warehouse_head_client, team):
+    # Начальник склада ведёт табель наравне с начсмены, но денег не видит.
+    body = warehouse_head_client.get(f"/timesheet/week?week={WEEK}").json()
+    assert body["with_money"] is False
+    ids = {r["employee_id"] for r in body["rows"]}
+    assert {team["a"], team["b"], team["c"]} <= ids
+    r = warehouse_head_client.put("/timesheet/entry", json={
+        "employee_id": team["c"], "work_date": WORK_DATE,
         "planned_start": "08:00", "planned_end": "20:00",
     })
     assert r.status_code == 200, r.text
@@ -317,21 +319,18 @@ def test_supervisor_can_edit_own_subordinate(shift_supervisor_client, team):
 def test_admin_sees_all_employees(admin_client, team):
     body = admin_client.get(f"/timesheet/week?week={WEEK}").json()
     ids = {r["employee_id"] for r in body["rows"]}
-    assert {team["sup"], team["other"], team["mgr"]} <= ids
+    assert {team["a"], team["b"], team["c"]} <= ids
 
 
-def test_manager_scoped_to_subordinates_with_money(manager_client, team):
+def test_manager_sees_all_with_money(manager_client, team):
     body = manager_client.get(f"/timesheet/week?week={WEEK}").json()
     assert body["with_money"] is True                    # деньги видит
     ids = {r["employee_id"] for r in body["rows"]}
-    assert team["mgr"] in ids
-    assert team["sup"] not in ids                        # но только своих
-    assert team["other"] not in ids
-    # Пятничный расчёт тоже ограничен подчинёнными.
+    assert {team["a"], team["b"], team["c"]} <= ids
+    # Пятничный расчёт тоже охватывает всех.
     pr = manager_client.get(f"/timesheet/payroll?week={WEEK}").json()
     pids = {r["employee_id"] for r in pr["rows"]}
-    assert team["mgr"] in pids
-    assert team["sup"] not in pids
+    assert {team["a"], team["b"], team["c"]} <= pids
 
 
 def test_positions_dictionary_crud(admin_client):

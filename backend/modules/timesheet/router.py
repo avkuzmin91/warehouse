@@ -47,11 +47,9 @@ from .schemas import (
     WeekResponse,
 )
 from .service import (
-    accessible_employee_ids,
     build_payroll,
     build_week,
     business_today,
-    can_access_employee,
     current_rate,
     day_status,
     entry_hours,
@@ -113,14 +111,6 @@ def _emp_or_404(conn, emp_id: str) -> dict:
     return dict(row)
 
 
-def _emp_or_403(conn, user, emp_id: str) -> dict:
-    """Сотрудник существует И доступен пользователю по подчинению, иначе 404/403."""
-    emp = _emp_or_404(conn, emp_id)
-    if not can_access_employee(conn, user, emp_id):
-        raise HTTPException(status_code=403, detail="Нет доступа к сотруднику")
-    return emp
-
-
 def _op(conn, entry_id: str, op_type: str, comment: str, uid: str, now: str) -> None:
     conn.execute(
         "INSERT INTO timesheet_ops (id,entry_id,op_type,comment,created_at,created_by) "
@@ -139,10 +129,7 @@ def list_employees_route(
 ):
     with_money = can_view_payroll(user)
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        items = list_employees(
-            conn, status=status, search=search, with_money=with_money, accessible_ids=ids
-        )
+        items = list_employees(conn, status=status, search=search, with_money=with_money)
     return EmployeeListResponse(
         items=[
             EmployeeListItem(
@@ -150,8 +137,6 @@ def list_employees_route(
                 full_name=it["full_name"],
                 position=it["position"],
                 position_id=it.get("position_id"),
-                supervisor_user_id=it.get("supervisor_user_id"),
-                supervisor_name=it.get("supervisor_name"),
                 status=it["status"],
                 status_label=EMPLOYEE_STATUS_LABELS.get(it["status"], it["status"]),
                 last_shift=it["last_shift"],
@@ -166,19 +151,11 @@ def list_employees_route(
 @router.get("/employees/lookup", response_model=list[EmployeeLookupItem])
 def employees_lookup(user=Depends(_get_timesheet)):
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        conds = ["COALESCE(e.is_deleted, 0) = 0", "e.status = ?"]
-        params: list = [EMPLOYEE_STATUS_ACTIVE]
-        if ids is not None:
-            if not ids:
-                return []
-            conds.append(f"e.id IN ({','.join('?' for _ in ids)})")
-            params += ids
         rows = conn.execute(
-            f"SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position "
-            f"FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
-            f"WHERE {' AND '.join(conds)} ORDER BY e.full_name",
-            params,
+            "SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position "
+            "FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
+            "WHERE COALESCE(e.is_deleted, 0) = 0 AND e.status = ? ORDER BY e.full_name",
+            (EMPLOYEE_STATUS_ACTIVE,),
         ).fetchall()
     return [
         EmployeeLookupItem(id=str(r["id"]), name=str(r["full_name"]), position=r["position"])
@@ -216,17 +193,6 @@ def _validate_user_link(conn, user_id: str | None, exclude_emp_id: str | None = 
     return link
 
 
-def _validate_supervisor(conn, supervisor_user_id: str | None) -> str | None:
-    sup = _clean(supervisor_user_id)
-    if sup is None:
-        return None
-    if not conn.execute(
-        "SELECT 1 FROM users WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (sup,)
-    ).fetchone():
-        raise HTTPException(status_code=400, detail="Руководитель не найден")
-    return sup
-
-
 @router.post("/employees")
 def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
     full_name = str(body.full_name or "").strip()
@@ -237,14 +203,13 @@ def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
     emp_id = str(uuid4())
     with get_connection() as conn:
         position_id = _validate_position(conn, body.position_id)
-        # Подчинение и связь с учёткой назначает только администратор.
+        # Связь с учётной записью назначает только администратор.
         user_link = _validate_user_link(conn, body.user_id) if _is_admin(user) else None
-        supervisor = _validate_supervisor(conn, body.supervisor_user_id) if _is_admin(user) else None
         conn.execute(
             "INSERT INTO employees "
-            "(id,full_name,position_id,user_id,supervisor_user_id,status,hired_on,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (emp_id, full_name, position_id, user_link, supervisor, EMPLOYEE_STATUS_ACTIVE,
+            "(id,full_name,position_id,user_id,status,hired_on,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (emp_id, full_name, position_id, user_link, EMPLOYEE_STATUS_ACTIVE,
              _clean(body.hired_on), now, uid),
         )
         # Стартовую ставку проставляет только тот, кто видит деньги.
@@ -267,13 +232,11 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
     days = week_days(sat)
     fri = days[-1]
     with get_connection() as conn:
-        emp = _emp_or_403(conn, user, emp_id)
+        emp = _emp_or_404(conn, emp_id)
         meta = conn.execute(
-            "SELECT COALESCE(p.name, e.position) AS position_name, "
-            "       su.email AS supervisor_name, lu.email AS user_email "
+            "SELECT COALESCE(p.name, e.position) AS position_name, lu.email AS user_email "
             "FROM employees e "
             "LEFT JOIN positions p ON p.id = e.position_id "
-            "LEFT JOIN users su ON su.id = e.supervisor_user_id "
             "LEFT JOIN users lu ON lu.id = e.user_id "
             "WHERE e.id = ?",
             (emp_id,),
@@ -327,8 +290,6 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         position_id=emp.get("position_id"),
         user_id=emp.get("user_id"),
         user_email=meta["user_email"] if meta else None,
-        supervisor_user_id=emp.get("supervisor_user_id"),
-        supervisor_name=meta["supervisor_name"] if meta else None,
         status=status,
         status_label=EMPLOYEE_STATUS_LABELS.get(status, status),
         hired_on=emp["hired_on"],
@@ -356,7 +317,7 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
     fields = body.model_fields_set
     now = _now()
     with get_connection() as conn:
-        _emp_or_403(conn, user, emp_id)
+        _emp_or_404(conn, emp_id)
         sets: list[str] = []
         params: list = []
         if "full_name" in fields:
@@ -368,11 +329,9 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
             sets.append("position_id = ?"); params.append(_validate_position(conn, body.position_id))
         if "hired_on" in fields:
             sets.append("hired_on = ?"); params.append(_clean(body.hired_on))
-        # Подчинение и связь с учёткой меняет только администратор.
+        # Связь с учётной записью меняет только администратор.
         if "user_id" in fields and _is_admin(user):
             sets.append("user_id = ?"); params.append(_validate_user_link(conn, body.user_id, emp_id))
-        if "supervisor_user_id" in fields and _is_admin(user):
-            sets.append("supervisor_user_id = ?"); params.append(_validate_supervisor(conn, body.supervisor_user_id))
         if not sets:
             return {"message": "ok"}
         sets.append("updated_at = ?"); params.append(now)
@@ -386,7 +345,7 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
 def archive_employee(emp_id: str, user=Depends(_get_timesheet)):
     now = _now()
     with get_connection() as conn:
-        _emp_or_403(conn, user, emp_id)
+        _emp_or_404(conn, emp_id)
         conn.execute(
             "UPDATE employees SET status = ?, updated_at = ? WHERE id = ?",
             (EMPLOYEE_STATUS_ARCHIVED, now, emp_id),
@@ -399,7 +358,7 @@ def archive_employee(emp_id: str, user=Depends(_get_timesheet)):
 def restore_employee(emp_id: str, user=Depends(_get_timesheet)):
     now = _now()
     with get_connection() as conn:
-        _emp_or_403(conn, user, emp_id)
+        _emp_or_404(conn, emp_id)
         conn.execute(
             "UPDATE employees SET status = ?, updated_at = ? WHERE id = ?",
             (EMPLOYEE_STATUS_ACTIVE, now, emp_id),
@@ -416,7 +375,7 @@ def add_rate(emp_id: str, body: RateCreate, user=Depends(_get_payroll)):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
-        _emp_or_403(conn, user, emp_id)
+        _emp_or_404(conn, emp_id)
         conn.execute(
             "INSERT INTO employee_rates (id,employee_id,rate_kopecks,effective_from,note,created_at,created_by) "
             "VALUES (?,?,?,?,?,?,?)",
@@ -432,8 +391,7 @@ def add_rate(emp_id: str, body: RateCreate, user=Depends(_get_payroll)):
 def get_week(week: str | None = Query(None), user=Depends(_get_timesheet)):
     sat = parse_week_param(week)
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        data = build_week(conn, sat, with_money=can_view_payroll(user), accessible_ids=ids)
+        data = build_week(conn, sat, with_money=can_view_payroll(user))
     return WeekResponse(**data)
 
 
@@ -446,7 +404,7 @@ def get_entry(
     work_date = str(date or "").strip()
     today_iso = business_today().isoformat()
     with get_connection() as conn:
-        emp = _emp_or_403(conn, user, employee_id)
+        emp = _emp_or_404(conn, employee_id)
         row = conn.execute(
             "SELECT * FROM timesheet_entries "
             "WHERE employee_id = ? AND work_date = ? AND COALESCE(is_deleted, 0) = 0",
@@ -502,7 +460,7 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
     now = _now()
 
     with get_connection() as conn:
-        _emp_or_403(conn, user, body.employee_id)
+        _emp_or_404(conn, body.employee_id)
         row = conn.execute(
             "SELECT * FROM timesheet_entries "
             "WHERE employee_id = ? AND work_date = ? AND COALESCE(is_deleted, 0) = 0",
@@ -565,12 +523,8 @@ def fill_fact(body: SettleAllRequest, user=Depends(_get_timesheet)):
     now = _now()
     filled = 0
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        allowed = None if ids is None else set(ids)
         entries = load_entries_range(conn, days[0].isoformat(), days[-1].isoformat())
         for (emp_id, day_iso), entry in entries.items():
-            if allowed is not None and emp_id not in allowed:  # чужие сотрудники не трогаем
-                continue
             if day_iso > today_iso:  # факт за ненаступивший день не проставляем
                 continue
             if day_status(entry, day_iso, today_iso) != TIMESHEET_DAY_PLANNED:
@@ -602,11 +556,7 @@ def bulk_plan(body: BulkPlanRequest, user=Depends(_get_timesheet)):
     now = _now()
     planned = 0
     with get_connection() as conn:
-        acc = accessible_employee_ids(conn, user)
-        allowed = None if acc is None else set(acc)
         for emp_id in ids:
-            if allowed is not None and emp_id not in allowed:  # чужих не планируем
-                continue
             if not conn.execute(
                 "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (emp_id,)
             ).fetchone():
@@ -642,8 +592,7 @@ def bulk_plan(body: BulkPlanRequest, user=Depends(_get_timesheet)):
 def get_payroll(week: str | None = Query(None), user=Depends(_get_payroll)):
     sat = parse_week_param(week)
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        data = build_payroll(conn, sat, ids)
+        data = build_payroll(conn, sat)
     return PayrollResponse(
         week_start=data["week_start"],
         week_end=data["week_end"],
@@ -666,7 +615,7 @@ def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
-        _emp_or_403(conn, user, body.employee_id)
+        _emp_or_404(conn, body.employee_id)
         conn.execute(
             "INSERT INTO payroll_payments "
             "(id,employee_id,amount_kopecks,kind,paid_on,period_start,period_end,comment,created_at,created_by) "
@@ -686,8 +635,7 @@ def settle_all(body: SettleAllRequest, user=Depends(_get_payroll)):
     today_iso = business_today().isoformat()
     settled = 0
     with get_connection() as conn:
-        ids = accessible_employee_ids(conn, user)
-        data = build_payroll(conn, sat, ids)
+        data = build_payroll(conn, sat)
         period_start, period_end = data["week_start"], data["week_end"]
         for r in data["rows"]:
             if r["settled"]:

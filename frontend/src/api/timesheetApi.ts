@@ -11,8 +11,6 @@ export type EmployeeListItem = {
   full_name: string
   position: string | null
   position_id: string | null
-  supervisor_user_id: string | null
-  supervisor_name: string | null
   status: EmployeeStatus
   status_label: string
   last_shift: string | null
@@ -54,8 +52,6 @@ export type EmployeeDetail = {
   position_id: string | null
   user_id: string | null
   user_email: string | null
-  supervisor_user_id: string | null
-  supervisor_name: string | null
   status: EmployeeStatus
   status_label: string
   hired_on: string | null
@@ -180,7 +176,6 @@ export type EmployeeCreatePayload = {
   position_id?: string | null
   hired_on?: string | null
   user_id?: string | null
-  supervisor_user_id?: string | null
   rate_kopecks?: number | null
   effective_from?: string | null
 }
@@ -189,7 +184,6 @@ export type EmployeeUpdatePayload = {
   position_id?: string | null
   hired_on?: string | null
   user_id?: string | null
-  supervisor_user_id?: string | null
 }
 export type PaymentCreatePayload = {
   employee_id: string

@@ -10,7 +10,6 @@ class EmployeeCreate(BaseModel):
     position_id:        str | None = None             # должность из справочника positions
     hired_on:           str | None = None             # YYYY-MM-DD
     user_id:            str | None = None             # связь с учёткой (только admin)
-    supervisor_user_id: str | None = None             # руководитель (только admin)
     rate_kopecks:       int | None = Field(default=None, ge=0)   # стартовая ставка, копейки/час
     effective_from:     str | None = None             # дата действия стартовой ставки
 
@@ -20,7 +19,6 @@ class EmployeeUpdate(BaseModel):
     position_id:        str | None = None
     hired_on:           str | None = None
     user_id:            str | None = None             # только admin
-    supervisor_user_id: str | None = None             # только admin
 
 
 class RateCreate(BaseModel):
@@ -34,8 +32,6 @@ class EmployeeListItem(BaseModel):
     full_name:          str
     position:           str | None = None
     position_id:        str | None = None
-    supervisor_user_id: str | None = None
-    supervisor_name:    str | None = None             # email руководителя (для отображения)
     status:             str
     status_label:       str
     last_shift:         str | None = None
@@ -89,8 +85,6 @@ class EmployeeDetailResponse(BaseModel):
     position_id:        str | None = None
     user_id:            str | None = None
     user_email:         str | None = None
-    supervisor_user_id: str | None = None
-    supervisor_name:    str | None = None
     status:             str
     status_label:       str
     hired_on:           str | None = None

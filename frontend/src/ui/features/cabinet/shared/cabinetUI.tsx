@@ -24,10 +24,10 @@ export function cabinetReceiptTrack(status: CabinetReceiptStatus): TrackState | 
 }
 
 export function cabinetShipmentTrack(status: CabinetShipmentStatus, cargoType: CabinetCargoType): TrackState | null {
-  if (status === 'cancelled') return null
+  if (status === 'cancelled' || status === 'completed_no_goods') return null
   if (cargoType === 'defect') {
     const steps = ['Принят в работу', 'Подготовка возврата', 'Готов к возврату', 'Возвращено']
-    const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled'>, number> = {
+    const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled' | 'completed_no_goods'>, number> = {
       packing: 0,
       on_packing: 0,
       relocating: 1,
@@ -38,7 +38,7 @@ export function cabinetShipmentTrack(status: CabinetShipmentStatus, cargoType: C
     return { steps, activeIdx: idx[status] }
   }
   const steps = ['Принят в работу', 'Упаковка', 'Готовится к отправке', 'Отгружено']
-  const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled'>, number> = {
+  const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled' | 'completed_no_goods'>, number> = {
     packing: 0,
     on_packing: 1,
     relocating: 2,
@@ -84,8 +84,10 @@ export function cabinetOpTone(opType: string): TimelineTone {
       return 'accent'
     case 'arrival_fix':
     case 'pack_correction':
+    case 'receiving_correction':
       return 'warning'
     case 'arrival_accept':
+    case 'ship':
       return 'success'
     case 'cancel':
       return 'danger'

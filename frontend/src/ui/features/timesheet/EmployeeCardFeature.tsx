@@ -181,7 +181,6 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
 
           <Panel icon="user" title="Данные">
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Должность</span><span style={{ fontSize: 13, fontWeight: 500 }}>{e.position ?? '—'}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Руководитель</span><span style={{ fontSize: 13, fontWeight: 500 }}>{e.supervisor_name ?? '—'}</span></div>
             {e.user_email && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Учётная запись</span><span style={{ fontSize: 12.5 }}>{e.user_email}</span></div>}
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Статус</span>{e.status === 'archived' ? <Badge>В архиве</Badge> : <Badge tone="success" dot>Активен</Badge>}</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>На складе с</span><span className="mono" style={{ fontSize: 12.5 }}>{e.hired_on ?? '—'}</span></div>

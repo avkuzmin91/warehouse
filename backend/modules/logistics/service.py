@@ -22,6 +22,7 @@ from config import (
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_OP_SHIP,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_LABELS,
@@ -583,7 +584,7 @@ def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid
     for ln in lines:
         sid = str(ln["shipment_doc_id"])
         ship = connection.execute(
-            "SELECT status, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
+            "SELECT status, priority_rank, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0", (sid,)
         ).fetchone()
         if not ship or str(ship["status"]) not in (
             SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_STATUS_PARTIALLY_SHIPPED
@@ -625,6 +626,13 @@ def cascade_shipments_to_shipped(connection, trip_id: str, trip_number: str, uid
             (str(uuid4()), sid, "advance",
              f"{prev_ru} → {new_ru} (погрузка рейса {trip_number})", now, uid),
         )
+        shipped_now = sum(alloc.values())
+        if shipped_now > 0:
+            verb = "Возвращено" if str(ship["cargo_type"] or SHIPMENT_CARGO_GOOD) == SHIPMENT_CARGO_DEFECT else "Отгружено"
+            connection.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), sid, SHIPMENT_OP_SHIP, f"{verb}: {shipped_now} шт.", now, uid),
+            )
         moved += 1
     return moved
 

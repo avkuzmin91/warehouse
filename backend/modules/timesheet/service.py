@@ -172,53 +172,14 @@ def entry_hours(entry: dict | None) -> float:
     return 0.0
 
 
-# ── Орг. структура: доступ по подчинению ──────────────────────────────────────
-
-def accessible_employee_ids(connection, user) -> list[str] | None:
-    """ID сотрудников, доступных пользователю для табеля/планирования/выплат.
-
-    `None` — без ограничения (admin видит всех). Иначе: подчинённые
-    (`supervisor_user_id` = его id) + собственная строка в табеле (`user_id` = его id).
-    Пустой список означает «нет доступных сотрудников»."""
-    if str(user.get("role")) == "admin":
-        return None
-    uid = str(user["id"])
-    rows = connection.execute(
-        "SELECT id FROM employees WHERE COALESCE(is_deleted, 0) = 0 "
-        "AND (supervisor_user_id = ? OR user_id = ?)",
-        (uid, uid),
-    ).fetchall()
-    return [str(r["id"]) for r in rows]
-
-
-def can_access_employee(connection, user, emp_id: str) -> bool:
-    """Доступен ли конкретный сотрудник пользователю (см. accessible_employee_ids)."""
-    if str(user.get("role")) == "admin":
-        return True
-    uid = str(user["id"])
-    row = connection.execute(
-        "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0 "
-        "AND (supervisor_user_id = ? OR user_id = ?)",
-        (emp_id, uid, uid),
-    ).fetchone()
-    return row is not None
-
-
 # ── Загрузчики ────────────────────────────────────────────────────────────────
 
-def load_active_employees(connection, accessible_ids: list[str] | None = None) -> list[dict]:
-    conds = ["COALESCE(e.is_deleted, 0) = 0", "e.status = ?"]
-    params: list = [EMPLOYEE_STATUS_ACTIVE]
-    if accessible_ids is not None:
-        if not accessible_ids:
-            return []
-        conds.append(f"e.id IN ({','.join('?' for _ in accessible_ids)})")
-        params += accessible_ids
+def load_active_employees(connection) -> list[dict]:
     rows = connection.execute(
-        f"SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.status "
-        f"FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
-        f"WHERE {' AND '.join(conds)} ORDER BY e.full_name",
-        params,
+        "SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.status "
+        "FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
+        "WHERE COALESCE(e.is_deleted, 0) = 0 AND e.status = ? ORDER BY e.full_name",
+        (EMPLOYEE_STATUS_ACTIVE,),
     ).fetchall()
     return [
         {"id": str(r["id"]), "full_name": str(r["full_name"]),
@@ -301,13 +262,13 @@ def week_stats(
 
 # ── Сборка сетки недели ───────────────────────────────────────────────────────
 
-def build_week(connection, sat: date, *, with_money: bool, accessible_ids: list[str] | None = None) -> dict:
+def build_week(connection, sat: date, *, with_money: bool) -> dict:
     days = week_days(sat)
     fri = days[-1]
     today = business_today()
     today_iso = today.isoformat()
 
-    employees = load_active_employees(connection, accessible_ids)
+    employees = load_active_employees(connection)
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids) if with_money else {}
@@ -385,12 +346,12 @@ def build_week(connection, sat: date, *, with_money: bool, accessible_ids: list[
 
 # ── Пятничный расчёт ──────────────────────────────────────────────────────────
 
-def build_payroll(connection, sat: date, accessible_ids: list[str] | None = None) -> dict:
+def build_payroll(connection, sat: date) -> dict:
     days = week_days(sat)
     fri = days[-1]
     today_iso = business_today().isoformat()
 
-    employees = load_active_employees(connection, accessible_ids)
+    employees = load_active_employees(connection)
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids)
@@ -441,10 +402,7 @@ def build_payroll(connection, sat: date, accessible_ids: list[str] | None = None
 
 def list_employees(
     connection, *, status: str | None, search: str | None, with_money: bool,
-    accessible_ids: list[str] | None = None,
 ) -> list[dict]:
-    if accessible_ids is not None and not accessible_ids:
-        return []
     conds = ["COALESCE(e.is_deleted, 0) = 0"]
     params: list = []
     if status in (EMPLOYEE_STATUS_ACTIVE, "archived"):
@@ -454,20 +412,16 @@ def list_employees(
         s = like_substring_param(search)
         conds.append("(e.full_name LIKE ? OR COALESCE(p.name, e.position) LIKE ?)")
         params += [s, s]
-    if accessible_ids is not None:
-        conds.append(f"e.id IN ({','.join('?' for _ in accessible_ids)})")
-        params += accessible_ids
     where = " AND ".join(conds)
     rows = connection.execute(
         f"""
         SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.position_id,
-               e.status, e.supervisor_user_id, su.email AS supervisor_name,
+               e.status,
                (SELECT MAX(t.work_date) FROM timesheet_entries t
                 WHERE t.employee_id = e.id AND COALESCE(t.is_deleted, 0) = 0
                   AND t.actual_start IS NOT NULL) AS last_shift
         FROM employees e
         LEFT JOIN positions p ON p.id = e.position_id
-        LEFT JOIN users su ON su.id = e.supervisor_user_id
         WHERE {where}
         ORDER BY (e.status = '{EMPLOYEE_STATUS_ACTIVE}') DESC, e.full_name
         """,
@@ -481,8 +435,6 @@ def list_employees(
             "full_name": str(r["full_name"]),
             "position": r["position"],
             "position_id": r["position_id"],
-            "supervisor_user_id": r["supervisor_user_id"],
-            "supervisor_name": r["supervisor_name"],
             "status": str(r["status"]),
             "last_shift": r["last_shift"],
         }
