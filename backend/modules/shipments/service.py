@@ -229,24 +229,30 @@ def shipment_fully_shipped(connection, doc_id: str) -> bool:
 
 
 def _check_duplicate_lines(connection, doc_id: str) -> None:
-    """Проверяет отсутствие дублей товар+зона перед переходом статуса."""
+    """Проверяет отсутствие дублей товар+зона+магазин перед переходом статуса."""
     rows = connection.execute(
         """SELECT MIN(product_name) AS product_name,
                   MIN(storage_zone_name) AS storage_zone_name,
                   storage_zone_id,
+                  MIN(store_name) AS store_name,
+                  store_id,
                   COUNT(*) AS cnt
            FROM shipment_lines
            WHERE doc_id = ? AND is_deleted = 0
-           GROUP BY product_id, color_id, size_id, storage_zone_id
+           GROUP BY product_id, color_id, size_id, storage_zone_id, store_id
            HAVING COUNT(*) > 1
            LIMIT 1""",
         (doc_id,),
     ).fetchone()
     if rows:
         zone_label = rows["storage_zone_name"] or ("без зоны" if rows["storage_zone_id"] is None else rows["storage_zone_id"])
+        store_suffix = ""
+        if rows["store_id"] is not None:
+            store_label = rows["store_name"] or rows["store_id"]
+            store_suffix = f", магазин «{store_label}»"
         raise HTTPException(
             status_code=400,
-            detail=f"Товар «{rows['product_name']}» добавлен дважды в зону «{zone_label}» — удалите дубль перед сохранением",
+            detail=f"Товар «{rows['product_name']}» добавлен дважды в зону «{zone_label}»{store_suffix} — удалите дубль перед сохранением",
         )
 
 
