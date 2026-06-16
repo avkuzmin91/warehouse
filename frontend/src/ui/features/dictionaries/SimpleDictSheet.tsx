@@ -23,6 +23,11 @@ type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
 type ZoneRoleKey = 'packing' | 'shipping'
 
+const ZONE_ROLE_FIELD: Record<ZoneRoleKey, 'is_packing_zone' | 'is_shipping_zone'> = {
+  packing: 'is_packing_zone',
+  shipping: 'is_shipping_zone',
+}
+
 const ZONE_ROLES: {
   key: ZoneRoleKey
   label: string
@@ -36,7 +41,7 @@ const ZONE_ROLES: {
 ]
 
 function zoneHasRole(zone: DictionaryItem, key: ZoneRoleKey): boolean {
-  return key === 'packing' ? !!zone.is_packing_zone : !!zone.is_shipping_zone
+  return !!zone[ZONE_ROLE_FIELD[key]]
 }
 
 const DEFAULT_COLOR_HEX = '#1a1a18'
@@ -55,6 +60,7 @@ const SIMPLE_API_PATHS: Record<string, string> = {
   warehouses: '/warehouses',
   carriers: '/carriers',
   'vehicle-types': '/vehicle-types',
+  positions: '/positions',
   reasons: '/defect-reasons',
 }
 function _apiPath(apiType: string) {
@@ -67,7 +73,7 @@ interface SimpleDictSheetProps {
   onSaved: () => void
   isNew: boolean
   kind: string
-  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'reasons'
+  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
   initial?: AnyDictItem | null
 }
 
@@ -132,7 +138,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
       setRoleFlags((prev) => ({ ...prev, [role.key]: true }))
       setZones((prev) => prev.map((z) => ({
         ...z,
-        [role.key === 'packing' ? 'is_packing_zone' : 'is_shipping_zone']: z.id === initial.id,
+        [ZONE_ROLE_FIELD[role.key]]: z.id === initial.id,
       })))
       toast(`${role.label} назначена`, 'success')
       onSaved()

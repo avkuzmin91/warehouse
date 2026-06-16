@@ -50,7 +50,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 МБ
 DICTIONARY_TABLES = frozenset({
     "clients", "colors", "sizes", "product_types", "suppliers",
     "unloading_zones", "warehouses", "carriers", "defect_reasons",
-    "vehicle_types",
+    "vehicle_types", "positions",
 })
 
 # Системный справочник «актуальность записи»
@@ -61,17 +61,19 @@ RECORD_ACTUALITY_NO_ID = "00000000-0000-4000-8000-000000000002"
 # Поступления (receipt_*)
 # ---------------------------------------------------------------------------
 
-RECEIPT_STATUS_DRAFT     = "draft"
-RECEIPT_STATUS_PLANNED   = "planned"
-RECEIPT_STATUS_ON_INTAKE = "on_intake"
-RECEIPT_STATUS_ON_REVIEW = "on_review"
-RECEIPT_STATUS_DONE      = "done"
-RECEIPT_STATUS_CANCELLED = "cancelled"
+RECEIPT_STATUS_DRAFT             = "draft"
+RECEIPT_STATUS_PLANNED           = "planned"
+RECEIPT_STATUS_ON_INTAKE         = "on_intake"
+RECEIPT_STATUS_PARTIALLY_RECEIVED = "partially_received"
+RECEIPT_STATUS_ON_REVIEW         = "on_review"
+RECEIPT_STATUS_DONE              = "done"
+RECEIPT_STATUS_CANCELLED         = "cancelled"
 
 RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
     RECEIPT_STATUS_DRAFT,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
@@ -79,18 +81,19 @@ RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
 
 RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
-    RECEIPT_STATUS_PLANNED:   RECEIPT_STATUS_ON_INTAKE,
-    # on_intake → done выполняет «Принять товары» (/arrive): весь принятый товар
-    # встаёт на остатки как «На хранении / Годный». Брак фиксируется на упаковке.
+    # Дальше поступление двигает только рейс: приёмка идёт в разгрузке рейса
+    # (planned → partially_received → done), отдельной карточной приёмки больше нет.
+    # on_intake / on_review — легаси-статусы, в новом потоке не используются.
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
-    RECEIPT_STATUS_DRAFT:     "Создание",
-    RECEIPT_STATUS_PLANNED:   "В плане",
-    RECEIPT_STATUS_ON_INTAKE: "Принят",
-    RECEIPT_STATUS_ON_REVIEW: "На проверке",
-    RECEIPT_STATUS_DONE:      "Завершён",
-    RECEIPT_STATUS_CANCELLED: "Аннулирован",
+    RECEIPT_STATUS_DRAFT:             "Создание",
+    RECEIPT_STATUS_PLANNED:           "В плане",
+    RECEIPT_STATUS_ON_INTAKE:         "На приёмке",
+    RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
+    RECEIPT_STATUS_ON_REVIEW:         "На проверке",
+    RECEIPT_STATUS_DONE:              "Завершён",
+    RECEIPT_STATUS_CANCELLED:         "Аннулирован",
 }
 
 # Типы операций журнала поступлений (QC убран — годность определяется при упаковке)
@@ -103,6 +106,7 @@ RECEIPT_OP_PLAN_FIX            = "plan_fix"
 RECEIPT_OP_INTAKE_START        = "intake_start"
 RECEIPT_OP_ARRIVAL_FIX         = "arrival_fix"
 RECEIPT_OP_ARRIVAL_ACCEPT      = "arrival_accept"
+RECEIPT_OP_RECEIVING_CORRECTION = "receiving_correction"
 RECEIPT_OP_CANCEL              = "cancel"
 
 # Статусы line-уровня (QC)
@@ -113,13 +117,18 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # Отгрузки (shipment_*)
 # ---------------------------------------------------------------------------
 
-SHIPMENT_STATUS_DRAFT         = "draft"
-SHIPMENT_STATUS_PACKING       = "packing"
-SHIPMENT_STATUS_ON_PACKING    = "on_packing"
-SHIPMENT_STATUS_RELOCATING    = "relocating"
-SHIPMENT_STATUS_AWAITING_TRIP = "awaiting_trip"
-SHIPMENT_STATUS_SHIPPED       = "shipped"
-SHIPMENT_STATUS_CANCELLED     = "cancelled"
+SHIPMENT_STATUS_DRAFT             = "draft"
+SHIPMENT_STATUS_PACKING           = "packing"
+SHIPMENT_STATUS_ON_PACKING        = "on_packing"
+SHIPMENT_STATUS_RELOCATING        = "relocating"
+SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
+SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
+SHIPMENT_STATUS_SHIPPED           = "shipped"
+# Завершено без отгрузки: после упаковки годного 0 (весь товар оказался браком),
+# рейс не нужен. Терминальный исход, отдельный от `shipped` — иначе попадёт в
+# кандидаты на счёт (финансы берут строго `shipped`) и в метрику реальных отгрузок.
+SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
+SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
@@ -127,18 +136,29 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
 
+# Терминальные статусы отгрузки (документ завершён, дальше не двигается).
+SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
+    SHIPMENT_STATUS_CANCELLED,
+})
+
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:         "Создание",
-    SHIPMENT_STATUS_PACKING:       "В плане",
-    SHIPMENT_STATUS_ON_PACKING:    "На упаковке",
-    SHIPMENT_STATUS_RELOCATING:    "Перемещение",
-    SHIPMENT_STATUS_AWAITING_TRIP: "Ожидает рейс",
-    SHIPMENT_STATUS_SHIPPED:       "Завершён",
-    SHIPMENT_STATUS_CANCELLED:     "Аннулирован",
+    SHIPMENT_STATUS_DRAFT:             "Создание",
+    SHIPMENT_STATUS_PACKING:           "В плане",
+    SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
+    SHIPMENT_STATUS_RELOCATING:        "Перемещение",
+    SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
+    SHIPMENT_STATUS_SHIPPED:           "Завершён",
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
+    SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
 
 # Плановые переходы через /advance. relocating → awaiting_trip не здесь: его делает
@@ -421,6 +441,61 @@ INVOICE_OP_CLOSE           = "close"
 INVOICE_OP_CANCEL          = "cancel"
 
 # ---------------------------------------------------------------------------
+# Табель учёта рабочего времени и выплаты
+# ---------------------------------------------------------------------------
+# Ставка (employee_rates.rate_kopecks) и суммы выплат (payroll_payments.amount_kopecks)
+# хранятся в КОПЕЙКАХ как INTEGER — как в модуле счетов, чтобы денежный учёт не
+# накапливал ошибки округления float.
+
+# Базовая смена и вычет обеда — основа расчёта часов за день.
+TIMESHEET_DEFAULT_SHIFT_START = "08:00"
+TIMESHEET_DEFAULT_SHIFT_END   = "20:00"
+TIMESHEET_LUNCH_HOURS         = 1.0   # вычет обеда: часы за день = (уход − приход) − 1 ч
+
+# Статус сотрудника в справочнике
+EMPLOYEE_STATUS_ACTIVE   = "active"
+EMPLOYEE_STATUS_ARCHIVED = "archived"
+EMPLOYEE_STATUS_LABELS: dict[str, str] = {
+    EMPLOYEE_STATUS_ACTIVE:   "Активен",
+    EMPLOYEE_STATUS_ARCHIVED: "В архиве",
+}
+
+# Статус дня (производный, для UI). Хранится только is_absent; остальное считается.
+#   worked  — есть факт по плану
+#   planned — план есть, факта нет, день не закрыт (сегодня/будущее)
+#   absent  — «не вышел» (план был, факта нет на прошедший день или отмечено явно)
+#   noplan  — факт есть, плана не было
+#   off     — выходной / нет записи
+TIMESHEET_DAY_WORKED  = "worked"
+TIMESHEET_DAY_PLANNED = "planned"
+TIMESHEET_DAY_ABSENT  = "absent"
+TIMESHEET_DAY_NOPLAN  = "noplan"
+TIMESHEET_DAY_OFF     = "off"
+TIMESHEET_DAY_LABELS: dict[str, str] = {
+    TIMESHEET_DAY_WORKED:  "Отработал",
+    TIMESHEET_DAY_PLANNED: "Запланирован",
+    TIMESHEET_DAY_ABSENT:  "Не вышел",
+    TIMESHEET_DAY_NOPLAN:  "Без плана",
+    TIMESHEET_DAY_OFF:     "Выходной",
+}
+
+# Типы операций журнала табеля (append-only)
+TIMESHEET_OP_PLAN_SET     = "plan_set"
+TIMESHEET_OP_FACT_SET     = "fact_set"
+TIMESHEET_OP_ABSENT_MARK  = "absent_mark"
+TIMESHEET_OP_ABSENT_CLEAR = "absent_clear"
+TIMESHEET_OP_NOTE         = "note"
+TIMESHEET_OP_CLEARED      = "cleared"
+
+# Типы выплат
+PAYROLL_KIND_SETTLEMENT = "settlement"   # пятничный расчёт за неделю
+PAYROLL_KIND_ADVANCE    = "advance"      # аванс по просьбе среди недели
+PAYROLL_KIND_LABELS: dict[str, str] = {
+    PAYROLL_KIND_SETTLEMENT: "Расчёт",
+    PAYROLL_KIND_ADVANCE:    "Аванс",
+}
+
+# ---------------------------------------------------------------------------
 # Кабинет клиента — границы видимости
 # ---------------------------------------------------------------------------
 
@@ -428,6 +503,7 @@ INVOICE_OP_CANCEL          = "cancel"
 CABINET_RECEIPT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
@@ -438,6 +514,7 @@ CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_CANCELLED,
 })

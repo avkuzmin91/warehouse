@@ -3,8 +3,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from config import (
-    RECEIPT_STATUS_ON_INTAKE,
+    INV_Q_GOOD,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_CARGO_GOOD,
+    SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -13,6 +16,8 @@ from config import (
     TRIP_STATUS_COSTING,
     TRIP_STATUS_UNLOADING,
 )
+from modules.receipts.service import list_shortage_receipts
+from modules.shipments.service import doc_ready_total
 
 ROLE_WAREHOUSE = "warehouse_manager"
 ROLE_MANAGER = "manager"
@@ -26,9 +31,8 @@ _TRIP_TASKS = {
     TRIP_STATUS_COSTING:          (ROLE_MANAGER, "trip_cost", "Уточнить стоимость рейса {num}"),
 }
 
-_RECEIPT_TASKS = {
-    RECEIPT_STATUS_ON_INTAKE: (ROLE_WAREHOUSE, "receipt_intake", "Принять товары — {num}"),
-}
+# Поступления больше не порождают задачу приёмки в карточке: приёмка идёт в рейсе
+# (задача «Завершить разгрузку рейса»). Карточная приёмка (on_intake) убрана.
 
 
 def _prev_working_day(d: date) -> date:
@@ -37,13 +41,6 @@ def _prev_working_day(d: date) -> date:
     while result.weekday() == 6:  # 6 = воскресенье
         result -= timedelta(days=1)
     return result
-
-
-def _receipt_task_statuses(visible_roles: set[str]) -> tuple[str, ...]:
-    statuses: list[str] = []
-    if ROLE_WAREHOUSE in visible_roles:
-        statuses.append(RECEIPT_STATUS_ON_INTAKE)
-    return tuple(statuses)
 
 
 def list_my_tasks(connection, *, user) -> list[dict]:
@@ -90,29 +87,6 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             "since": r["updated_at"] or r["created_at"],
         })
 
-    receipt_statuses = _receipt_task_statuses(visible_roles)
-    if receipt_statuses:
-        placeholders = ",".join("?" for _ in receipt_statuses)
-        receipt_rows = connection.execute(
-            "SELECT id, doc_number, status, updated_at, created_at FROM receipt_docs "
-            f"WHERE is_deleted = 0 AND status IN ({placeholders})",
-            receipt_statuses,
-        ).fetchall()
-        for r in receipt_rows:
-            task_role, kind, title_tpl = _RECEIPT_TASKS[str(r["status"])]
-            if task_role not in visible_roles:
-                continue
-            tasks.append({
-                "kind": kind,
-                "title": title_tpl.format(num=r["doc_number"]),
-                "doc_type": "receipt",
-                "doc_id": str(r["id"]),
-                "doc_number": str(r["doc_number"]),
-                "status": str(r["status"]),
-                "role": task_role,
-                "since": r["updated_at"] or r["created_at"],
-            })
-
     if ROLE_SHIFT in visible_roles or ROLE_WAREHOUSE in visible_roles:
         # Задача отгрузки — прямая функция статуса:
         #   «В плане» (+за 1 рабочий день до отгрузки) → кладовщик передаёт на упаковку;
@@ -151,6 +125,45 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_number": str(r["doc_number"]), "status": status,
                 "role": task_role, "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if see_manager:
+        # Товарная отгрузка после упаковки оказалась полностью браком (0 годного):
+        # рейса не будет (везти нечего), брак вернулся на хранение — цикл фактически
+        # отработан, менеджер завершает отгрузку без рейса. Признак — awaiting_trip
+        # товарной отгрузки с нулём готового годного.
+        all_defect_rows = connection.execute(
+            "SELECT id, doc_number, priority_rank, updated_at, created_at FROM shipment_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ? AND COALESCE(cargo_type, ?) = ?",
+            (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_GOOD),
+        ).fetchall()
+        for r in all_defect_rows:
+            if doc_ready_total(connection, str(r["id"]), INV_Q_GOOD) > 0:
+                continue
+            tasks.append({
+                "kind": "shipment_complete_no_goods",
+                "title": f"Завершить {r['doc_number']} — весь товар брак",
+                "doc_type": "shipment",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": SHIPMENT_STATUS_AWAITING_TRIP,
+                "role": ROLE_MANAGER,
+                "since": r["updated_at"] or r["created_at"],
+                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+        # Поступление приняли рейсами с недопоставкой (рейсы кончились, план не закрыт) —
+        # менеджер решает: закрыть с недопоставкой или довезти следующим рейсом.
+        for r in list_shortage_receipts(connection):
+            tasks.append({
+                "kind": "receipt_close_short",
+                "title": f"Закрыть {r['doc_number']} с недопоставкой",
+                "doc_type": "receipt",
+                "doc_id": r["id"],
+                "doc_number": r["doc_number"],
+                "status": RECEIPT_STATUS_PARTIALLY_RECEIVED,
+                "role": ROLE_MANAGER,
+                "since": r["since"],
             })
 
     # Новые задачи — вверх (как в почте): внутри приоритета сортируем по `since`

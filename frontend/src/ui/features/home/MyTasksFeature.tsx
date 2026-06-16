@@ -16,6 +16,7 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   trip_cost: 'ruble',
   receipt_intake: 'inbox',
   receipt_review: 'check',
+  receipt_close_short: 'alert',
   shipment_move_in: 'forklift',
   shipment_pack: 'boxOut',
   shipment_relocate: 'forklift',
@@ -28,6 +29,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   trip_cost: 'Уточнить стоимость',
   receipt_intake: 'Принять товары',
   receipt_review: 'Проверить поступление',
+  receipt_close_short: 'Закрыть с недопоставкой',
   shipment_move_in: 'Передать на упаковку',
   shipment_pack: 'Упаковать',
   shipment_relocate: 'Разложить по местам',
@@ -44,6 +46,7 @@ const STATUS_SUB: Record<string, string> = {
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   awaiting_trip: 'Ожидает рейс',
+  partially_received: 'Недопоставка по рейсам',
 }
 
 function taskTitle(t: TaskItem): string {
@@ -92,7 +95,7 @@ function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean
     return task.doc_type === 'shipment'
   }
   if (role === 'manager') {
-    return task.kind === 'trip_cost'
+    return task.kind === 'trip_cost' || task.kind === 'receipt_close_short'
   }
   if (role === 'warehouse_manager' && task.doc_type === 'receipt' && task.status === 'on_review') {
     return false

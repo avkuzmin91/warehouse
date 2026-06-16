@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   advanceReceiptStatus,
-  arriveReceipt,
   cancelReceipt,
+  closeReceiptShort,
+  expectRedelivery,
   getReceipt,
-  startReceiptIntake,
 } from '../../../../api/receiptsApi'
-import type { ReceiptArriveLine, ReceiptDetail } from '../../../../api/receiptsApi'
+import type { ReceiptDetail } from '../../../../api/receiptsApi'
 import { useConfirm } from '../../../feedback/ConfirmDialog'
 import { DraftView } from './views/DraftView'
 import { PlannedView } from './views/PlannedView'
@@ -19,8 +19,9 @@ interface Props {
 /**
  * Главный роутер деталей приёмки по статусу:
  * - draft    → DraftView   (редактирование черновика)
- * - planned  → PlannedView (план поступления + фиксация прибытия)
- * - on_review / done → ReviewView (QC: приёмка/брак по строкам)
+ * - planned  → PlannedView (план поступления, ожидание рейса)
+ * - partially_received / done → ReviewView (итог приёмки рейсами, закрытие недопоставки)
+ * Приёмка идёт в рейсе (карточная приёмка убрана), поэтому on_intake в новом потоке нет.
  */
 export function ReceiptDetailFeature({ docId }: Props) {
   const confirm = useConfirm()
@@ -54,10 +55,17 @@ export function ReceiptDetailFeature({ docId }: Props) {
     }
   }
 
-  async function handleArrive(lines: ReceiptArriveLine[]) {
+  async function handleCloseShort() {
+    const d = detail!
+    const ok = await confirm({
+      title: 'Закрыть с недопоставкой?',
+      body: `Поступление ${d.doc.doc_number} будет завершено с фактически принятым количеством. Недовезённое не приедет.`,
+      confirmLabel: 'Закрыть',
+    })
+    if (!ok) return
     setAdvancing(true)
     try {
-      await arriveReceipt(docId, lines)
+      await closeReceiptShort(docId)
       await load()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
@@ -66,10 +74,17 @@ export function ReceiptDetailFeature({ docId }: Props) {
     }
   }
 
-  async function handleStartIntake() {
+  async function handleExpectRedelivery() {
+    const d = detail!
+    const ok = await confirm({
+      title: 'Ожидается довоз?',
+      body: `Недовоз по ${d.doc.doc_number} будет освобождён. Поступление останется открытым — закажите новый рейс для довоза недостающего.`,
+      confirmLabel: 'Освободить недовоз',
+    })
+    if (!ok) return
     setAdvancing(true)
     try {
-      await startReceiptIntake(docId)
+      await expectRedelivery(docId)
       await load()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
@@ -126,29 +141,28 @@ export function ReceiptDetailFeature({ docId }: Props) {
     )
   }
 
-  // Planned — план поступления + «Начать приёмку».
-  // On_intake — подсчёт «Принято» + «Принять товары». Та же вью, разные действия.
-  if (detail.doc.status === 'planned' || detail.doc.status === 'on_intake') {
+  // Planned — план поступления, ожидание приёмки рейсом (без карточной приёмки).
+  if (detail.doc.status === 'planned') {
     return (
       <PlannedView
         docId={docId}
         detail={detail}
         onReload={load}
-        onArrive={handleArrive}
-        onStartIntake={handleStartIntake}
         onCancel={handleCancel}
         advancing={advancing}
       />
     )
   }
 
-  // on_review и done — рендерятся через ReviewView
+  // partially_received / done (и легаси on_intake/on_review) — через ReviewView
   return (
     <ReviewView
       docId={docId}
       detail={detail}
       onReload={load}
       onAdvance={handleAdvance}
+      onCloseShort={handleCloseShort}
+      onExpectRedelivery={handleExpectRedelivery}
       advancing={advancing}
     />
   )

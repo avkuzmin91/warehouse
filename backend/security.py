@@ -92,6 +92,20 @@ def ensure_document_create_access(user: Mapping[str, Any]) -> None:
         )
 
 
+def can_correct_received(user: Mapping[str, Any]) -> bool:
+    """Пост-фактум корректировка обсчёта приёмки (правит остатки) — менеджер и
+    начальник склада. Рядовой кладовщик и начальник смены такую правку не делают."""
+    return user["role"] in ("admin", "manager", "warehouse_head")
+
+
+def ensure_received_correction_access(user: Mapping[str, Any]) -> None:
+    if not can_correct_received(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
@@ -148,6 +162,30 @@ def can_edit_planned_arrival(user: Mapping[str, Any]) -> bool:
 
 def ensure_planned_arrival_access(user: Mapping[str, Any]) -> None:
     if not can_edit_planned_arrival(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def ensure_timesheet_access(user: Mapping[str, Any]) -> None:
+    """Табель (план/факт) и справочник сотрудников: начальник смены ведёт табель,
+    плюс менеджерский состав. warehouse_head включает права начальника смены."""
+    if user["role"] not in ("manager", "admin", "shift_supervisor", "warehouse_head"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def can_view_payroll(user: Mapping[str, Any]) -> bool:
+    """Деньги табеля (ставки, заработок, выплаты) — только менеджер и админ,
+    как и прочие стоимости (`can_view_costs`). Начальник смены сумм не видит."""
+    return user["role"] in ("admin", "manager")
+
+
+def ensure_payroll_access(user: Mapping[str, Any]) -> None:
+    if not can_view_payroll(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,

@@ -41,7 +41,7 @@ function isBefore(left: string, right: string): boolean {
   return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
 }
 
-export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt, docsNode }: {
+export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, onBack, onArrival, onUnload, onOpenReceipt, docsNode, receiveNode, extraBlockReasons }: {
   detail: TripDetail
   loadFactor: TripLoadFactor | ''
   onLoadFactor: (v: TripLoadFactor) => void
@@ -58,6 +58,8 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
   onUnload: () => void
   onOpenReceipt: (id: string) => void
   docsNode?: ReactNode
+  receiveNode?: (showErrors: boolean) => ReactNode
+  extraBlockReasons?: string[]
 }) {
   const { doc, receipts } = detail
   const direction = (doc.direction as TripDirection) ?? 'inbound'
@@ -78,6 +80,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
         ...(!unloadEndReady ? [`Не указано «${lex.unloadEndLabel}»`] : []),
         ...(unloadPeriodInvalid ? [lex.periodInvalid] : []),
         ...(!loadFactor ? ['Не выбрана загруженность машины'] : []),
+        ...(extraBlockReasons ?? []),
       ]
     : (!arrivalReady ? [`Не указано «${lex.arrivalLabel}»`] : [])
   const handleAction = () => {
@@ -138,6 +141,12 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
             </div>
           )}
         </div>
+
+        {unloading && receiveNode && (
+          <div style={{ borderTop: '1px solid var(--c-border)', padding: 18 }}>
+            {receiveNode(showReasons)}
+          </div>
+        )}
 
         <div style={{ borderTop: '1px solid var(--c-border)', padding: 18, display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
           {!unloading && (
@@ -219,7 +228,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
                 : blockReasons.length === 0
                 ? (outbound
                     ? <>После завершения {docsCount} отгрузки уйдут в статус <b>«Завершён»</b>, а рейс — менеджеру на закрытие.</>
-                    : <>После завершения {docsCount} поступления уйдут в статус <b>«Принят»</b>, а рейс — менеджеру на закрытие.</>)
+                    : <>После завершения принятое встанет на хранение (поступления — <b>«Завершён»</b> или <b>«Частично принято»</b>), а рейс — менеджеру на закрытие.</>)
                 : <>Укажите время {lex.warehousePhaseGen} и загруженность машины — без них завершить {lex.warehousePhase.toLowerCase()} нельзя.</>}
             </span>
           </div>

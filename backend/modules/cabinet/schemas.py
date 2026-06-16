@@ -94,7 +94,6 @@ class CabinetShipmentListItem(BaseModel):
     doc_number: str
     cargo_type: str
     store_names: list[str] = []
-    carrier: str | None = None
     ship_date: str | None = None
     actual_ship_date: str | None = None
     status: str
@@ -143,7 +142,6 @@ class CabinetShipmentDoc(BaseModel):
     id: str
     doc_number: str
     cargo_type: str
-    carrier: str | None = None
     ship_date: str | None = None
     actual_ship_date: str | None = None
     status: str

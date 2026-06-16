@@ -6,6 +6,7 @@ export type ReceiptStatus =
   | 'draft'
   | 'planned'
   | 'on_intake'
+  | 'partially_received'
   | 'on_review'
   | 'done'
   | 'cancelled'
@@ -47,10 +48,13 @@ export type ReceiptDoc = {
   logistics_cost: number | null
   trip_id: string | null
   trip_number: string | null
+  trips: TripRef[]
   created_at: string
   created_by: string | null
   updated_at: string | null
 }
+
+export type TripRef = { id: string; number: string }
 
 export type ReceiptLine = {
   id: string
@@ -66,6 +70,8 @@ export type ReceiptLine = {
   storage_zone_name: string | null
   planned_qty: number
   accepted_qty: number | null
+  /** Сколько уже привезли разгруженные рейсы — потолок приёмки в карточке (ручное поступление = план). */
+  arrived_qty: number
   created_at: string
 }
 
@@ -94,6 +100,8 @@ export type ReceiptDetail = {
   lines: ReceiptLine[]
   ops: ReceiptOp[]
   state: ReceiptState
+  /** Приёмка рейсами завершилась недопоставкой — менеджер может закрыть с недопоставкой. */
+  can_close_short: boolean
 }
 
 export type ReceiptListItem = ReceiptDoc & {
@@ -182,7 +190,7 @@ export type ReceiptListParams = {
   page?: number
   limit?: number
   client_id?: string
-  status?: ReceiptStatus
+  status?: ReceiptStatus | ReceiptStatus[]
   overdue?: boolean
   search?: string
   sku?: string
@@ -218,7 +226,7 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
   if (params.client_id) sp.set('client_id', params.client_id)
-  if (params.status) sp.set('status', params.status)
+  if (params.status) sp.set('status', Array.isArray(params.status) ? params.status.join(',') : params.status)
   if (params.overdue) sp.set('overdue', 'true')
   if (params.search) sp.set('search', params.search)
   if (params.sku) sp.set('sku', params.sku)
@@ -235,7 +243,7 @@ export function getReceiptLines(params: ReceiptListParams = {}, signal?: AbortSi
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
   if (params.client_id) sp.set('client_id', params.client_id)
-  if (params.status) sp.set('status', params.status)
+  if (params.status) sp.set('status', Array.isArray(params.status) ? params.status.join(',') : params.status)
   if (params.overdue) sp.set('overdue', 'true')
   if (params.search) sp.set('search', params.search)
   if (params.sku) sp.set('sku', params.sku)
@@ -247,6 +255,22 @@ export function getReceiptLines(params: ReceiptListParams = {}, signal?: AbortSi
 
 export function getReceipt(docId: string) {
   return request<ReceiptDetail>(`/receipts/${docId}`)
+}
+
+export type ReceiptTripRemainingLine = {
+  line_id: string
+  product_sku: string | null
+  product_name: string | null
+  color: string | null
+  variant: string | null
+  planned_qty: number
+  accepted_qty: number
+  remaining: number
+}
+
+/** Остаток к распределению по строкам поступления для привязки к рейсу. */
+export function getReceiptTripRemaining(docId: string, signal?: AbortSignal) {
+  return request<{ lines: ReceiptTripRemainingLine[] }>(`/receipts/${docId}/trip-alloc-remaining`, { signal })
 }
 
 export function createReceipt(payload: ReceiptCreatePayload) {
@@ -303,24 +327,35 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
-export function startReceiptIntake(docId: string) {
-  return request<{ message: string }>(`/receipts/${docId}/intake`, {
-    method: 'POST',
-  })
-}
-
-export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
-
-export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
-  return request<{ message: string }>(`/receipts/${docId}/arrive`, {
-    method: 'POST',
-    body: JSON.stringify({ lines }),
-  })
-}
+// Карточная приёмка (/intake, /arrive) удалена: поступления принимаются в рейсе
+// (разгрузка рейса), историческое заведение — действие в «Остатках».
 
 export function cancelReceipt(docId: string) {
   return request<{ message: string }>(`/receipts/${docId}/cancel`, {
     method: 'POST',
+  })
+}
+
+/** Частично принято → Завершён: закрыть поступление с недопоставкой (менеджер). */
+export function closeReceiptShort(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/close-short`, {
+    method: 'POST',
+  })
+}
+
+/** Частично принято: освободить недовоз разгруженных рейсов под новый рейс (менеджер). */
+export function expectRedelivery(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/expect-redelivery`, {
+    method: 'POST',
+  })
+}
+
+/** Корректировка обсчёта приёмки по строке (менеджер / начальник склада): новое
+ *  принятое + причина. Правит сток и пишет в журнал. */
+export function correctReceivedQty(docId: string, lineId: string, payload: { accepted_qty: number; reason: string }) {
+  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/correct-received`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
@@ -330,6 +365,7 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
   on_intake: 'На приёмке',
+  partially_received: 'Частично принято',
   on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
@@ -337,18 +373,24 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
-  planned: 'Поступил',
+  planned: 'Запланирован',
   on_intake: 'Принят',
+  partially_received: 'Принято рейсом',
   on_review: 'Проверен',
-  done: 'Завершен',
+  done: 'Завершён',
   cancelled: 'Аннулирован',
 }
 
-// Поток поступления завершается на приёмке: on_review больше не статус документа
-// (остаётся только как статус инвентаря). Старые done-документы отображаются корректно.
+// Один линейный путь поступления: приёмка идёт рейсом, поэтому маршрут —
+// Создание → В плане → Частично принято → Завершён. on_intake/on_review — легаси,
+// в маршрут не входят (старые документы отображаются корректно).
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_intake', 'done',
+  'draft', 'planned', 'partially_received', 'done',
 ]
+
+/** Статусы поступлений, доступные для привязки к рейсу: «В плане» и «Частично принято»
+ *  (остаток можно довезти следующими рейсами). */
+export const RECEIPT_TRIP_SELECTABLE_STATUSES: ReceiptStatus[] = ['planned', 'partially_received']
 
 export const RECEIPT_OP_LABELS: Record<ReceiptOpType, string> = {
   doc_create: 'Создание документа',
@@ -375,6 +417,7 @@ export function receiptStatusTone(status: ReceiptStatus) {
     draft: '',
     planned: 'info',
     on_intake: 'warning',
+    partially_received: 'warning',
     on_review: 'warning',
     done: 'success',
     cancelled: 'danger',

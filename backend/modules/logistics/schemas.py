@@ -35,22 +35,52 @@ class TripDocUpdate(BaseModel):
     comment: str | None = None
 
 
+class TripReceiptLineAlloc(BaseModel):
+    line_id: str
+    qty: int = Field(ge=1)
+
+
+class TripReceiptLinkItem(BaseModel):
+    receipt_doc_id: str
+    allocations: list[TripReceiptLineAlloc] = Field(default_factory=list)
+
+
 class TripLinkPayload(BaseModel):
-    receipt_doc_ids: list[str] = Field(default_factory=list)
+    items: list[TripReceiptLinkItem] = Field(default_factory=list)
+
+
+class TripShipmentLineAlloc(BaseModel):
+    line_id: str
+    qty: int = Field(ge=1)
+
+
+class TripShipmentLinkItem(BaseModel):
+    shipment_doc_id: str
+    allocations: list[TripShipmentLineAlloc] = Field(default_factory=list)
 
 
 class TripShipmentLinkPayload(BaseModel):
-    shipment_doc_ids: list[str] = Field(default_factory=list)
+    items: list[TripShipmentLinkItem] = Field(default_factory=list)
 
 
 class TripArrivalPayload(BaseModel):
     arrived_at: str | None = None
 
 
+class TripUnloadReceiptLine(BaseModel):
+    line_id: str                       # receipt_line_id
+    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+
+
 class TripUnloadPayload(BaseModel):
     unload_started_at: str | None = None
     unload_finished_at: str | None = None
     load_factor: str | None = None  # full | partial
+    # Приёмка inbound-рейса: фактически принятое по строкам аллокации (пусто для
+    # outbound и для рейсов без поступлений — приём проводится по умолчанию).
+    receipt_lines: list[TripUnloadReceiptLine] = Field(default_factory=list)
 
 
 class TripCostPayload(BaseModel):
@@ -96,6 +126,19 @@ class TripDocResponse(BaseModel):
     updated_at: str | None = None
 
 
+class TripReceiptAllocItem(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    variant: str | None = None
+    qty: int = 0           # привозит этот рейс
+    planned_qty: int = 0   # план по строке
+    accepted_qty: int = 0  # принято всего (по всем рейсам)
+    received_qty: int = 0  # принято кладовщиком в этом рейсе (нетто журнала по trip_id)
+    storage_zone_id: str | None = None    # место хранения строки (план/факт)
+    storage_zone_name: str | None = None
+
+
 class TripReceiptItem(BaseModel):
     line_id: str
     receipt_doc_id: str
@@ -103,6 +146,19 @@ class TripReceiptItem(BaseModel):
     receipt_status: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    allocated_qty: int = 0
+    received_qty: int = 0  # принято в этом рейсе по всему поступлению
+    allocations: list[TripReceiptAllocItem] = Field(default_factory=list)
+
+
+class TripShipmentAllocItem(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    variant: str | None = None
+    qty: int = 0          # увозит этот рейс
+    line_qty: int = 0     # план по строке
+    shipped_qty: int = 0  # отгружено всего (по всем рейсам)
 
 
 class TripShipmentItem(BaseModel):
@@ -112,6 +168,8 @@ class TripShipmentItem(BaseModel):
     shipment_status: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    allocated_qty: int = 0
+    allocations: list[TripShipmentAllocItem] = Field(default_factory=list)
 
 
 class TripOpResponse(BaseModel):

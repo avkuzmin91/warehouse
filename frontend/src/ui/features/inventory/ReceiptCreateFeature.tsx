@@ -33,6 +33,7 @@ import { NumberStep } from './shared/NumberStep'
 import {
   receiptLineColorRequired,
   receiptLineSizeRequired,
+  receiptLineVariantKey,
 } from './shared/receiptLineVariantRules'
 import { ReceiptRailPanel } from './receiptDetail/components/ReceiptRailPanel'
 
@@ -96,7 +97,7 @@ export function ReceiptCreateFeature() {
       await advanceReceiptStatus(docId)
       if (tripParam) {
         // Создано из рейса — привязываем и возвращаемся к рейсу.
-        try { await linkTripReceipts(tripParam, [docId]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
+        try { await linkTripReceipts(tripParam, [{ receipt_doc_id: docId, allocations: [] }]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
         navigate(`/logistics/trips/${tripParam}`)
       } else if (returnToParam) {
         navigate(returnToParam)
@@ -318,6 +319,7 @@ export function ReceiptCreateFeature() {
         key={showAddLine ? 'open' : 'closed'}
         open={showAddLine}
         clientId={clientId}
+        existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
         onAdd={(line) => {
           setLines((ls) => [...ls, { ...line, _id: genId() }])
@@ -369,11 +371,13 @@ function OpPreviewItem({ icon, tone, title, sub }: { icon: string; tone: string;
 function AddLineDrawer({
   open,
   clientId,
+  existingKeys = [],
   onClose,
   onAdd,
 }: {
   open: boolean
   clientId: string
+  existingKeys?: string[]
   onClose: () => void
   onAdd: (line: ReceiptLineInput) => void
 }) {
@@ -385,6 +389,7 @@ function AddLineDrawer({
   const [sizeId, setSizeId] = useState('')
   const [qty, setQty] = useState(0)
   const [qtyDraft, setQtyDraft] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (open && clientId) {
@@ -416,6 +421,12 @@ function AddLineDrawer({
     if (!selectedProduct || qty < 1) return
     if (needsColor && !colorId) return
     if (needsSize && !sizeId) return
+    const variantKey = receiptLineVariantKey({ product_id: selectedProduct.id, color_id: colorId || null, size_id: sizeId || null })
+    if (existingKeys.includes(variantKey)) {
+      setError('Этот товар с таким цветом и размером уже добавлен — измените количество в существующей строке')
+      return
+    }
+    setError('')
     const selectedColor = colors.find((c) => c.id === colorId)
     const selectedSize = sizes.find((s) => s.id === sizeId)
     onAdd({
@@ -454,6 +465,7 @@ function AddLineDrawer({
         </>
       }
     >
+      {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
       <div>
         <label className="field-label">
           <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>

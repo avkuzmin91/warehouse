@@ -424,6 +424,52 @@ def delete_carrier(item_id: str, admin=Depends(get_current_admin)):
     return delete_dictionary_item("carriers", item_id, admin["id"])
 
 
+# ── Positions (должности) ──────────────────────────────────────────────────────
+
+@router.get("/positions", response_model=DictionaryListResponse)
+def list_positions(
+    admin=Depends(get_current_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    return list_dictionary_items_page(
+        "positions", page, limit,
+        search=name, actuality_id=actuality_id,
+        date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
+        date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        include_deleted=include_deleted,
+    )
+
+
+@router.post("/positions", response_model=MessageResponse)
+def create_position(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_item("positions", payload, admin["id"])
+
+
+@router.get("/positions/{item_id}", response_model=DictionaryBaseItem)
+def get_position(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return get_dictionary_item("positions", item_id, include_deleted=include_deleted)
+
+
+@router.patch("/positions/{item_id}", response_model=MessageResponse)
+def update_position(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(get_current_admin)):
+    return update_dictionary_item("positions", item_id, payload, admin["id"])
+
+
+@router.delete("/positions/{item_id}", response_model=MessageResponse)
+def delete_position(item_id: str, admin=Depends(get_current_admin)):
+    return delete_dictionary_item("positions", item_id, admin["id"])
+
+
 # ── Vehicle types ─────────────────────────────────────────────────────────────
 
 @router.get("/vehicle-types", response_model=DictionaryListResponse)

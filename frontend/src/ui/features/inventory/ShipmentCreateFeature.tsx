@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile } from '../../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
@@ -28,7 +28,7 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = ShipmentLineIn & { _key: string; available: number; files: File[] }
+type DraftLine = ShipmentLineIn & { _uid: string; _key: string; available: number; files: File[] }
 type DraftLineFilePreview = FilePreviewMeta & { file: File }
 
 export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
@@ -46,6 +46,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const lineUidSeq = useRef(0)
 
   const { clients } = useLookups()
   const { user } = useCurrentUser()
@@ -92,49 +93,49 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     setLines([])
   }
 
-  function updateQty(key: string, qty: number) {
-    setLines((ls) => ls.map((l) => l._key === key ? { ...l, qty: Math.max(1, qty) } : l))
+  function updateQty(uid: string, qty: number) {
+    setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, qty: Math.max(1, qty) } : l))
   }
 
-  function removeLine(key: string) {
-    setLines((ls) => ls.filter((l) => l._key !== key))
+  function removeLine(uid: string) {
+    setLines((ls) => ls.filter((l) => l._uid !== uid))
   }
 
-  function setLineStore(key: string, storeId: string, storeName: string | null) {
-    setLines((ls) => ls.map((l) => l._key === key
+  function setLineStore(uid: string, storeId: string, storeName: string | null) {
+    setLines((ls) => ls.map((l) => l._uid === uid
       ? { ...l, store_id: storeId || null, store_name: storeId ? storeName : null }
       : l))
   }
 
-  function addLineFiles(key: string, files: File[]) {
+  function addLineFiles(uid: string, files: File[]) {
     if (files.length === 0) return
     for (const file of files) {
       const invalid = validateLineFile(file)
       if (invalid) { setError(`${file.name}: ${invalid}`); return }
     }
     setError('')
-    setLines((ls) => ls.map((l) => l._key === key ? { ...l, files: [...l.files, ...files] } : l))
+    setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, files: [...l.files, ...files] } : l))
   }
 
-  function replaceLineFile(key: string, index: number, file: File) {
+  function replaceLineFile(uid: string, index: number, file: File) {
     const invalid = validateLineFile(file)
     if (invalid) { setError(`${file.name}: ${invalid}`); return }
     setError('')
-    setLines((ls) => ls.map((l) => l._key === key
+    setLines((ls) => ls.map((l) => l._uid === uid
       ? { ...l, files: l.files.map((f, i) => i === index ? file : f) }
       : l))
   }
 
-  function removeLineFile(key: string, index: number) {
-    setLines((ls) => ls.map((l) => l._key === key
+  function removeLineFile(uid: string, index: number) {
+    setLines((ls) => ls.map((l) => l._uid === uid
       ? { ...l, files: l.files.filter((_, i) => i !== index) }
       : l))
   }
 
   function addFromBalance(b: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
-    const key = balanceKey(b)
     setLines((ls) => [...ls, {
-      _key:              key,
+      _uid:              `line-${lineUidSeq.current++}`,
+      _key:              balanceKey(b),
       product_id:        b.product_id,
       product_name:      b.product_name,
       product_sku:       b.product_sku,
@@ -156,9 +157,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     const withFiles = lines.filter((l) => l.files.length > 0)
     if (withFiles.length === 0) return
     const detail = await getShipment(docId)
+    const used = new Set<string>()
     for (const draft of withFiles) {
-      const target = detail.lines.find((cl) => balanceKey(cl) === draft._key)
+      const target = detail.lines.find((cl) =>
+        !used.has(cl.id) &&
+        balanceKey(cl) === draft._key &&
+        (cl.store_id ?? null) === (draft.store_id ?? null))
       if (!target) continue
+      used.add(target.id)
       for (const file of draft.files) {
         await uploadShipmentLineFile(docId, target.id, file)
       }
@@ -327,7 +333,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                   {lines.map((l) => {
                     const over = l.qty > l.available
                     return (
-                      <tr key={l._key} style={over ? { background: 'var(--c-warning-bg)' } : {}}>
+                      <tr key={l._uid} style={over ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td>
                           <div style={{ width: 26, height: 26, borderRadius: 4, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <Icon name="box" size={12} style={{ color: 'var(--c-text-muted)' }} />
@@ -343,14 +349,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                               value={l.store_id ?? null}
                               placeholder="Без магазина"
                               options={storeOptions}
-                              onChange={(v, opt) => setLineStore(l._key, String(v ?? ''), opt?.label ?? null)}
+                              onChange={(v, opt) => setLineStore(l._uid, String(v ?? ''), opt?.label ?? null)}
                               clearable
                             />
                           </div>
                         </td>
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
-                            <NumberStep value={l.qty} onChange={(v) => updateQty(l._key, v)} />
+                            <NumberStep value={l.qty} onChange={(v) => updateQty(l._uid, v)} />
                             {over && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
                           </div>
                         </td>
@@ -374,13 +380,13 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                                 qty: l.qty,
                               })
                             }}
-                            onAdd={(files) => addLineFiles(l._key, files)}
-                            onReplace={(entryId, file) => replaceLineFile(l._key, Number(entryId), file)}
-                            onRemove={(entryId) => removeLineFile(l._key, Number(entryId))}
+                            onAdd={(files) => addLineFiles(l._uid, files)}
+                            onReplace={(entryId, file) => replaceLineFile(l._uid, Number(entryId), file)}
+                            onRemove={(entryId) => removeLineFile(l._uid, Number(entryId))}
                           />
                         </td>
                         <td>
-                          <button className="btn ghost icon sm" onClick={() => removeLine(l._key)}>
+                          <button className="btn ghost icon sm" onClick={() => removeLine(l._uid)}>
                             <Icon name="trash" size={13} />
                           </button>
                         </td>

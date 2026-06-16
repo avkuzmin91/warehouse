@@ -157,7 +157,7 @@ def test_outbound_unlink_shipment_during_loading(admin_client, client_id):
     ready = _packing_shipment(admin_client, client_id)
     late = _packing_shipment(admin_client, client_id)
     trip_id = _handoff_ready_outbound(admin_client, ready)
-    link = admin_client.post(f"/trips/{trip_id}/shipments", json={"shipment_doc_ids": [late]})
+    link = admin_client.post(f"/trips/{trip_id}/shipments", json={"items": [{"shipment_doc_id": late, "allocations": []}]})
     assert link.status_code == 200, link.text
 
     assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
@@ -176,7 +176,7 @@ def test_outbound_unlink_shipment_during_loading(admin_client, client_id):
     assert unlink.status_code == 200, unlink.text
 
     # Привязать обратно в погрузке нельзя.
-    relink = admin_client.post(f"/trips/{trip_id}/shipments", json={"shipment_doc_ids": [late]})
+    relink = admin_client.post(f"/trips/{trip_id}/shipments", json={"items": [{"shipment_doc_id": late, "allocations": []}]})
     assert relink.status_code == 400, relink.text
 
     # Теперь погрузка завершается, готовая отгрузка уезжает.
@@ -220,19 +220,25 @@ def test_outbound_handoff_missing_fields_use_outbound_labels(admin_client, clien
     assert "Плановое отправление" in detail
 
 
-def test_shipment_cannot_be_linked_to_two_trips(admin_client, client_id):
+def test_shipment_can_be_linked_to_multiple_trips(admin_client, client_id):
+    # Отгрузку можно дробить по нескольким рейсам (распределение по строкам).
     shipment_id = _packing_shipment(admin_client, client_id)
     t1 = admin_client.post("/trips", json={
         "direction": "outbound", "shipment_doc_ids": [shipment_id],
     }).json()["message"]
     assert t1
     t2 = admin_client.post("/trips", json={"direction": "outbound"}).json()["message"]
-    dup = admin_client.post(f"/trips/{t2}/shipments", json={"shipment_doc_ids": [shipment_id]})
-    assert dup.status_code == 400, dup.text
-    assert "уже привязана" in dup.json()["detail"]
+    # Та же отгрузка — во второй рейс: теперь разрешено.
+    second = admin_client.post(f"/trips/{t2}/shipments", json={"items": [{"shipment_doc_id": shipment_id, "allocations": []}]})
+    assert second.status_code == 200, second.text
+    # Повторная привязка к тому же рейсу — идемпотентна (без дублей и ошибок).
+    again = admin_client.post(f"/trips/{t1}/shipments", json={"items": [{"shipment_doc_id": shipment_id, "allocations": []}]})
+    assert again.status_code == 200, again.text
 
 
-def test_shipment_candidates_exclude_shipments_linked_to_other_trips(admin_client, client_id):
+def test_shipment_candidates_include_shipments_linked_to_other_trips(admin_client, client_id):
+    # Привязанная к ДРУГОМУ рейсу остаётся кандидатом (остаток можно довезти другим
+    # рейсом); исключается только привязанная к ЭТОМУ рейсу.
     own = _packing_shipment(admin_client, client_id)
     other = _packing_shipment(admin_client, client_id)
     free = _packing_shipment(admin_client, client_id)
@@ -249,9 +255,9 @@ def test_shipment_candidates_exclude_shipments_linked_to_other_trips(admin_clien
     )
     assert res.status_code == 200, res.text
     ids = {item["id"] for item in res.json()["items"]}
-    assert own in ids
+    assert own not in ids       # привязана к этому рейсу
+    assert other in ids         # привязана к другому рейсу — остаётся кандидатом
     assert free in ids
-    assert other not in ids
 
 
 def test_cross_direction_linking_rejected(admin_client, client_id):
@@ -259,7 +265,7 @@ def test_cross_direction_linking_rejected(admin_client, client_id):
     inbound = admin_client.post("/trips", json={"direction": "inbound"}).json()["message"]
     outbound = admin_client.post("/trips", json={"direction": "outbound"}).json()["message"]
 
-    bad_ship = admin_client.post(f"/trips/{inbound}/shipments", json={"shipment_doc_ids": [shipment_id]})
+    bad_ship = admin_client.post(f"/trips/{inbound}/shipments", json={"items": [{"shipment_doc_id": shipment_id, "allocations": []}]})
     assert bad_ship.status_code == 400, bad_ship.text
 
     bad_rec = admin_client.post(f"/trips/{outbound}/receipts", json={"receipt_doc_ids": ["whatever"]})
@@ -298,16 +304,16 @@ def test_link_rejects_cargo_mismatch(admin_client, client_id):
     }).json()["message"]
 
     # Брак нельзя привязать к рейсу товара.
-    bad = admin_client.post(f"/trips/{good_trip}/shipments", json={"shipment_doc_ids": [defect_ship]})
+    bad = admin_client.post(f"/trips/{good_trip}/shipments", json={"items": [{"shipment_doc_id": defect_ship, "allocations": []}]})
     assert bad.status_code == 400, bad.text
     assert "не подходит" in bad.json()["detail"]
 
     # Товар нельзя привязать к рейсу брака.
-    bad2 = admin_client.post(f"/trips/{defect_trip}/shipments", json={"shipment_doc_ids": [good_ship]})
+    bad2 = admin_client.post(f"/trips/{defect_trip}/shipments", json={"items": [{"shipment_doc_id": good_ship, "allocations": []}]})
     assert bad2.status_code == 400, bad2.text
 
     # Совпадающий тип груза — ок.
-    ok = admin_client.post(f"/trips/{defect_trip}/shipments", json={"shipment_doc_ids": [defect_ship]})
+    ok = admin_client.post(f"/trips/{defect_trip}/shipments", json={"items": [{"shipment_doc_id": defect_ship, "allocations": []}]})
     assert ok.status_code == 200, ok.text
 
 
@@ -320,6 +326,279 @@ def test_create_outbound_with_mismatched_cargo_rejected(admin_client, client_id)
     assert res.status_code == 400, res.text
     # Отгрузка осталась свободной — рейс не создан (транзакция откатилась).
     assert admin_client.get(f"/shipments/{good_ship}").json()["trip_id"] is None
+
+
+# --- Дробление отгрузки по нескольким рейсам (распределение по строкам) ---
+
+def _good_shipment_awaiting_with_ready(admin_client, client_id: str, qty: int = 10, ready: int | None = None):
+    """Отгрузка (товар) с одной строкой и готовым остатком ready/good, статус awaiting_trip.
+
+    Полный путь (приёмка→упаковка→раскладка) покрыт в test_packing_qc; здесь сразу
+    сеем готовый остаток в журнал и ставим «Ожидает рейс», чтобы проверить дробление
+    списания по рейсам. `ready` (по умолчанию = qty) задаёт физически готовый остаток —
+    меньше плана, чтобы воспроизвести расхождение план-привязки и подготовленного.
+    """
+    import uuid as _uuid
+    ready = qty if ready is None else ready
+    pid = str(_uuid.uuid4())
+    create = admin_client.post("/shipments", json={
+        "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
+        "destination": "Москва", "ship_date": "2026-06-10", "comment": "ТЗ",
+        "lines": [{"product_id": pid, "product_name": "Товар", "product_sku": "SKU-SPLIT",
+                   "color_id": None, "color_name": None, "size_id": None, "size_name": None, "qty": qty}],
+    })
+    assert create.status_code == 200, create.text
+    doc_id = create.json()["message"]
+    line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    with get_connection() as conn:
+        if ready > 0:
+            conn.execute(
+                """INSERT INTO zone_relocations
+                   (id, product_id, product_name, product_sku, client_id, client_name,
+                    from_op, to_op, from_quality, to_quality, to_zone_id, to_zone_name,
+                    qty, created_at, created_by, shipment_line_id)
+                   VALUES (?, ?, 'Товар', 'SKU-SPLIT', ?, 'Test Client',
+                           'packing', 'ready', 'good', 'good', 'zone-ready', 'Готов',
+                           ?, NOW(), 'test', ?)""",
+                (str(_uuid.uuid4()), pid, client_id, ready, line_id),
+            )
+        conn.execute("UPDATE shipment_docs SET status = 'awaiting_trip' WHERE id = ?", (doc_id,))
+        conn.commit()
+    return doc_id, line_id
+
+
+def _ready_for_line(line_id: str, quality: str = "good") -> int:
+    from modules.shipments.service import _line_ready_by_zone
+    with get_connection() as conn:
+        return sum(z["net"] for z in _line_ready_by_zone(conn, line_id, quality))
+
+
+def _bare_outbound_trip(admin_client) -> str:
+    create = admin_client.post("/trips", json={
+        "direction": "outbound", "cargo_type": "good",
+        "origin_id": "wh-2", "origin_name": "Склад-получатель",
+        "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
+        "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "vehicle_number": "А123ВС 77", "cost_estimate": 8000,
+        "transport_ordered_at": "2026-06-09T10:00", "eta": "2026-06-10T08:00",
+    })
+    assert create.status_code == 200, create.text
+    return create.json()["message"]
+
+
+def _drive_to_costing(admin_client, trip_id: str) -> None:
+    assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+    assert admin_client.post(
+        f"/trips/{trip_id}/arrival", json={"arrived_at": "2026-06-10T07:30"}
+    ).json()["message"] == "unloading"
+    unload = admin_client.post(f"/trips/{trip_id}/unload", json={
+        "load_factor": "full", "unload_started_at": "2026-06-10T07:35", "unload_finished_at": "2026-06-10T08:10",
+    })
+    assert unload.status_code == 200, unload.text
+
+
+def test_shipment_split_across_two_trips(admin_client, client_id):
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10)
+
+    t1 = _bare_outbound_trip(admin_client)
+    link1 = admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    assert link1.status_code == 200, link1.text
+
+    t2 = _bare_outbound_trip(admin_client)
+    link2 = admin_client.post(f"/trips/{t2}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 4}]}],
+    })
+    assert link2.status_code == 200, link2.text
+
+    # Первый рейс увозит 6 → «Частично отгружено», остаток 4 «Готов».
+    _drive_to_costing(admin_client, t1)
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "partially_shipped"
+    assert ship["lines"][0]["shipped_qty"] == 6
+    assert _ready_for_line(line_id) == 4
+
+    # Второй рейс увозит остаток 4 → «Завершён».
+    _drive_to_costing(admin_client, t2)
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "shipped"
+    assert ship["lines"][0]["shipped_qty"] == 10
+    assert _ready_for_line(line_id) == 0
+
+
+def test_shipment_split_across_three_trips(admin_client, client_id):
+    # Дробление одной отгрузки по трём рейсам (система не ограничивает двумя).
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=12)
+
+    parts = [5, 5, 2]
+    trips = []
+    for qty in parts:
+        t = _bare_outbound_trip(admin_client)
+        link = admin_client.post(f"/trips/{t}/shipments", json={
+            "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": qty}]}],
+        })
+        assert link.status_code == 200, link.text
+        trips.append(t)
+
+    shipped = 0
+    for t, qty in zip(trips[:-1], parts[:-1]):
+        _drive_to_costing(admin_client, t)
+        shipped += qty
+        ship = admin_client.get(f"/shipments/{doc_id}").json()
+        assert ship["status"] == "partially_shipped"
+        assert ship["lines"][0]["shipped_qty"] == shipped
+
+    # Последний рейс увозит остаток → «Завершён».
+    _drive_to_costing(admin_client, trips[-1])
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "shipped"
+    assert ship["lines"][0]["shipped_qty"] == 12
+    assert _ready_for_line(line_id) == 0
+
+
+def test_alloc_remaining_is_fact_not_plan(admin_client, client_id):
+    # Остаток к распределению считается по ФАКТУ готового остатка, а не по плану:
+    # заказ 10, готово 8 → в рейс можно отдать максимум 8, а не 10.
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10, ready=8)
+    rem = admin_client.get(f"/shipments/{doc_id}/trip-alloc-remaining").json()["lines"][0]
+    assert rem["qty"] == 10           # план строки
+    assert rem["remaining"] == 8      # факт готового остатка
+
+
+def test_fact_counts_only_cargo_quality(admin_client, client_id):
+    # Факт готового остатка считается по КАЧЕСТВУ груза: рейс товара видит только
+    # годный; брак той же строки в факт не попадает (и наоборот).
+    import uuid as _uuid
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10, ready=3)
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO zone_relocations
+               (id, product_id, product_name, product_sku, client_id, client_name,
+                from_op, to_op, from_quality, to_quality, to_zone_id, to_zone_name,
+                qty, created_at, created_by, shipment_line_id)
+               VALUES (?, (SELECT product_id FROM shipment_lines WHERE id = ?), 'Товар', 'SKU-SPLIT',
+                       ?, 'Test Client', 'storage', 'ready', 'defect', 'defect',
+                       'zone-ship', 'Зона отгрузки', 5, NOW(), 'test', ?)""",
+            (str(_uuid.uuid4()), line_id, client_id, line_id),
+        )
+        conn.commit()
+
+    rem = admin_client.get(f"/shipments/{doc_id}/trip-alloc-remaining").json()["lines"][0]
+    assert rem["remaining"] == 3              # только годный; брак (5) не учтён
+    assert _ready_for_line(line_id, "good") == 3
+    assert _ready_for_line(line_id, "defect") == 5
+
+
+def test_link_rejects_alloc_above_ready(admin_client, client_id):
+    # План привязки опережает факт: заказ 10, готово 8. Первый рейс берёт 5,
+    # второй НЕ может взять 5 (свободно только 3) — отказ ещё на привязке.
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10, ready=8)
+
+    t1 = _bare_outbound_trip(admin_client)
+    ok = admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    assert ok.status_code == 200, ok.text
+
+    t2 = _bare_outbound_trip(admin_client)
+    bad = admin_client.post(f"/trips/{t2}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    assert bad.status_code == 400, bad.text
+    assert "остаток" in bad.json()["detail"].lower()
+
+    # Ровно по факту (3) — проходит.
+    good = admin_client.post(f"/trips/{t2}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 3}]}],
+    })
+    assert good.status_code == 200, good.text
+
+
+def test_short_prepare_completes_after_shipping_all_ready(admin_client, client_id):
+    # Подготовлено меньше плана (заказ 10, готово 8): после отгрузки всех 8 догрузить
+    # нечем → отгрузка ЗАВЕРШАЕТСЯ (shipped), а не зависает в «Частично отгружено».
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10, ready=8)
+
+    t1 = _bare_outbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    t2 = _bare_outbound_trip(admin_client)
+    admin_client.post(f"/trips/{t2}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 3}]}],
+    })
+
+    # После первого рейса остаётся 3 готовых → «Частично отгружено».
+    _drive_to_costing(admin_client, t1)
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "partially_shipped"
+    assert ship["lines"][0]["shipped_qty"] == 5
+    assert _ready_for_line(line_id) == 3
+
+    # Второй рейс увозит остаток факта (3); план не добран (8 из 10), но готового
+    # больше нет → отгрузка завершена.
+    _drive_to_costing(admin_client, t2)
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "shipped"
+    assert ship["lines"][0]["shipped_qty"] == 8
+    assert _ready_for_line(line_id) == 0
+
+
+def test_relink_shipment_replaces_allocation(admin_client, client_id):
+    # Повторная привязка той же отгрузки к рейсу ЗАМЕНяет распределение (правка из модала),
+    # а не складывает; остаток корректно восстанавливается.
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10)
+    t1 = _bare_outbound_trip(admin_client)
+    first = admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    assert first.status_code == 200, first.text
+    second = admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 4}]}],
+    })
+    assert second.status_code == 200, second.text
+
+    detail = admin_client.get(f"/trips/{t1}").json()
+    assert detail["shipments"][0]["allocated_qty"] == 4, detail["shipments"]
+    # Остаток в этой отгрузке: 10 − 4 = 6 (старое распределение 6 снято).
+    rem = admin_client.get(f"/shipments/{doc_id}/trip-alloc-remaining").json()["lines"]
+    assert rem[0]["remaining"] == 6, rem
+
+
+def test_link_rejects_over_allocation(admin_client, client_id):
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10)
+    t1 = _bare_outbound_trip(admin_client)
+    ok = admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 7}]}],
+    })
+    assert ok.status_code == 200, ok.text
+    # Второй рейс пытается взять 5 при остатке 3 — отказ.
+    t2 = _bare_outbound_trip(admin_client)
+    bad = admin_client.post(f"/trips/{t2}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 5}]}],
+    })
+    assert bad.status_code == 400, bad.text
+    assert "остаток" in bad.json()["detail"].lower()
+
+
+def test_cancel_trip_returns_partial_shipment(admin_client, client_id):
+    doc_id, line_id = _good_shipment_awaiting_with_ready(admin_client, client_id, qty=10)
+    t1 = _bare_outbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/shipments", json={
+        "items": [{"shipment_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    _drive_to_costing(admin_client, t1)
+    assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "partially_shipped"
+    assert _ready_for_line(line_id) == 4
+
+    # Отмена рейса после выезда возвращает товар и откатывает статус.
+    cancel = admin_client.post(f"/trips/{t1}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    ship = admin_client.get(f"/shipments/{doc_id}").json()
+    assert ship["status"] == "awaiting_trip"
+    assert ship["lines"][0]["shipped_qty"] == 0
+    assert _ready_for_line(line_id) == 10
 
 
 def _seed_defect_in_zone(client_id: str, pos: dict, zone_id: str, qty: int) -> None:

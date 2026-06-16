@@ -104,24 +104,36 @@ def _create_receipt(admin_client, client_id: str, *, advance: bool = False) -> s
 
 
 def _accept_receipt(admin_client, doc_id: str) -> None:
-    """planned → on_intake → done: зоны по строкам, приёмка по плану."""
-    actual = admin_client.patch(
-        f"/receipts/{doc_id}/actual-arrival", json={"actual_arrival_date": "2026-06-21"}
-    )
-    assert actual.status_code == 200, actual.text
-    lines = admin_client.get(f"/receipts/{doc_id}").json()["lines"]
-    for l in lines:
-        admin_client.patch(
-            f"/receipts/{doc_id}/lines/{l['id']}",
-            json={"storage_zone_id": str(uuid.uuid4()), "storage_zone_name": "Зона Т"},
-        )
-    intake = admin_client.post(f"/receipts/{doc_id}/intake")
-    assert intake.status_code == 200, intake.text
-    lines = admin_client.get(f"/receipts/{doc_id}").json()["lines"]
-    arrive = admin_client.post(f"/receipts/{doc_id}/arrive", json={
-        "lines": [{"line_id": l["id"], "accepted_qty": l["planned_qty"]} for l in lines],
-    })
-    assert arrive.status_code == 200, arrive.text
+    """Приёмка по плану. Карточная приёмка убрана (поступления принимаются в рейсе),
+    поэтому в тесте сразу сажаем остаток в storage и помечаем поступление done —
+    как раньше делал /arrive."""
+    from datetime import UTC, datetime
+    from config import INV_OP_INTAKE, INV_OP_STORAGE, INV_Q_GOOD, RECEIPT_OP_ARRIVAL_ACCEPT
+    from dbconn import get_connection
+    from modules.balances.service import insert_inventory_move
+    doc = admin_client.get(f"/receipts/{doc_id}").json()
+    client_id = doc["doc"]["client_id"]
+    zone_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as c:
+        c.execute("UPDATE receipt_docs SET status='done', actual_arrival_date='2026-06-21' WHERE id=?", (doc_id,))
+        for l in doc["lines"]:
+            c.execute("UPDATE receipt_lines SET accepted_qty=?, storage_zone_id=?, storage_zone_name=? WHERE id=?",
+                      (l["planned_qty"], zone_id, "Зона Т", l["id"]))
+            c.execute(
+                "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), doc_id, l["id"], RECEIPT_OP_ARRIVAL_ACCEPT, l["planned_qty"],
+                 f"Принято: {l['planned_qty']} шт. (seed)", now),
+            )
+            insert_inventory_move(
+                c, product_id=l["product_id"], product_name=l["product_name"], product_sku=l["product_sku"],
+                color_id=l["color_id"], color_name=l["color_name"], size_id=l["size_id"], size_name=l["size_name"],
+                client_id=client_id, client_name=None, from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                from_zone_id=zone_id, from_zone_name="Зона Т", to_zone_id=zone_id, to_zone_name="Зона Т",
+                qty=l["planned_qty"], user_id=None, receipt_line_id=l["id"], comment="seed",
+            )
+        c.commit()
 
 
 def _create_shipment(admin_client, client_id: str, *, advance: bool = False) -> str:
@@ -239,7 +251,7 @@ def test_shipments_isolation_and_projection(admin_client, cabinet_client, own_cl
     assert own_draft not in ids
     assert foreign_packing not in ids
     for item in items:
-        for hidden in ("logistics_cost", "priority_rank", "client_id", "client_name", "destination"):
+        for hidden in ("logistics_cost", "priority_rank", "client_id", "client_name", "destination", "carrier"):
             assert hidden not in item, f"в списке утёк ключ {hidden}"
         assert "store_names" in item
 
@@ -249,8 +261,7 @@ def test_shipments_isolation_and_projection(admin_client, cabinet_client, own_cl
     detail = cabinet_client.get(f"/cabinet/shipments/{own_packing}")
     assert detail.status_code == 200, detail.text
     data = detail.json()
-    assert data["doc"]["carrier"] == "Перевозчик Т"
-    for hidden in ("logistics_cost", "priority_rank", "comment", "trip_id", "trip_number", "created_by", "destination"):
+    for hidden in ("logistics_cost", "priority_rank", "comment", "trip_id", "trip_number", "created_by", "destination", "carrier"):
         assert hidden not in data["doc"], f"в doc утёк ключ {hidden}"
     for line in data["lines"]:
         for hidden in ("storage_zone_id", "storage_zone_name", "placements", "available_for_pack", "store_id"):

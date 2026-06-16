@@ -110,12 +110,26 @@ def _receive(api, client_id, pos, qty, intake_zone_id):
         "supplier_name": "S", "arrival_date": "2026-05-27", "lines": [line],
     }).json()["message"]
     api.post(f"/receipts/{doc_id}/advance")  # draft → planned
-    api.patch(f"/receipts/{doc_id}/actual-arrival", json={"actual_arrival_date": "2026-05-27"})
-    lid = api.get(f"/receipts/{doc_id}").json()["lines"][0]["id"]
-    api.patch(f"/receipts/{doc_id}/lines/{lid}", json={"storage_zone_id": intake_zone_id, "storage_zone_name": "Приёмка"})
-    api.post(f"/receipts/{doc_id}/intake")  # planned → on_intake
-    r = api.post(f"/receipts/{doc_id}/arrive", json={"lines": [{"line_id": lid, "accepted_qty": qty}]})
-    assert r.status_code == 200 and r.json()["message"] == "done", r.text
+    l = api.get(f"/receipts/{doc_id}").json()["lines"][0]
+    lid = l["id"]
+    # Карточная приёмка убрана (поступления принимаются в рейсе); для сида сразу
+    # сажаем готовый остаток в storage и помечаем поступление done — как делал /arrive.
+    from config import INV_OP_INTAKE, INV_OP_STORAGE, INV_Q_GOOD
+    from dbconn import get_connection
+    from modules.balances.service import insert_inventory_move
+    with get_connection() as c:
+        c.execute("UPDATE receipt_docs SET status='done' WHERE id=?", (doc_id,))
+        c.execute("UPDATE receipt_lines SET accepted_qty=?, storage_zone_id=?, storage_zone_name=? WHERE id=?",
+                  (qty, intake_zone_id, "Приёмка", lid))
+        insert_inventory_move(
+            c, product_id=l["product_id"], product_name=l["product_name"], product_sku=l["product_sku"],
+            color_id=l["color_id"], color_name=l["color_name"], size_id=l["size_id"], size_name=l["size_name"],
+            client_id=client_id, client_name="C", from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+            from_zone_id=intake_zone_id, from_zone_name="Приёмка", to_zone_id=intake_zone_id, to_zone_name="Приёмка",
+            qty=qty, user_id=None, receipt_line_id=lid, comment="seed",
+        )
+        c.commit()
     return doc_id
 
 
@@ -693,3 +707,78 @@ def test_cancel_in_plan_returns_packing_pool_to_storage(api, client_id):
     # Пул с упаковки вернулся в исходную зону, на упаковке пусто.
     assert _balance(client_id, pos) == (0, 0, 20, 0)
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 20
+
+
+def test_all_defect_shipment_manager_complete(api, client_id):
+    """Товарная отгрузка, где после упаковки весь товар оказался браком (0 годного):
+    зависает в awaiting_trip, менеджеру падает задача «Завершить», завершение даёт
+    терминальный статус completed_no_goods (не shipped → не идёт в счета)."""
+    from modules.tasks.service import list_my_tasks
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    defect_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)      # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"defect_delta": 10, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)   # on_packing → relocating
+
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [], "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 10}]},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    # Готового годного к отгрузке нет; брак вернулся на хранение.
+    assert _balance(client_id, pos) == (0, 10, 0, 0)
+
+    # Менеджеру падает задача завершить; кладовщик такой задачи не видит.
+    with get_connection() as conn:
+        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
+        wh_tasks = list_my_tasks(conn, user={"role": "warehouse_manager"})
+    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks), mgr_tasks
+    assert not any(t["kind"] == "shipment_complete_no_goods" for t in wh_tasks)
+
+    # Менеджер завершает зависшую отгрузку без рейса.
+    _as(_ADMIN)
+    completed = api.post(f"/shipments/{doc_id}/complete-no-goods")
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["message"] == "completed_no_goods"
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "completed_no_goods"
+
+    # После завершения задача исчезает (статус не awaiting_trip).
+    with get_connection() as conn:
+        mgr_tasks2 = list_my_tasks(conn, user={"role": "manager"})
+    assert not any(t["doc_id"] == doc_id for t in mgr_tasks2)
+
+
+def test_normal_awaiting_trip_not_completable_and_no_defect_task(api, client_id):
+    """Обычная товарная отгрузка с готовым годным в awaiting_trip: задачи «Завершить» нет,
+    через complete-no-goods её не закрыть — она ждёт реальный рейс."""
+    from modules.tasks.service import list_my_tasks
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+
+    with get_connection() as conn:
+        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
+    assert not any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks)
+
+    _as(_ADMIN)
+    blocked = api.post(f"/shipments/{doc_id}/complete-no-goods")
+    assert blocked.status_code == 400, blocked.text

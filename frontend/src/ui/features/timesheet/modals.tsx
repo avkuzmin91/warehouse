@@ -1,0 +1,342 @@
+import { useEffect, useState } from 'react'
+import { Icon } from '../../primitives/Icon'
+import { useToast } from '../../feedback/Toast'
+import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { canManageUsers } from '../../../utils/access'
+import { getUsers } from '../../../api/adminApi'
+import type { UserListItem } from '../../../api/domainTypes'
+import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
+import { addPayment, addEmployeeRate, createEmployee, updateEmployee, type EmployeeDetail } from '../../../api/timesheetApi'
+
+const USER_ROLE_LABELS: Record<string, string> = {
+  admin: 'Администратор', manager: 'Менеджер', warehouse_manager: 'Кладовщик',
+  shift_supervisor: 'Начальник смены', warehouse_head: 'Начальник склада',
+  client: 'Клиент', user: 'Без доступа',
+}
+const SUPERVISOR_ROLES = new Set(['admin', 'manager', 'shift_supervisor', 'warehouse_head'])
+
+/** Загружает учётки для назначения руководителя/связи (только для админа). */
+function useManageableUsers(enabled: boolean): UserListItem[] {
+  const [users, setUsers] = useState<UserListItem[]>([])
+  useEffect(() => {
+    if (!enabled) return
+    let alive = true
+    getUsers().then((u) => { if (alive) setUsers(u) }).catch(() => {})
+    return () => { alive = false }
+  }, [enabled])
+  return users
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+const input: React.CSSProperties = { width: '100%', height: 34 }
+const lead = (icon: string, tone: string) => (
+  <div style={{ width: 34, height: 34, borderRadius: 8, background: `var(--c-${tone}-bg)`, color: `var(--c-${tone})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <Icon name={icon as never} size={17} />
+  </div>
+)
+
+// ── Выдать аванс ──────────────────────────────────────────────────────────────
+
+export function AdvanceModal({
+  employeeId, employeeName, weekStart, weekEnd, earned, advances, onClose, onSaved,
+}: {
+  employeeId: string; employeeName: string; weekStart: string; weekEnd: string
+  earned: number; advances: number; onClose: () => void; onSaved: () => void
+}) {
+  const toast = useToast()
+  const [amount, setAmount] = useState('')
+  const [paidOn, setPaidOn] = useState(todayIso())
+  const [comment, setComment] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const kop = rublesToKopecks(amount)
+  const newAdv = advances + kop
+  const toPay = Math.max(0, earned - newAdv)
+
+  const submit = async () => {
+    if (kop <= 0) { toast('Укажите сумму аванса', 'error'); return }
+    setBusy(true)
+    try {
+      await addPayment({ employee_id: employeeId, amount_kopecks: kop, kind: 'advance', paid_on: paidOn, period_start: weekStart, period_end: weekEnd, comment: comment || null })
+      toast('Аванс зафиксирован', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Выдать аванс" subtitle={`${employeeName} · среди недели`} lead={lead('banknote', 'warning')} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="banknote" size={14} />Выдать{kop > 0 ? ` ${fmtMoney(kop)}` : ''}</button></>}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        <div><FieldLabel required>Сумма, ₽</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></div>
+        <div><FieldLabel required>Дата</FieldLabel><input className="input sm" type="date" style={input} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} /></div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Комментарий</FieldLabel>
+        <input className="input sm" style={input} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. «на проезд», «по просьбе»…" />
+      </div>
+      <div style={{ padding: '12px 14px', borderRadius: 'var(--r-lg)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}>
+        <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="wallet" size={12} />Влияние на пятничный расчёт</div>
+        <ReadRow label="Заработано (на сейчас)">{fmtMoney(earned)}</ReadRow>
+        <ReadRow label="Уже выдано + этот аванс" tone="danger">−{fmtMoneyShort(newAdv)} ₽</ReadRow>
+        <div style={{ height: 1, background: 'var(--c-border)', margin: '6px 0' }} />
+        <ReadRow label="К выдаче в пятницу">{fmtMoney(toPay)}</ReadRow>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── Рассчитать за неделю ──────────────────────────────────────────────────────
+
+export function SettleModal({
+  employeeId, employeeName, weekLabel, weekStart, weekEnd, earned, advances, toPay, hours, rate, onClose, onSaved,
+}: {
+  employeeId: string; employeeName: string; weekLabel: string; weekStart: string; weekEnd: string
+  earned: number; advances: number; toPay: number; hours: number; rate: number | null
+  onClose: () => void; onSaved: () => void
+}) {
+  const toast = useToast()
+  const [amount, setAmount] = useState(String(Math.round(toPay / 100)))
+  const [comment, setComment] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    const kop = rublesToKopecks(amount)
+    if (kop <= 0) { toast('Укажите сумму выплаты', 'error'); return }
+    setBusy(true)
+    try {
+      await addPayment({ employee_id: employeeId, amount_kopecks: kop, kind: 'settlement', paid_on: todayIso(), period_start: weekStart, period_end: weekEnd, comment: comment || 'Пятничный расчёт' })
+      toast('Расчёт зафиксирован', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Расчёт за неделю" subtitle={`${employeeName} · ${weekLabel}`} lead={lead('wallet', 'accent')} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Рассчитать</button></>}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1, background: 'var(--c-border)', borderRadius: 'var(--r-lg)', overflow: 'hidden', marginBottom: 16 }}>
+        <div style={{ padding: '12px 14px', background: 'var(--c-bg-elev)' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Заработано</div>
+          <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 3 }}>{fmtMoney(earned)}</div>
+          <div style={{ fontSize: 10.5, color: 'var(--c-text-faint)', marginTop: 1 }}>{fmtHours(hours)}{rate != null ? ` × ${fmtRate(rate)}` : ''}</div>
+        </div>
+        <div style={{ padding: '12px 14px', background: 'var(--c-bg-elev)' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Выдано (авансы)</div>
+          <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 3, color: 'var(--c-warning)' }}>−{fmtMoneyShort(advances)} ₽</div>
+        </div>
+        <div style={{ padding: '12px 14px', background: 'var(--c-accent-bg)' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-accent-text)' }}>К выдаче</div>
+          <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 3, color: 'var(--c-accent-text)' }}>{fmtMoney(toPay)}</div>
+        </div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel required>Сумма выплаты, ₽</FieldLabel>
+        <input className="input sm" style={input} inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <div className="help">По умолчанию = к выдаче. Можно скорректировать (например, округлить).</div>
+      </div>
+      <div>
+        <FieldLabel>Комментарий</FieldLabel>
+        <input className="input sm" style={input} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. «расчёт за неделю, наличными»…" />
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── Изменить ставку ───────────────────────────────────────────────────────────
+
+export function RateModal({
+  employeeId, employeeName, onClose, onSaved,
+}: { employeeId: string; employeeName: string; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
+  const [rate, setRate] = useState('')
+  const [from, setFrom] = useState(todayIso())
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    const kop = rublesToKopecks(rate)
+    if (kop <= 0) { toast('Укажите ставку', 'error'); return }
+    if (!from) { toast('Укажите дату действия', 'error'); return }
+    setBusy(true)
+    try {
+      await addEmployeeRate(employeeId, { rate_kopecks: kop, effective_from: from, note: note || null })
+      toast('Ставка обновлена', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Изменить ставку" subtitle={`${employeeName} · действует с даты`} lead={lead('ruble', 'accent')} width={440} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Сохранить</button></>}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        <div><FieldLabel required>Ставка, ₽/ч</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" /></div>
+        <div><FieldLabel required>Действует с</FieldLabel><input className="input sm" type="date" style={input} value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+      </div>
+      <div><FieldLabel>Примечание</FieldLabel><input className="input sm" style={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Напр. «индексация»" /></div>
+      <div style={{ marginTop: 12, fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', gap: 6 }}>
+        <Icon name="history" size={12} style={{ flexShrink: 0, marginTop: 1 }} />Прошлые недели считаются по ставке, действовавшей в тот день.
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── Добавить сотрудника ───────────────────────────────────────────────────────
+
+export function AddEmployeeModal({
+  canSetRate, onClose, onSaved,
+}: { canSetRate: boolean; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
+  const { positions } = useLookups()
+  const { user } = useCurrentUser()
+  const isAdmin = canManageUsers(user)
+  const users = useManageableUsers(isAdmin)
+  const [name, setName] = useState('')
+  const [positionId, setPositionId] = useState('')
+  const [supervisorId, setSupervisorId] = useState('')
+  const [userId, setUserId] = useState('')
+  const [rate, setRate] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    if (!name.trim()) { toast('Укажите ФИО', 'error'); return }
+    setBusy(true)
+    try {
+      await createEmployee({
+        full_name: name.trim(),
+        position_id: positionId || null,
+        supervisor_user_id: isAdmin ? (supervisorId || null) : undefined,
+        user_id: isAdmin ? (userId || null) : undefined,
+        rate_kopecks: canSetRate && rate ? rublesToKopecks(rate) : null,
+      })
+      toast('Сотрудник добавлен', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Добавить сотрудника" subtitle="Новый сотрудник склада" lead={lead('userPlus', 'info')} width={460} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Добавить</button></>}
+    >
+      <div style={{ marginBottom: 14 }}><FieldLabel required>ФИО</FieldLabel><input className="input sm" style={input} value={name} onChange={(e) => setName(e.target.value)} placeholder="Фамилия Имя Отчество" /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: canSetRate ? '1fr 1fr' : '1fr', gap: 14 }}>
+        <div>
+          <FieldLabel>Должность</FieldLabel>
+          <select className="input sm" style={input} value={positionId} onChange={(e) => setPositionId(e.target.value)}>
+            <option value="">— не выбрана —</option>
+            {positions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        {canSetRate && <div><FieldLabel>Ставка, ₽/ч</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" /></div>}
+      </div>
+      {isAdmin && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
+          <div>
+            <FieldLabel>Руководитель</FieldLabel>
+            <select className="input sm" style={input} value={supervisorId} onChange={(e) => setSupervisorId(e.target.value)}>
+              <option value="">— не назначен —</option>
+              {users.filter((u) => SUPERVISOR_ROLES.has(u.role)).map((u) => (
+                <option key={u.id} value={u.id}>{u.email} · {USER_ROLE_LABELS[u.role] ?? u.role}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Учётная запись</FieldLabel>
+            <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">— нет —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '9px 12px', borderRadius: 'var(--r-md)', background: 'var(--c-info-bg)', fontSize: 11.5, color: 'var(--c-text)' }}>
+        <Icon name="userPlus" size={13} style={{ color: 'var(--c-info)', flexShrink: 0 }} />
+        {isAdmin
+          ? 'Руководитель ведёт табель и планирование только по своим сотрудникам.'
+          : 'Подчинение сотрудника настраивает администратор.'}
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── Изменить сотрудника (должность / подчинение / учётка) ─────────────────────
+
+export function EditEmployeeModal({
+  employee, onClose, onSaved,
+}: { employee: EmployeeDetail; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
+  const { positions } = useLookups()
+  const { user } = useCurrentUser()
+  const isAdmin = canManageUsers(user)
+  const users = useManageableUsers(isAdmin)
+  const [name, setName] = useState(employee.full_name)
+  const [positionId, setPositionId] = useState(employee.position_id ?? '')
+  const [supervisorId, setSupervisorId] = useState(employee.supervisor_user_id ?? '')
+  const [userId, setUserId] = useState(employee.user_id ?? '')
+  const [hiredOn, setHiredOn] = useState(employee.hired_on ?? '')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    if (!name.trim()) { toast('Укажите ФИО', 'error'); return }
+    setBusy(true)
+    try {
+      await updateEmployee(employee.id, {
+        full_name: name.trim(),
+        position_id: positionId || null,
+        hired_on: hiredOn || null,
+        supervisor_user_id: isAdmin ? (supervisorId || null) : undefined,
+        user_id: isAdmin ? (userId || null) : undefined,
+      })
+      toast('Сохранено', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Изменить сотрудника" subtitle={employee.full_name} lead={lead('user', 'info')} width={460} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Сохранить</button></>}
+    >
+      <div style={{ marginBottom: 14 }}><FieldLabel required>ФИО</FieldLabel><input className="input sm" style={input} value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div>
+          <FieldLabel>Должность</FieldLabel>
+          <select className="input sm" style={input} value={positionId} onChange={(e) => setPositionId(e.target.value)}>
+            <option value="">— не выбрана —</option>
+            {positions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div><FieldLabel>На складе с</FieldLabel><input className="input sm" type="date" style={input} value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} /></div>
+      </div>
+      {isAdmin && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
+          <div>
+            <FieldLabel>Руководитель</FieldLabel>
+            <select className="input sm" style={input} value={supervisorId} onChange={(e) => setSupervisorId(e.target.value)}>
+              <option value="">— не назначен —</option>
+              {users.filter((u) => SUPERVISOR_ROLES.has(u.role)).map((u) => (
+                <option key={u.id} value={u.id}>{u.email} · {USER_ROLE_LABELS[u.role] ?? u.role}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Учётная запись</FieldLabel>
+            <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">— нет —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  )
+}

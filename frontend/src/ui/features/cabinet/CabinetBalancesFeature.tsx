@@ -99,7 +99,6 @@ export function CabinetBalancesFeature() {
         <>
           <div className="zone-strip" style={{ marginBottom: 18 }}>
             <KPI label="Всего единиц" value={kpiVal(summary?.total)} unit="шт" />
-            <KPI label={INV_OP_LABELS.intake} value={kpiVal(summary?.intake)} unit="шт" />
             <KPI
               label={INV_OP_LABELS.storage}
               value={kpiVal(summary ? summary.storage_good + summary.storage_defect : undefined)}
@@ -132,7 +131,6 @@ export function CabinetBalancesFeature() {
               <tr>
                 <th>Товар</th>
                 <th style={{ width: 150 }}>Распределение</th>
-                <th style={{ textAlign: 'right', width: 100 }}>{INV_OP_LABELS.intake}</th>
                 <th style={{ textAlign: 'right', width: 120 }}>{INV_OP_LABELS.storage}</th>
                 <th style={{ textAlign: 'right', width: 120 }}>{INV_OP_LABELS.packing}</th>
                 <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.ready}</th>
@@ -141,9 +139,9 @@ export function CabinetBalancesFeature() {
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={7} />
+                <SkeletonRows rows={8} cols={6} />
               ) : items.length === 0 ? (
-                <tr><Td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
+                <tr><Td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
               ) : (
                 items.map((item, index) => {
                   const stor = item.storage_good + item.storage_defect
@@ -167,11 +165,6 @@ export function CabinetBalancesFeature() {
                           <i style={{ width: `${(pack / sum) * 100}%`, background: 'var(--c-info)', opacity: 0.75 }} />
                           <i style={{ width: `${(ready / sum) * 100}%`, background: 'var(--c-success)', opacity: 0.8 }} />
                         </div>
-                      </Td>
-                      <Td className="num">
-                        {item.intake > 0
-                          ? <span style={{ fontWeight: 500 }}>{item.intake.toLocaleString('ru-RU')}</span>
-                          : <span className="dash">0</span>}
                       </Td>
                       <Td className="num">
                         <BucketCell good={item.storage_good} defect={item.storage_defect} accent="var(--c-accent)" />

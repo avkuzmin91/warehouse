@@ -2,6 +2,7 @@ import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import type { BadgeTone } from '../../../primitives/Badge'
 import { ExpandableReceiptRow } from './ExpandableReceiptRow'
+import type { TripReceiptAlloc } from '../../../../api/tripsApi'
 
 export type ReceiptCardData = {
   receipt_doc_id?: string
@@ -12,13 +13,17 @@ export type ReceiptCardData = {
   qty?: number | null
   status?: string | null
   eta?: string | null
+  /** Сколько привёз этот рейс (распределение по строкам). */
+  allocatedQty?: number
+  allocations?: TripReceiptAlloc[]
 }
 
 const STATUS_RU: Record<string, string> = {
-  planned: 'В плане', on_intake: 'Принят', on_review: 'На проверке', done: 'Поступил',
+  planned: 'В плане', on_intake: 'На приёмке', partially_received: 'Частично принято',
+  on_review: 'На проверке', done: 'Поступил',
 }
 const STATUS_TONE: Record<string, BadgeTone> = {
-  planned: '', on_intake: 'info', on_review: 'warning', done: 'success',
+  planned: '', on_intake: 'info', partially_received: 'warning', on_review: 'warning', done: 'success',
 }
 
 /** Карточка привязанного поступления: клиент, номер (mono), SKU/шт, бейдж статуса. */
@@ -36,7 +41,10 @@ export function ReceiptCard({ r, removable, onRemove, onClick, expandable, expan
   if (expandable && r.receipt_doc_id) {
     return (
       <ExpandableReceiptRow
-        r={{ receipt_doc_id: r.receipt_doc_id, number: r.number, client: r.client, status: r.status }}
+        r={{
+          receipt_doc_id: r.receipt_doc_id, number: r.number, client: r.client, status: r.status,
+          allocated_qty: r.allocatedQty, allocations: r.allocations,
+        }}
         open={!!expanded}
         onToggle={onToggle ?? (() => {})}
         onOpen={onOpen ?? onClick ?? (() => {})}
@@ -64,11 +72,11 @@ export function ReceiptCard({ r, removable, onRemove, onClick, expandable, expan
           </span>
           {r.number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{r.number}</span>}
         </div>
-        {(r.sku != null || r.qty != null || r.eta) && (
+        {(r.sku != null || r.qty != null || r.eta || (r.allocatedQty ?? 0) > 0) && (
           <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 1 }}>
             {[
               r.sku != null ? `${r.sku} SKU` : null,
-              r.qty != null ? `${r.qty} шт` : null,
+              (r.allocatedQty ?? 0) > 0 ? `${r.allocatedQty} шт в рейсе` : (r.qty != null ? `${r.qty} шт` : null),
               r.eta ? `прибытие ${r.eta}` : null,
             ].filter(Boolean).join(' · ')}
           </div>

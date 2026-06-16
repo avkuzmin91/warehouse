@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { TripShipmentItem } from '../../../../api/tripsApi'
-import type { ShipmentListItem } from '../../../../api/shipmentsApi'
+import type { TripShipmentItem, TripShipmentLinkItem } from '../../../../api/tripsApi'
+import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES, getShipmentTripRemaining } from '../../../../api/shipmentsApi'
+import type { ShipmentListItem, ShipmentStatus } from '../../../../api/shipmentsApi'
+import { fmtDateShort } from '../../../../utils/format'
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import { ExpandableShipmentRow } from '../components/ExpandableShipmentRow'
 import { Panel } from './panels'
-import { LinkShipmentDrawer } from './components/LinkShipmentDrawer'
+import { AllocModal } from './components/AllocModal'
+import type { AllocDoc, AllocLine, AllocItem } from './components/AllocModal'
 
 /** SKU/шт для привязанных отгрузок (из кандидатов-«В плане», если доступны). */
 export type ShipmentEnrich = Record<string, { sku?: number | null; qty?: number | null }>
@@ -15,8 +18,13 @@ export type ShipmentLink = {
   options: ShipmentListItem[]
   tripNumber: string
   tripDestination: string | null
-  onLink: (shipmentIds: string[]) => Promise<void>
+  onLink: (items: TripShipmentLinkItem[]) => Promise<void>
   onUnlink: (shipmentDocId: string) => void
+  /** Сохранение распределения из модала: привязка/замена + отвязка убранных. */
+  onSaveDistribution: (items: TripShipmentLinkItem[], removedDocIds: string[]) => Promise<void>
+  /** Пресеты-аллокации уже учтены в trip_alloc (карточка рейса) → их прибавляем к остатку.
+   *  В создании рейса (false) распределение локальное, рейса ещё нет — не прибавляем. */
+  presetsLinked?: boolean
   busy?: boolean
 }
 
@@ -43,7 +51,9 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
 
   const canExpand = !!expandable && !!onOpen
   const unlink = link?.onUnlink ?? onUnlink
-  const totalQty = shipments.reduce((s, sh) => s + (enrich?.[sh.shipment_doc_id]?.qty ?? 0), 0)
+  // В рейсе показываем распределённое количество (allocated_qty); для легаси-привязок
+  // без распределения — падаем на полный план из enrich.
+  const totalQty = shipments.reduce((s, sh) => s + (sh.allocated_qty || (enrich?.[sh.shipment_doc_id]?.qty ?? 0)), 0)
   const allOpen = shipments.length > 0 && open.size === shipments.length
 
   const toggleOne = (id: string) => setOpen((prev) => {
@@ -84,6 +94,8 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
                     shipment_number: s.shipment_number ?? null,
                     client_name: s.client_name ?? null,
                     shipment_status: s.shipment_status,
+                    allocated_qty: s.allocated_qty,
+                    allocations: s.allocations,
                   }}
                   open={open.has(s.shipment_doc_id)}
                   onToggle={() => toggleOne(s.shipment_doc_id)}
@@ -133,15 +145,58 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
 
       {footerNote && <div style={{ marginTop: 12 }}>{footerNote}</div>}
 
-      {link && (
-        <LinkShipmentDrawer
-          open={drawerOpen}
+      {link && drawerOpen && (
+        <AllocModal
+          open
           onClose={() => setDrawerOpen(false)}
           tripNumber={link.tripNumber}
           tripDestination={link.tripDestination}
-          candidates={link.options}
+          lex={{ headerIcon: 'boxOut', docsGen: 'отгрузки', addTitle: 'Отгрузки', flowLabel: 'Уходит в рейс' }}
+          linkedDocs={shipments.map((s): AllocDoc => ({
+            doc_id: s.shipment_doc_id,
+            client: s.client_name,
+            doc_number: s.shipment_number,
+            status_label: SHIPMENT_STATUS_LABELS[(s.shipment_status ?? '') as ShipmentStatus] ?? (s.shipment_status ?? ''),
+            status_tone: SHIPMENT_STATUS_TONES[(s.shipment_status ?? '') as ShipmentStatus] ?? '',
+          }))}
+          candidates={link.options.map((c): AllocDoc => ({
+            doc_id: c.id,
+            client: c.client_name,
+            doc_number: c.doc_number,
+            status_label: SHIPMENT_STATUS_LABELS[c.status] ?? c.status,
+            status_tone: SHIPMENT_STATUS_TONES[c.status] ?? '',
+            meta: c.ship_date ? fmtDateShort(c.ship_date) : null,
+            sub: `${c.sku_count} SKU · свободно ${c.total_free_qty ?? 0} шт`,
+          }))}
+          fetchLines={async (docId): Promise<AllocLine[]> => {
+            const presets = shipments.find((s) => s.shipment_doc_id === docId)?.allocations
+            const presetMap: Record<string, number> | null = presets && presets.length > 0
+              ? Object.fromEntries(presets.map((a) => [a.line_id, a.qty]))
+              : null
+            const res = await getShipmentTripRemaining(docId)
+            return res.lines.map((l): AllocLine => {
+              const preset = presetMap ? (presetMap[l.line_id] ?? 0) : null
+              const addBack = link.presetsLinked === false ? 0 : (preset ?? 0)
+              return {
+                line_id: l.line_id,
+                sku: l.product_sku,
+                name: l.product_name,
+                variant: l.variant,
+                color: l.color,
+                plan: l.qty,
+                max: l.remaining + addBack,
+                preset,
+                store: l.store_name,
+              }
+            })
+          }}
+          onConfirm={async (items: AllocItem[], removed) => {
+            await link.onSaveDistribution(
+              items.map((it) => ({ shipment_doc_id: it.doc_id, allocations: it.allocations })),
+              removed,
+            )
+          }}
           busy={link.busy}
-          onLink={link.onLink}
         />
       )}
     </Panel>
@@ -151,8 +206,6 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
 // ---------------------------------------------------------------------------
 // Простая (не раскрываемая) карточка — используется когда expandable не задан
 
-import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../api/shipmentsApi'
-import type { ShipmentStatus } from '../../../../api/shipmentsApi'
 import type { BadgeTone } from '../../../primitives/Badge'
 
 function ShipmentCardSimple({ s, enrich, onOpen, onRemove }: {
@@ -181,9 +234,12 @@ function ShipmentCardSimple({ s, enrich, onOpen, onRemove }: {
           </span>
           {s.shipment_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{s.shipment_number}</span>}
         </div>
-        {(enrich?.sku != null || enrich?.qty != null) && (
+        {(enrich?.sku != null || enrich?.qty != null || (s.allocated_qty ?? 0) > 0) && (
           <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 1 }}>
-            {[enrich?.sku != null ? `${enrich.sku} SKU` : null, enrich?.qty != null ? `${enrich.qty} шт` : null].filter(Boolean).join(' · ')}
+            {[
+              enrich?.sku != null ? `${enrich.sku} SKU` : null,
+              (s.allocated_qty ?? 0) > 0 ? `${s.allocated_qty} шт в рейсе` : (enrich?.qty != null ? `${enrich.qty} шт` : null),
+            ].filter(Boolean).join(' · ')}
           </div>
         )}
       </div>

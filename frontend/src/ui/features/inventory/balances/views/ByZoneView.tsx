@@ -34,7 +34,6 @@ type LocationGroup = {
 }
 
 const OP_TONE: Record<InvOpStatus, BadgeTone> = {
-  intake:  '',
   storage: 'accent',
   packing: 'info',
   ready:   'success',
@@ -272,14 +271,13 @@ export function ByZoneView() {
     const bucket = (op: InvOpStatus, good: number, defect: number) =>
       opOn(op) ? (useGood ? good : 0) + (useDefect ? defect : 0) : 0
     const s = summary
-    const intakeQty = s && opOn('intake') && useGood ? s.intake : 0
     const storageQty = s ? bucket('storage', s.storage_good, s.storage_defect) : 0
     const packingQty = s ? bucket('packing', s.packing_good, s.packing_defect) : 0
     const readyQty = s ? bucket('ready', s.ready_good, s.ready_defect) : 0
     const defectQty = s ? bucket('storage', 0, s.storage_defect) + bucket('packing', 0, s.packing_defect) + bucket('ready', 0, s.ready_defect) : 0
     return {
-      totalQty: intakeQty + storageQty + packingQty + readyQty,
-      intakeQty, storageQty, packingQty, readyQty, defectQty,
+      totalQty: storageQty + packingQty + readyQty,
+      storageQty, packingQty, readyQty, defectQty,
     }
   }, [summary, opFilter, qualityFilter])
 
@@ -320,7 +318,6 @@ export function ByZoneView() {
             value={opFilter}
             options={[
               { value: '', label: 'Все статусы' },
-              { value: 'intake', label: INV_OP_LABELS.intake },
               { value: 'storage', label: INV_OP_LABELS.storage },
               { value: 'packing', label: INV_OP_LABELS.packing },
               { value: 'ready', label: INV_OP_LABELS.ready },
@@ -352,15 +349,8 @@ export function ByZoneView() {
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
         <KPI label="Всего единиц" value={kpiVal(kpi.totalQty)} unit="шт" />
-        <KPI
-          label={INV_OP_LABELS.intake}
-          value={kpiVal(kpi.intakeQty)}
-          unit="шт"
-          active={opFilter === 'intake'}
-          onClick={() => toggleOp('intake')}
-        />
         <KPI
           label={INV_OP_LABELS.storage}
           value={kpiVal(kpi.storageQty)}

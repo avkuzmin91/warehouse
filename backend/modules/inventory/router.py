@@ -156,6 +156,12 @@ def lookup_vehicle_types(user=Depends(_get_lookup_viewer)):
     return _active_dictionary_rows("vehicle_types")
 
 
+@router.get("/lookups/positions", response_model=list[DictionaryBaseItem])
+def lookup_positions(user=Depends(_get_lookup_viewer)):
+    _ = user
+    return _active_dictionary_rows("positions")
+
+
 @router.get("/lookups/unloading-zones", response_model=list[DictionaryBaseItem])
 def lookup_unloading_zones(user=Depends(_get_lookup_viewer)):
     _ = user

@@ -8,12 +8,15 @@ import type { BadgeTone } from '../../../primitives/Badge'
 import { ShipmentLinesTable } from './ShipmentLinesTable'
 import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../api/shipmentsApi'
 import type { ShipmentStatus } from '../../../../api/shipmentsApi'
+import type { TripShipmentAlloc } from '../../../../api/tripsApi'
 
 export type ExpandableShipmentData = {
   shipment_doc_id: string
   shipment_number: string | null
   client_name: string | null
   shipment_status?: string | null
+  allocated_qty?: number
+  allocations?: TripShipmentAlloc[]
 }
 
 function LinesBody({ docId }: { docId: string }) {
@@ -35,6 +38,9 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
   if (open && !everOpened) setEverOpened(true)
 
   const status = (r.shipment_status ?? '') as ShipmentStatus
+  const allocs = r.allocations ?? []
+  const hasAllocs = allocs.length > 0
+  const tripQty = allocs.reduce((s, a) => s + a.qty, 0)
 
   return (
     <div
@@ -68,6 +74,9 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
                 {r.client_name ?? 'Без клиента'}
               </span>
               {r.shipment_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{r.shipment_number}</span>}
+              {(r.allocated_qty ?? 0) > 0 && (
+                <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>· {r.allocated_qty} шт в рейсе</span>
+              )}
             </div>
           </div>
         </button>
@@ -102,7 +111,34 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
       <div className={`exp-wrap${open ? ' open' : ''}`}>
         <div className="exp-inner">
           <div style={{ padding: '12px 14px', borderTop: '1px solid var(--c-border)' }}>
-            {everOpened && <LinesBody docId={r.shipment_doc_id} />}
+            {hasAllocs ? (
+              <div>
+                <div className="t-sub" style={{ marginBottom: 6 }}>В этом рейсе</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {allocs.map((a) => (
+                    <div key={a.line_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                      <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span className="mono" style={{ color: 'var(--c-text-subtle)' }}>{a.product_sku}</span>{' '}{a.product_name}
+                        {a.variant ? <span style={{ color: 'var(--c-text-subtle)' }}> · {a.variant}</span> : null}
+                      </span>
+                      <span className="num" style={{ fontWeight: 500 }}>{a.qty} шт</span>
+                      <span className="t-sub" style={{ width: 118, flexShrink: 0, textAlign: 'right' }}>отгружено {a.shipped_qty}/{a.line_qty}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                  marginTop: 8, paddingTop: 8, borderTop: '1.5px solid var(--c-border-strong)', color: 'var(--c-text-subtle)', fontSize: 12.5,
+                }}>
+                  <span>Итого</span>
+                  <span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>
+                    {allocs.length} SKU · {tripQty} шт
+                  </span>
+                </div>
+              </div>
+            ) : (
+              everOpened && <LinesBody docId={r.shipment_doc_id} />
+            )}
 
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',

@@ -114,9 +114,8 @@ export function ByProductView() {
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
         <KPI label="Всего единиц" value={kpiVal(summary?.total)} unit="шт" />
-        <KPI label={INV_OP_LABELS.intake} value={kpiVal(summary?.intake)} unit="шт" />
         <KPI
           label={INV_OP_LABELS.storage}
           value={kpiVal(summary ? summary.storage_good + summary.storage_defect : undefined)}
@@ -150,7 +149,6 @@ export function ByProductView() {
           <tr>
             <th>Товар</th>
             <th>Клиент</th>
-            <th style={{ textAlign: 'right', width: 110 }}>{INV_OP_LABELS.intake}</th>
             <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.storage}</th>
             <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.packing}</th>
             <th style={{ textAlign: 'right', width: 140 }}>{INV_OP_LABELS.ready}</th>
@@ -159,9 +157,9 @@ export function ByProductView() {
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={7} />
+            <SkeletonRows rows={8} cols={6} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
+            <tr><td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
           ) : (
             items.map((item, i) => (
               <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${i}`}>
@@ -173,11 +171,6 @@ export function ByProductView() {
                 </Td>
                 <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>
                   {item.client_name ?? '—'}
-                </Td>
-                <Td className="num">
-                  {item.intake > 0
-                    ? <span style={{ fontWeight: 500 }}>{item.intake.toLocaleString('ru-RU')}</span>
-                    : <span style={{ color: 'var(--c-text-faint)' }}>0</span>}
                 </Td>
                 <Td className="num">
                   <BucketCell good={item.storage_good} defect={item.storage_defect} accent="var(--c-accent)" />

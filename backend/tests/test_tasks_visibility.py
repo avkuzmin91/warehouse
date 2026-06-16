@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from config import RECEIPT_STATUS_ON_INTAKE, SHIPMENT_STATUS_ON_PACKING
+from config import SHIPMENT_STATUS_ON_PACKING, TRIP_STATUS_UNLOADING
 from modules.tasks.service import list_my_tasks
 
 
@@ -41,8 +41,9 @@ class _FakeConn:
 
 def _conn() -> _FakeConn:
     return _FakeConn(
-        receipts=[{
-            "id": "r1", "doc_number": "WH-00001", "status": RECEIPT_STATUS_ON_INTAKE,
+        trips=[{
+            "id": "t1", "trip_number": "TR-00001", "status": TRIP_STATUS_UNLOADING,
+            "direction": "inbound",
             "updated_at": "2026-06-10T00:00:00", "created_at": "2026-06-10T00:00:00",
         }],
         shipments=[{
@@ -60,17 +61,17 @@ def _kinds(role: str) -> set[str]:
 
 def test_warehouse_head_sees_both_queues():
     kinds = _kinds("warehouse_head")
-    assert "receipt_intake" in kinds      # очередь кладовщика
-    assert "shipment_pack" in kinds       # очередь начальника смены
+    assert "trip_unload" in kinds          # очередь кладовщика (разгрузка/приёмка рейса)
+    assert "shipment_pack" in kinds        # очередь начальника смены
 
 
 def test_warehouse_manager_sees_only_warehouse_queue():
     kinds = _kinds("warehouse_manager")
-    assert "receipt_intake" in kinds
+    assert "trip_unload" in kinds
     assert "shipment_pack" not in kinds
 
 
 def test_shift_supervisor_sees_only_shift_queue():
     kinds = _kinds("shift_supervisor")
     assert "shipment_pack" in kinds
-    assert "receipt_intake" not in kinds
+    assert "trip_unload" not in kinds
