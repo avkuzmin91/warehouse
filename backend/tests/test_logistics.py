@@ -22,10 +22,10 @@ def client_id():
     cleanup_client(cid)
 
 
-def _handoff_ready_trip(admin_client, receipt_id: str) -> str:
+def _handoff_ready_trip(admin_client, receipt_id: str, origin_name: str = "Москва") -> str:
     """Создаёт черновик рейса со всеми обязательными для передачи на склад полями."""
     create = admin_client.post("/trips", json={
-        "origin_id": "wh-1", "origin_name": "Москва",
+        "origin_id": "wh-1", "origin_name": origin_name,
         "carrier_id": "carrier-1", "carrier_name": "ООО Перевозчик",
         "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
         "vehicle_number": "А123ВС 77",
@@ -820,8 +820,9 @@ def test_tasks_endpoint_lists_only_costing_trips_for_manager(admin_client, manag
 
 
 def test_warehouse_trip_costs_are_hidden_and_readonly(admin_client, warehouse_client, client_id):
+    tag = f"WHCOST-{uuid.uuid4()}"  # маркер origin_name изолирует рейс в общем списке
     receipt_id = _planned_receipt(admin_client, client_id)
-    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id, origin_name=tag)
     admin_client.post(f"/trips/{trip_id}/handoff")
     admin_client.post(f"/trips/{trip_id}/arrival", json={})
     admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "partial"})
@@ -840,7 +841,7 @@ def test_warehouse_trip_costs_are_hidden_and_readonly(admin_client, warehouse_cl
     assert doc["waiting_cost"] is None
     assert doc["waiting_minutes"] == 90
 
-    listing = warehouse_client.get("/trips?limit=200")
+    listing = warehouse_client.get(f"/trips?search={tag}&limit=200")
     assert listing.status_code == 200, listing.text
     item = next(i for i in listing.json()["items"] if i["id"] == trip_id)
     assert item["cost_estimate"] is None
