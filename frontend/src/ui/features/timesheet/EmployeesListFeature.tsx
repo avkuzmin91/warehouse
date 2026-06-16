@@ -48,7 +48,6 @@ export function EmployeesListFeature() {
             <tr>
               <th style={{ paddingLeft: 14 }}>Сотрудник</th>
               <th style={{ width: 180 }}>Должность</th>
-              <th style={{ width: 200 }}>Руководитель</th>
               {showMoney && <th style={{ width: 150, textAlign: 'right' }}>Текущая ставка</th>}
               <th style={{ width: 150 }}>Последняя смена</th>
               <th style={{ width: 150 }}>Статус</th>
@@ -65,7 +64,6 @@ export function EmployeesListFeature() {
                   </div>
                 </td>
                 <td><span style={{ color: 'var(--c-text-muted)' }}>{e.position ?? '—'}</span></td>
-                <td><span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{e.supervisor_name ?? '—'}</span></td>
                 {showMoney && <td className="num" style={{ fontWeight: 600 }}>{fmtRate(e.rate_kopecks)}</td>}
                 <td><span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{e.last_shift ?? 'нет'}</span></td>
                 <td>{e.status === 'archived' ? <Badge>В архиве</Badge> : <Badge tone="success" dot>Активен</Badge>}</td>
@@ -73,7 +71,7 @@ export function EmployeesListFeature() {
               </tr>
             ))}
             {data && data.items.length === 0 && (
-              <tr><td colSpan={showMoney ? 7 : 6} style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)' }}>Сотрудники не найдены</td></tr>
+              <tr><td colSpan={showMoney ? 6 : 5} style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)' }}>Сотрудники не найдены</td></tr>
             )}
           </tbody>
         </table>

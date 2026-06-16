@@ -290,6 +290,7 @@ SHIPMENT_OP_PACK            = "pack"
 SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
+SHIPMENT_OP_SHIP            = "ship"
 
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
@@ -516,6 +517,7 @@ CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
+    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 })
 
@@ -525,12 +527,14 @@ CABINET_RECEIPT_OPS_VISIBLE: frozenset[str] = frozenset({
     RECEIPT_OP_INTAKE_START,
     RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_ARRIVAL_FIX,
+    RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_OP_CANCEL,
 })
 
 CABINET_SHIPMENT_OPS_VISIBLE: frozenset[str] = frozenset({
     SHIPMENT_OP_PACK,
     SHIPMENT_OP_PACK_CORRECTION,
+    SHIPMENT_OP_SHIP,
     "cancel",
 })
 

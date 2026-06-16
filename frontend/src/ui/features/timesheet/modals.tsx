@@ -9,14 +9,7 @@ import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
 import { addPayment, addEmployeeRate, createEmployee, updateEmployee, type EmployeeDetail } from '../../../api/timesheetApi'
 
-const USER_ROLE_LABELS: Record<string, string> = {
-  admin: 'Администратор', manager: 'Менеджер', warehouse_manager: 'Кладовщик',
-  shift_supervisor: 'Начальник смены', warehouse_head: 'Начальник склада',
-  client: 'Клиент', user: 'Без доступа',
-}
-const SUPERVISOR_ROLES = new Set(['admin', 'manager', 'shift_supervisor', 'warehouse_head'])
-
-/** Загружает учётки для назначения руководителя/связи (только для админа). */
+/** Загружает учётки для связи сотрудника с учётной записью (только для админа). */
 function useManageableUsers(enabled: boolean): UserListItem[] {
   const [users, setUsers] = useState<UserListItem[]>([])
   useEffect(() => {
@@ -201,7 +194,6 @@ export function AddEmployeeModal({
   const users = useManageableUsers(isAdmin)
   const [name, setName] = useState('')
   const [positionId, setPositionId] = useState('')
-  const [supervisorId, setSupervisorId] = useState('')
   const [userId, setUserId] = useState('')
   const [rate, setRate] = useState('')
   const [busy, setBusy] = useState(false)
@@ -213,7 +205,6 @@ export function AddEmployeeModal({
       await createEmployee({
         full_name: name.trim(),
         position_id: positionId || null,
-        supervisor_user_id: isAdmin ? (supervisorId || null) : undefined,
         user_id: isAdmin ? (userId || null) : undefined,
         rate_kopecks: canSetRate && rate ? rublesToKopecks(rate) : null,
       })
@@ -239,36 +230,19 @@ export function AddEmployeeModal({
         {canSetRate && <div><FieldLabel>Ставка, ₽/ч</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" /></div>}
       </div>
       {isAdmin && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-          <div>
-            <FieldLabel>Руководитель</FieldLabel>
-            <select className="input sm" style={input} value={supervisorId} onChange={(e) => setSupervisorId(e.target.value)}>
-              <option value="">— не назначен —</option>
-              {users.filter((u) => SUPERVISOR_ROLES.has(u.role)).map((u) => (
-                <option key={u.id} value={u.id}>{u.email} · {USER_ROLE_LABELS[u.role] ?? u.role}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <FieldLabel>Учётная запись</FieldLabel>
-            <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
-              <option value="">— нет —</option>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
-            </select>
-          </div>
+        <div style={{ marginTop: 14 }}>
+          <FieldLabel>Учётная запись</FieldLabel>
+          <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
+            <option value="">— нет —</option>
+            {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
+          </select>
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '9px 12px', borderRadius: 'var(--r-md)', background: 'var(--c-info-bg)', fontSize: 11.5, color: 'var(--c-text)' }}>
-        <Icon name="userPlus" size={13} style={{ color: 'var(--c-info)', flexShrink: 0 }} />
-        {isAdmin
-          ? 'Руководитель ведёт табель и планирование только по своим сотрудникам.'
-          : 'Подчинение сотрудника настраивает администратор.'}
-      </div>
     </ModalShell>
   )
 }
 
-// ── Изменить сотрудника (должность / подчинение / учётка) ─────────────────────
+// ── Изменить сотрудника (должность / учётка) ──────────────────────────────────
 
 export function EditEmployeeModal({
   employee, onClose, onSaved,
@@ -280,7 +254,6 @@ export function EditEmployeeModal({
   const users = useManageableUsers(isAdmin)
   const [name, setName] = useState(employee.full_name)
   const [positionId, setPositionId] = useState(employee.position_id ?? '')
-  const [supervisorId, setSupervisorId] = useState(employee.supervisor_user_id ?? '')
   const [userId, setUserId] = useState(employee.user_id ?? '')
   const [hiredOn, setHiredOn] = useState(employee.hired_on ?? '')
   const [busy, setBusy] = useState(false)
@@ -293,7 +266,6 @@ export function EditEmployeeModal({
         full_name: name.trim(),
         position_id: positionId || null,
         hired_on: hiredOn || null,
-        supervisor_user_id: isAdmin ? (supervisorId || null) : undefined,
         user_id: isAdmin ? (userId || null) : undefined,
       })
       toast('Сохранено', 'success')
@@ -318,23 +290,12 @@ export function EditEmployeeModal({
         <div><FieldLabel>На складе с</FieldLabel><input className="input sm" type="date" style={input} value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} /></div>
       </div>
       {isAdmin && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-          <div>
-            <FieldLabel>Руководитель</FieldLabel>
-            <select className="input sm" style={input} value={supervisorId} onChange={(e) => setSupervisorId(e.target.value)}>
-              <option value="">— не назначен —</option>
-              {users.filter((u) => SUPERVISOR_ROLES.has(u.role)).map((u) => (
-                <option key={u.id} value={u.id}>{u.email} · {USER_ROLE_LABELS[u.role] ?? u.role}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <FieldLabel>Учётная запись</FieldLabel>
-            <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
-              <option value="">— нет —</option>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
-            </select>
-          </div>
+        <div style={{ marginTop: 14 }}>
+          <FieldLabel>Учётная запись</FieldLabel>
+          <select className="input sm" style={input} value={userId} onChange={(e) => setUserId(e.target.value)}>
+            <option value="">— нет —</option>
+            {users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
+          </select>
         </div>
       )}
     </ModalShell>
