@@ -10,6 +10,7 @@ from config import (
     INV_OP_WRITTEN_OFF,
     PRODUCT_LIST_SORT_COLUMNS,
     RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
@@ -540,7 +541,7 @@ def list_cabinet_shipments(
     rows = connection.execute(
         f"""
         SELECT d.id, d.doc_number, COALESCE(d.cargo_type, 'good') AS cargo_type,
-               d.carrier, d.ship_date, d.actual_ship_date,
+               d.ship_date, d.actual_ship_date,
                d.status, d.created_at,
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.store_name) FILTER (WHERE l.is_deleted = 0), NULL) AS store_names,
                COUNT(l.id) FILTER (WHERE l.is_deleted = 0) AS sku_count,
@@ -563,7 +564,6 @@ def list_cabinet_shipments(
             doc_number=str(r["doc_number"]),
             cargo_type=str(r["cargo_type"]),
             store_names=[str(s) for s in (r["store_names"] or [])],
-            carrier=r["carrier"],
             ship_date=r["ship_date"],
             actual_ship_date=r["actual_ship_date"],
             status=str(r["status"]),
@@ -746,7 +746,6 @@ def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetS
             id=str(row["id"]),
             doc_number=str(row["doc_number"]),
             cargo_type=str(row["cargo_type"] or "good"),
-            carrier=row["carrier"],
             ship_date=row["ship_date"],
             actual_ship_date=row["actual_ship_date"],
             status=str(row["status"]),
@@ -802,7 +801,7 @@ def cabinet_summary(connection, *, client_id: str) -> CabinetSummaryResponse:
         client_id=client_id,
         page=1,
         limit=5,
-        statuses=[RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE],
+        statuses=[RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_PARTIALLY_RECEIVED],
         order="upcoming",
     ).items
     active_shipments = list_cabinet_shipments(

@@ -67,10 +67,20 @@ class TripArrivalPayload(BaseModel):
     arrived_at: str | None = None
 
 
+class TripUnloadReceiptLine(BaseModel):
+    line_id: str                       # receipt_line_id
+    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+
+
 class TripUnloadPayload(BaseModel):
     unload_started_at: str | None = None
     unload_finished_at: str | None = None
     load_factor: str | None = None  # full | partial
+    # Приёмка inbound-рейса: фактически принятое по строкам аллокации (пусто для
+    # outbound и для рейсов без поступлений — приём проводится по умолчанию).
+    receipt_lines: list[TripUnloadReceiptLine] = Field(default_factory=list)
 
 
 class TripCostPayload(BaseModel):
@@ -124,6 +134,9 @@ class TripReceiptAllocItem(BaseModel):
     qty: int = 0           # привозит этот рейс
     planned_qty: int = 0   # план по строке
     accepted_qty: int = 0  # принято всего (по всем рейсам)
+    received_qty: int = 0  # принято кладовщиком в этом рейсе (нетто журнала по trip_id)
+    storage_zone_id: str | None = None    # место хранения строки (план/факт)
+    storage_zone_name: str | None = None
 
 
 class TripReceiptItem(BaseModel):
@@ -134,6 +147,7 @@ class TripReceiptItem(BaseModel):
     client_id: str | None = None
     client_name: str | None = None
     allocated_qty: int = 0
+    received_qty: int = 0  # принято в этом рейсе по всему поступлению
     allocations: list[TripReceiptAllocItem] = Field(default_factory=list)
 
 

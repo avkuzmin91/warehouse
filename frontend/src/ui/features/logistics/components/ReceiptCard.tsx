@@ -19,7 +19,7 @@ export type ReceiptCardData = {
 }
 
 const STATUS_RU: Record<string, string> = {
-  planned: 'В плане', on_intake: 'Принят', partially_received: 'Частично принято',
+  planned: 'В плане', on_intake: 'На приёмке', partially_received: 'Частично принято',
   on_review: 'На проверке', done: 'Поступил',
 }
 const STATUS_TONE: Record<string, BadgeTone> = {

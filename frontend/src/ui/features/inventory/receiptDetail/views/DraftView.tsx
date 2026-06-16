@@ -188,12 +188,16 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
                   </div>
                 )}
               </Field>
-              <Field label="Рейс" style={{ marginBottom: 0 }}>
-                {doc.trip_id ? (
-                  <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                    style={{ width: '100%', justifyContent: 'flex-start' }}>
-                    <Icon name="truckIn" size={13} />{doc.trip_number}
-                  </button>
+              <Field label={doc.trips.length > 1 ? 'Рейсы' : 'Рейс'} style={{ marginBottom: 0 }}>
+                {doc.trips.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {doc.trips.map((t) => (
+                      <button key={t.id} className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${t.id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}>
+                        <Icon name="truckIn" size={13} />{t.number}
+                      </button>
+                    ))}
+                  </div>
                 ) : (
                   <Input value="—" readOnly style={{ cursor: 'default' }} />
                 )}

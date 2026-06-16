@@ -32,7 +32,7 @@ function isBefore(left: string, right: string): boolean {
   return Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs < rightTs
 }
 
-export function InWarehouseView({ detail, form, onField, showCosts, canEditTransportPlanning, dirtyFields, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt, docsNode }: {
+export function InWarehouseView({ detail, form, onField, showCosts, canEditTransportPlanning, dirtyFields, link, enrich, loadFactor, onLoadFactor, arrival, onArrivalChange, unloadStart, onUnloadStartChange, unloadEnd, onUnloadEndChange, busy, onBack, onCancel, onSaveFields, onArrival, onUnload, onOpenReceipt, docsNode, receiveNode, extraBlockReasons }: {
   detail: TripDetail
   form: PlanningFormValue
   onField: (patch: Partial<PlanningFormValue>) => void
@@ -57,6 +57,8 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
   onUnload: () => void
   onOpenReceipt: (id: string) => void
   docsNode?: ReactNode
+  receiveNode?: (showErrors: boolean) => ReactNode
+  extraBlockReasons?: string[]
 }) {
   const { doc, ops, receipts } = detail
   const direction = (doc.direction as TripDirection) ?? 'inbound'
@@ -73,6 +75,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
         ...(!unloadEndReady ? [`Не указано «${lex.unloadEndLabel}»`] : []),
         ...(unloadPeriodInvalid ? [lex.periodInvalid] : []),
         ...(!loadFactor ? ['Не выбрана загруженность машины'] : []),
+        ...(extraBlockReasons ?? []),
       ]
     : (!arrivalReady ? [`Не указано «${lex.arrivalLabel}»`] : [])
   const handleAction = () => {
@@ -144,6 +147,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
               </>
             ) : (
               <>
+                {receiveNode && <div style={{ marginBottom: 12 }}>{receiveNode(showReasons)}</div>}
                 <div className="form-grid-2">
                   <div>
                     <FieldLabel required>{lex.unloadStartLabel}</FieldLabel>

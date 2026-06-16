@@ -123,7 +123,6 @@ def _dict_row_to_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
         color_hex=row.get("color_hex"),
         is_packing_zone=bool(row.get("is_packing_zone") or 0),
         is_shipping_zone=bool(row.get("is_shipping_zone") or 0),
-        is_receiving_zone=bool(row.get("is_receiving_zone") or 0),
         is_active=bool(row["is_active"]),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
@@ -439,7 +438,6 @@ def list_dictionary_items_page(
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
     packing_sql = "COALESCE(d.is_packing_zone, 0) AS is_packing_zone" if table_name == "unloading_zones" else "0 AS is_packing_zone"
     shipping_sql = "COALESCE(d.is_shipping_zone, 0) AS is_shipping_zone" if table_name == "unloading_zones" else "0 AS is_shipping_zone"
-    receiving_sql = "COALESCE(d.is_receiving_zone, 0) AS is_receiving_zone" if table_name == "unloading_zones" else "0 AS is_receiving_zone"
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
@@ -471,7 +469,7 @@ def list_dictionary_items_page(
         rows = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   {color_hex_sql}, {packing_sql}, {shipping_sql}, {receiving_sql},
+                   {color_hex_sql}, {packing_sql}, {shipping_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             FROM {table_name} d
@@ -514,19 +512,6 @@ def set_shipping_zone(item_id: str) -> MessageResponse:
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Место хранения не найдено")
         connection.execute("UPDATE unloading_zones SET is_shipping_zone = CASE WHEN id = ? THEN 1 ELSE 0 END", (item_id,))
-        connection.commit()
-    return MessageResponse(message="ok")
-
-
-def set_receiving_zone(item_id: str) -> MessageResponse:
-    """Делает зону единственной «Зоной приёмки» (снимает флаг с остальных)."""
-    with get_connection() as connection:
-        row = connection.execute(
-            "SELECT id FROM unloading_zones WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (item_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Место хранения не найдено")
-        connection.execute("UPDATE unloading_zones SET is_receiving_zone = CASE WHEN id = ? THEN 1 ELSE 0 END", (item_id,))
         connection.commit()
     return MessageResponse(message="ok")
 

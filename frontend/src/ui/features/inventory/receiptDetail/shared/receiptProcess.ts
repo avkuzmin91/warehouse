@@ -8,12 +8,13 @@ import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/roles'
 import type { IconName } from '../../../../primitives/Icon'
 
-/** Маршрут поступления: владелец, иконка и подсказка для каждого статуса. */
+/** Маршрут поступления: владелец, иконка и подсказка для каждого статуса.
+ *  Приёмка идёт рейсом, поэтому средний шаг — событие разгрузки рейса (роль склада). */
 export const RC_META: Record<ReceiptStatus, { role: ProcessRole | null; icon: IconName; sub: string }> = {
   draft:     { role: 'manager',   icon: 'edit',     sub: 'состав и план поступления' },
-  planned:   { role: 'manager',   icon: 'clock',    sub: 'ожидание прибытия товара' },
-  on_intake: { role: 'warehouse', icon: 'forklift', sub: 'подсчёт и местоположения' },
-  partially_received: { role: 'warehouse', icon: 'forklift', sub: 'часть принята, остаток ждёт рейсов' },
+  planned:   { role: 'manager',   icon: 'clock',    sub: 'ожидание приёмки рейсом' },
+  on_intake: { role: 'warehouse', icon: 'forklift', sub: 'приёмка' },
+  partially_received: { role: 'warehouse', icon: 'forklift', sub: 'часть принята рейсами, остаток ждёт следующих' },
   on_review: { role: 'warehouse', icon: 'box',      sub: '' },
   done:      { role: null,        icon: 'check',    sub: 'товар встал на остатки годным' },
   cancelled: { role: null,        icon: 'x',        sub: '' },
@@ -33,8 +34,8 @@ function getStepTimestamps(ops: ReceiptOp[]): Partial<Record<ReceiptStatus, stri
   for (const op of ops) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
     else if (op.op_type === 'plan_fix' && !ts.planned) ts.planned = op.created_at
-    else if (op.op_type === 'intake_start' && !ts.on_intake) ts.on_intake = op.created_at
-    else if ((op.op_type === 'arrival_fix' || op.op_type === 'qc_complete') && !ts.done) ts.done = op.created_at
+    else if (op.op_type === 'arrival_accept' && !ts.partially_received) ts.partially_received = op.created_at
+    else if (op.op_type === 'arrival_fix' && !ts.done) ts.done = op.created_at
   }
   return ts
 }
@@ -52,11 +53,11 @@ export function buildReceiptSteps(
   ops: ReceiptOp[] = [],
   opts: { awaitingTrip?: boolean; tripNumber?: string | null } = {},
 ): ProcessStep[] {
-  // Легаси on_review (QC убран) → завершённое; «Частично принято» в линейном
-  // маршруте показываем как активную приёмку (on_intake).
+  // Легаси-статусы вне маршрута: on_review → завершённое, on_intake → шаг приёмки
+  // рейсом (partially_received). «Частично принято» — собственный активный шаг.
   const effStatus: ReceiptStatus =
     status === 'on_review' ? 'done'
-    : status === 'partially_received' ? 'on_intake'
+    : status === 'on_intake' ? 'partially_received'
     : status
   const isDone = effStatus === 'done'
   const curIdx = effStatus === 'cancelled' ? 1 : RECEIPT_STATUS_ORDER.indexOf(effStatus)

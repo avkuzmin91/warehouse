@@ -9,7 +9,6 @@ class DictionaryBaseItem(BaseModel):
     color_hex: str | None = None
     is_packing_zone: bool = False
     is_shipping_zone: bool = False
-    is_receiving_zone: bool = False
     is_active: bool
     is_deleted: bool = False
     deleted_at: str | None = None

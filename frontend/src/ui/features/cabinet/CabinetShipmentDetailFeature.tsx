@@ -53,7 +53,7 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
         {track && <CabinetTrack {...track} />}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(5, 1fr)',
+          gridTemplateColumns: 'repeat(4, 1fr)',
           gap: 16,
           ...(track ? { marginTop: 20, paddingTop: 18, borderTop: '1px solid var(--c-border)' } : {}),
         }}>
@@ -66,10 +66,6 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
             {doc?.actual_ship_date
               ? <div className="dt" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{fmtDate(doc.actual_ship_date)}</div>
               : <div className="dash" style={{ fontWeight: 500 }}>—</div>}
-          </div>
-          <div>
-            <div className="t-sub">Перевозчик</div>
-            <div style={{ fontWeight: 500 }}>{doc?.carrier || '—'}</div>
           </div>
           <div>
             <div className="t-sub">План, шт</div>

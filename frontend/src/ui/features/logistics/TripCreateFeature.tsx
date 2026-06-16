@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripShipments, linkTripReceipts } from '../../../api/tripsApi'
 import type { TripReceiptItem, TripReceiptLinkItem, TripShipmentItem, TripShipmentLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
-import { getReceipts } from '../../../api/receiptsApi'
+import { getReceipts, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
 import type { ShipmentListItem } from '../../../api/shipmentsApi'
@@ -56,14 +56,17 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   useEffect(() => {
     const ctrl = new AbortController()
     if (outbound) {
-      // 'new' — несуществующий рейс: фильтр available_for_trip_id отсекает отгрузки,
-      // привязанные к любому реальному рейсу (tl.trip_id != 'new'), оставляя свободные.
-      // cargo_type ограничивает кандидатов типом груза рейса (товар | брак).
+      // 'new' — несуществующий рейс: available_for_trip_id исключает только привязки
+      // к ЭТОМУ рейсу (которого ещё нет) → в кандидаты попадают и документы, уже
+      // распределённые по другим рейсам (дробление). cargo_type ограничивает типом груза.
       listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
         .catch(() => {})
     } else {
-      getReceipts({ status: 'planned', limit: 100, unlinked_to_trip: true }, ctrl.signal)
+      // Зеркально отгрузкам: «В плане» + «Частично принято» (остаток можно довезти
+      // вторым рейсом). available_for_trip_id:'new' оставляет в кандидатах поступления,
+      // уже привязанные к другим рейсам.
+      getReceipts({ status: RECEIPT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new' }, ctrl.signal)
         .then((res) => { if (!ctrl.signal.aborted) setAvailable(res.items) })
         .catch(() => {})
     }
@@ -130,6 +133,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       allocations: (recvDist.find((it) => it.receipt_doc_id === r.id)?.allocations ?? []).map((a) => ({
         line_id: a.line_id, product_sku: null, product_name: null, variant: null,
         qty: a.qty, planned_qty: 0, accepted_qty: 0,
+        storage_zone_id: null, storage_zone_name: null,
       })),
     }))
   const selectedShipments: TripShipmentItem[] = availableShipments

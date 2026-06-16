@@ -16,8 +16,6 @@ class BalanceItem(BaseModel):
     size_id: str | None
     size_name: str | None
     # Корзины: операционный статус × качество.
-    # intake — принятое по незавершённым поступлениям (только отображение).
-    intake: int
     storage_good: int
     storage_defect: int
     packing_good: int
@@ -38,7 +36,6 @@ class BalanceListResponse(BaseModel):
 class BalanceSummaryResponse(BaseModel):
     """Итоги по всем позициям (не зависят от пагинации списка)."""
 
-    intake: int
     storage_good: int
     storage_defect: int
     packing_good: int
@@ -51,7 +48,7 @@ class BalanceSummaryResponse(BaseModel):
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'intake' | 'storage' | 'packing' | 'ready'
+    op_status: str  # 'storage' | 'packing' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str
@@ -120,6 +117,30 @@ class WriteOffCreate(BaseModel):
     qty: int = Field(ge=1)
     reason: Literal["shortage", "damage", "disposal", "client_return", "other"]
     comment: str | None = None
+
+
+class StockEntryLine(BaseModel):
+    product_id: str
+    product_name: str
+    product_sku: str
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+    zone_id: str
+    quality: Literal["good", "defect"] = "good"
+    qty: int = Field(ge=1)
+
+
+class StockEntryCreate(BaseModel):
+    """Историческое заведение остатков — то, что лежало на складе до системы.
+
+    Без документа/маршрута: каждая строка пишется журнальным движением
+    intake→storage@место. Привязка к клиенту обязательна (остатки — по клиенту).
+    """
+    client_id: str
+    comment: str | None = None
+    lines: list[StockEntryLine] = Field(default_factory=list)
 
 
 class ZoneRelocationItem(BaseModel):

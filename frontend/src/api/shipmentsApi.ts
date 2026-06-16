@@ -151,6 +151,7 @@ export type ShipmentDetail = ShipmentListItem & {
   actual_ship_date: string | null
   trip_id:          string | null
   trip_number:      string | null
+  trips:            { id: string; number: string }[]
   created_by:       string | null
   updated_at:       string | null
   lines:            ShipmentLine[]

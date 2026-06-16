@@ -2,14 +2,12 @@ import { request } from './http'
 
 // --- Types ---
 
-/** Операционный статус запаса: что товар делает.
- *  intake — виртуальный статус отображения: принято по незавершённым поступлениям. */
-export type InvOpStatus = 'intake' | 'storage' | 'packing' | 'ready'
+/** Операционный статус запаса: что товар делает. */
+export type InvOpStatus = 'storage' | 'packing' | 'ready'
 /** Качество запаса. «Не проверен» существует только внутри приёмки. */
 export type InvQuality = 'good' | 'defect'
 
 export const INV_OP_LABELS: Record<InvOpStatus, string> = {
-  intake:  'На приёмке',
   storage: 'На хранении',
   packing: 'На упаковке',
   ready:   'Готов к отгрузке',
@@ -41,7 +39,6 @@ export type BalanceItem = {
   size_name: string | null
   client_id: string | null
   client_name: string | null
-  intake: number
   storage_good: number
   storage_defect: number
   packing_good: number
@@ -53,7 +50,6 @@ export type BalanceItem = {
 }
 
 export type BalanceSummary = {
-  intake: number
   storage_good: number
   storage_defect: number
   packing_good: number
@@ -218,12 +214,39 @@ export function createQualityChange(payload: QualityChangePayload) {
   })
 }
 
+export type StockEntryLine = {
+  product_id:   string
+  product_name: string
+  product_sku:  string
+  color_id:     string | null
+  color_name:   string | null
+  size_id:      string | null
+  size_name:    string | null
+  zone_id:      string
+  quality:      InvQuality
+  qty:          number
+}
+
+export type StockEntryPayload = {
+  client_id: string
+  comment?:  string | null
+  lines:     StockEntryLine[]
+}
+
+/** Историческое заведение остатков (то, что лежало до системы) — без документа. */
+export function createStockEntry(payload: StockEntryPayload) {
+  return request<{ message: string }>('/balances/stock-entry', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export type ZoneRelocationItem = {
   id:               string
   created_at:       string
   created_by_email: string | null
-  from_op:          InvOpStatus | 'shipped' | 'written_off'
-  to_op:            InvOpStatus | 'shipped' | 'written_off'
+  from_op:          InvOpStatus | 'intake' | 'shipped' | 'written_off'
+  to_op:            InvOpStatus | 'intake' | 'shipped' | 'written_off'
   from_quality:     InvQuality
   to_quality:       InvQuality
   product_name:     string | null

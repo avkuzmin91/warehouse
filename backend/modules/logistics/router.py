@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    INV_OP_INTAKE,
+    INV_OP_STORAGE,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     TRIP_DIRECTION_INBOUND,
@@ -61,12 +63,12 @@ from modules.logistics.schemas import (
 )
 from modules.logistics.service import (
     assert_shipments_ready_for_load,
-    cascade_receipts_to_intake,
     cascade_shipments_to_shipped,
     link_receipts,
     link_shipments,
     list_trips_aggregated,
     next_trip_number,
+    receive_receipts_for_trip,
     reverse_receipt_intake_for_trip,
     reverse_shipment_consume_for_trip,
     sync_actual_arrival,
@@ -266,6 +268,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         shipment_rows = []
         alloc_rows = []
         recv_alloc_rows = []
+        recv_by_line: dict[str, int] = {}
         if is_outbound:
             shipment_rows = conn.execute(
                 """
@@ -307,7 +310,8 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 """
                 SELECT ta.trip_line_id, ta.qty,
                        rl.id AS receipt_line_id, rl.product_sku, rl.product_name,
-                       rl.color_name, rl.size_name, rl.planned_qty, rl.accepted_qty
+                       rl.color_name, rl.size_name, rl.planned_qty, rl.accepted_qty,
+                       rl.storage_zone_id, rl.storage_zone_name
                 FROM trip_alloc ta
                 JOIN trip_lines l ON l.id = ta.trip_line_id
                 JOIN receipt_lines rl ON rl.id = ta.receipt_line_id
@@ -316,6 +320,20 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 """,
                 (trip_id,),
             ).fetchall()
+            # Принято кладовщиком фактически в этом рейсе = нетто журнала по строке:
+            # приход приёмки (intake→storage) минус сторно при отмене рейса (storage→intake).
+            recv_net_rows = conn.execute(
+                """
+                SELECT receipt_line_id,
+                       COALESCE(SUM(CASE WHEN from_op = ? AND to_op = ? THEN qty ELSE 0 END), 0)
+                     - COALESCE(SUM(CASE WHEN from_op = ? AND to_op = ? THEN qty ELSE 0 END), 0) AS net
+                FROM zone_relocations
+                WHERE trip_id = ? AND receipt_line_id IS NOT NULL
+                GROUP BY receipt_line_id
+                """,
+                (INV_OP_INTAKE, INV_OP_STORAGE, INV_OP_STORAGE, INV_OP_INTAKE, trip_id),
+            ).fetchall()
+            recv_by_line = {str(r["receipt_line_id"]): int(r["net"] or 0) for r in recv_net_rows}
         ops_rows = conn.execute(
             "SELECT o.*, u.email AS user_email FROM trip_ops o "
             "LEFT JOIN users u ON u.id = o.created_by WHERE o.trip_id = ? ORDER BY o.created_at DESC",
@@ -334,6 +352,9 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 qty=int(a["qty"] or 0),
                 planned_qty=int(a["planned_qty"] or 0),
                 accepted_qty=int(a["accepted_qty"] or 0),
+                received_qty=recv_by_line.get(str(a["receipt_line_id"]), 0),
+                storage_zone_id=a["storage_zone_id"],
+                storage_zone_name=a["storage_zone_name"],
             )
         )
     receipts = [
@@ -346,6 +367,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             client_name=r["client_name"],
             allocations=recv_alloc_by_line.get(str(r["line_id"]), []),
             allocated_qty=sum(al.qty for al in recv_alloc_by_line.get(str(r["line_id"]), [])),
+            received_qty=sum(al.received_qty for al in recv_alloc_by_line.get(str(r["line_id"]), [])),
         )
         for r in receipt_rows
     ]
@@ -647,7 +669,18 @@ def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_curre
             cascade_shipments_to_shipped(conn, trip_id, str(doc_row["trip_number"]), uid)
             sync_actual_ship_date(conn, trip_id, doc_row["arrived_at"])
         else:
-            cascade_receipts_to_intake(conn, trip_id, str(doc_row["trip_number"]), uid)
+            accepted_by_line = {x.line_id: x.accepted_qty for x in payload.receipt_lines}
+            zone_by_line = {
+                x.line_id: {
+                    "id": (x.storage_zone_id or "").strip() or None,
+                    "name": (x.storage_zone_name or "").strip() or None,
+                }
+                for x in payload.receipt_lines
+            }
+            receive_receipts_for_trip(
+                conn, trip_id, str(doc_row["trip_number"]), uid,
+                accepted_by_line=accepted_by_line, zone_by_line=zone_by_line,
+            )
             sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
         conn.commit()
     return {"message": TRIP_STATUS_COSTING}

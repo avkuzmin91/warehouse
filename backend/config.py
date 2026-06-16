@@ -81,15 +81,15 @@ RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
 
 RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
-    RECEIPT_STATUS_PLANNED:   RECEIPT_STATUS_ON_INTAKE,
-    # on_intake → done выполняет «Принять товары» (/arrive): весь принятый товар
-    # встаёт на остатки как «На хранении / Годный». Брак фиксируется на упаковке.
+    # Дальше поступление двигает только рейс: приёмка идёт в разгрузке рейса
+    # (planned → partially_received → done), отдельной карточной приёмки больше нет.
+    # on_intake / on_review — легаси-статусы, в новом потоке не используются.
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:             "Создание",
     RECEIPT_STATUS_PLANNED:           "В плане",
-    RECEIPT_STATUS_ON_INTAKE:         "Принят",
+    RECEIPT_STATUS_ON_INTAKE:         "На приёмке",
     RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
     RECEIPT_STATUS_ON_REVIEW:         "На проверке",
     RECEIPT_STATUS_DONE:              "Завершён",
@@ -106,6 +106,7 @@ RECEIPT_OP_PLAN_FIX            = "plan_fix"
 RECEIPT_OP_INTAKE_START        = "intake_start"
 RECEIPT_OP_ARRIVAL_FIX         = "arrival_fix"
 RECEIPT_OP_ARRIVAL_ACCEPT      = "arrival_accept"
+RECEIPT_OP_RECEIVING_CORRECTION = "receiving_correction"
 RECEIPT_OP_CANCEL              = "cancel"
 
 # Статусы line-уровня (QC)

@@ -110,12 +110,26 @@ def _receive(api, client_id, pos, qty, intake_zone_id):
         "supplier_name": "S", "arrival_date": "2026-05-27", "lines": [line],
     }).json()["message"]
     api.post(f"/receipts/{doc_id}/advance")  # draft → planned
-    api.patch(f"/receipts/{doc_id}/actual-arrival", json={"actual_arrival_date": "2026-05-27"})
-    lid = api.get(f"/receipts/{doc_id}").json()["lines"][0]["id"]
-    api.patch(f"/receipts/{doc_id}/lines/{lid}", json={"storage_zone_id": intake_zone_id, "storage_zone_name": "Приёмка"})
-    api.post(f"/receipts/{doc_id}/intake")  # planned → on_intake
-    r = api.post(f"/receipts/{doc_id}/arrive", json={"lines": [{"line_id": lid, "accepted_qty": qty}]})
-    assert r.status_code == 200 and r.json()["message"] == "done", r.text
+    l = api.get(f"/receipts/{doc_id}").json()["lines"][0]
+    lid = l["id"]
+    # Карточная приёмка убрана (поступления принимаются в рейсе); для сида сразу
+    # сажаем готовый остаток в storage и помечаем поступление done — как делал /arrive.
+    from config import INV_OP_INTAKE, INV_OP_STORAGE, INV_Q_GOOD
+    from dbconn import get_connection
+    from modules.balances.service import insert_inventory_move
+    with get_connection() as c:
+        c.execute("UPDATE receipt_docs SET status='done' WHERE id=?", (doc_id,))
+        c.execute("UPDATE receipt_lines SET accepted_qty=?, storage_zone_id=?, storage_zone_name=? WHERE id=?",
+                  (qty, intake_zone_id, "Приёмка", lid))
+        insert_inventory_move(
+            c, product_id=l["product_id"], product_name=l["product_name"], product_sku=l["product_sku"],
+            color_id=l["color_id"], color_name=l["color_name"], size_id=l["size_id"], size_name=l["size_name"],
+            client_id=client_id, client_name="C", from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+            from_zone_id=intake_zone_id, from_zone_name="Приёмка", to_zone_id=intake_zone_id, to_zone_name="Приёмка",
+            qty=qty, user_id=None, receipt_line_id=lid, comment="seed",
+        )
+        c.commit()
     return doc_id
 
 

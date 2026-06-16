@@ -20,10 +20,6 @@ function isShippingZone(item: AnyDictItem): boolean {
   return 'is_shipping_zone' in item && !!item.is_shipping_zone
 }
 
-function isReceivingZone(item: AnyDictItem): boolean {
-  return 'is_receiving_zone' in item && !!item.is_receiving_zone
-}
-
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
 interface SimpleDictProps {
@@ -190,9 +186,6 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   )}
                   {isShippingZone(item) && (
                     <Badge tone="warning" style={{ marginLeft: 8 }}>Зона отгрузки</Badge>
-                  )}
-                  {isReceivingZone(item) && (
-                    <Badge tone="success" style={{ marginLeft: 8 }}>Зона приёмки</Badge>
                   )}
                 </td>
                 <td className="text-sm muted">{formatDate(item.created_at)}</td>

@@ -63,6 +63,12 @@ class ReceiptActualArrivalUpdate(BaseModel):
     actual_arrival_date: str | None = None
 
 
+class ReceiptReceivedCorrection(BaseModel):
+    """Пост-фактум корректировка обсчёта приёмки по строке: новое принятое + причина."""
+    accepted_qty: int = Field(ge=0)
+    reason: str
+
+
 class ReceiptArriveLine(BaseModel):
     line_id: str
     accepted_qty: int = Field(ge=0)
@@ -85,6 +91,11 @@ class ReceiptLineQcComplete(BaseModel):
     defect: int | None = None
 
 
+class TripRef(BaseModel):
+    id: str
+    number: str
+
+
 class ReceiptDocResponse(BaseModel):
     id: str
     doc_number: str
@@ -101,6 +112,7 @@ class ReceiptDocResponse(BaseModel):
     logistics_cost: float | None = None
     trip_id: str | None = None
     trip_number: str | None = None
+    trips: list[TripRef] = []
     created_at: str
     created_by: str | None = None
     updated_at: str | None = None
@@ -120,6 +132,7 @@ class ReceiptLineResponse(BaseModel):
     storage_zone_name: str | None = None
     planned_qty: int
     accepted_qty: int | None = None
+    arrived_qty: int = 0
     created_at: str
 
 
@@ -141,6 +154,7 @@ class ReceiptDetailResponse(BaseModel):
     lines: list[ReceiptLineResponse]
     ops: list[ReceiptOpResponse]
     state: dict
+    can_close_short: bool = False
 
 
 class ReceiptListItem(BaseModel):

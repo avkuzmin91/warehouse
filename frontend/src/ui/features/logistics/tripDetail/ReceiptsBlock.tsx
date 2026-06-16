@@ -52,6 +52,7 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
   const canExpand = !!expandable && !!onOpen
   // В рейсе показываем распределённое количество (allocated_qty); для легаси-привязок — план из enrich.
   const totalQty = receipts.reduce((s, r) => s + (r.allocated_qty || (enrich?.[r.receipt_doc_id]?.qty ?? 0)), 0)
+  const receivedTotal = receipts.reduce((s, r) => s + (r.received_qty ?? 0), 0)
   const allOpen = receipts.length > 0 && open.size === receipts.length
 
   const toggleOne = (id: string) => setOpen((prev) => {
@@ -65,7 +66,10 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
   const headerRight = right ?? (
     canExpand ? (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-        <span className="t-sub">{receipts.length} поступления{totalQty > 0 ? ` · ${totalQty} шт` : ''}</span>
+        <span className="t-sub">
+          {receipts.length} поступления{totalQty > 0 ? ` · план ${totalQty} шт` : ''}
+          {totalQty > 0 ? ` · принято ${receivedTotal}` : ''}
+        </span>
         {receipts.length > 0 && (
           <button type="button" className="btn ghost sm" onClick={toggleAll}>
             <Icon name={allOpen ? 'chevUp' : 'chevDown'} size={13} />

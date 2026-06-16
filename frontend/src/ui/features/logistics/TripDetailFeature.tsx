@@ -17,7 +17,8 @@ import {
   isOutbound,
   tripLexicon,
 } from '../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor, TripShipmentLinkItem, TripReceiptLinkItem } from '../../../api/tripsApi'
+import type { TripDetail, TripLoadFactor, TripShipmentLinkItem, TripReceiptLinkItem, TripUnloadReceiptLine } from '../../../api/tripsApi'
+import { UnloadReceiveTable } from './tripDetail/components/UnloadReceiveTable'
 import { getReceipts, createReceipt, advanceReceiptStatus, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
@@ -63,7 +64,7 @@ function todayYmd(): string {
 export function TripDetailFeature({ tripId }: { tripId: string }) {
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const { warehouses, carriers, vehicleTypes } = useLookups()
+  const { warehouses, carriers, vehicleTypes, unloadingZones } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const canEditTransportPlanning = user?.role === 'admin' || user?.role === 'manager'
@@ -80,6 +81,9 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [arrival, setArrival] = useState<string>(todayYmd())
   const [unloadStart, setUnloadStart] = useState<string>('')
   const [unloadEnd, setUnloadEnd] = useState<string>('')
+  // Приёмка inbound-рейса по строкам: принято (по умолчанию вся аллокация) и место.
+  const [acceptByLine, setAcceptByLine] = useState<Record<string, number>>({})
+  const [zoneByLine, setZoneByLine] = useState<Record<string, string>>({})
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
   const [availableShipments, setAvailableShipments] = useState<ShipmentListItem[]>([])
   const [showBlockReasons, setShowBlockReasons] = useState(false)
@@ -110,6 +114,18 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       setArrival(d.doc.arrived_at ?? d.doc.eta ?? todayYmd())
       setUnloadStart(d.doc.unload_started_at ?? d.doc.arrived_at ?? '')
       setUnloadEnd(d.doc.unload_finished_at ?? '')
+      // Предзаполняем только принятое (= аллокация рейса). Место хранения кладовщик
+      // выбирает вручную при разгрузке — не подставляем место из строки.
+      const acc: Record<string, number> = {}
+      const zone: Record<string, string> = {}
+      for (const r of d.receipts) {
+        for (const a of r.allocations) {
+          acc[a.line_id] = a.qty
+          zone[a.line_id] = ''
+        }
+      }
+      setAcceptByLine(acc)
+      setZoneByLine(zone)
     } catch {
       setError('Рейс не найден')
     } finally {
@@ -212,10 +228,29 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     return run(async () => { await saveFields(); await handoffTrip(tripId) })
   }
   const handleArrival = () => run(() => tripArrival(tripId, arrival))
+
+  function buildReceiptLines(): TripUnloadReceiptLine[] {
+    const out: TripUnloadReceiptLine[] = []
+    for (const r of detail?.receipts ?? []) {
+      for (const a of r.allocations) {
+        const zoneId = zoneByLine[a.line_id] ?? ''
+        const zone = unloadingZones.find((z) => z.id === zoneId)
+        out.push({
+          line_id: a.line_id,
+          accepted_qty: acceptByLine[a.line_id] ?? a.qty,
+          storage_zone_id: zoneId || null,
+          storage_zone_name: zone?.name ?? a.storage_zone_name ?? null,
+        })
+      }
+    }
+    return out
+  }
+
   const handleUnload = () => run(() => tripUnload(tripId, {
     unload_started_at: unloadStart || null,
     unload_finished_at: unloadEnd || null,
     load_factor: loadFactor || null,
+    ...(outbound ? {} : { receipt_lines: buildReceiptLines() }),
   }))
 
   async function handleClose() {
@@ -355,6 +390,30 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     />
   ) : undefined
 
+  // Приёмка inbound-рейса при разгрузке: таблица «принято + место» по строкам.
+  const storageZones = unloadingZones.filter((z) => z.is_active && !z.is_deleted)
+  const anyReceiveZoneMissing = !outbound && receipts.some((r) => r.allocations.some((a) => {
+    const acc = acceptByLine[a.line_id] ?? a.qty
+    const zoneId = zoneByLine[a.line_id] ?? ''
+    return acc > 0 && !zoneId
+  }))
+  const receiveBlockReasons = (!outbound && status === 'unloading' && anyReceiveZoneMissing)
+    ? ['Укажите место хранения по строкам приёмки']
+    : []
+  const receiveNode = (!outbound && status === 'unloading')
+    ? (showErrors: boolean) => (
+        <UnloadReceiveTable
+          receipts={receipts}
+          zones={storageZones}
+          acceptByLine={acceptByLine}
+          zoneByLine={zoneByLine}
+          onAccept={(lineId, qty) => setAcceptByLine((p) => ({ ...p, [lineId]: qty }))}
+          onZone={(lineId, zoneId) => setZoneByLine((p) => ({ ...p, [lineId]: zoneId }))}
+          showErrors={showErrors}
+        />
+      )
+    : undefined
+
   const checks: Check[] = [
     { ok: !!form.origin_id, label: `${lex.routeLabel} указано` },
     { ok: !!form.carrier_id, label: 'Перевозчик указан' },
@@ -402,6 +461,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
           unloadEnd={unloadEnd} onUnloadEndChange={setUnloadEnd}
           onBack={onBack} onArrival={handleArrival} onUnload={handleUnload} onOpenReceipt={onOpenReceipt}
           docsNode={docsNode}
+          receiveNode={receiveNode}
+          extraBlockReasons={receiveBlockReasons}
         />
       ) : (
         <InWarehouseView
@@ -419,6 +480,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
           onSaveFields={handleSaveFields} onArrival={handleArrival} onUnload={handleUnload}
           onOpenReceipt={onOpenReceipt}
           docsNode={docsNode}
+          receiveNode={receiveNode}
+          extraBlockReasons={receiveBlockReasons}
         />
       )
     )

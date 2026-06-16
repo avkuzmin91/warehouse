@@ -377,8 +377,11 @@ def test_storage_remainder_after_move_to_packing(admin_client, client_id, produc
         _cleanup_test_docs(client_id)
 
 
-def test_intake_bucket_for_unfinished_receipt(admin_client, client_id, product_ids):
-    """Принятое по незавершённому поступлению видно в корзине «На приёмке»."""
+def test_unfinished_receipt_not_in_balances(admin_client, client_id, product_ids):
+    """Незавершённая приёмка (on_intake) не попадает в остатки.
+
+    Остаток чисто журнальный: пока приёмка не проведена (нет движения
+    intake → storage), товар в выдаче остатков не появляется."""
     pid, color_id, size_id = product_ids
     zone = str(uuid.uuid4())
     qty = 17
@@ -393,22 +396,18 @@ def test_intake_bucket_for_unfinished_receipt(admin_client, client_id, product_i
         r = admin_client.get(f"/balances?client_id={client_id}")
         assert r.status_code == 200, r.text
         matched = [i for i in r.json()["items"] if i["product_id"] == pid]
-        assert matched, f"Товар {pid} не найден в балансах"
-        assert matched[0]["intake"] == qty
-        assert matched[0]["storage_good"] == 0
-        assert matched[0]["total"] == qty
+        assert matched == [], "Незавершённая приёмка не должна быть в остатках"
 
         z = admin_client.get(f"/balances/zones?client_id={client_id}")
         assert z.status_code == 200, z.text
         z_data = z.json()
         assert z_data["truncated"] is False
-        assert _zone_bucket(z_data["items"], zone, "intake", "good") == qty
         assert _zone_bucket(z_data["items"], zone, "storage", "good") == 0
 
         s = admin_client.get(f"/balances/summary?client_id={client_id}")
         assert s.status_code == 200, s.text
-        assert s.json()["intake"] == qty
-        assert s.json()["total"] == qty
+        assert "intake" not in s.json()
+        assert s.json()["total"] == 0
     finally:
         _cleanup_test_docs(client_id)
 
@@ -432,7 +431,6 @@ def test_balances_summary_matches_buckets(admin_client, client_id, product_ids):
         s = admin_client.get(f"/balances/summary?client_id={client_id}")
         assert s.status_code == 200, s.text
         data = s.json()
-        assert data["intake"] == 0
         assert data["storage_good"] == received - defect - to_packing
         assert data["storage_defect"] == defect
         assert data["packing_good"] == to_packing

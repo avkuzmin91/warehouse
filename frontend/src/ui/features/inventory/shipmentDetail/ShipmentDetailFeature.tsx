@@ -673,11 +673,11 @@ export function ShipmentDetailFeature() {
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
-              <button className="btn" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}>
-                <Icon name="truckOut" size={14} />Открыть рейс {doc.trip_number}
+            {(isAwaitingTrip || status === 'shipped') && doc.trips.map((t) => (
+              <button key={t.id} className="btn" onClick={() => navigate(`/logistics/trips/${t.id}`)}>
+                <Icon name="truckOut" size={14} />Открыть рейс {t.number}
               </button>
-            )}
+            ))}
             {primary?.show && (
               <PrimaryAction
                 icon={primary.icon}
@@ -751,15 +751,20 @@ export function ShipmentDetailFeature() {
                       </div>
                     </div>
                   </Field>
-                  <Field label="Рейс" style={{ marginBottom: 0 }}>
-                    {doc.trip_id ? (
-                      <button
-                        className="btn ghost sm"
-                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                        style={{ width: '100%', justifyContent: 'flex-start' }}
-                      >
-                        <Icon name="truckIn" size={13} />{doc.trip_number}
-                      </button>
+                  <Field label={doc.trips.length > 1 ? 'Рейсы' : 'Рейс'} style={{ marginBottom: 0 }}>
+                    {doc.trips.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {doc.trips.map((t) => (
+                          <button
+                            key={t.id}
+                            className="btn ghost sm"
+                            onClick={() => navigate(`/logistics/trips/${t.id}`)}
+                            style={{ width: '100%', justifyContent: 'flex-start' }}
+                          >
+                            <Icon name="truckIn" size={13} />{t.number}
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <Input value="—" readOnly style={{ cursor: 'default' }} />
                     )}
@@ -805,15 +810,20 @@ export function ShipmentDetailFeature() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
                   <div>
-                    <div className="field-label"><span>Рейс</span></div>
-                    {doc.trip_id ? (
-                      <button
-                        className="btn ghost sm"
-                        onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                        style={{ width: '100%', justifyContent: 'flex-start' }}
-                      >
-                        <Icon name="truckIn" size={13} />{doc.trip_number}
-                      </button>
+                    <div className="field-label"><span>{doc.trips.length > 1 ? 'Рейсы' : 'Рейс'}</span></div>
+                    {doc.trips.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {doc.trips.map((t) => (
+                          <button
+                            key={t.id}
+                            className="btn ghost sm"
+                            onClick={() => navigate(`/logistics/trips/${t.id}`)}
+                            style={{ width: '100%', justifyContent: 'flex-start' }}
+                          >
+                            <Icon name="truckIn" size={13} />{t.number}
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
                     )}
@@ -1011,15 +1021,20 @@ export function ShipmentDetailFeature() {
             </Panel>
           )}
 
-          {(isAwaitingTrip || status === 'shipped') && doc.trip_id && (
-            <Panel icon="truckOut" title="Рейс отгрузки">
-              <button
-                className="btn ghost sm"
-                onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                style={{ width: '100%', justifyContent: 'flex-start' }}
-              >
-                <Icon name="truckOut" size={13} />{doc.trip_number}
-              </button>
+          {(isAwaitingTrip || status === 'shipped') && doc.trips.length > 0 && (
+            <Panel icon="truckOut" title={doc.trips.length > 1 ? 'Рейсы отгрузки' : 'Рейс отгрузки'}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {doc.trips.map((t) => (
+                  <button
+                    key={t.id}
+                    className="btn ghost sm"
+                    onClick={() => navigate(`/logistics/trips/${t.id}`)}
+                    style={{ width: '100%', justifyContent: 'flex-start' }}
+                  >
+                    <Icon name="truckOut" size={13} />{t.number}
+                  </button>
+                ))}
+              </div>
               <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
                 Дата отгрузки (факт) и списание остатков проставляются при отправке рейса.
               </div>

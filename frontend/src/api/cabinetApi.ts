@@ -82,7 +82,6 @@ export type CabinetShipmentListItem = {
   doc_number: string
   cargo_type: CabinetCargoType
   store_names: string[]
-  carrier: string | null
   ship_date: string | null
   actual_ship_date: string | null
   status: CabinetShipmentStatus
@@ -127,7 +126,6 @@ export type CabinetShipmentDetail = {
     id: string
     doc_number: string
     cargo_type: CabinetCargoType
-    carrier: string | null
     ship_date: string | null
     actual_ship_date: string | null
     status: CabinetShipmentStatus

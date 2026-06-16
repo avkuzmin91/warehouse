@@ -32,6 +32,11 @@ export function canCreateDocuments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }
 
+// Пост-фактум корректировка обсчёта приёмки (правит остатки) — менеджер и начальник склада.
+export function canCorrectReceived(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_head'
+}
+
 export function canPackShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'shift_supervisor' || user?.role === 'warehouse_head'
 }

@@ -60,6 +60,7 @@ from modules.shipments.schemas import (
     ShipmentPackingResponse,
     ShipmentPriorityUpdate,
     ShipmentReturnFromPackingPayload,
+    TripRef,
 )
 from modules.shipments.service import (
     advance_shipment,
@@ -535,13 +536,14 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        trip_row = conn.execute(
-            "SELECT t.id AS trip_id, t.trip_number AS trip_number "
+        trip_rows = conn.execute(
+            "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
             "FROM trip_lines tl "
             "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
-            "WHERE tl.shipment_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0",
+            "WHERE tl.shipment_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+            "ORDER BY t.trip_number",
             (doc_id,),
-        ).fetchone()
+        ).fetchall()
         lines_rows = conn.execute(
             "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
             (doc_id,),
@@ -665,8 +667,9 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         comment=row["comment"],
         status=str(row["status"]),
         status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
-        trip_id=str(trip_row["trip_id"]) if trip_row else None,
-        trip_number=str(trip_row["trip_number"]) if trip_row else None,
+        trip_id=str(trip_rows[0]["trip_id"]) if trip_rows else None,
+        trip_number=str(trip_rows[0]["trip_number"]) if trip_rows else None,
+        trips=[TripRef(id=str(tr["trip_id"]), number=str(tr["trip_number"])) for tr in trip_rows],
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
         updated_at=row["updated_at"],

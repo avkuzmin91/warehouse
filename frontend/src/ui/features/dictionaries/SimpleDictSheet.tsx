@@ -9,7 +9,6 @@ import {
   fetchSimpleDictionaryPage,
   setUnloadingZonePacking,
   setUnloadingZoneShipping,
-  setUnloadingZoneReceiving,
 } from '../../../api/adminApi'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import { Drawer } from '../../feedback/Drawer'
@@ -22,25 +21,23 @@ import { Icon } from '../../primitives/Icon'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
-type ZoneRoleKey = 'packing' | 'shipping' | 'receiving'
+type ZoneRoleKey = 'packing' | 'shipping'
 
-const ZONE_ROLE_FIELD: Record<ZoneRoleKey, 'is_packing_zone' | 'is_shipping_zone' | 'is_receiving_zone'> = {
+const ZONE_ROLE_FIELD: Record<ZoneRoleKey, 'is_packing_zone' | 'is_shipping_zone'> = {
   packing: 'is_packing_zone',
   shipping: 'is_shipping_zone',
-  receiving: 'is_receiving_zone',
 }
 
 const ZONE_ROLES: {
   key: ZoneRoleKey
   label: string
   instrumental: string
-  icon: 'forklift' | 'truckOut' | 'truckIn'
-  tone: 'info' | 'warning' | 'success'
+  icon: 'forklift' | 'truckOut'
+  tone: 'info' | 'warning'
   assign: (id: string) => Promise<{ message: string }>
 }[] = [
   { key: 'packing', label: 'Зона упаковки', instrumental: 'зоной упаковки', icon: 'forklift', tone: 'info', assign: setUnloadingZonePacking },
   { key: 'shipping', label: 'Зона отгрузки', instrumental: 'зоной отгрузки', icon: 'truckOut', tone: 'warning', assign: setUnloadingZoneShipping },
-  { key: 'receiving', label: 'Зона приёмки', instrumental: 'зоной приёмки', icon: 'truckIn', tone: 'success', assign: setUnloadingZoneReceiving },
 ]
 
 function zoneHasRole(zone: DictionaryItem, key: ZoneRoleKey): boolean {
@@ -89,7 +86,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [zones, setZones] = useState<DictionaryItem[]>([])
-  const [roleFlags, setRoleFlags] = useState<Record<ZoneRoleKey, boolean>>({ packing: false, shipping: false, receiving: false })
+  const [roleFlags, setRoleFlags] = useState<Record<ZoneRoleKey, boolean>>({ packing: false, shipping: false })
   const [assigning, setAssigning] = useState(false)
   const confirm = useConfirm()
   const toast = useToast()
@@ -114,7 +111,6 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     setRoleFlags({
       packing: !!initial && 'is_packing_zone' in initial && !!initial.is_packing_zone,
       shipping: !!initial && 'is_shipping_zone' in initial && !!initial.is_shipping_zone,
-      receiving: !!initial && 'is_receiving_zone' in initial && !!initial.is_receiving_zone,
     })
   }, [open, initial, apiType])
 

@@ -48,10 +48,13 @@ export type ReceiptDoc = {
   logistics_cost: number | null
   trip_id: string | null
   trip_number: string | null
+  trips: TripRef[]
   created_at: string
   created_by: string | null
   updated_at: string | null
 }
+
+export type TripRef = { id: string; number: string }
 
 export type ReceiptLine = {
   id: string
@@ -67,6 +70,8 @@ export type ReceiptLine = {
   storage_zone_name: string | null
   planned_qty: number
   accepted_qty: number | null
+  /** Сколько уже привезли разгруженные рейсы — потолок приёмки в карточке (ручное поступление = план). */
+  arrived_qty: number
   created_at: string
 }
 
@@ -95,6 +100,8 @@ export type ReceiptDetail = {
   lines: ReceiptLine[]
   ops: ReceiptOp[]
   state: ReceiptState
+  /** Приёмка рейсами завершилась недопоставкой — менеджер может закрыть с недопоставкой. */
+  can_close_short: boolean
 }
 
 export type ReceiptListItem = ReceiptDoc & {
@@ -320,24 +327,35 @@ export function advanceReceiptStatus(docId: string) {
   })
 }
 
-export function startReceiptIntake(docId: string) {
-  return request<{ message: string }>(`/receipts/${docId}/intake`, {
-    method: 'POST',
-  })
-}
-
-export type ReceiptArriveLine = { line_id: string; accepted_qty: number }
-
-export function arriveReceipt(docId: string, lines: ReceiptArriveLine[]) {
-  return request<{ message: string }>(`/receipts/${docId}/arrive`, {
-    method: 'POST',
-    body: JSON.stringify({ lines }),
-  })
-}
+// Карточная приёмка (/intake, /arrive) удалена: поступления принимаются в рейсе
+// (разгрузка рейса), историческое заведение — действие в «Остатках».
 
 export function cancelReceipt(docId: string) {
   return request<{ message: string }>(`/receipts/${docId}/cancel`, {
     method: 'POST',
+  })
+}
+
+/** Частично принято → Завершён: закрыть поступление с недопоставкой (менеджер). */
+export function closeReceiptShort(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/close-short`, {
+    method: 'POST',
+  })
+}
+
+/** Частично принято: освободить недовоз разгруженных рейсов под новый рейс (менеджер). */
+export function expectRedelivery(docId: string) {
+  return request<{ message: string }>(`/receipts/${docId}/expect-redelivery`, {
+    method: 'POST',
+  })
+}
+
+/** Корректировка обсчёта приёмки по строке (менеджер / начальник склада): новое
+ *  принятое + причина. Правит сток и пишет в журнал. */
+export function correctReceivedQty(docId: string, lineId: string, payload: { accepted_qty: number; reason: string }) {
+  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/correct-received`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
@@ -355,18 +373,19 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
-  planned: 'Поступил',
+  planned: 'Запланирован',
   on_intake: 'Принят',
-  partially_received: 'Частично принято',
+  partially_received: 'Принято рейсом',
   on_review: 'Проверен',
-  done: 'Завершен',
+  done: 'Завершён',
   cancelled: 'Аннулирован',
 }
 
-// Поток поступления завершается на приёмке: on_review больше не статус документа
-// (остаётся только как статус инвентаря). Старые done-документы отображаются корректно.
+// Один линейный путь поступления: приёмка идёт рейсом, поэтому маршрут —
+// Создание → В плане → Частично принято → Завершён. on_intake/on_review — легаси,
+// в маршрут не входят (старые документы отображаются корректно).
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
-  'draft', 'planned', 'on_intake', 'done',
+  'draft', 'planned', 'partially_received', 'done',
 ]
 
 /** Статусы поступлений, доступные для привязки к рейсу: «В плане» и «Частично принято»

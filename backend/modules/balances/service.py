@@ -11,8 +11,7 @@ from config import (
     INV_Q_GOOD,
     INV_QUALITY_LABELS,
     RECEIPT_STATUS_DONE,
-    RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_REVIEW,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     WRITEOFF_REASON_OTHER,
 )
 from dbconn import like_substring_param
@@ -36,10 +35,9 @@ from modules.balances.schemas import (
 # (только источник), shipped и written_off — терминальные стоки (INV_OP_SINKS).
 # Инвариант: остаток меняется ⇔ есть запись в журнале.
 #
-# Виртуальная корзина intake в выдаче — accepted_qty поступлений в статусах
-# on_intake / on_review (товар на складе, но операции недоступны до завершения
-# приёмки). Считается из receipt_lines; при завершении документ уходит из этих
-# статусов, и тот же объём приходит в storage уже журнальным intake-движением.
+# Остатки — чисто журнальные: товар появляется в выдаче только после проведённого
+# прихода (intake → storage). Незавершённая приёмка (документ в on_intake) в остатки
+# не попадает — пока кладовщик считает, журнальной записи ещё нет.
 
 _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_STORAGE, INV_Q_GOOD),
@@ -50,8 +48,11 @@ _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_READY, INV_Q_DEFECT),
 ]
 
-_INTAKE_STATUSES = (RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW)
-_INTAKE_STATUS_SQL = ", ".join(f"'{s}'" for s in _INTAKE_STATUSES)
+# Якорь позиций: какие поступления вообще порождают позицию в выдаче остатков.
+# Остаток чисто журнальный, поэтому якорят документы с проведённым приходом:
+# done (полностью принято) и partially_received (часть уже лежит в storage).
+_ANCHOR_STATUSES = (RECEIPT_STATUS_PARTIALLY_RECEIVED, RECEIPT_STATUS_DONE)
+_ANCHOR_STATUS_SQL = ", ".join(f"'{s}'" for s in _ANCHOR_STATUSES)
 _SINKS_SQL = ", ".join(f"'{s}'" for s in INV_OP_SINKS)
 
 # Защита от бесконечной выдачи в разрезе мест; усечение отдаётся флагом truncated.
@@ -63,7 +64,7 @@ def _bucket_col(op: str, quality: str) -> str:
 
 
 def _total_expr() -> str:
-    return "intake + " + " + ".join(_bucket_col(op, q) for op, q in _BUCKETS)
+    return " + ".join(_bucket_col(op, q) for op, q in _BUCKETS)
 
 
 def _defect_expr() -> str:
@@ -72,21 +73,22 @@ def _defect_expr() -> str:
 
 def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str, list]:
     """SQL позиционного агрегата остатков: одна строка на позицию
-    (product, client, color, size) с корзинами intake + op×quality."""
-    line_conds = [
-        "l.is_deleted = 0",
-        "d.is_deleted = 0",
-        f"d.status IN ({_INTAKE_STATUS_SQL}, '{RECEIPT_STATUS_DONE}')",
-    ]
+    (product, client, color, size) с корзинами op×quality.
+
+    Якорь позиций журнально-инклюзивный: позиция появляется и из строк поступлений
+    (как раньше), и напрямую из журнала (приход без документа — историческое
+    заведение остатков). Количества — чистый replay журнала.
+    """
+    pos_conds: list[str] = []
     line_params: list = []
     if client_id:
-        line_conds.append("d.client_id = ?")
+        pos_conds.append("u.client_id = ?")
         line_params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        line_conds.append("(l.product_name LIKE ? OR l.product_sku LIKE ?)")
+        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ?)")
         line_params += [s, s]
-    line_where = " AND ".join(line_conds)
+    pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     net_cols = ",\n                   ".join(
         f"SUM(CASE WHEN to_op='{op}' AND to_quality='{q}' THEN qty ELSE 0 END)"
@@ -100,19 +102,29 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
     )
 
     agg_query = f"""
-        WITH accepted AS (
-            SELECT
-                l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id,
-                MAX(l.product_name) AS product_name, MAX(cl.name) AS client_name,
-                MAX(l.color_name)   AS color_name, MAX(l.size_name) AS size_name,
-                SUM(CASE WHEN d.status IN ({_INTAKE_STATUS_SQL})
-                         THEN COALESCE(l.accepted_qty, 0) ELSE 0 END) AS intake,
-                COUNT(DISTINCT l.doc_id) FILTER (WHERE d.status = '{RECEIPT_STATUS_DONE}') AS docs_count
+        WITH receipt_pos AS (
+            SELECT l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id,
+                   l.product_name, cl.name AS client_name, l.color_name, l.size_name,
+                   CASE WHEN d.status = '{RECEIPT_STATUS_DONE}' THEN l.doc_id END AS done_doc
             FROM receipt_lines l
             JOIN receipt_docs d  ON d.id = l.doc_id
             LEFT JOIN clients cl ON cl.id = d.client_id
-            WHERE {line_where}
-            GROUP BY l.product_id, l.product_sku, d.client_id, l.color_id, l.size_id
+            WHERE l.is_deleted = 0 AND d.is_deleted = 0 AND d.status IN ({_ANCHOR_STATUS_SQL})
+        ),
+        journal_pos AS (
+            SELECT product_id, product_sku, client_id, color_id, size_id,
+                   product_name, client_name, color_name, size_name, NULL::text AS done_doc
+            FROM zone_relocations
+            WHERE to_op NOT IN ({_SINKS_SQL})
+        ),
+        accepted AS (
+            SELECT product_id, product_sku, client_id, color_id, size_id,
+                   MAX(product_name) AS product_name, MAX(client_name) AS client_name,
+                   MAX(color_name)   AS color_name, MAX(size_name) AS size_name,
+                   COUNT(DISTINCT done_doc) AS docs_count
+            FROM (SELECT * FROM receipt_pos UNION ALL SELECT * FROM journal_pos) u
+            {pos_where}
+            GROUP BY product_id, product_sku, client_id, color_id, size_id
         ),
         conv AS (
             SELECT product_id, client_id, color_id, size_id,
@@ -123,7 +135,6 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
         SELECT
             a.product_id, a.product_sku, a.client_id, a.color_id, a.size_id,
             a.product_name, a.client_name, a.color_name, a.size_name,
-            a.intake,
             {bucket_selects},
             a.docs_count
         FROM accepted a
@@ -173,7 +184,6 @@ def get_balances(
     items = []
     for row in rows:
         buckets = {_bucket_col(op, q): int(row[_bucket_col(op, q)] or 0) for op, q in _BUCKETS}
-        intake = int(row["intake"] or 0)
         items.append(
             BalanceItem(
                 product_id=str(row["product_id"]),
@@ -185,9 +195,8 @@ def get_balances(
                 color_name=row["color_name"],
                 size_id=row["size_id"],
                 size_name=row["size_name"],
-                intake=intake,
                 **buckets,
-                total=intake + sum(buckets.values()),
+                total=sum(buckets.values()),
                 docs_count=int(row["docs_count"] or 0),
             )
         )
@@ -209,7 +218,7 @@ def get_balances_summary(
     agg_query, line_params = _position_agg_query(client_id, search)
     where_clause = f"WHERE ({_defect_expr()}) > 0" if has_defect else ""
 
-    cols = ["intake"] + [_bucket_col(op, q) for op, q in _BUCKETS]
+    cols = [_bucket_col(op, q) for op, q in _BUCKETS]
     sum_cols = ", ".join(f"COALESCE(SUM({c}), 0) AS {c}" for c in cols)
     row = connection.execute(
         f"SELECT {sum_cols} FROM ({agg_query}) a {where_clause}",
@@ -230,26 +239,19 @@ def get_balances_by_zone(
     """Остатки в разрезе местоположения, длинный формат: одна строка на
     (местоположение, позиция, операционный статус, качество).
 
-    Баланс корзины в месте = приход в корзину@место − уход из корзины@место.
-    intake/good — accepted-приход незавершённых поступлений (виртуальная корзина
-    из receipt_lines); при завершении приёмки её объём переезжает в storage
-    журнальным intake-движением, а минус по intake@место гасит витрину до нуля.
+    Баланс корзины в месте = приход в корзину@место − уход из корзины@место
+    (чисто журнальный: незавершённая приёмка в остатки не попадает).
     """
-    line_conds = ["l.is_deleted = 0", "d.is_deleted = 0"]
+    pos_conds: list[str] = []
     line_params: list = []
     if client_id:
-        line_conds.append("d.client_id = ?")
+        pos_conds.append("u.client_id = ?")
         line_params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        line_conds.append("(l.product_name LIKE ? OR l.product_sku LIKE ?)")
+        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ?)")
         line_params += [s, s]
-
-    def _where(status_sql: str) -> str:
-        return " AND ".join([*line_conds, status_sql])
-
-    meta_where = _where(f"d.status IN ({_INTAKE_STATUS_SQL}, '{RECEIPT_STATUS_DONE}')")
-    intake_where = _where(f"d.status IN ({_INTAKE_STATUS_SQL})")
+    pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     pos_join = (
         "pm.product_id = x.product_id "
@@ -269,25 +271,25 @@ def get_balances_by_zone(
 
     agg_query = f"""
         WITH position_meta AS (
-            SELECT
-                l.product_id, d.client_id, l.color_id, l.size_id,
-                MAX(l.product_sku)  AS product_sku,
-                MAX(l.product_name) AS product_name, MAX(cl.name) AS client_name,
-                MAX(l.color_name)   AS color_name, MAX(l.size_name) AS size_name
-            FROM receipt_lines l
-            JOIN receipt_docs d  ON d.id = l.doc_id
-            LEFT JOIN clients cl ON cl.id = d.client_id
-            WHERE {meta_where}
-            GROUP BY l.product_id, d.client_id, l.color_id, l.size_id
-        ),
-        intake_inflow AS (
-            SELECT l.product_id, d.client_id, l.color_id, l.size_id,
-                   l.storage_zone_id AS loc_id,
-                   SUM(COALESCE(l.accepted_qty, 0)) AS qty_in
-            FROM receipt_lines l
-            JOIN receipt_docs d ON d.id = l.doc_id
-            WHERE {intake_where}
-            GROUP BY l.product_id, d.client_id, l.color_id, l.size_id, l.storage_zone_id
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(product_sku)  AS product_sku,
+                   MAX(product_name) AS product_name, MAX(client_name) AS client_name,
+                   MAX(color_name)   AS color_name, MAX(size_name) AS size_name
+            FROM (
+                SELECT l.product_id, d.client_id, l.color_id, l.size_id,
+                       l.product_sku, l.product_name, cl.name AS client_name, l.color_name, l.size_name
+                FROM receipt_lines l
+                JOIN receipt_docs d  ON d.id = l.doc_id
+                LEFT JOIN clients cl ON cl.id = d.client_id
+                WHERE l.is_deleted = 0 AND d.is_deleted = 0 AND d.status IN ({_ANCHOR_STATUS_SQL})
+                UNION ALL
+                SELECT product_id, client_id, color_id, size_id,
+                       product_sku, product_name, client_name, color_name, size_name
+                FROM zone_relocations
+                WHERE to_op NOT IN ({_SINKS_SQL})
+            ) u
+            {pos_where}
+            GROUP BY product_id, client_id, color_id, size_id
         ),
         gain AS (
             SELECT product_id, client_id, color_id, size_id,
@@ -306,24 +308,15 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM gain
             UNION
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM lose
-            UNION
-            SELECT product_id, client_id, color_id, size_id, loc_id,
-                   '{INV_OP_INTAKE}', '{INV_Q_GOOD}'
-            FROM intake_inflow
         )
         SELECT x.loc_id AS location_id, x.op AS op_status, x.quality,
                pm.product_id, pm.product_sku, pm.client_id, pm.color_id, pm.size_id,
                pm.product_name, pm.client_name, pm.color_name, pm.size_name,
-               GREATEST(0,
-                   CASE WHEN x.op = '{INV_OP_INTAKE}' AND x.quality = '{INV_Q_GOOD}'
-                        THEN COALESCE(ii.qty_in, 0) ELSE 0 END
-                   + COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)
-               ) AS qty
+               GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.op = x.op AND gi.quality = x.quality
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
-        LEFT JOIN intake_inflow ii ON {_term_join('ii')}
     """
 
     rows = connection.execute(
@@ -348,7 +341,7 @@ def get_balances_by_zone(
             b.size_name
         LIMIT {ZONE_ROWS_LIMIT + 1}
         """,
-        line_params * 2,
+        line_params,
     ).fetchall()
 
     truncated = len(rows) > ZONE_ROWS_LIMIT
@@ -404,18 +397,6 @@ def get_shipping_zone(connection) -> tuple[str, str]:
     return str(row["id"]), str(row["name"])
 
 
-def get_receiving_zone(connection) -> tuple[str, str]:
-    """(id, name) выделенной «Зоны приёмки» — буфер для приёмки рейсом без места. 400, если не настроена."""
-    row = connection.execute(
-        "SELECT id, name FROM unloading_zones "
-        "WHERE is_receiving_zone = 1 AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at LIMIT 1"
-    ).fetchone()
-    if not row:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Не настроена «Зона приёмки» (отметьте зону в справочнике)")
-    return str(row["id"]), str(row["name"])
-
-
 def insert_inventory_move(
     connection,
     *,
@@ -458,6 +439,32 @@ def insert_inventory_move(
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
          packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id),
     )
+
+
+def net_storage_good_in_zone(
+    connection, *, product_id: str, client_id: str | None,
+    color_id: str | None, size_id: str | None, zone_id: str | None,
+) -> int:
+    """Текущий остаток «На хранении / Годный» позиции в конкретной зоне (чистый net журнала).
+
+    Нужен гейтом для корректировки приёмки в меньшую сторону: уменьшать принятое
+    можно не ниже того, что физически ещё лежит в зоне — остальное уже отгружено
+    или перемещено (и его нельзя «вернуть» в intake без реверса downstream).
+    """
+    row = connection.execute(
+        """SELECT COALESCE(
+                 SUM(CASE WHEN to_op = ? AND to_quality = ? AND to_zone_id IS NOT DISTINCT FROM ? THEN qty ELSE 0 END)
+               - SUM(CASE WHEN from_op = ? AND from_quality = ? AND from_zone_id IS NOT DISTINCT FROM ? THEN qty ELSE 0 END),
+               0) AS net
+           FROM zone_relocations
+           WHERE product_id = ?
+             AND client_id IS NOT DISTINCT FROM ?
+             AND color_id  IS NOT DISTINCT FROM ?
+             AND size_id   IS NOT DISTINCT FROM ?""",
+        (INV_OP_STORAGE, INV_Q_GOOD, zone_id, INV_OP_STORAGE, INV_Q_GOOD, zone_id,
+         product_id, client_id, color_id, size_id),
+    ).fetchone()
+    return int(row["net"]) if row and row["net"] is not None else 0
 
 
 def get_available_in_zone(
@@ -686,6 +693,54 @@ def create_write_off(connection, payload, user_id: str) -> None:
         comment=comment or None,
     )
     connection.commit()
+
+
+def create_stock_entry(connection, payload, user_id: str) -> int:
+    """Историческое заведение остатков — то, что лежало на складе до системы.
+
+    Без документа поступления и без маршрута: на каждую строку пишем движение
+    intake→storage@место (зеркало приходу приёмки). Позиция появляется в остатках
+    за счёт журнально-инклюзивного якоря (см. _position_agg_query / get_balances_by_zone).
+    Привязка к клиенту обязательна — остатки считаются по клиенту.
+    """
+    from fastapi import HTTPException
+
+    client_id = (payload.client_id or "").strip()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Укажите клиента")
+    if not payload.lines:
+        raise HTTPException(status_code=400, detail="Добавьте хотя бы одну строку")
+
+    client_row = connection.execute(
+        "SELECT name FROM clients WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (client_id,)
+    ).fetchone()
+    if not client_row:
+        raise HTTPException(status_code=400, detail="Клиент не найден")
+    client_name = str(client_row["name"])
+    suffix = (payload.comment or "").strip()
+
+    for ln in payload.lines:
+        zone_id = (ln.zone_id or "").strip() or None
+        if not zone_id:
+            raise HTTPException(status_code=400, detail="Укажите место хранения по каждой строке")
+        if ln.quality not in (INV_Q_GOOD, INV_Q_DEFECT):
+            raise HTTPException(status_code=400, detail="Недопустимое качество товара")
+        zone_name = _zone_name(connection, zone_id)
+        insert_inventory_move(
+            connection,
+            product_id=ln.product_id, product_name=ln.product_name, product_sku=ln.product_sku,
+            color_id=ln.color_id, color_name=ln.color_name,
+            size_id=ln.size_id, size_name=ln.size_name,
+            client_id=client_id, client_name=client_name,
+            from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+            from_quality=ln.quality, to_quality=ln.quality,
+            from_zone_id=zone_id, from_zone_name=zone_name,
+            to_zone_id=zone_id, to_zone_name=zone_name,
+            qty=ln.qty, user_id=user_id,
+            comment=f"Заведение остатка: {ln.qty} шт." + (f". {suffix}" if suffix else ""),
+        )
+    connection.commit()
+    return len(payload.lines)
 
 
 def _zone_name(connection, zone_id: str | None) -> str | None:

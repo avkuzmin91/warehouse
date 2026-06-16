@@ -9,12 +9,14 @@ from modules.balances.schemas import (
     BalanceSummaryResponse,
     BalanceZonesResponse,
     QualityChangeCreate,
+    StockEntryCreate,
     WriteOffCreate,
     ZoneRelocationCreate,
     ZoneRelocationListResponse,
 )
 from modules.balances.service import (
     create_quality_change,
+    create_stock_entry,
     create_write_off,
     create_zone_relocation,
     get_balances,
@@ -99,6 +101,14 @@ def create_quality_change_op(payload: QualityChangeCreate, user=Depends(get_curr
     with get_connection() as conn:
         create_quality_change(conn, payload, str(user["id"]))
     return {"message": "ok"}
+
+
+@router.post("/balances/stock-entry")
+def create_stock_entry_op(payload: StockEntryCreate, user=Depends(get_current_manager)):
+    """Историческое заведение остатков (то, что лежало до системы) — без документа."""
+    with get_connection() as conn:
+        n = create_stock_entry(conn, payload, str(user["id"]))
+    return {"message": str(n)}
 
 
 @router.get("/balances/relocations", response_model=ZoneRelocationListResponse)

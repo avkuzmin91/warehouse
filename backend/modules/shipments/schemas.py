@@ -263,6 +263,11 @@ class ShipmentOpItem(BaseModel):
     created_by_email: str | None
 
 
+class TripRef(BaseModel):
+    id:     str
+    number: str
+
+
 class ShipmentDetailResponse(BaseModel):
     id:           str
     doc_number:   str
@@ -280,6 +285,7 @@ class ShipmentDetailResponse(BaseModel):
     status_label: str
     trip_id:      str | None = None
     trip_number:  str | None = None
+    trips:        list[TripRef] = []
     created_at:   str
     created_by:   str | None
     updated_at:   str | None

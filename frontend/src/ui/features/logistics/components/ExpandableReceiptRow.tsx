@@ -18,7 +18,7 @@ export type ExpandableReceiptData = {
 }
 
 const STATUS_RU: Record<string, string> = {
-  planned: 'В плане', on_intake: 'Принят', partially_received: 'Частично принято',
+  planned: 'В плане', on_intake: 'На приёмке', partially_received: 'Частично принято',
   on_review: 'На проверке', done: 'Поступил',
 }
 const STATUS_TONE: Record<string, BadgeTone> = {
@@ -47,6 +47,7 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
   const allocs = r.allocations ?? []
   const hasAllocs = allocs.length > 0
   const tripQty = allocs.reduce((s, a) => s + a.qty, 0)
+  const receivedQty = allocs.reduce((s, a) => s + (a.received_qty ?? 0), 0)
 
   return (
     <div
@@ -125,8 +126,13 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
                         <span className="mono" style={{ color: 'var(--c-text-subtle)' }}>{a.product_sku}</span>{' '}{a.product_name}
                         {a.variant ? <span style={{ color: 'var(--c-text-subtle)' }}> · {a.variant}</span> : null}
                       </span>
-                      <span className="num" style={{ fontWeight: 500 }}>{a.qty} шт</span>
-                      <span className="t-sub" style={{ width: 118, flexShrink: 0, textAlign: 'right' }}>принято {a.accepted_qty}/{a.planned_qty}</span>
+                      <span className="num t-sub" style={{ flexShrink: 0 }}>план {a.qty} шт</span>
+                      <span
+                        className="num"
+                        style={{ width: 118, flexShrink: 0, textAlign: 'right', fontWeight: 500, color: a.received_qty > 0 ? 'var(--c-text)' : 'var(--c-text-subtle)' }}
+                      >
+                        принято {a.received_qty ?? 0}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -136,7 +142,7 @@ export function ExpandableReceiptRow({ r, open, onToggle, onOpen, onRemove }: {
                 }}>
                   <span>Итого</span>
                   <span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>
-                    {allocs.length} SKU · {tripQty} шт
+                    {allocs.length} SKU · план {tripQty} шт · принято {receivedQty}
                   </span>
                 </div>
               </div>

@@ -92,6 +92,20 @@ def ensure_document_create_access(user: Mapping[str, Any]) -> None:
         )
 
 
+def can_correct_received(user: Mapping[str, Any]) -> bool:
+    """Пост-фактум корректировка обсчёта приёмки (правит остатки) — менеджер и
+    начальник склада. Рядовой кладовщик и начальник смены такую правку не делают."""
+    return user["role"] in ("admin", "manager", "warehouse_head")
+
+
+def ensure_received_correction_access(user: Mapping[str, Any]) -> None:
+    if not can_correct_received(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_view_costs(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 

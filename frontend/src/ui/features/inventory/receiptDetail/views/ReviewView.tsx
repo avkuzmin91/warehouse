@@ -13,12 +13,13 @@ import { Icon } from '../../../../primitives/Icon'
 import { Drawer } from '../../../../feedback/Drawer'
 import { ReadOnlyField } from '../../../inventory/shared/ReadOnlyField'
 import { fmtDate } from '../../../../../utils/format'
-import { canViewCosts } from '../../../../../utils/access'
+import { canCorrectReceived, canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { DocHeader } from '../../../shared/process/DocHeader'
 import { Panel, ReadRow } from '../../../shared/process/processUI'
 import { receiptStatusRole } from '../shared/receiptProcess'
+import { CorrectReceivedDrawer } from '../components/CorrectReceivedDrawer'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
@@ -28,23 +29,32 @@ type Props = {
   detail: ReceiptDetail
   onReload: () => Promise<void>
   onAdvance: () => void
+  onCloseShort?: () => void
+  onExpectRedelivery?: () => void
   advancing: boolean
 }
 
 // Поступление завершается на приёмке (done): товар встал на остатки годным «На хранении».
-// Брак фиксируется позже при упаковке отгрузки. Вью — только просмотр.
-export function ReviewView({ detail }: Props) {
+// Брак фиксируется позже при упаковке отгрузки. Вью — только просмотр; для частично
+// принятого менеджер может закрыть его с недопоставкой.
+export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRedelivery, advancing }: Props) {
   const navigate = useNavigate()
   const { doc, lines, ops } = detail
 
   const [filterLine, setFilterLine] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string | null>(null)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
+  const [correctOpen, setCorrectOpen] = useState(false)
 
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const canManage = user?.role === 'admin' || user?.role === 'manager'
+  const canCloseShort = canManage && detail.can_close_short && !!onCloseShort
+  const canExpectRedelivery = canManage && detail.can_close_short && !!onExpectRedelivery
 
   const isCancelled = doc.status === 'cancelled'
+  const canCorrect = canCorrectReceived(user) && !isCancelled
+    && (doc.status === 'partially_received' || doc.status === 'done')
   const plannedUnits = lines.reduce((s, l) => s + l.planned_qty, 0)
   const arrivedUnits = lines.reduce((s, l) => s + (l.accepted_qty ?? 0), 0)
   const acceptedPct = plannedUnits > 0 ? Math.floor((arrivedUnits / plannedUnits) * 100) : 0
@@ -68,10 +78,27 @@ export function ReviewView({ detail }: Props) {
         subtitle={`Поступление · ${doc.client_name ?? '—'}`}
         onBack={() => navigate('/inventory/receipts')}
         actions={
-          <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
-            <Icon name="layers" size={14} />Журнал
-            {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
-          </button>
+          <>
+            <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>
+              <Icon name="layers" size={14} />Журнал
+              {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
+            </button>
+            {canCorrect && (
+              <button className="btn ghost" onClick={() => setCorrectOpen(true)}>
+                <Icon name="edit" size={14} />Исправить приёмку
+              </button>
+            )}
+            {canExpectRedelivery && (
+              <button className="btn ghost" onClick={onExpectRedelivery} disabled={advancing}>
+                <Icon name="truckIn" size={14} />Ожидается довоз
+              </button>
+            )}
+            {canCloseShort && (
+              <button className="btn primary" onClick={onCloseShort} disabled={advancing}>
+                <Icon name="check" size={14} />Закрыть с недопоставкой
+              </button>
+            )}
+          </>
         }
       />
 
@@ -82,12 +109,16 @@ export function ReviewView({ detail }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <ReadOnlyField label="Клиент" value={doc.client_name} />
               <div>
-                <div className="field-label"><span>Рейс</span></div>
-                {doc.trip_id ? (
-                  <button className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${doc.trip_id}`)}
-                    style={{ width: '100%', justifyContent: 'flex-start' }}>
-                    <Icon name="truckIn" size={13} />{doc.trip_number}
-                  </button>
+                <div className="field-label"><span>{doc.trips.length > 1 ? 'Рейсы' : 'Рейс'}</span></div>
+                {doc.trips.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {doc.trips.map((t) => (
+                      <button key={t.id} className="btn ghost sm" onClick={() => navigate(`/logistics/trips/${t.id}`)}
+                        style={{ width: '100%', justifyContent: 'flex-start' }}>
+                        <Icon name="truckIn" size={13} />{t.number}
+                      </button>
+                    ))}
+                  </div>
                 ) : (
                   <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
                 )}
@@ -187,6 +218,14 @@ export function ReviewView({ detail }: Props) {
         )}
       </Drawer>
 
+      <CorrectReceivedDrawer
+        key={correctOpen ? 'open' : 'closed'}
+        docId={docId}
+        lines={lines}
+        open={correctOpen}
+        onClose={() => setCorrectOpen(false)}
+        onSaved={async () => { setCorrectOpen(false); await onReload() }}
+      />
     </div>
   )
 }
