@@ -113,7 +113,9 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, fontSize: 13, color: 'var(--c-text-muted)' }}>
               <Icon name="briefcase" size={13} style={{ color: 'var(--c-text-subtle)' }} />{e.position ?? '—'}
-              {showMoney && e.rate_kopecks != null && <><span style={{ color: 'var(--c-text-faint)' }}>·</span><span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)' }}>{fmtRate(e.rate_kopecks)}</span></>}
+              {showMoney && e.comp_type === 'fixed'
+                ? (e.fixed_salary_kopecks != null && <><span style={{ color: 'var(--c-text-faint)' }}>·</span><span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)' }}>{fmtMoney(e.fixed_salary_kopecks)}/мес</span></>)
+                : (showMoney && e.rate_kopecks != null && <><span style={{ color: 'var(--c-text-faint)' }}>·</span><span className="mono" style={{ fontWeight: 600, color: 'var(--c-text)' }}>{fmtRate(e.rate_kopecks)}</span></>)}
             </div>
           </div>
         </div>

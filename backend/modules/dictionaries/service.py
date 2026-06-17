@@ -117,10 +117,12 @@ def _resolve_actuality_filter(connection: Any, actuality_id: str | None) -> bool
 
 
 def _dict_row_to_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
+    rent = row.get("rent_monthly_kopecks")
     return DictionaryBaseItem(
         id=row["id"],
         name=row["name"],
         color_hex=row.get("color_hex"),
+        rent_monthly_kopecks=int(rent) if rent is not None else None,
         is_packing_zone=bool(row.get("is_packing_zone") or 0),
         is_shipping_zone=bool(row.get("is_shipping_zone") or 0),
         is_active=bool(row["is_active"]),
@@ -187,11 +189,12 @@ def _product_type_row_to_item(row: Mapping[str, Any]) -> ProductTypeDictionaryIt
 def get_dictionary_item(table_name: str, item_id: str, *, include_deleted: bool = False) -> DictionaryBaseItem:
     _ensure_dictionary_table(table_name)
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
+    rent_sql = "d.rent_monthly_kopecks" if table_name == "warehouses" else "NULL AS rent_monthly_kopecks"
     with get_connection() as connection:
         row = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   {color_hex_sql},
+                   {color_hex_sql}, {rent_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             FROM {table_name} d
@@ -220,6 +223,11 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                 connection.execute(
                     "INSERT INTO colors (id, name, color_hex, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
                     (item_id, name, color_hex, 1 if payload.is_active else 0, _now(), creator_id),
+                )
+            elif table_name == "warehouses":
+                connection.execute(
+                    "INSERT INTO warehouses (id, name, rent_monthly_kopecks, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, _now(), creator_id),
                 )
             else:
                 connection.execute(
@@ -270,6 +278,9 @@ def update_dictionary_item(
         if table_name == "colors" and "color_hex" in payload.model_fields_set:
             fields.append("color_hex = ?")
             values.append(_normalize_color_hex(payload.color_hex))
+        if table_name == "warehouses" and "rent_monthly_kopecks" in payload.model_fields_set:
+            fields.append("rent_monthly_kopecks = ?")
+            values.append(payload.rent_monthly_kopecks)
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
@@ -436,6 +447,7 @@ def list_dictionary_items_page(
 ) -> DictionaryListResponse:
     _ensure_dictionary_table(table_name)
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
+    rent_sql = "d.rent_monthly_kopecks" if table_name == "warehouses" else "NULL AS rent_monthly_kopecks"
     packing_sql = "COALESCE(d.is_packing_zone, 0) AS is_packing_zone" if table_name == "unloading_zones" else "0 AS is_packing_zone"
     shipping_sql = "COALESCE(d.is_shipping_zone, 0) AS is_shipping_zone" if table_name == "unloading_zones" else "0 AS is_shipping_zone"
     offset = (page - 1) * limit
@@ -469,7 +481,7 @@ def list_dictionary_items_page(
         rows = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   {color_hex_sql}, {packing_sql}, {shipping_sql},
+                   {color_hex_sql}, {rent_sql}, {packing_sql}, {shipping_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
             FROM {table_name} d

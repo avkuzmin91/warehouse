@@ -7,6 +7,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    EMPLOYEE_COMP_HOURLY,
+    EMPLOYEE_COMP_LABELS,
+    EMPLOYEE_COMP_TYPES_ALL,
     EMPLOYEE_STATUS_ACTIVE,
     EMPLOYEE_STATUS_ARCHIVED,
     EMPLOYEE_STATUS_LABELS,
@@ -101,6 +104,14 @@ def _is_admin(user) -> bool:
     return str(user["role"]) == "admin"
 
 
+def _validate_comp_type(value: str | None) -> str:
+    """Тип оплаты труда из карточки: hourly | fixed (по умолчанию hourly)."""
+    v = str(value or "").strip() or EMPLOYEE_COMP_HOURLY
+    if v not in EMPLOYEE_COMP_TYPES_ALL:
+        raise HTTPException(status_code=400, detail="Тип оплаты: почасовая или оклад")
+    return v
+
+
 def _emp_or_404(conn, emp_id: str) -> dict:
     row = conn.execute(
         "SELECT * FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -141,6 +152,8 @@ def list_employees_route(
                 status_label=EMPLOYEE_STATUS_LABELS.get(it["status"], it["status"]),
                 last_shift=it["last_shift"],
                 rate_kopecks=it.get("rate_kopecks"),
+                comp_type=it.get("comp_type", EMPLOYEE_COMP_HOURLY),
+                fixed_salary_kopecks=it.get("fixed_salary_kopecks"),
             )
             for it in items
         ],
@@ -201,16 +214,21 @@ def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
     uid = str(user["id"])
     now = _now()
     emp_id = str(uuid4())
+    comp_type = _validate_comp_type(body.comp_type)
+    # Оклад — это деньги: проставляет только тот, кто их видит.
+    fixed_salary = int(body.fixed_salary_kopecks) \
+        if body.fixed_salary_kopecks is not None and can_view_payroll(user) else None
     with get_connection() as conn:
         position_id = _validate_position(conn, body.position_id)
         # Связь с учётной записью назначает только администратор.
         user_link = _validate_user_link(conn, body.user_id) if _is_admin(user) else None
         conn.execute(
             "INSERT INTO employees "
-            "(id,full_name,position_id,user_id,status,hired_on,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "(id,full_name,position_id,user_id,status,hired_on,comp_type,fixed_salary_kopecks,"
+            "created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (emp_id, full_name, position_id, user_link, EMPLOYEE_STATUS_ACTIVE,
-             _clean(body.hired_on), now, uid),
+             _clean(body.hired_on), comp_type, fixed_salary, now, uid),
         )
         # Стартовую ставку проставляет только тот, кто видит деньги.
         if body.rate_kopecks is not None and can_view_payroll(user):
@@ -294,6 +312,14 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         status_label=EMPLOYEE_STATUS_LABELS.get(status, status),
         hired_on=emp["hired_on"],
         rate_kopecks=current_rate(rates) if with_money else None,
+        comp_type=str(emp.get("comp_type") or EMPLOYEE_COMP_HOURLY),
+        comp_label=EMPLOYEE_COMP_LABELS.get(
+            str(emp.get("comp_type") or EMPLOYEE_COMP_HOURLY), ""
+        ),
+        fixed_salary_kopecks=(
+            int(emp["fixed_salary_kopecks"])
+            if with_money and emp.get("fixed_salary_kopecks") is not None else None
+        ),
         with_money=with_money,
         week_start=sat.isoformat(),
         week_end=fri.isoformat(),
@@ -329,6 +355,13 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
             sets.append("position_id = ?"); params.append(_validate_position(conn, body.position_id))
         if "hired_on" in fields:
             sets.append("hired_on = ?"); params.append(_clean(body.hired_on))
+        if "comp_type" in fields:
+            sets.append("comp_type = ?"); params.append(_validate_comp_type(body.comp_type))
+        # Оклад — деньги: меняет только тот, кто их видит.
+        if "fixed_salary_kopecks" in fields and can_view_payroll(user):
+            fs = body.fixed_salary_kopecks
+            sets.append("fixed_salary_kopecks = ?")
+            params.append(int(fs) if fs is not None else None)
         # Связь с учётной записью меняет только администратор.
         if "user_id" in fields and _is_admin(user):
             sets.append("user_id = ?"); params.append(_validate_user_link(conn, body.user_id, emp_id))

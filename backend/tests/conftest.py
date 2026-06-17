@@ -19,6 +19,9 @@ if not os.environ.get("DATABASE_URL"):
 
 from fastapi.testclient import TestClient
 
+# Фоновый планировщик ЗП не должен писать в тестовую БД при старте lifespan.
+os.environ["SALARY_SCHEDULER"] = "0"
+
 from app import app
 from dbconn import get_connection
 from modules.auth.service import get_current_user

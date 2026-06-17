@@ -464,6 +464,74 @@ def test_amount_correction_rejected_on_draft(admin_client, client_id):
     assert r.status_code == 400, r.text
 
 
+def _add_shipment_lines(ship: str, rows: list[tuple[str, int]]) -> None:
+    """Строки отгрузки напрямую в БД (без зависимости от справочника товаров)."""
+    now = "2026-06-10T00:00:00+00:00"
+    with get_connection() as conn:
+        for i, (pid, qty) in enumerate(rows):
+            conn.execute(
+                "INSERT INTO shipment_lines "
+                "(id,doc_id,product_id,product_name,product_sku,color_id,color_name,"
+                "size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,"
+                "store_id,store_name,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"{ship}-l{i}", ship, pid, f"Товар {pid}", pid.upper(),
+                 None, None, None, None, qty, qty, None, None, None, None, now),
+            )
+        conn.commit()
+
+
+def test_invoice_detail_exposes_shipment_contents(admin_client, client_id):
+    # Детализация счёта отдаёт агрегаты по строкам каждой отгрузки (кол-во + число SKU),
+    # чтобы видеть содержимое прямо в карточке, не открывая отгрузку.
+    ship = _shipped_shipment(admin_client, client_id)
+    _add_shipment_lines(ship, [("p-aaa", 120), ("p-aaa", 100), ("p-bbb", 30)])  # 2 товара, 250 шт
+
+    invoice_id = _draft_invoice(admin_client, client_id, ship=ship, total_amount=5000)
+    d = admin_client.get(f"/invoices/{invoice_id}").json()
+    item = next(s for s in d["shipments"] if s["shipment_doc_id"] == ship)
+    assert item["total_qty"] == 250
+    assert item["sku_count"] == 2
+
+
+def test_uninvoiced_shipment_products_preview(admin_client, client_id):
+    # Реестр «без счёта» отдаёт топ-3 товара отгрузки по количеству (для свёрнутой строки).
+    ship = _shipped_shipment(admin_client, client_id)
+    _add_shipment_lines(ship, [("p-a", 50), ("p-b", 200), ("p-c", 30), ("p-d", 10)])  # 4 SKU
+
+    r = admin_client.get(f"/invoices/uninvoiced-shipments?client_id={client_id}&limit=200")
+    assert r.status_code == 200, r.text
+    item = next(it for it in r.json()["items"] if it["id"] == ship)
+    assert item["sku_count"] == 4
+    assert item["total_qty"] == 290
+    preview = item["products_preview"]
+    assert len(preview) == 3                              # топ-3, не все 4
+    assert [p["name"] for p in preview] == ["Товар p-b", "Товар p-a", "Товар p-c"]  # qty desc
+    assert preview[0]["qty"] == 200
+
+
+def test_shipment_contents_rollup(admin_client, client_id):
+    # Сводный состав по набору отгрузок (roll-up при выборе в счёт): товар p-x суммируется.
+    ship1 = _shipped_shipment(admin_client, client_id)
+    ship2 = _shipped_shipment(admin_client, client_id)
+    _add_shipment_lines(ship1, [("p-x", 100), ("p-y", 50)])
+    _add_shipment_lines(ship2, [("p-x", 30), ("p-z", 20)])
+
+    r = admin_client.get(f"/invoices/shipment-contents?shipment_ids={ship1},{ship2}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total_qty"] == 200
+    assert body["sku_count"] == 3
+    by_id = {p["product_id"]: p["qty"] for p in body["products"]}
+    assert by_id == {"p-x": 130, "p-y": 50, "p-z": 20}
+    assert body["products"][0]["product_id"] == "p-x"     # сортировка по убыванию количества
+
+    # Пустой набор — пустая сводка.
+    empty = admin_client.get("/invoices/shipment-contents?shipment_ids=")
+    assert empty.status_code == 200, empty.text
+    assert empty.json() == {"products": [], "total_qty": 0, "sku_count": 0}
+
+
 def test_due_date_reason_in_journal(admin_client, client_id):
     ship = _shipped_shipment(admin_client, client_id)
     invoice_id = _issued_invoice(admin_client, client_id, ship, total_amount=100, due_date="2026-07-01")

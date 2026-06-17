@@ -74,6 +74,7 @@ from modules.logistics.service import (
     sync_actual_arrival,
     sync_actual_ship_date,
 )
+from modules.expenses.service import upsert_trip_logistics_expense
 from security import can_view_costs, ensure_cost_access
 
 router = APIRouter(tags=["logistics"])
@@ -716,6 +717,8 @@ def trip_cost(trip_id: str, payload: TripCostPayload, user=Depends(get_current_m
             "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), trip_id, TRIP_OP_COST_ACTUAL, "Внесена фактическая стоимость логистики", now, uid),
         )
+        # Стоимость рейса ≠ оплата: заводим/обновляем расход «ожидает оплаты» в реестре.
+        upsert_trip_logistics_expense(conn, _fetch_doc(conn, trip_id), uid)
         conn.commit()
     return {"message": "ok"}
 

@@ -14,7 +14,7 @@ import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { CargoTag } from './financeUI'
+import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, productsPreviewText } from './financeUI'
 
 function FieldRow({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
@@ -267,6 +267,7 @@ export function AmountModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
 export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
   const toast = useToast()
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const { data, loading } = useApi(
     (s) => invoice.client_id
@@ -278,6 +279,9 @@ export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
 
   function toggle(id: string) {
     setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleExpand(id: string) {
+    setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   }
   function toggleAll() {
     setSelected((prev) => prev.size === shipments.length ? new Set() : new Set(shipments.map((s) => s.id)))
@@ -324,29 +328,52 @@ export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
           {shipments.map((s) => {
             const on = selected.has(s.id)
+            const open = expanded.has(s.id)
             return (
-              <label key={s.id} style={{
-                display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 'var(--r-md)', cursor: 'pointer',
+              <div key={s.id} style={{
+                borderRadius: 'var(--r-md)',
                 border: `1px solid ${on ? 'var(--c-accent-border)' : 'var(--c-border)'}`,
                 background: on ? 'var(--c-accent-bg)' : 'var(--c-bg-elev)',
               }}>
-                <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {on && <Icon name="check" size={10} />}
-                </span>
-                <input type="checkbox" checked={on} onChange={() => toggle(s.id)} style={{ display: 'none' }} />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="mono" style={{ fontWeight: 500 }}>{s.doc_number}</span>
-                    <CargoTag cargoType={s.cargo_type} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', cursor: 'pointer' }}>
+                  <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {on && <Icon name="check" size={10} />}
+                  </span>
+                  <input type="checkbox" checked={on} onChange={() => toggle(s.id)} style={{ display: 'none' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="mono" style={{ fontWeight: 500 }}>{s.doc_number}</span>
+                      <CargoTag cargoType={s.cargo_type} />
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 2 }}>{s.destination ?? '—'} · {fmtDate(s.ship_date)}</div>
+                    {s.products_preview.length > 0 && (
+                      <div style={{ fontSize: 11.5, color: 'var(--c-text-faint)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {productsPreviewText(s.products_preview, s.sku_count)}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 2 }}>{s.destination ?? '—'} · {fmtDate(s.ship_date)}</div>
-                </div>
-                <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span>
-              </label>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span>
+                  <button
+                    type="button" className="btn ghost icon sm"
+                    title={open ? 'Свернуть состав' : 'Показать состав'}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleExpand(s.id) }}
+                  >
+                    <Icon name={open ? 'chevUp' : 'chevDown'} size={14} />
+                  </button>
+                </label>
+                {open && (
+                  <div style={{ padding: '0 12px 10px 39px', borderTop: '1px solid var(--c-border)' }}>
+                    <div style={{ paddingTop: 8 }}>
+                      <ShipmentContentsPanel shipmentId={s.id} />
+                    </div>
+                  </div>
+                )}
+              </div>
             )
           })}
         </div>
       )}
+      <SelectedContentsRollup shipmentIds={[...selected]} />
     </Modal>
   )
 }

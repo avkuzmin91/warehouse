@@ -26,6 +26,14 @@ const OPS_NAV: NavItem[] = [
 
 const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
+  { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
+]
+
+// Только для админа: «фиксы» и сводный реестр всех расходов.
+const ADMIN_FINANCE_NAV: NavItem[] = [
+  { to: '/finance/transactions', icon: 'receipt', label: 'Транзакции' },
+  { to: '/finance/rent', icon: 'boxes', label: 'Оплата склада' },
+  { to: '/finance/salary', icon: 'wallet', label: 'Оплата ЗП' },
 ]
 
 const TIMESHEET_NAV: NavItem[] = [
@@ -85,6 +93,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const hasStaffAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
   const hasAdminAccess = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
   const hasFinanceAccess = user?.role === 'admin' || user?.role === 'manager'
+  const isAdmin = user?.role === 'admin'
   const hasTimesheetAccess = canManageTimesheet(user)
   const canSeePayroll = canViewPayroll(user)
 
@@ -164,6 +173,9 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
             <>
               {!collapsed && <div className="sidebar-section">Финансы</div>}
               {FINANCE_NAV.map((item) => (
+                <NavItem key={item.to} {...item} collapsed={collapsed} />
+              ))}
+              {isAdmin && ADMIN_FINANCE_NAV.map((item) => (
                 <NavItem key={item.to} {...item} collapsed={collapsed} />
               ))}
             </>

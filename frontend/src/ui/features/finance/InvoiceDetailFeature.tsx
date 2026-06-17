@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   cancelInvoice,
@@ -28,7 +28,7 @@ import { useLookups } from '../../../hooks/useLookups'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDate, fmtDateShort, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon } from './financeUI'
+import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel } from './financeUI'
 import { InvoiceRailPanel, invoicePhase } from './InvoiceRail'
 import { PayModal, DueModal, AmountModal, AttachModal } from './InvoiceModals'
 
@@ -49,6 +49,8 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
   const reload = () => setTick((t) => t + 1)
+  const toggleShip = (id: string) =>
+    setExpandedShip((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   const { data: inv, loading, error } = useApi((s) => getInvoice(invoiceId, s), [invoiceId, tick])
 
@@ -56,6 +58,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const [dueOpen, setDueOpen] = useState(false)
   const [amountOpen, setAmountOpen] = useState(false)
   const [attachOpen, setAttachOpen] = useState(false)
+  const [expandedShip, setExpandedShip] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const [draftDirty, setDraftDirty] = useState(false)
@@ -245,21 +248,46 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             ) : (
               <table className="t" style={{ margin: '0 -14px', width: 'calc(100% + 28px)' }}>
                 <tbody>
-                  {inv.shipments.map((s) => (
-                    <tr key={s.shipment_doc_id} onClick={() => navigate(`/inventory/shipments/${s.shipment_doc_id}`)}>
-                      <td style={{ width: 130 }}><span className="mono" style={{ fontWeight: 500, color: 'var(--c-accent-text)' }}>{s.doc_number}</span></td>
-                      <td style={{ width: 90 }}><CargoTag cargoType={s.cargo_type} /></td>
-                      <td><span style={{ color: 'var(--c-text-subtle)' }}>{s.destination ?? '—'}</span></td>
-                      <td style={{ width: 110 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(s.ship_date)}</span></td>
-                      <td style={{ width: 44, textAlign: 'right' }}>
-                        {editable && (
-                          <button className="btn ghost icon sm" title="Отвязать" onClick={(e) => { e.stopPropagation(); handleDetach(s.shipment_doc_id, s.doc_number) }}>
-                            <Icon name="x" size={13} />
-                          </button>
+                  {inv.shipments.map((s) => {
+                    const open = expandedShip.has(s.shipment_doc_id)
+                    return (
+                      <Fragment key={s.shipment_doc_id}>
+                        <tr>
+                          <td style={{ width: 36, textAlign: 'center' }}>
+                            <button className="btn ghost icon sm" title={open ? 'Свернуть состав' : 'Показать состав'} onClick={() => toggleShip(s.shipment_doc_id)}>
+                              <Icon name={open ? 'chevUp' : 'chevDown'} size={14} />
+                            </button>
+                          </td>
+                          <td style={{ width: 120 }}>
+                            <button
+                              className="btn ghost sm" style={{ padding: '2px 6px', height: 'auto' }}
+                              title="Открыть отгрузку" onClick={() => navigate(`/inventory/shipments/${s.shipment_doc_id}`)}
+                            >
+                              <span className="mono" style={{ fontWeight: 500, color: 'var(--c-accent-text)' }}>{s.doc_number}</span>
+                            </button>
+                          </td>
+                          <td style={{ width: 84 }}><CargoTag cargoType={s.cargo_type} /></td>
+                          <td><span style={{ color: 'var(--c-text-subtle)' }}>{s.destination ?? '—'}</span></td>
+                          <td style={{ width: 104 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(s.ship_date)}</span></td>
+                          <td style={{ width: 110, textAlign: 'right' }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span></td>
+                          <td style={{ width: 44, textAlign: 'right' }}>
+                            {editable && (
+                              <button className="btn ghost icon sm" title="Отвязать" onClick={() => handleDetach(s.shipment_doc_id, s.doc_number)}>
+                                <Icon name="x" size={13} />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr>
+                            <td colSpan={7} style={{ background: 'var(--c-bg-sunken)', padding: '8px 14px 10px 50px' }}>
+                              <ShipmentContentsPanel shipmentId={s.shipment_doc_id} />
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                    </tr>
-                  ))}
+                      </Fragment>
+                    )
+                  })}
                 </tbody>
               </table>
             )}

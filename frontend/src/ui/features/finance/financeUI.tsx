@@ -3,6 +3,10 @@ import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
 import { formatMoneyKopecks } from '../../../utils/format'
+import { useApi } from '../../../hooks/useApi'
+import { getShipment } from '../../../api/shipmentsApi'
+import { getShipmentContents } from '../../../api/invoicesApi'
+import type { ProductPreview } from '../../../api/invoicesApi'
 
 /** Компактные деньги для KPI: рубли без копеек, не растягивают карточку. «2 400 000 ₽». */
 export function kpiMoney(kopecks: number): string {
@@ -168,6 +172,103 @@ export function CargoTag({ cargoType }: { cargoType: string }) {
   return cargoType === 'defect'
     ? <Badge tone="danger">Брак</Badge>
     : <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Годный</span>
+}
+
+/** Ленивая раскрывашка состава отгрузки: грузит строки по требованию
+ *  (`getShipment`) и показывает компактную таблицу товар·цвет·размер·кол-во.
+ *  Переиспользуется при выборе отгрузок (создание/привязка) и в карточке счёта —
+ *  чтобы видеть содержимое, не уходя со страницы. */
+export function ShipmentContentsPanel({ shipmentId }: { shipmentId: string }) {
+  const { data, loading, error } = useApi(() => getShipment(shipmentId), [shipmentId])
+
+  if (loading) {
+    return <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', padding: '4px 0' }}>Загрузка состава…</div>
+  }
+  if (error) {
+    return <div style={{ fontSize: 12, color: 'var(--c-danger)', padding: '4px 0' }}>Не удалось загрузить состав отгрузки</div>
+  }
+  const lines = data?.lines ?? []
+  if (lines.length === 0) {
+    return <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', padding: '4px 0' }}>В отгрузке нет строк</div>
+  }
+  return (
+    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+      <thead>
+        <tr style={{ color: 'var(--c-text-faint)', textAlign: 'left' }}>
+          <th style={{ fontWeight: 400, padding: '2px 8px 4px 0' }}>Товар</th>
+          <th style={{ fontWeight: 400, padding: '2px 8px 4px 0' }}>Цвет</th>
+          <th style={{ fontWeight: 400, padding: '2px 8px 4px 0' }}>Размер</th>
+          <th style={{ fontWeight: 400, padding: '2px 0 4px', textAlign: 'right' }}>Кол-во</th>
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((l) => (
+          <tr key={l.id}>
+            <td style={{ padding: '3px 8px 3px 0' }}>
+              {l.product_name}
+              {l.product_sku && <span className="mono" style={{ color: 'var(--c-text-faint)', marginLeft: 6, fontSize: 11 }}>{l.product_sku}</span>}
+            </td>
+            <td style={{ padding: '3px 8px 3px 0', color: 'var(--c-text-subtle)' }}>{l.color_name ?? '—'}</td>
+            <td style={{ padding: '3px 8px 3px 0', color: 'var(--c-text-subtle)' }}>{l.size_name ?? '—'}</td>
+            <td className="mono num" style={{ padding: '3px 0', textAlign: 'right' }}>{l.qty}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** Однострочный предпросмотр состава для свёрнутой строки: «Куртка ×220, Джинсы ×80 +2».
+ *  `+N` — сколько ещё SKU сверх показанных (на основе общего sku_count отгрузки). */
+export function productsPreviewText(preview: ProductPreview[], skuCount: number): string {
+  if (!preview.length) return ''
+  const shown = preview.map((p) => `${p.name} ×${p.qty}`).join(', ')
+  const rest = skuCount - preview.length
+  return rest > 0 ? `${shown} +${rest}` : shown
+}
+
+/** Сводка-roll-up по выбранным отгрузкам: товары с суммарным количеством.
+ *  Грузит агрегат с бэкенда (`getShipmentContents`) при смене набора отгрузок —
+ *  чтобы сверить сумму счёта с фактическим объёмом, не открывая отгрузки. */
+export function SelectedContentsRollup({ shipmentIds }: { shipmentIds: string[] }) {
+  const key = [...shipmentIds].sort().join(',')
+  const { data, loading } = useApi(
+    (signal) => shipmentIds.length
+      ? getShipmentContents(shipmentIds, signal)
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0 }),
+    [key],
+  )
+  if (shipmentIds.length === 0) return null
+
+  const products = data?.products ?? []
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+        <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>Сводка по выбранным отгрузкам</span>
+        {data && (
+          <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-muted)' }}>
+            {data.total_qty.toLocaleString('ru-RU')} шт · {data.sku_count} SKU
+          </span>
+        )}
+      </div>
+      {loading && !data ? (
+        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Подсчёт…</div>
+      ) : products.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>В выбранных отгрузках нет строк</div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {products.map((p) => (
+            <span key={p.product_id} style={{
+              fontSize: 12, background: 'var(--c-bg-sunken)', padding: '3px 9px', borderRadius: 99,
+              color: 'var(--c-text-muted)',
+            }}>
+              {p.name} · <span className="mono" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{p.qty.toLocaleString('ru-RU')}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** Иконка файла по расширению (Excel — зелёная, PDF — красная). */

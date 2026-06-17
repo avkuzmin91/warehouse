@@ -33,6 +33,8 @@ class InvoiceShipmentItem(BaseModel):
     status_label:    str
     ship_date:       str | None = None
     destination:     str | None = None
+    sku_count:       int = 0
+    total_qty:       int = 0
 
 
 class InvoicePaymentItem(BaseModel):
@@ -106,17 +108,23 @@ class InvoiceListResponse(BaseModel):
     limit: int
 
 
+class ProductPreviewItem(BaseModel):
+    name: str
+    qty:  int
+
+
 class UninvoicedShipmentItem(BaseModel):
-    id:           str           # shipment_docs.id
-    doc_number:   str
-    cargo_type:   str
-    client_id:    str | None
-    client_name:  str | None
-    destination:  str | None
-    ship_date:    str | None
-    sku_count:    int
-    total_qty:    int
-    created_at:   str
+    id:               str           # shipment_docs.id
+    doc_number:       str
+    cargo_type:       str
+    client_id:        str | None
+    client_name:      str | None
+    destination:      str | None
+    ship_date:        str | None
+    sku_count:        int
+    total_qty:        int
+    products_preview: list[ProductPreviewItem] = []   # топ-товары для свёрнутой строки
+    created_at:       str
 
 
 class UninvoicedShipmentsResponse(BaseModel):
@@ -124,6 +132,20 @@ class UninvoicedShipmentsResponse(BaseModel):
     total: int
     page:  int
     limit: int
+
+
+class ShipmentContentsProduct(BaseModel):
+    product_id: str
+    name:       str
+    sku:        str | None = None
+    qty:        int
+
+
+class ShipmentContentsResponse(BaseModel):
+    """Сводный состав по набору отгрузок (roll-up при выборе в счёт)."""
+    products:  list[ShipmentContentsProduct] = []
+    total_qty: int = 0
+    sku_count: int = 0
 
 
 class InvoicePaymentCreate(BaseModel):

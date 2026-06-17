@@ -2,6 +2,7 @@ export type DictionaryItem = {
   id: string
   name: string
   color_hex?: string | null
+  rent_monthly_kopecks?: number | null
   is_packing_zone?: boolean
   is_shipping_zone?: boolean
   is_active: boolean

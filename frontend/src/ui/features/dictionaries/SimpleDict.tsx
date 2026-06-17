@@ -36,6 +36,10 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString('ru', { day: 'numeric', month: 'short' })
 }
 
+function itemRentKopecks(item: AnyDictItem): number | null {
+  return 'rent_monthly_kopecks' in item && item.rent_monthly_kopecks != null ? item.rent_monthly_kopecks : null
+}
+
 function normalizeColorHex(value: string | null | undefined): string | null {
   const s = String(value ?? '').trim()
   if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) return s
@@ -186,6 +190,11 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   )}
                   {isShippingZone(item) && (
                     <Badge tone="warning" style={{ marginLeft: 8 }}>Зона отгрузки</Badge>
+                  )}
+                  {typeId === 'warehouses' && itemRentKopecks(item) != null && (
+                    <span className="text-xs subtle" style={{ marginLeft: 8 }}>
+                      {Math.round(itemRentKopecks(item)! / 100).toLocaleString('ru-RU')} ₽/мес
+                    </span>
                   )}
                 </td>
                 <td className="text-sm muted">{formatDate(item.created_at)}</td>

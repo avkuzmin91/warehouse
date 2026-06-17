@@ -1,0 +1,561 @@
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from psycopg import IntegrityError
+
+from config import (
+    EXPENSE_KIND_LOGISTICS,
+    EXPENSE_KIND_MANUAL,
+    EXPENSE_KINDS_ADMIN_ONLY,
+    EXPENSE_KINDS_ALL,
+    EXPENSE_KINDS_MANAGER_VISIBLE,
+    EXPENSE_OP_CANCEL,
+    EXPENSE_OP_CREATE,
+    EXPENSE_OP_DELETE,
+    EXPENSE_OP_FILE_ADD,
+    EXPENSE_OP_FILE_DELETE,
+    EXPENSE_OP_PAY,
+    EXPENSE_OP_UPDATE,
+    EXPENSE_PAYMENT_AWAITING,
+    EXPENSE_PAYMENT_CANCELLED,
+    EXPENSE_PAYMENT_PAID,
+    MAX_UPLOAD_BYTES,
+    UPLOADS_DIR,
+)
+from dbconn import get_connection
+from modules.auth.service import get_current_manager
+from modules.expenses.schemas import (
+    AccrualRunResponse,
+    ExpenseCreate,
+    ExpenseDetailResponse,
+    ExpenseDictCreate,
+    ExpenseDictItem,
+    ExpenseDictUpdate,
+    ExpenseListItem,
+    ExpenseListResponse,
+    ExpensePayRequest,
+    ExpenseSummaryResponse,
+    ExpenseUpdate,
+    MessageResponse,
+)
+from modules.expenses.service import (
+    build_update_diff,
+    expense_summary,
+    format_kopecks,
+    list_expenses_aggregated,
+    load_detail,
+    next_expense_number,
+    now_iso,
+    resolve_category,
+    resolve_payment_source,
+    run_rent_accruals,
+    run_salary_accruals,
+    today_iso,
+    validate_date,
+)
+from modules.timesheet.service import business_today
+from security import can_manage_admin_finance, ensure_admin_finance, ensure_finance_access
+
+router = APIRouter(tags=["expenses"])
+
+_ALLOWED_EXPENSE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
+
+# Справочники расходов: ключ из URL → (таблица, человекочитаемая метка ошибок).
+_DICTS: dict[str, tuple[str, str]] = {
+    "categories": ("expense_categories", "Категория"),
+    "payment-sources": ("expense_payment_sources", "Источник оплаты"),
+}
+
+
+def _get_finance(user=Depends(get_current_manager)):
+    ensure_finance_access(user)
+    return user
+
+
+def _visible_kinds(user) -> list[str] | None:
+    """Набор типов расходов, видимых роли: админ — все (None = без фильтра),
+    менеджер — только хозрасходы и логистика."""
+    if can_manage_admin_finance(user):
+        return None
+    return list(EXPENSE_KINDS_MANAGER_VISIBLE)
+
+
+def _resolve_kind_filter(user, kind: str | None) -> str | None:
+    """Валидирует явный фильтр kind с учётом видимости роли. 403, если менеджер
+    запрашивает админский тип."""
+    if not kind:
+        return None
+    if kind not in EXPENSE_KINDS_ALL:
+        raise HTTPException(status_code=400, detail="Неизвестный тип расхода")
+    if kind in EXPENSE_KINDS_ADMIN_ONLY and not can_manage_admin_finance(user):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    return kind
+
+
+def _resolve_kinds_scope(user, kinds_csv: str | None) -> list[str] | None:
+    """Область типов (CSV) ∩ видимость роли. Без CSV — вся видимая область
+    (None для админа = все типы). Менеджер с админским типом в CSV → 403."""
+    visible = _visible_kinds(user)
+    if not kinds_csv:
+        return visible
+    requested: list[str] = []
+    for raw in kinds_csv.split(","):
+        k = raw.strip()
+        if not k:
+            continue
+        if k not in EXPENSE_KINDS_ALL:
+            raise HTTPException(status_code=400, detail="Неизвестный тип расхода")
+        if k in EXPENSE_KINDS_ADMIN_ONLY and not can_manage_admin_finance(user):
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        requested.append(k)
+    if visible is None:
+        return requested
+    return [k for k in requested if k in visible]
+
+
+def _assert_visible(user, row) -> None:
+    """Менеджер не должен видеть/трогать аренду и ЗП даже по прямому id."""
+    if str(row["kind"]) in EXPENSE_KINDS_ADMIN_ONLY and not can_manage_admin_finance(user):
+        raise HTTPException(status_code=404, detail="Расход не найден")
+
+
+def _journal(conn, expense_id: str, op_type: str, comment: str, uid: str) -> None:
+    conn.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, op_type, comment, now_iso(), uid),
+    )
+
+
+# ── Список / сводка ─────────────────────────────────────────────────────────────
+
+@router.get("/expenses", response_model=ExpenseListResponse)
+def list_expenses(
+    page:              int = Query(1, ge=1),
+    limit:             int = Query(25, ge=1, le=200),
+    search:            str | None = Query(None),
+    category_id:       str | None = Query(None),
+    payment_source_id: str | None = Query(None),
+    date_from:         str | None = Query(None),
+    date_to:           str | None = Query(None),
+    kind:              str | None = Query(None),
+    kinds:             str | None = Query(None),
+    payment_status:    str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    kind = _resolve_kind_filter(user, kind)
+    with get_connection() as conn:
+        items, total = list_expenses_aggregated(
+            conn, page=page, limit=limit, search=search, category_id=category_id,
+            payment_source_id=payment_source_id, date_from=date_from, date_to=date_to,
+            kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
+        )
+    return ExpenseListResponse(
+        items=[ExpenseListItem(**it) for it in items], total=total, page=page, limit=limit,
+    )
+
+
+@router.get("/expenses/summary", response_model=ExpenseSummaryResponse)
+def expenses_summary(
+    search:            str | None = Query(None),
+    category_id:       str | None = Query(None),
+    payment_source_id: str | None = Query(None),
+    date_from:         str | None = Query(None),
+    date_to:           str | None = Query(None),
+    kind:              str | None = Query(None),
+    kinds:             str | None = Query(None),
+    payment_status:    str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    kind = _resolve_kind_filter(user, kind)
+    with get_connection() as conn:
+        data = expense_summary(
+            conn, search=search, category_id=category_id,
+            payment_source_id=payment_source_id, date_from=date_from, date_to=date_to,
+            kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
+        )
+    return ExpenseSummaryResponse(**data)
+
+
+# ── Автоначисление ЗП (оклады: 1-е и 15-е число — по 1/2) ────────────────────────
+
+@router.post("/expenses/salary/accruals/run", response_model=AccrualRunResponse)
+def run_salary_accruals_endpoint(on_date: str | None = Query(None), user=Depends(_get_finance)):
+    """Ручной запуск начисления ЗП-окладов на дату (по умолчанию — сегодня).
+    Идемпотентно: повторный вызов в ту же дату ничего не дублирует. Только админ."""
+    ensure_admin_finance(user)
+    target = validate_date(on_date) if on_date else business_today().isoformat()
+    with get_connection() as conn:
+        created = run_salary_accruals(conn, date.fromisoformat(target), uid=str(user["id"]))
+        if created:
+            conn.commit()
+    return AccrualRunResponse(created=created, on_date=target)
+
+
+# ── Автозаведение аренды складов (1-е число месяца) ──────────────────────────────
+
+@router.post("/expenses/rent/accruals/run", response_model=AccrualRunResponse)
+def run_rent_accruals_endpoint(on_date: str | None = Query(None), user=Depends(_get_finance)):
+    """Ручной запуск/бэкафилл аренды складов за месяц даты (по умолчанию — сегодня).
+    Идемпотентно: повторный вызов за тот же месяц ничего не дублирует. Только админ."""
+    ensure_admin_finance(user)
+    target = validate_date(on_date) if on_date else business_today().isoformat()
+    with get_connection() as conn:
+        created = run_rent_accruals(conn, date.fromisoformat(target), uid=str(user["id"]), force=True)
+        if created:
+            conn.commit()
+    return AccrualRunResponse(created=created, on_date=target)
+
+
+# ── Справочники (категории, источники оплаты) ───────────────────────────────────
+
+def _dict_meta(kind: str) -> tuple[str, str]:
+    meta = _DICTS.get(kind)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Справочник не найден")
+    return meta
+
+
+@router.get("/expenses/dict/{kind}", response_model=list[ExpenseDictItem])
+def list_dict_items(kind: str, user=Depends(_get_finance)):
+    table, _ = _dict_meta(kind)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, name FROM {table} WHERE COALESCE(is_deleted, 0) = 0 "
+            "ORDER BY sort_order ASC, LOWER(name) ASC"
+        ).fetchall()
+    return [ExpenseDictItem(id=str(r["id"]), name=str(r["name"])) for r in rows]
+
+
+@router.post("/expenses/dict/{kind}", response_model=MessageResponse)
+def create_dict_item(kind: str, body: ExpenseDictCreate, user=Depends(_get_finance)):
+    table, label = _dict_meta(kind)
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Укажите название")
+    new_id = str(uuid4())
+    with get_connection() as conn:
+        max_row = conn.execute(f"SELECT COALESCE(MAX(sort_order), -1) AS m FROM {table}").fetchone()
+        sort_order = int(max_row["m"]) + 1
+        try:
+            conn.execute(
+                f"INSERT INTO {table} (id,name,sort_order,created_at,created_by) VALUES (?,?,?,?,?)",
+                (new_id, name, sort_order, now_iso(), str(user["id"])),
+            )
+            conn.commit()
+        except IntegrityError as exc:
+            raise HTTPException(status_code=400, detail=f"{label} с таким названием уже есть") from exc
+    return MessageResponse(message=new_id)
+
+
+@router.patch("/expenses/dict/{kind}/{item_id}", response_model=MessageResponse)
+def update_dict_item(kind: str, item_id: str, body: ExpenseDictUpdate, user=Depends(_get_finance)):
+    table, label = _dict_meta(kind)
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Укажите название")
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (item_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"{label} не найдена")
+        try:
+            conn.execute(
+                f"UPDATE {table} SET name = ?, updated_at = ? WHERE id = ?",
+                (name, now_iso(), item_id),
+            )
+            conn.commit()
+        except IntegrityError as exc:
+            raise HTTPException(status_code=400, detail=f"{label} с таким названием уже есть") from exc
+    return MessageResponse(message="ok")
+
+
+@router.delete("/expenses/dict/{kind}/{item_id}", response_model=MessageResponse)
+def delete_dict_item(kind: str, item_id: str, user=Depends(_get_finance)):
+    table, label = _dict_meta(kind)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (item_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"{label} не найдена")
+        conn.execute(
+            f"UPDATE {table} SET is_deleted = 1, updated_at = ? WHERE id = ?",
+            (now_iso(), item_id),
+        )
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+# ── Расход: создание ─────────────────────────────────────────────────────────────
+
+@router.post("/expenses", response_model=MessageResponse)
+def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    kind = (body.kind or EXPENSE_KIND_MANUAL).strip()
+    if kind not in EXPENSE_KINDS_ALL:
+        raise HTTPException(status_code=400, detail="Неизвестный тип расхода")
+    if kind == EXPENSE_KIND_LOGISTICS:
+        raise HTTPException(status_code=400, detail="Логистический расход заводится из рейса")
+    if kind in EXPENSE_KINDS_ADMIN_ONLY:
+        ensure_admin_finance(user)
+
+    spent_on = validate_date(body.spent_on)
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Укажите наименование")
+
+    pay_status = (body.payment_status or EXPENSE_PAYMENT_PAID).strip()
+    if pay_status not in (EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PAID):
+        raise HTTPException(status_code=400, detail="Статус оплаты: ожидает или оплачено")
+
+    quantity = float(body.quantity or 1)
+    unit = str(body.unit or "").strip()
+    if kind == EXPENSE_KIND_MANUAL and not unit:
+        raise HTTPException(status_code=400, detail="Укажите единицу измерения")
+    unit = unit or None
+
+    period_start = validate_date(body.period_start) if body.period_start else None
+    period_end = validate_date(body.period_end) if body.period_end else None
+    expense_id = str(uuid4())
+    now = now_iso()
+    with get_connection() as conn:
+        cat_id = (body.category_id or "").strip() or None
+        if kind == EXPENSE_KIND_MANUAL and not cat_id:
+            raise HTTPException(status_code=400, detail="Выберите категорию")
+        cat_name = resolve_category(conn, cat_id) if cat_id else None
+
+        src_id = (body.payment_source_id or "").strip() or None
+        if pay_status == EXPENSE_PAYMENT_PAID and not src_id:
+            raise HTTPException(status_code=400, detail="Выберите источник оплаты")
+        src_name = resolve_payment_source(conn, src_id) if src_id else None
+
+        paid_on = (validate_date(body.paid_on) if body.paid_on else spent_on) \
+            if pay_status == EXPENSE_PAYMENT_PAID else None
+        source_kind = (body.source_kind or "").strip() or None
+        source_id = (body.source_id or "").strip() or None
+
+        exp_number = next_expense_number(conn)
+        conn.execute(
+            """INSERT INTO material_expenses
+               (id,exp_number,spent_on,category_id,name,quantity,unit,amount,
+                payment_source_id,supplier,comment,kind,payment_status,paid_on,
+                period_start,period_end,source_kind,source_id,created_at,created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (expense_id, exp_number, spent_on, cat_id, name, quantity, unit, int(body.amount),
+             src_id, (body.supplier or "").strip() or None, (body.comment or "").strip() or None,
+             kind, pay_status, paid_on, period_start, period_end, source_kind, source_id, now, uid),
+        )
+        bits = [name, format_kopecks(int(body.amount))]
+        if src_name:
+            bits.append(src_name)
+        if cat_name:
+            bits.append(cat_name)
+        comment = "Заведено: " + " · ".join(bits)
+        if pay_status == EXPENSE_PAYMENT_AWAITING:
+            comment += " · ожидает оплаты"
+        _journal(conn, expense_id, EXPENSE_OP_CREATE, comment, uid)
+        conn.commit()
+    return MessageResponse(message=expense_id)
+
+
+# ── Расход: карточка / правка / удаление ─────────────────────────────────────────
+
+@router.get("/expenses/{expense_id}", response_model=ExpenseDetailResponse)
+def get_expense(expense_id: str, user=Depends(_get_finance)):
+    with get_connection() as conn:
+        detail = load_detail(conn, expense_id)
+    _assert_visible(user, detail)
+    return ExpenseDetailResponse(**detail)
+
+
+@router.patch("/expenses/{expense_id}", response_model=MessageResponse)
+def update_expense(expense_id: str, body: ExpenseUpdate, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    spent_on = validate_date(body.spent_on)
+    name = str(body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Укажите наименование")
+    with get_connection() as conn:
+        old = conn.execute(
+            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+        _assert_visible(user, old)
+
+        # Ед.изм./категория обязательны только для хозрасхода (как при создании).
+        is_manual = str(old["kind"]) == EXPENSE_KIND_MANUAL
+        unit = str(body.unit or "").strip()
+        if is_manual and not unit:
+            raise HTTPException(status_code=400, detail="Укажите единицу измерения")
+        cat_id = (body.category_id or "").strip() or None
+        if is_manual and not cat_id:
+            raise HTTPException(status_code=400, detail="Выберите категорию")
+
+        diff = build_update_diff(conn, old, body)
+        if diff is None:
+            return MessageResponse(message="ok")
+
+        period_start = validate_date(body.period_start) if body.period_start else None
+        period_end = validate_date(body.period_end) if body.period_end else None
+        conn.execute(
+            """UPDATE material_expenses
+               SET spent_on = ?, category_id = ?, name = ?, quantity = ?, unit = ?,
+                   amount = ?, payment_source_id = ?, supplier = ?, comment = ?,
+                   period_start = ?, period_end = ?, updated_at = ?
+               WHERE id = ?""",
+            (spent_on, cat_id, name, float(body.quantity or 1), unit or None,
+             int(body.amount), (body.payment_source_id or "").strip() or None,
+             (body.supplier or "").strip() or None, (body.comment or "").strip() or None,
+             period_start, period_end, now_iso(), expense_id),
+        )
+        _journal(conn, expense_id, EXPENSE_OP_UPDATE, diff, uid)
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/expenses/{expense_id}/pay", response_model=MessageResponse)
+def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_finance)):
+    """Перевод расхода «ожидает оплаты» → «оплачено». Опционально проставляет
+    дату оплаты и источник («с чьей карты»)."""
+    uid = str(user["id"])
+    paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
+    with get_connection() as conn:
+        old = conn.execute(
+            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+        _assert_visible(user, old)
+        if str(old["payment_status"]) == EXPENSE_PAYMENT_PAID:
+            raise HTTPException(status_code=400, detail="Расход уже оплачен")
+        if str(old["payment_status"]) == EXPENSE_PAYMENT_CANCELLED:
+            raise HTTPException(status_code=400, detail="Отменённый расход нельзя оплатить")
+
+        src_id = (body.payment_source_id or "").strip() or old["payment_source_id"]
+        if not src_id:
+            raise HTTPException(status_code=400, detail="Выберите источник оплаты")
+        src_name = resolve_payment_source(conn, src_id)
+        conn.execute(
+            "UPDATE material_expenses SET payment_status = ?, paid_on = ?, "
+            "payment_source_id = ?, updated_at = ? WHERE id = ?",
+            (EXPENSE_PAYMENT_PAID, paid_on, src_id, now_iso(), expense_id),
+        )
+        _journal(
+            conn, expense_id, EXPENSE_OP_PAY,
+            f"Оплачено: {format_kopecks(int(old['amount']))} · {src_name}", uid,
+        )
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/expenses/{expense_id}/cancel", response_model=MessageResponse)
+def cancel_expense(expense_id: str, user=Depends(_get_finance)):
+    """Снятие обязательства «ожидает оплаты» → «отменён» (без удаления записи)."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        old = conn.execute(
+            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+        _assert_visible(user, old)
+        if str(old["payment_status"]) != EXPENSE_PAYMENT_AWAITING:
+            raise HTTPException(status_code=400, detail="Отменить можно только расход, ожидающий оплаты")
+        conn.execute(
+            "UPDATE material_expenses SET payment_status = ?, updated_at = ? WHERE id = ?",
+            (EXPENSE_PAYMENT_CANCELLED, now_iso(), expense_id),
+        )
+        _journal(conn, expense_id, EXPENSE_OP_CANCEL,
+                 f"Обязательство снято: {format_kopecks(int(old['amount']))}", uid)
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.delete("/expenses/{expense_id}", response_model=MessageResponse)
+def delete_expense(expense_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        old = conn.execute(
+            "SELECT exp_number, kind FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+        _assert_visible(user, old)
+        conn.execute(
+            "UPDATE material_expenses SET is_deleted = 1, updated_at = ? WHERE id = ?",
+            (now_iso(), expense_id),
+        )
+        _journal(conn, expense_id, EXPENSE_OP_DELETE, f"Удалён расход {old['exp_number']}", uid)
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+# ── Вложения (фото/скан чека) ────────────────────────────────────────────────────
+
+@router.post("/expenses/{expense_id}/files", response_model=MessageResponse)
+async def upload_expense_file(
+    expense_id: str,
+    file: UploadFile = File(...),
+    user=Depends(_get_finance),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_EXPENSE_FILE_EXTS:
+        raise HTTPException(status_code=400, detail="Допустимы файлы: pdf, png, jpg, jpeg")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+
+        saved_filename = f"{uuid4()}{ext}"
+        file_path = UPLOADS_DIR / saved_filename
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_bytes(data)
+        tmp_path.rename(file_path)
+
+        file_id = str(uuid4())
+        url = f"/uploads/{saved_filename}"
+        conn.execute(
+            "INSERT INTO expense_files (id,expense_id,filename,url,mime_type,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (file_id, expense_id, file.filename, url, file.content_type or None, now_iso(), uid),
+        )
+        _journal(conn, expense_id, EXPENSE_OP_FILE_ADD, f"Прикреплён файл {file.filename}", uid)
+        conn.commit()
+    return MessageResponse(message=file_id)
+
+
+@router.delete("/expenses/{expense_id}/files/{file_id}", response_model=MessageResponse)
+def delete_expense_file(expense_id: str, file_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT filename FROM expense_files WHERE id = ? AND expense_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (file_id, expense_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        conn.execute("UPDATE expense_files SET is_deleted = 1 WHERE id = ?", (file_id,))
+        _journal(conn, expense_id, EXPENSE_OP_FILE_DELETE, f"Удалён файл {row['filename']}", uid)
+        conn.commit()
+    return MessageResponse(message="ok")

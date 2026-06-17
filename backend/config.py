@@ -442,6 +442,99 @@ INVOICE_OP_CLOSE           = "close"
 INVOICE_OP_CANCEL          = "cancel"
 
 # ---------------------------------------------------------------------------
+# Расходы на материалы (хозрасходы)
+# ---------------------------------------------------------------------------
+# Суммы (material_expenses.amount) хранятся в КОПЕЙКАХ как INTEGER — как в счетах
+# и табеле, чтобы денежный учёт не накапливал ошибок округления float.
+# Количество (material_expenses.quantity) — NUMERIC: расходники бывают дробными
+# (2.5 л, 0.5 кг), поэтому не INTEGER.
+
+# Типы операций журнала расходов (append-only)
+EXPENSE_OP_CREATE      = "create"
+EXPENSE_OP_UPDATE      = "update"
+EXPENSE_OP_DELETE      = "delete"
+EXPENSE_OP_RESTORE     = "restore"
+EXPENSE_OP_FILE_ADD    = "file_add"
+EXPENSE_OP_FILE_DELETE = "file_delete"
+EXPENSE_OP_PAY         = "pay"
+EXPENSE_OP_CANCEL      = "cancel"
+
+EXPENSE_OP_LABELS: dict[str, str] = {
+    EXPENSE_OP_CREATE:      "Создание",
+    EXPENSE_OP_UPDATE:      "Изменение",
+    EXPENSE_OP_DELETE:      "Удаление",
+    EXPENSE_OP_RESTORE:     "Восстановление",
+    EXPENSE_OP_FILE_ADD:    "Файл прикреплён",
+    EXPENSE_OP_FILE_DELETE: "Файл удалён",
+    EXPENSE_OP_PAY:         "Оплачено",
+    EXPENSE_OP_CANCEL:      "Отменён",
+}
+
+# Тип/источник расхода (kind). Единый реестр сводит хозрасходы, логистику рейсов,
+# аренду склада и ЗП в одну таблицу material_expenses.
+EXPENSE_KIND_MANUAL    = "manual"      # ручная разовая закупка
+EXPENSE_KIND_LOGISTICS = "logistics"   # автоматически из рейса (стоимость логистики)
+EXPENSE_KIND_RENT      = "rent"        # оплата склада (аренда)
+EXPENSE_KIND_SALARY    = "salary"      # выплата ЗП сотруднику
+
+EXPENSE_KINDS_ALL: tuple[str, ...] = (
+    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
+)
+EXPENSE_KIND_LABELS: dict[str, str] = {
+    EXPENSE_KIND_MANUAL:    "Хозрасход",
+    EXPENSE_KIND_LOGISTICS: "Логистика",
+    EXPENSE_KIND_RENT:      "Оплата склада",
+    EXPENSE_KIND_SALARY:    "Зарплата",
+}
+# Видимость по ролям: менеджер видит только хозрасходы и логистику; аренда и ЗП —
+# только админ. Реестр-список и сводка фильтруются этим набором (см. security).
+EXPENSE_KINDS_MANAGER_VISIBLE: frozenset[str] = frozenset({
+    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS,
+})
+EXPENSE_KINDS_ADMIN_ONLY: frozenset[str] = frozenset({
+    EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
+})
+
+# Источник (origin) расхода — обратная ссылка на породивший объект.
+EXPENSE_SOURCE_TRIP      = "trip"       # рейс (логистика)
+EXPENSE_SOURCE_EMPLOYEE  = "employee"   # сотрудник (ЗП)
+EXPENSE_SOURCE_WAREHOUSE = "warehouse"  # склад (аренда)
+
+# Статус оплаты расхода. Рейсовая логистика создаётся «ожидает оплаты»; ручной
+# хозрасход по умолчанию «оплачено» (фиксация постфактум), но может быть и «ожидает».
+EXPENSE_PAYMENT_AWAITING  = "awaiting"
+EXPENSE_PAYMENT_PAID      = "paid"
+EXPENSE_PAYMENT_CANCELLED = "cancelled"
+
+EXPENSE_PAYMENT_STATUSES_ALL: tuple[str, ...] = (
+    EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PAID, EXPENSE_PAYMENT_CANCELLED,
+)
+EXPENSE_PAYMENT_STATUS_LABELS: dict[str, str] = {
+    EXPENSE_PAYMENT_AWAITING:  "Ожидает оплаты",
+    EXPENSE_PAYMENT_PAID:      "Оплачено",
+    EXPENSE_PAYMENT_CANCELLED: "Отменён",
+}
+
+# Системные категории, которые сидятся миграцией 0057 и используются авто-расходами
+# (логистика рейса) и подсказками UI. Их имена резолвятся по name (best-effort).
+EXPENSE_SYSTEM_CATEGORY_LOGISTICS = "Логистика"
+EXPENSE_SYSTEM_CATEGORY_RENT      = "Аренда склада"
+EXPENSE_SYSTEM_CATEGORY_SALARY    = "Зарплата"
+EXPENSE_SYSTEM_CATEGORY_SEED: tuple[str, ...] = (
+    EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
+    EXPENSE_SYSTEM_CATEGORY_RENT,
+    EXPENSE_SYSTEM_CATEGORY_SALARY,
+)
+
+# Стартовое наполнение справочников расходов (сид миграции 0056 и dev-guard).
+EXPENSE_CATEGORY_SEED: tuple[str, ...] = (
+    "Склад", "Упаковка", "Уборка", "Туалет", "Прочее",
+)
+EXPENSE_PAYMENT_SOURCE_SEED: tuple[str, ...] = (
+    "ИП Макс", "Саша", "Олег",
+)
+
+# ---------------------------------------------------------------------------
 # Табель учёта рабочего времени и выплаты
 # ---------------------------------------------------------------------------
 # Ставка (employee_rates.rate_kopecks) и суммы выплат (payroll_payments.amount_kopecks)
@@ -459,6 +552,16 @@ EMPLOYEE_STATUS_ARCHIVED = "archived"
 EMPLOYEE_STATUS_LABELS: dict[str, str] = {
     EMPLOYEE_STATUS_ACTIVE:   "Активен",
     EMPLOYEE_STATUS_ARCHIVED: "В архиве",
+}
+
+# Тип оплаты труда (в карточке сотрудника). hourly — ставка × часы из табеля;
+# fixed — фиксированный оклад из карточки (employees.fixed_salary_kopecks).
+EMPLOYEE_COMP_HOURLY = "hourly"
+EMPLOYEE_COMP_FIXED  = "fixed"
+EMPLOYEE_COMP_TYPES_ALL: tuple[str, ...] = (EMPLOYEE_COMP_HOURLY, EMPLOYEE_COMP_FIXED)
+EMPLOYEE_COMP_LABELS: dict[str, str] = {
+    EMPLOYEE_COMP_HOURLY: "Почасовая",
+    EMPLOYEE_COMP_FIXED:  "Оклад (фикс)",
 }
 
 # Статус дня (производный, для UI). Хранится только is_absent; остальное считается.

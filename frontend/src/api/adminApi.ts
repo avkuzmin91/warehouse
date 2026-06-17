@@ -139,7 +139,7 @@ export function setUnloadingZoneShipping(id: string) {
 
 export function createSimpleDictionaryItem(
   apiPath: string,
-  payload: { name: string; is_active: boolean; color_hex?: string | null },
+  payload: { name: string; is_active: boolean; color_hex?: string | null; rent_monthly_kopecks?: number | null },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(path, {
@@ -151,7 +151,7 @@ export function createSimpleDictionaryItem(
 export function updateSimpleDictionaryItem(
   apiPath: string,
   id: string,
-  payload: { name?: string; is_active?: boolean; color_hex?: string | null },
+  payload: { name?: string; is_active?: boolean; color_hex?: string | null; rent_monthly_kopecks?: number | null },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(`${path}/${id}`, {

@@ -123,6 +123,20 @@ def ensure_finance_access(user: Mapping[str, Any]) -> None:
         )
 
 
+def can_manage_admin_finance(user: Mapping[str, Any]) -> bool:
+    """Расходы-«фиксы» (аренда склада, ЗП) и сводный реестр «Транзакции» —
+    только админ. Менеджер их не видит и не заводит."""
+    return user["role"] == "admin"
+
+
+def ensure_admin_finance(user: Mapping[str, Any]) -> None:
+    if not can_manage_admin_finance(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 
