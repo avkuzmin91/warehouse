@@ -58,6 +58,7 @@ const SIMPLE_API_PATHS: Record<string, string> = {
   suppliers: '/suppliers',
   'unloading-zones': '/unloading-zones',
   warehouses: '/warehouses',
+  'own-warehouses': '/own-warehouses',
   carriers: '/carriers',
   'vehicle-types': '/vehicle-types',
   positions: '/positions',
@@ -73,13 +74,14 @@ interface SimpleDictSheetProps {
   onSaved: () => void
   isNew: boolean
   kind: string
-  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
+  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
   initial?: AnyDictItem | null
 }
 
 export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, initial }: SimpleDictSheetProps) {
   const [name, setName] = useState('')
   const [colorHex, setColorHex] = useState(DEFAULT_COLOR_HEX)
+  const [rentRub, setRentRub] = useState('')
   const [active, setActive] = useState(true)
   const [reqColor, setReqColor] = useState(false)
   const [reqSize, setReqSize] = useState(false)
@@ -98,6 +100,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     setName(initial?.name ?? '')
     const initialColorHex = initial && 'color_hex' in initial ? initial.color_hex : null
     setColorHex(apiType === 'colors' ? normalizeColorHex(initialColorHex ?? initial?.name ?? '') ?? DEFAULT_COLOR_HEX : DEFAULT_COLOR_HEX)
+    const initialRent = initial && 'rent_monthly_kopecks' in initial ? initial.rent_monthly_kopecks : null
+    setRentRub(apiType === 'own-warehouses' && initialRent != null ? String(initialRent / 100) : '')
     setActive(initial?.is_active ?? true)
     setError(null)
     if (apiType === 'product-types' && initial) {
@@ -156,6 +160,20 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
       return
     }
     const colorPayload = apiType === 'colors' ? { color_hex: normalizeColorHex(colorHex) } : {}
+    let rentPayload: { rent_monthly_kopecks?: number | null } = {}
+    if (apiType === 'own-warehouses') {
+      const s = rentRub.trim().replace(',', '.')
+      if (s) {
+        const n = Number(s)
+        if (!Number.isFinite(n) || n < 0) {
+          setError('Аренда: укажите неотрицательную сумму в рублях')
+          return
+        }
+        rentPayload = { rent_monthly_kopecks: Math.round(n * 100) }
+      } else {
+        rentPayload = { rent_monthly_kopecks: null }
+      }
+    }
     setSaving(true)
     setError(null)
     try {
@@ -166,7 +184,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           await createSize({ name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active, ...colorPayload })
+          await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
         }
       } else if (initial) {
         if (apiType === 'product-types') {
@@ -175,7 +193,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           await updateSize(initial.id, { name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active, ...colorPayload })
+          await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
         }
       }
       onSaved()
@@ -240,6 +258,18 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
               onChange={(e) => setColorHex(e.target.value)}
             />
           </div>
+        </Field>
+      )}
+
+      {apiType === 'own-warehouses' && (
+        <Field label="Аренда, ₽ / мес" help="1-го числа каждого месяца автоматически создаётся расход типа «Аренда» со статусом «Ожидает оплаты». Оставьте пустым, если аренды нет.">
+          <Input
+            className="num"
+            inputMode="decimal"
+            placeholder="Например: 120000"
+            value={rentRub}
+            onChange={(e) => setRentRub(e.target.value)}
+          />
         </Field>
       )}
 

@@ -25,6 +25,8 @@ export type InvoiceShipment = {
   status_label: string
   ship_date: string | null
   destination: string | null
+  sku_count: number
+  total_qty: number
 }
 
 export type InvoicePayment = {
@@ -98,6 +100,8 @@ export type InvoiceListResponse = {
   limit: number
 }
 
+export type ProductPreview = { name: string; qty: number }
+
 export type UninvoicedShipment = {
   id: string
   doc_number: string
@@ -108,8 +112,12 @@ export type UninvoicedShipment = {
   ship_date: string | null
   sku_count: number
   total_qty: number
+  products_preview: ProductPreview[]
   created_at: string
 }
+
+export type ShipmentContentsProduct = { product_id: string; name: string; sku: string | null; qty: number }
+export type ShipmentContents = { products: ShipmentContentsProduct[]; total_qty: number; sku_count: number }
 
 export type UninvoicedShipmentsResponse = {
   items: UninvoicedShipment[]
@@ -188,6 +196,12 @@ export function getUninvoicedShipments(params: UninvoicedParams = {}, signal?: A
 
 export function getInvoiceAlerts(signal?: AbortSignal) {
   return request<InvoiceAlerts>('/invoices/alerts', { signal })
+}
+
+export function getShipmentContents(shipmentIds: string[], signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('shipment_ids', shipmentIds.join(','))
+  return request<ShipmentContents>(`/invoices/shipment-contents?${sp.toString()}`, { signal })
 }
 
 export function getInvoice(invoiceId: string, signal?: AbortSignal) {

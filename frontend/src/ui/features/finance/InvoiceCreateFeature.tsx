@@ -13,7 +13,7 @@ import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { CargoTag } from './financeUI'
+import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, productsPreviewText } from './financeUI'
 import { InvoiceRailPanel } from './InvoiceRail'
 
 export function InvoiceCreateFeature() {
@@ -27,6 +27,7 @@ export function InvoiceCreateFeature() {
   const [amount, setAmount] = useState('')
   const [comment, setComment] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [showErrors, setShowErrors] = useState(false)
 
@@ -54,6 +55,9 @@ export function InvoiceCreateFeature() {
 
   function toggle(id: string) {
     setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleExpand(id: string) {
+    setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   }
   function toggleAll() {
     setSelected((prev) => prev.size === shipments.length ? new Set() : new Set(shipments.map((s) => s.id)))
@@ -140,26 +144,48 @@ export function InvoiceCreateFeature() {
                 <div style={{ margin: '0 -14px' }}>
                   {shipments.map((s) => {
                     const on = selected.has(s.id)
+                    const open = expanded.has(s.id)
                     return (
-                      <label key={s.id} style={{
-                        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-                        borderBottom: '1px solid var(--c-border)', cursor: 'pointer',
+                      <div key={s.id} style={{
+                        borderBottom: '1px solid var(--c-border)',
                         background: on ? 'var(--c-accent-bg)' : undefined,
                       }}>
-                        <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          {on && <Icon name="check" size={10} />}
-                        </span>
-                        <input type="checkbox" checked={on} onChange={() => toggle(s.id)} style={{ display: 'none' }} />
-                        <span className="mono" style={{ fontWeight: 500, minWidth: 92 }}>{s.doc_number}</span>
-                        <CargoTag cargoType={s.cargo_type} />
-                        <span style={{ flex: 1, fontSize: 12.5, color: 'var(--c-text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {s.destination ?? '—'} · {fmtDate(s.ship_date)}
-                        </span>
-                        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span>
-                      </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+                          <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {on && <Icon name="check" size={10} />}
+                          </span>
+                          <input type="checkbox" checked={on} onChange={() => toggle(s.id)} style={{ display: 'none' }} />
+                          <span className="mono" style={{ fontWeight: 500, minWidth: 92 }}>{s.doc_number}</span>
+                          <CargoTag cargoType={s.cargo_type} />
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ display: 'block', fontSize: 12.5, color: 'var(--c-text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {s.destination ?? '—'} · {fmtDate(s.ship_date)}
+                            </span>
+                            {s.products_preview.length > 0 && (
+                              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--c-text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {productsPreviewText(s.products_preview, s.sku_count)}
+                              </span>
+                            )}
+                          </span>
+                          <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>{s.total_qty} шт · {s.sku_count} SKU</span>
+                          <button
+                            type="button" className="btn ghost icon sm"
+                            title={open ? 'Свернуть состав' : 'Показать состав'}
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleExpand(s.id) }}
+                          >
+                            <Icon name={open ? 'chevUp' : 'chevDown'} size={14} />
+                          </button>
+                        </label>
+                        {open && (
+                          <div style={{ padding: '2px 14px 12px 38px' }}>
+                            <ShipmentContentsPanel shipmentId={s.id} />
+                          </div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
+                <SelectedContentsRollup shipmentIds={[...selected]} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                   <Icon name="lock" size={12} />Привязанные отгрузки нельзя добавить в другой счёт.
                 </div>

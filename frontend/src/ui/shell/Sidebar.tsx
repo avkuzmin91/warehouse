@@ -26,6 +26,7 @@ const OPS_NAV: NavItem[] = [
 
 const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
+  { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
 ]
 
 const TIMESHEET_NAV: NavItem[] = [
@@ -144,50 +145,52 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
         </button>
       </div>
 
-      {isClient ? (
-        <>
-          {!collapsed && <div className="sidebar-section">Личный кабинет</div>}
-          {CLIENT_NAV.map((item) => (
-            <NavItem key={item.to} {...item} collapsed={collapsed} />
-          ))}
-        </>
-      ) : (
-        <>
-          {!collapsed && <div className="sidebar-section">Склад</div>}
-          {isShiftSupervisor && SHIFT_SUPERVISOR_NAV.map((item) => (
-            <NavItem key={item.to} {...item} collapsed={collapsed} />
-          ))}
-          {hasStaffAccess && OPS_NAV.map((item) => (
-            <NavItem key={item.to} {...item} collapsed={collapsed} />
-          ))}
-          {hasFinanceAccess && (
-            <>
-              {!collapsed && <div className="sidebar-section">Финансы</div>}
-              {FINANCE_NAV.map((item) => (
-                <NavItem key={item.to} {...item} collapsed={collapsed} />
-              ))}
-            </>
-          )}
-          {hasTimesheetAccess && (
-            <>
-              {!collapsed && <div className="sidebar-section">Табель</div>}
-              {TIMESHEET_NAV
-                .filter((item) => item.to !== '/timesheet/payroll' || canSeePayroll)
-                .map((item) => (
+      <nav className="sidebar-nav">
+        {isClient ? (
+          <>
+            {!collapsed && <div className="sidebar-section">Личный кабинет</div>}
+            {CLIENT_NAV.map((item) => (
+              <NavItem key={item.to} {...item} collapsed={collapsed} />
+            ))}
+          </>
+        ) : (
+          <>
+            {!collapsed && <div className="sidebar-section">Склад</div>}
+            {isShiftSupervisor && SHIFT_SUPERVISOR_NAV.map((item) => (
+              <NavItem key={item.to} {...item} collapsed={collapsed} />
+            ))}
+            {hasStaffAccess && OPS_NAV.map((item) => (
+              <NavItem key={item.to} {...item} collapsed={collapsed} />
+            ))}
+            {hasFinanceAccess && (
+              <>
+                {!collapsed && <div className="sidebar-section">Финансы</div>}
+                {FINANCE_NAV.map((item) => (
                   <NavItem key={item.to} {...item} collapsed={collapsed} />
                 ))}
-            </>
-          )}
-          {hasAdminAccess && (
-            <>
-              {!collapsed && <div className="sidebar-section">Управление</div>}
-              {[...ADMIN_NAV, ...(canManageUsers(user) ? USERS_NAV : [])].map((item) => (
-                <NavItem key={item.to} {...item} collapsed={collapsed} />
-              ))}
-            </>
-          )}
-        </>
-      )}
+              </>
+            )}
+            {hasTimesheetAccess && (
+              <>
+                {!collapsed && <div className="sidebar-section">Табель</div>}
+                {TIMESHEET_NAV
+                  .filter((item) => item.to !== '/timesheet/payroll' || canSeePayroll)
+                  .map((item) => (
+                    <NavItem key={item.to} {...item} collapsed={collapsed} />
+                  ))}
+              </>
+            )}
+            {hasAdminAccess && (
+              <>
+                {!collapsed && <div className="sidebar-section">Управление</div>}
+                {[...ADMIN_NAV, ...(canManageUsers(user) ? USERS_NAV : [])].map((item) => (
+                  <NavItem key={item.to} {...item} collapsed={collapsed} />
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </nav>
 
       <div className="sidebar-footer-wrap" ref={footerRef}>
         {menuOpen && (

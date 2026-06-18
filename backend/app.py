@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 import subprocess
@@ -22,6 +23,7 @@ from modules.dashboard.router import router as dashboard_router
 from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
 from modules.invoices.router import router as invoices_router
+from modules.expenses.router import router as expenses_router
 from modules.timesheet.router import router as timesheet_router
 from modules.logistics.router import router as logistics_router
 from modules.products.router import router as products_router
@@ -32,6 +34,32 @@ from modules.users.router import router as users_router
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
+
+def _seed_expense_dictionaries(conn) -> None:
+    """Сид справочников расходов при dev-старте без alembic — только если таблица пуста."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from config import (
+        EXPENSE_CATEGORY_SEED,
+        EXPENSE_PAYMENT_SOURCE_SEED,
+        EXPENSE_SYSTEM_CATEGORY_SEED,
+    )
+
+    now = datetime.now(UTC).isoformat()
+    for table, names in (
+        ("expense_categories", EXPENSE_CATEGORY_SEED + EXPENSE_SYSTEM_CATEGORY_SEED),
+        ("expense_payment_sources", EXPENSE_PAYMENT_SOURCE_SEED),
+    ):
+        empty = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+        if int(empty) > 0:
+            continue
+        for i, name in enumerate(names):
+            conn.execute(
+                f"INSERT INTO {table} (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
+                (str(uuid4()), name, i, now),
+            )
+
 
 def _ensure_runtime_schema() -> None:
     """Small guard for direct dev starts that bypass `alembic upgrade head`."""
@@ -54,6 +82,23 @@ def _ensure_runtime_schema() -> None:
             ALTER TABLE IF EXISTS colors
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
+        # «Наши склады» (own_warehouses) — отдельный admin-only справочник со ставкой
+        # аренды; не путать с warehouses («Точки логистики», origin рейсов).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS own_warehouses (
+                id                   TEXT PRIMARY KEY,
+                name                 TEXT UNIQUE NOT NULL,
+                rent_monthly_kopecks INTEGER,
+                is_active            INTEGER NOT NULL DEFAULT 1,
+                created_at           TEXT NOT NULL,
+                creator_id           TEXT,
+                updated_at           TEXT,
+                updated_by_id        TEXT,
+                is_deleted           INTEGER NOT NULL DEFAULT 0,
+                deleted_at           TEXT,
+                deleted_by_id        TEXT
+            )
+        """)
         conn.execute("""
             ALTER TABLE IF EXISTS products
                 ADD COLUMN IF NOT EXISTS weight_grams INTEGER
@@ -75,9 +120,11 @@ def _ensure_runtime_schema() -> None:
         """)
         conn.execute("""
             ALTER TABLE IF EXISTS employees
-                ADD COLUMN IF NOT EXISTS position_id        TEXT,
-                ADD COLUMN IF NOT EXISTS user_id            TEXT,
-                ADD COLUMN IF NOT EXISTS supervisor_user_id TEXT
+                ADD COLUMN IF NOT EXISTS position_id          TEXT,
+                ADD COLUMN IF NOT EXISTS user_id              TEXT,
+                ADD COLUMN IF NOT EXISTS supervisor_user_id   TEXT,
+                ADD COLUMN IF NOT EXISTS comp_type            TEXT NOT NULL DEFAULT 'hourly',
+                ADD COLUMN IF NOT EXISTS fixed_salary_kopecks INTEGER
         """)
         # Логистика (рейсы) + справочник «Тип кузова» — на случай dev-старта без alembic.
         conn.execute("""
@@ -233,6 +280,97 @@ def _ensure_runtime_schema() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_files_invoice ON invoice_files(invoice_id)")
+        # Расходы на материалы (хозрасходы) — на случай dev-старта без alembic.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_categories (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                updated_at TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_categories_name "
+            "ON expense_categories (LOWER(name)) WHERE COALESCE(is_deleted, 0) = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_payment_sources (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                updated_at TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_payment_sources_name "
+            "ON expense_payment_sources (LOWER(name)) WHERE COALESCE(is_deleted, 0) = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS material_expenses (
+                id                TEXT PRIMARY KEY,
+                exp_number        TEXT NOT NULL UNIQUE,
+                spent_on          TEXT NOT NULL,
+                category_id       TEXT REFERENCES expense_categories(id),
+                name              TEXT NOT NULL,
+                quantity          NUMERIC(14, 3) NOT NULL DEFAULT 0,
+                unit              TEXT,
+                amount            INTEGER NOT NULL DEFAULT 0,
+                payment_source_id TEXT REFERENCES expense_payment_sources(id),
+                supplier          TEXT,
+                comment           TEXT,
+                created_at        TEXT NOT NULL,
+                created_by        TEXT,
+                updated_at        TEXT,
+                is_deleted        INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_spent_on ON material_expenses(spent_on)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_category ON material_expenses(category_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_source ON material_expenses(payment_source_id)")
+        # Единый реестр расходов: тип / статус оплаты / origin / период (миграция 0057).
+        conn.execute("""
+            ALTER TABLE IF EXISTS material_expenses
+                ADD COLUMN IF NOT EXISTS kind           TEXT NOT NULL DEFAULT 'manual',
+                ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid',
+                ADD COLUMN IF NOT EXISTS paid_on        TEXT,
+                ADD COLUMN IF NOT EXISTS source_kind    TEXT,
+                ADD COLUMN IF NOT EXISTS source_id      TEXT,
+                ADD COLUMN IF NOT EXISTS period_start   TEXT,
+                ADD COLUMN IF NOT EXISTS period_end     TEXT
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_kind ON material_expenses(kind)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_pay_status ON material_expenses(payment_status)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_ops (
+                id         TEXT PRIMARY KEY,
+                expense_id TEXT NOT NULL REFERENCES material_expenses(id),
+                op_type    TEXT NOT NULL,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_expense_ops_expense ON expense_ops(expense_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_files (
+                id         TEXT PRIMARY KEY,
+                expense_id TEXT NOT NULL,
+                filename   TEXT NOT NULL,
+                url        TEXT NOT NULL,
+                mime_type  TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                is_deleted INTEGER DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_expense_files_expense ON expense_files(expense_id)")
+        _seed_expense_dictionaries(conn)
         # Табель и выплаты — на случай dev-старта без alembic.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS employees (
@@ -320,12 +458,41 @@ def _ensure_runtime_schema() -> None:
         conn.commit()
 
 
+async def _accrual_loop() -> None:
+    """Фоновое автоначисление: ЗП-оклады (15-е и последний день месяца) и аренда складов
+    (1-е число). Будится раз в час; дедуп по периоду делает повторные прогоны и рестарты
+    безопасными. Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
+    from modules.expenses.service import run_rent_accruals, run_salary_accruals
+    from modules.timesheet.service import business_today
+
+    while True:
+        try:
+            with get_connection() as conn:
+                today = business_today()
+                created = run_salary_accruals(conn, today)
+                created += run_rent_accruals(conn, today)
+                if created:
+                    conn.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(exist_ok=True)
     init_pool()
     _ensure_runtime_schema()
+    accrual_task = (
+        asyncio.create_task(_accrual_loop())
+        if os.environ.get("SALARY_SCHEDULER", "1") == "1"
+        else None
+    )
     yield
+    if accrual_task is not None:
+        accrual_task.cancel()
     close_pool()
     try:
         await close_login_redis()
@@ -464,6 +631,7 @@ app.include_router(shipments_router)
 app.include_router(balances_router)
 app.include_router(cabinet_router)
 app.include_router(invoices_router)
+app.include_router(expenses_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)

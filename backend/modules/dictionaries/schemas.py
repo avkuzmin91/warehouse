@@ -7,6 +7,7 @@ class DictionaryBaseItem(BaseModel):
     id: str
     name: str
     color_hex: str | None = None
+    rent_monthly_kopecks: int | None = None
     is_packing_zone: bool = False
     is_shipping_zone: bool = False
     is_active: bool
@@ -27,12 +28,14 @@ class ProductTypeDictionaryItem(DictionaryBaseItem):
 class DictionaryCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     color_hex: str | None = None
+    rent_monthly_kopecks: int | None = Field(default=None, ge=0)
     is_active: bool = False
 
 
 class DictionaryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     color_hex: str | None = None
+    rent_monthly_kopecks: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
     is_deleted: bool | None = None
 

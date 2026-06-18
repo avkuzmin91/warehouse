@@ -416,7 +416,7 @@ def list_employees(
     rows = connection.execute(
         f"""
         SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.position_id,
-               e.status,
+               e.status, e.comp_type, e.fixed_salary_kopecks,
                (SELECT MAX(t.work_date) FROM timesheet_entries t
                 WHERE t.employee_id = e.id AND COALESCE(t.is_deleted, 0) = 0
                   AND t.actual_start IS NOT NULL) AS last_shift
@@ -437,8 +437,12 @@ def list_employees(
             "position_id": r["position_id"],
             "status": str(r["status"]),
             "last_shift": r["last_shift"],
+            "comp_type": str(r["comp_type"] or "hourly"),
         }
         if with_money:
             item["rate_kopecks"] = current_rate(rates.get(str(r["id"])))
+            item["fixed_salary_kopecks"] = (
+                int(r["fixed_salary_kopecks"]) if r["fixed_salary_kopecks"] is not None else None
+            )
         out.append(item)
     return out

@@ -12,6 +12,17 @@ export function canManageUsers(user: User | null | undefined): boolean {
   return user?.role === 'admin'
 }
 
+// Справочник «Наши склады» (ставки аренды) — только админ.
+export function canManageOwnWarehouses(user: User | null | undefined): boolean {
+  return user?.role === 'admin'
+}
+
+// Расходы-«фиксы» (аренда склада, ЗП) и сводный реестр всех типов — только админ.
+// Менеджер видит и заводит только хозрасходы и логистику.
+export function canManageAdminFinance(user: User | null | undefined): boolean {
+  return user?.role === 'admin'
+}
+
 export function canEditShipmentFiles(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }

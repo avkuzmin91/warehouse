@@ -260,6 +260,10 @@ def list_uninvoiced_shipments(
         [*params, limit, offset],
     ).fetchall()
 
+    # Топ-товары каждой отгрузки для свёрнутой строки (одним запросом по странице,
+    # не N+1). Полный состав по требованию грузит карточка отгрузки / roll-up.
+    preview_map = _products_preview_map(connection, [str(r["id"]) for r in rows], top_n=3)
+
     items = [
         {
             "id": str(r["id"]),
@@ -271,11 +275,68 @@ def list_uninvoiced_shipments(
             "ship_date": r["ship_date"],
             "sku_count": int(r["sku_count"]),
             "total_qty": int(r["total_qty"]),
+            "products_preview": preview_map.get(str(r["id"]), []),
             "created_at": str(r["created_at"]),
         }
         for r in rows
     ]
     return items, total
+
+
+def _products_preview_map(connection, doc_ids: list[str], *, top_n: int) -> dict[str, list[dict]]:
+    """Для набора отгрузок — топ-N товаров по количеству (для свёрнутой строки)."""
+    ids = [d for d in doc_ids if d]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"""
+        SELECT doc_id, product_id, MAX(product_name) AS name, SUM(qty) AS qty
+        FROM shipment_lines
+        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
+        GROUP BY doc_id, product_id
+        ORDER BY doc_id, SUM(qty) DESC, MAX(product_name)
+        """,
+        ids,
+    ).fetchall()
+    result: dict[str, list[dict]] = {}
+    for r in rows:
+        bucket = result.setdefault(str(r["doc_id"]), [])
+        if len(bucket) < top_n:
+            bucket.append({"name": str(r["name"]), "qty": int(r["qty"])})
+    return result
+
+
+def aggregate_shipment_contents(connection, shipment_ids: list[str]) -> dict:
+    """Сводный состав по набору отгрузок: товары с суммарным количеством (roll-up)."""
+    ids: list[str] = []
+    for raw in shipment_ids:
+        sid = str(raw or "").strip()
+        if sid and sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return {"products": [], "total_qty": 0, "sku_count": 0}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"""
+        SELECT product_id, MAX(product_name) AS name, MAX(product_sku) AS sku, SUM(qty) AS qty
+        FROM shipment_lines
+        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
+        GROUP BY product_id
+        ORDER BY SUM(qty) DESC, MAX(product_name)
+        """,
+        ids,
+    ).fetchall()
+    products = [
+        {"product_id": str(r["product_id"]), "name": str(r["name"]),
+         "sku": r["sku"], "qty": int(r["qty"])}
+        for r in rows
+    ]
+    return {
+        "products": products,
+        "total_qty": sum(p["qty"] for p in products),
+        "sku_count": len(products),
+    }
 
 
 # Лёгкий in-process кеш счётчика алёрта: бейдж опрашивается часто, а сам запрос

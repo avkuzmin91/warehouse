@@ -12,6 +12,8 @@ class EmployeeCreate(BaseModel):
     user_id:            str | None = None             # связь с учёткой (только admin)
     rate_kopecks:       int | None = Field(default=None, ge=0)   # стартовая ставка, копейки/час
     effective_from:     str | None = None             # дата действия стартовой ставки
+    comp_type:          str | None = None             # hourly | fixed
+    fixed_salary_kopecks: int | None = Field(default=None, ge=0)  # оклад для fixed, копейки
 
 
 class EmployeeUpdate(BaseModel):
@@ -19,6 +21,8 @@ class EmployeeUpdate(BaseModel):
     position_id:        str | None = None
     hired_on:           str | None = None
     user_id:            str | None = None             # только admin
+    comp_type:          str | None = None             # hourly | fixed
+    fixed_salary_kopecks: int | None = Field(default=None, ge=0)
 
 
 class RateCreate(BaseModel):
@@ -36,6 +40,8 @@ class EmployeeListItem(BaseModel):
     status_label:       str
     last_shift:         str | None = None
     rate_kopecks:       int | None = None             # только для менеджера
+    comp_type:          str = "hourly"
+    fixed_salary_kopecks: int | None = None           # только для менеджера
 
 
 class EmployeeListResponse(BaseModel):
@@ -89,6 +95,9 @@ class EmployeeDetailResponse(BaseModel):
     status_label:       str
     hired_on:           str | None = None
     rate_kopecks:       int | None = None             # текущая ставка (менеджер)
+    comp_type:          str = "hourly"
+    comp_label:         str = ""
+    fixed_salary_kopecks: int | None = None           # оклад (менеджер)
     with_money:    bool
     week_start:    str
     week_end:      str

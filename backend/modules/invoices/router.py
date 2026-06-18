@@ -45,10 +45,12 @@ from modules.invoices.schemas import (
     InvoicePaymentItem,
     InvoiceShipmentItem,
     InvoiceUpdate,
+    ShipmentContentsResponse,
     UninvoicedShipmentItem,
     UninvoicedShipmentsResponse,
 )
 from modules.invoices.service import (
+    aggregate_shipment_contents,
     alerts_counts,
     attach_shipments,
     format_kopecks,
@@ -107,7 +109,11 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     ship_rows = conn.execute(
         """
         SELECT s.shipment_doc_id, d.doc_number, d.cargo_type, d.status,
-               d.ship_date, d.destination
+               d.ship_date, d.destination,
+               (SELECT COUNT(DISTINCT sl.product_id) FROM shipment_lines sl
+                WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS sku_count,
+               (SELECT COALESCE(SUM(sl.qty), 0) FROM shipment_lines sl
+                WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS total_qty
         FROM invoice_shipments s
         JOIN shipment_docs d ON d.id = s.shipment_doc_id
         WHERE s.invoice_id = ? AND COALESCE(s.is_deleted, 0) = 0
@@ -124,6 +130,8 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
             ship_date=r["ship_date"],
             destination=r["destination"],
+            sku_count=int(r["sku_count"]),
+            total_qty=int(r["total_qty"]),
         )
         for r in ship_rows
     ]
@@ -305,6 +313,15 @@ def invoice_alerts(user=Depends(_get_finance)):
     with get_connection() as conn:
         counts = alerts_counts(conn)
     return InvoiceAlertsResponse(**counts)
+
+
+@router.get("/invoices/shipment-contents", response_model=ShipmentContentsResponse)
+def shipment_contents(shipment_ids: str = Query(""), user=Depends(_get_finance)):
+    # Сводный состав по набору отгрузок (roll-up при выборе в счёт). ids — CSV.
+    ids = [s.strip() for s in str(shipment_ids or "").split(",") if s.strip()]
+    with get_connection() as conn:
+        data = aggregate_shipment_contents(conn, ids)
+    return ShipmentContentsResponse(**data)
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceDetailResponse)

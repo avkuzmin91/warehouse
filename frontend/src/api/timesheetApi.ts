@@ -6,6 +6,8 @@ export type EmployeeStatus = 'active' | 'archived'
 export type DayStatus = 'worked' | 'planned' | 'absent' | 'noplan' | 'off'
 export type PayKind = 'settlement' | 'advance'
 
+export type CompType = 'hourly' | 'fixed'
+
 export type EmployeeListItem = {
   id: string
   full_name: string
@@ -15,6 +17,8 @@ export type EmployeeListItem = {
   status_label: string
   last_shift: string | null
   rate_kopecks: number | null
+  comp_type: CompType
+  fixed_salary_kopecks: number | null
 }
 export type EmployeeListResponse = { items: EmployeeListItem[]; total: number }
 export type EmployeeLookupItem = { id: string; name: string; position: string | null }
@@ -56,6 +60,9 @@ export type EmployeeDetail = {
   status_label: string
   hired_on: string | null
   rate_kopecks: number | null
+  comp_type: CompType
+  comp_label: string
+  fixed_salary_kopecks: number | null
   with_money: boolean
   week_start: string
   week_end: string
@@ -178,12 +185,16 @@ export type EmployeeCreatePayload = {
   user_id?: string | null
   rate_kopecks?: number | null
   effective_from?: string | null
+  comp_type?: CompType
+  fixed_salary_kopecks?: number | null
 }
 export type EmployeeUpdatePayload = {
   full_name?: string
   position_id?: string | null
   hired_on?: string | null
   user_id?: string | null
+  comp_type?: CompType
+  fixed_salary_kopecks?: number | null
 }
 export type PaymentCreatePayload = {
   employee_id: string

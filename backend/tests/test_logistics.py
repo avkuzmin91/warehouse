@@ -358,6 +358,73 @@ def test_trip_detail_received_qty_reversed_on_cancel(admin_client, client_id):
     assert admin_client.get(f"/trips/{t1}").json()["receipts"][0]["received_qty"] == 0
 
 
+def _trip_to_costing(admin_client, client_id: str) -> str:
+    """Минимальный рейс до статуса «Уточнение стоимости» с перевозчиком."""
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)
+    admin_client.post(f"/trips/{trip_id}/handoff")
+    admin_client.post(f"/trips/{trip_id}/arrival", json={})
+    ok = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["message"] == "costing"
+    return trip_id
+
+
+def _logistics_expense_for(admin_client, trip_id: str) -> dict | None:
+    items = admin_client.get("/expenses?kind=logistics&limit=200").json()["items"]
+    mine = [e for e in items if e.get("source_id") == trip_id]
+    return mine[0] if mine else None
+
+
+def test_trip_cost_creates_logistics_expense(admin_client, client_id):
+    """Стоимость рейса ≠ оплата: внесение фактической стоимости заводит в реестре
+    расход «ожидает оплаты» (1 рейс → 1 расход, повтор обновляет, не дублирует)."""
+    from dbconn import get_connection
+
+    trip_id = _trip_to_costing(admin_client, client_id)
+    try:
+        cost = admin_client.post(f"/trips/{trip_id}/cost", json={
+            "logistics_cost_actual": 5000, "waiting_cost": 500,
+        })
+        assert cost.status_code == 200, cost.text
+
+        exp = _logistics_expense_for(admin_client, trip_id)
+        assert exp is not None, "ожидался логистический расход из рейса"
+        assert exp["kind"] == "logistics"
+        assert exp["payment_status"] == "awaiting"
+        assert exp["amount"] == 550000          # (5000 + 500) ₽ → копейки
+        assert exp["supplier"] == "ООО Перевозчик"
+        assert exp["source_kind"] == "trip"
+
+        # Повторный ввод стоимости обновляет ТОТ ЖЕ расход, не плодит дубль.
+        again = admin_client.post(f"/trips/{trip_id}/cost", json={"logistics_cost_actual": 6000})
+        assert again.status_code == 200, again.text
+        items = admin_client.get("/expenses?kind=logistics&limit=200").json()["items"]
+        mine = [e for e in items if e.get("source_id") == trip_id]
+        assert len(mine) == 1, mine
+        assert mine[0]["amount"] == 650000      # (6000 + 500) ₽
+
+        # Расход можно оплатить из реестра (источник оплаты у авто-расхода пуст —
+        # указываем «с чьей карты» при оплате).
+        pay_src = admin_client.get("/expenses/dict/payment-sources").json()[0]["id"]
+        paid = admin_client.post(f"/expenses/{exp['id']}/pay",
+                                 json={"payment_source_id": pay_src, "paid_on": "2026-06-17"})
+        assert paid.status_code == 200, paid.text
+        assert admin_client.get(f"/expenses/{exp['id']}").json()["payment_status"] == "paid"
+    finally:
+        with get_connection() as conn:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM material_expenses WHERE source_kind='trip' AND source_id=?",
+                (trip_id,),
+            ).fetchall()]
+            for eid in ids:
+                conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
+            conn.execute(
+                "DELETE FROM material_expenses WHERE source_kind='trip' AND source_id=?", (trip_id,)
+            )
+            conn.commit()
+
+
 def test_trip_receive_undership_then_close_short(admin_client, client_id):
     # Весь план на одном рейсе, но привезли меньше: приёмка в рейсе фиксирует факт,
     # поступление «Частично принято»; менеджер закрывает его с недопоставкой.

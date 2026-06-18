@@ -9,6 +9,7 @@ export type DictionaryTypeId =
   | 'suppliers'
   | 'unloading-zones'
   | 'warehouses'
+  | 'own-warehouses'
   | 'reasons'
   | 'carriers'
   | 'vehicle-types'
@@ -27,6 +28,8 @@ export interface DictionaryType {
   createLabel: string
   /** Sheet kind string passed to SimpleDictSheet */
   sheetKind?: string
+  /** Видимость только для админа (например ставки аренды наших складов) */
+  adminOnly?: boolean
 }
 
 export const DICTIONARY_TYPES: DictionaryType[] = [
@@ -36,6 +39,7 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
   { id: 'unloading-zones', name: 'Местоположения',  icon: 'boxes',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Местоположение' },
   { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
+  { id: 'own-warehouses',   name: 'Наши склады',      icon: 'building', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад', adminOnly: true },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },
   { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },
   { id: 'positions',     name: 'Должности',     icon: 'users',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Должность' },
