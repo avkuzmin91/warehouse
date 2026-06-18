@@ -1,8 +1,9 @@
-"""Ежемесячная аренда склада: ставка на карточке склада.
+"""Справочник «Наши склады» (own_warehouses) + ежемесячная аренда.
 
-Добавляет складу ставку аренды (копейки). Планировщик 1-го числа каждого месяца
-заводит по записи в едином реестре расходов (kind=rent, ожидает оплаты) на каждый
-активный склад с заданной ставкой.
+Отдельный admin-only справочник собственных складов компании с полем ставки аренды
+(копейки). Не путать с `warehouses` — это «Точки логистики» (внешние, origin рейсов).
+Планировщик 1-го числа каждого месяца заводит по записи в едином реестре расходов
+(kind=rent, ожидает оплаты) на каждый активный наш склад с заданной ставкой.
 
 Revision ID: 0058
 Revises: 0057
@@ -20,12 +21,24 @@ depends_on = None
 def upgrade() -> None:
     from alembic import op
 
-    op.execute(
-        "ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS rent_monthly_kopecks INTEGER"
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS own_warehouses (
+            id                   TEXT PRIMARY KEY,
+            name                 TEXT UNIQUE NOT NULL,
+            rent_monthly_kopecks INTEGER,
+            is_active            INTEGER NOT NULL DEFAULT 1,
+            created_at           TEXT NOT NULL,
+            creator_id           TEXT,
+            updated_at           TEXT,
+            updated_by_id        TEXT,
+            is_deleted           INTEGER NOT NULL DEFAULT 0,
+            deleted_at           TEXT,
+            deleted_by_id        TEXT
+        )
+    """)
 
 
 def downgrade() -> None:
     from alembic import op
 
-    op.execute("ALTER TABLE warehouses DROP COLUMN IF EXISTS rent_monthly_kopecks")
+    op.execute("DROP TABLE IF EXISTS own_warehouses")

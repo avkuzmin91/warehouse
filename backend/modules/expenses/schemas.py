@@ -108,9 +108,10 @@ class ExpenseListItem(BaseModel):
 
 
 class ExpenseDetailResponse(ExpenseListItem):
-    updated_at: str | None = None
-    files:      list[ExpenseFileItem]
-    ops:        list[ExpenseOpItem]
+    updated_at:         str | None = None
+    source_trip_number: str | None = None
+    files:              list[ExpenseFileItem]
+    ops:                list[ExpenseOpItem]
 
 
 class ExpenseListResponse(BaseModel):

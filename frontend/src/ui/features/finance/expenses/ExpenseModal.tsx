@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   cancelExpense,
   createExpense,
-  deleteExpense,
   deleteExpenseFile,
   EXPENSE_KIND_LABELS,
   EXPENSE_OP_LABELS,
@@ -50,6 +50,33 @@ function FieldLabel({ children, required }: { children: React.ReactNode; require
   )
 }
 
+function PayStatusSeg({ active, icon, label, activeBg, activeColor, onClick }: {
+  active: boolean
+  icon: 'check' | 'clock'
+  label: string
+  activeBg: string
+  activeColor: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        padding: '8px 10px', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer',
+        border: '1px solid', transition: 'background .12s, color .12s, border-color .12s',
+        background: active ? activeBg : 'transparent',
+        color: active ? activeColor : 'var(--c-text-subtle)',
+        borderColor: active ? 'transparent' : 'transparent',
+        boxShadow: active ? 'var(--sh-1)' : 'none',
+      }}
+    >
+      <Icon name={icon} size={14} />{label}
+    </button>
+  )
+}
+
 export type SalaryEmployee = {
   id: string
   full_name: string
@@ -69,6 +96,7 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
 }) {
   const toast = useToast()
   const confirm = useConfirm()
+  const navigate = useNavigate()
   const isEdit = !!expenseId
 
   const [tick, setTick] = useState(0)
@@ -194,27 +222,14 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   async function doCancel() {
     if (!expenseId || !detail) return
     const ok = await confirm({
-      title: 'Отменить обязательство?',
-      body: `${detail.exp_number} · ${detail.name} перейдёт в «Отменён». Запись сохранится в журнале.`,
-      danger: true, confirmLabel: 'Отменить расход',
+      title: 'Аннулировать расход?',
+      body: `${detail.exp_number} · ${detail.name} будет аннулирован. Запись сохранится в журнале.`,
+      danger: true, confirmLabel: 'Аннулировать',
     })
     if (!ok) return
     cancelExpense(expenseId)
-      .then(() => { toast('Расход отменён', 'success'); onSaved() })
+      .then(() => { toast('Расход аннулирован', 'success'); onSaved() })
       .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
-  }
-
-  async function handleDelete() {
-    if (!expenseId || !detail) return
-    const ok = await confirm({
-      title: 'Удалить расход?',
-      body: `${detail.exp_number} · ${detail.name} будет удалён. Запись сохранится в журнале.`,
-      danger: true, confirmLabel: 'Удалить',
-    })
-    if (!ok) return
-    deleteExpense(expenseId)
-      .then(() => { toast('Расход удалён', 'success'); onSaved() })
-      .catch((e) => toast(e.message, 'error'))
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -240,9 +255,11 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   const inv = showErrors
   const dangerStyle = { borderColor: 'var(--c-danger)', background: 'var(--c-danger-bg)' }
   const kindWord = EXPENSE_KIND_LABELS[kind]
-  const createTitle = isRent ? 'Оплата склада' : kind === 'salary' ? 'Выплата ЗП' : 'Новый расход'
+  const createTitle = isRent ? 'Оплата аренды' : kind === 'salary' ? 'Выплата ЗП' : 'Новый расход'
   const isAwaiting = isEdit && detail?.payment_status === 'awaiting'
   const canSave = editableForm && (!isEdit || detail?.payment_status !== 'cancelled')
+  // Закрывает крестик в шапке — отдельная кнопка не нужна; футер скрываем, если действий нет.
+  const hasFooterButtons = !isEdit || isAwaiting || canSave
 
   return (
     <Modal
@@ -250,13 +267,10 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
       title={isEdit ? (detail ? `${detail.exp_number} · ${kindWord}` : 'Расход') : createTitle}
       subtitle={isEdit ? 'Любое изменение фиксируется в журнале ниже' : 'Дата по умолчанию — сегодня'}
       footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, width: '100%' }}>
-          {isEdit
-            ? <button className="btn ghost danger" onClick={handleDelete}><Icon name="trash" size={14} />Удалить</button>
-            : <span />}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn ghost" onClick={onClose}>{isEdit ? 'Закрыть' : 'Отмена'}</button>
-            {isAwaiting && <button className="btn ghost danger" onClick={doCancel}>Отменить</button>}
+        hasFooterButtons ? (
+          <>
+            {!isEdit && <button className="btn ghost" onClick={onClose}>Отмена</button>}
+            {isAwaiting && <button className="btn ghost danger" onClick={doCancel}>Аннулировать</button>}
             {canSave && (
               <button className={isAwaiting ? 'btn' : 'btn primary'} onClick={submit} disabled={busy || (isEdit && loadingDetail)}>
                 <Icon name="check" size={14} />{busy ? 'Сохранение…' : isEdit ? 'Сохранить' : 'Добавить'}
@@ -267,8 +281,8 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
                 <Icon name="wallet" size={14} />Оплатить
               </button>
             )}
-          </div>
-        </div>
+          </>
+        ) : undefined
       }
     >
       <input ref={fileRef} type="file" accept={ALLOWED_FILES} style={{ display: 'none' }} onChange={handleFileChange} />
@@ -290,13 +304,15 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
           {!isEdit && (
             <div>
               <FieldLabel>Статус оплаты</FieldLabel>
-              <div className="tabs">
-                <button className={`tab ${paymentStatus === 'paid' ? 'active' : ''}`} onClick={() => setPaymentStatus('paid')}>
-                  {EXPENSE_PAYMENT_STATUS_LABELS.paid}
-                </button>
-                <button className={`tab ${paymentStatus === 'awaiting' ? 'active' : ''}`} onClick={() => setPaymentStatus('awaiting')}>
-                  {EXPENSE_PAYMENT_STATUS_LABELS.awaiting}
-                </button>
+              <div style={{ display: 'flex', gap: 4, padding: 4, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)', borderRadius: 10 }}>
+                <PayStatusSeg
+                  active={paymentStatus === 'paid'} icon="check" label={EXPENSE_PAYMENT_STATUS_LABELS.paid}
+                  activeBg="var(--c-success-bg)" activeColor="var(--c-success)" onClick={() => setPaymentStatus('paid')}
+                />
+                <PayStatusSeg
+                  active={paymentStatus === 'awaiting'} icon="clock" label={EXPENSE_PAYMENT_STATUS_LABELS.awaiting}
+                  activeBg="var(--c-warning-bg)" activeColor="var(--c-warning)" onClick={() => setPaymentStatus('awaiting')}
+                />
               </div>
             </div>
           )}
@@ -423,7 +439,10 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
               </button>
             </>
           ) : detail && (
-            <ReadonlySummary detail={detail} />
+            <ReadonlySummary
+              detail={detail}
+              onOpenTrip={() => { onClose(); navigate(`/logistics/trips/${detail.source_id}`) }}
+            />
           )}
 
           {isAwaiting && (
@@ -495,7 +514,10 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   )
 }
 
-function ReadonlySummary({ detail }: { detail: import('../../../../api/expensesApi').ExpenseDetail }) {
+function ReadonlySummary({ detail, onOpenTrip }: {
+  detail: import('../../../../api/expensesApi').ExpenseDetail
+  onOpenTrip: () => void
+}) {
   const rows: Array<[string, string | null]> = [
     ['Тип', EXPENSE_KIND_LABELS[detail.kind]],
     ['Дата', detail.spent_on],
@@ -506,11 +528,20 @@ function ReadonlySummary({ detail }: { detail: import('../../../../api/expensesA
     ['Источник оплаты', detail.payment_source_name],
     ['Комментарий', detail.comment],
   ]
+  const isTrip = detail.source_kind === 'trip' && !!detail.source_id
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', rowGap: 8, columnGap: 12, alignItems: 'baseline' }}>
       {rows.filter(([, v]) => v).map(([k, v]) => (
         <FragmentRow key={k} label={k} value={v as string} />
       ))}
+      {isTrip && (
+        <>
+          <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Рейс</span>
+          <button className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={onOpenTrip}>
+            <Icon name="truckIn" size={13} />{detail.source_trip_number ? `Рейс ${detail.source_trip_number}` : 'Открыть рейс'}
+          </button>
+        </>
+      )}
     </div>
   )
 }

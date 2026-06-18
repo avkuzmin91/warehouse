@@ -60,6 +60,7 @@ export type ExpenseListItem = {
 
 export type ExpenseDetail = ExpenseListItem & {
   updated_at: string | null
+  source_trip_number: string | null
   files: ExpenseFile[]
   ops: ExpenseOp[]
 }
@@ -170,10 +171,6 @@ export function updateExpense(expenseId: string, payload: ExpensePayload) {
   })
 }
 
-export function deleteExpense(expenseId: string) {
-  return request<{ message: string }>(`/expenses/${expenseId}`, { method: 'DELETE' })
-}
-
 export function payExpense(expenseId: string, payload: ExpensePayPayload = {}) {
   return request<{ message: string }>(`/expenses/${expenseId}/pay`, {
     method: 'POST',
@@ -237,20 +234,20 @@ export const EXPENSE_OP_LABELS: Record<ExpenseOpType, string> = {
   file_add: 'Файл прикреплён',
   file_delete: 'Файл удалён',
   pay: 'Оплачено',
-  cancel: 'Отменён',
+  cancel: 'Аннулирование',
 }
 
 export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
   manual: 'Хозрасход',
   logistics: 'Логистика',
-  rent: 'Оплата склада',
+  rent: 'Аренда',
   salary: 'Зарплата',
 }
 
 export const EXPENSE_PAYMENT_STATUS_LABELS: Record<ExpensePaymentStatus, string> = {
   awaiting: 'Ожидает оплаты',
-  paid: 'Оплачено',
-  cancelled: 'Отменён',
+  paid: 'Оплачен',
+  cancelled: 'Аннулирован',
 }
 
 /** Тон бейджа статуса оплаты для Badge: оплачено — success, ожидает — warning, отменён — нейтральный. */

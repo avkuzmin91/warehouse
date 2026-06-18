@@ -352,7 +352,7 @@ export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
                       </div>
                     )}
                   </div>
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>{s.total_qty} шт · {s.sku_count} SKU</span>
                   <button
                     type="button" className="btn ghost icon sm"
                     title={open ? 'Свернуть состав' : 'Показать состав'}

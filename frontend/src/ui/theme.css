@@ -174,8 +174,20 @@ a { color: inherit; text-decoration: none; }
   min-width: 18px; text-align: center;
 }
 
+.sidebar-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
 .sidebar-footer-wrap {
-  margin-top: auto;
+  flex: 0 0 auto;
   position: relative;
 }
 .sidebar-footer {

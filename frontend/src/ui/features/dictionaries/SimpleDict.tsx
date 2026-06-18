@@ -84,6 +84,10 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
         const res = await fetchSimpleDictionaryPage('/warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
         onTotalLoaded(res.total)
+      } else if (typeId === 'own-warehouses') {
+        const res = await fetchSimpleDictionaryPage('/own-warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
+        setItems(res.items)
+        onTotalLoaded(res.total)
       } else if (typeId === 'carriers') {
         const res = await fetchSimpleDictionaryPage('/carriers', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
@@ -191,7 +195,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
                   {isShippingZone(item) && (
                     <Badge tone="warning" style={{ marginLeft: 8 }}>Зона отгрузки</Badge>
                   )}
-                  {typeId === 'warehouses' && itemRentKopecks(item) != null && (
+                  {typeId === 'own-warehouses' && itemRentKopecks(item) != null && (
                     <span className="text-xs subtle" style={{ marginLeft: 8 }}>
                       {Math.round(itemRentKopecks(item)! / 100).toLocaleString('ru-RU')} ₽/мес
                     </span>

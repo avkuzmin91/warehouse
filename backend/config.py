@@ -50,7 +50,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 МБ
 DICTIONARY_TABLES = frozenset({
     "clients", "colors", "sizes", "product_types", "suppliers",
     "unloading_zones", "warehouses", "carriers", "defect_reasons",
-    "vehicle_types", "positions",
+    "vehicle_types", "positions", "own_warehouses",
 })
 
 # Системный справочник «актуальность записи»
@@ -467,7 +467,7 @@ EXPENSE_OP_LABELS: dict[str, str] = {
     EXPENSE_OP_FILE_ADD:    "Файл прикреплён",
     EXPENSE_OP_FILE_DELETE: "Файл удалён",
     EXPENSE_OP_PAY:         "Оплачено",
-    EXPENSE_OP_CANCEL:      "Отменён",
+    EXPENSE_OP_CANCEL:      "Аннулирование",
 }
 
 # Тип/источник расхода (kind). Единый реестр сводит хозрасходы, логистику рейсов,
@@ -483,7 +483,7 @@ EXPENSE_KINDS_ALL: tuple[str, ...] = (
 EXPENSE_KIND_LABELS: dict[str, str] = {
     EXPENSE_KIND_MANUAL:    "Хозрасход",
     EXPENSE_KIND_LOGISTICS: "Логистика",
-    EXPENSE_KIND_RENT:      "Оплата склада",
+    EXPENSE_KIND_RENT:      "Аренда",
     EXPENSE_KIND_SALARY:    "Зарплата",
 }
 # Видимость по ролям: менеджер видит только хозрасходы и логистику; аренда и ЗП —
@@ -511,8 +511,8 @@ EXPENSE_PAYMENT_STATUSES_ALL: tuple[str, ...] = (
 )
 EXPENSE_PAYMENT_STATUS_LABELS: dict[str, str] = {
     EXPENSE_PAYMENT_AWAITING:  "Ожидает оплаты",
-    EXPENSE_PAYMENT_PAID:      "Оплачено",
-    EXPENSE_PAYMENT_CANCELLED: "Отменён",
+    EXPENSE_PAYMENT_PAID:      "Оплачен",
+    EXPENSE_PAYMENT_CANCELLED: "Аннулирован",
 }
 
 # Системные категории, которые сидятся миграцией 0057 и используются авто-расходами

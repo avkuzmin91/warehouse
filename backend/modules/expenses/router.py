@@ -15,7 +15,6 @@ from config import (
     EXPENSE_KINDS_MANAGER_VISIBLE,
     EXPENSE_OP_CANCEL,
     EXPENSE_OP_CREATE,
-    EXPENSE_OP_DELETE,
     EXPENSE_OP_FILE_ADD,
     EXPENSE_OP_FILE_DELETE,
     EXPENSE_OP_PAY,
@@ -364,7 +363,7 @@ def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
     return MessageResponse(message=expense_id)
 
 
-# ── Расход: карточка / правка / удаление ─────────────────────────────────────────
+# ── Расход: карточка / правка ────────────────────────────────────────────────────
 
 @router.get("/expenses/{expense_id}", response_model=ExpenseDetailResponse)
 def get_expense(expense_id: str, user=Depends(_get_finance)):
@@ -438,7 +437,7 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
         if str(old["payment_status"]) == EXPENSE_PAYMENT_PAID:
             raise HTTPException(status_code=400, detail="Расход уже оплачен")
         if str(old["payment_status"]) == EXPENSE_PAYMENT_CANCELLED:
-            raise HTTPException(status_code=400, detail="Отменённый расход нельзя оплатить")
+            raise HTTPException(status_code=400, detail="Аннулированный расход нельзя оплатить")
 
         src_id = (body.payment_source_id or "").strip() or old["payment_source_id"]
         if not src_id:
@@ -459,7 +458,7 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
 
 @router.post("/expenses/{expense_id}/cancel", response_model=MessageResponse)
 def cancel_expense(expense_id: str, user=Depends(_get_finance)):
-    """Снятие обязательства «ожидает оплаты» → «отменён» (без удаления записи)."""
+    """Снятие обязательства «ожидает оплаты» → «аннулирован» (без удаления записи)."""
     uid = str(user["id"])
     with get_connection() as conn:
         old = conn.execute(
@@ -470,33 +469,13 @@ def cancel_expense(expense_id: str, user=Depends(_get_finance)):
             raise HTTPException(status_code=404, detail="Расход не найден")
         _assert_visible(user, old)
         if str(old["payment_status"]) != EXPENSE_PAYMENT_AWAITING:
-            raise HTTPException(status_code=400, detail="Отменить можно только расход, ожидающий оплаты")
+            raise HTTPException(status_code=400, detail="Аннулировать можно только расход, ожидающий оплаты")
         conn.execute(
             "UPDATE material_expenses SET payment_status = ?, updated_at = ? WHERE id = ?",
             (EXPENSE_PAYMENT_CANCELLED, now_iso(), expense_id),
         )
         _journal(conn, expense_id, EXPENSE_OP_CANCEL,
                  f"Обязательство снято: {format_kopecks(int(old['amount']))}", uid)
-        conn.commit()
-    return MessageResponse(message="ok")
-
-
-@router.delete("/expenses/{expense_id}", response_model=MessageResponse)
-def delete_expense(expense_id: str, user=Depends(_get_finance)):
-    uid = str(user["id"])
-    with get_connection() as conn:
-        old = conn.execute(
-            "SELECT exp_number, kind FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-            (expense_id,),
-        ).fetchone()
-        if not old:
-            raise HTTPException(status_code=404, detail="Расход не найден")
-        _assert_visible(user, old)
-        conn.execute(
-            "UPDATE material_expenses SET is_deleted = 1, updated_at = ? WHERE id = ?",
-            (now_iso(), expense_id),
-        )
-        _journal(conn, expense_id, EXPENSE_OP_DELETE, f"Удалён расход {old['exp_number']}", uid)
         conn.commit()
     return MessageResponse(message="ok")
 

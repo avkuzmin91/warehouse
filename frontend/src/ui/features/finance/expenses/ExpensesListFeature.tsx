@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   EXPENSE_KIND_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
@@ -10,43 +10,54 @@ import {
 } from '../../../../api/expensesApi'
 import type { ExpenseKind, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
 import { getEmployees } from '../../../../api/timesheetApi'
+import { fetchSimpleDictionaryPage } from '../../../../api/adminApi'
 import { ListPage } from '../../../layouts/ListPage'
 import { Table, Td } from '../../../data/Table'
 import { Pagination } from '../../../data/Pagination'
-import { FiltersBar, FilterSelect } from '../../../data/FiltersBar'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../../../data/FiltersBar'
 import { DateRange } from '../../../data/DateRange'
 import { Badge } from '../../../primitives/Badge'
 import { Icon } from '../../../primitives/Icon'
 import { SkeletonRows } from '../../../primitives/Skeleton'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { useApi } from '../../../../hooks/useApi'
+import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useToast } from '../../../feedback/Toast'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../../hooks/useFilterParams'
+import { canManageAdminFinance } from '../../../../utils/access'
 import { fmtDate, formatMoneyKopecks } from '../../../../utils/format'
 import { Kpi, kpiMoney } from '../financeUI'
 import { ExpenseModal } from './ExpenseModal'
 import { ExpenseDictsModal } from './ExpenseDictsModal'
 import { SalaryRosterModal } from './SalaryRosterModal'
+import { RentRosterModal } from './RentRosterModal'
 
 const PAGE_SIZE = 25
 
-export type LedgerVariant = {
-  title: string
-  subtitle?: string
-  kindScope?: ExpenseKind[]        // request kinds=... (область); undefined — все видимые
-  showKind?: boolean               // колонка и фильтр «Тип»
-  createKind?: ExpenseKind | null  // тип для «Добавить»; null — без создания
-  createLabel?: string
+/** Метаданные текущего календарного месяца для плашки средних трат.
+ *  Рабочий день — любой день, кроме воскресенья (в неделе 6 рабочих дней),
+ *  поэтому делитель меняется по месяцам (июнь 2026 — 26, июль 2026 — 27). */
+function currentMonthMeta() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const lastDay = new Date(y, m + 1, 0).getDate()
+  let workingDays = 0
+  for (let d = 1; d <= lastDay; d++) {
+    if (new Date(y, m, d).getDay() !== 0) workingDays++
+  }
+  return {
+    start: `${y}-${pad(m + 1)}-01`,
+    end: `${y}-${pad(m + 1)}-${pad(lastDay)}`,
+    workingDays,
+    monthLabel: now.toLocaleString('ru-RU', { month: 'long' }),
+  }
 }
 
-const OPERATIONAL: LedgerVariant = {
-  title: 'Расходы',
-  subtitle: 'Хозрасходы и логистика',
-  kindScope: ['manual', 'logistics'],
-  showKind: true,
-  createKind: 'manual',
-  createLabel: 'Добавить расход',
-}
+// Операционная область расходов — для плашки «средние траты за рабочий день».
+// Аренда и ЗП в среднесуточную трату не входят (это периодические фиксы).
+const OPERATIONAL_KINDS: ExpenseKind[] = ['manual', 'logistics']
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Все статусы' },
@@ -55,12 +66,15 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: EXPENSE_PAYMENT_STATUS_LABELS.cancelled },
 ]
 
-export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: LedgerVariant }) {
+export function ExpensesListFeature() {
   const toast = useToast()
-  const showKind = variant.showKind ?? false
-  const kindOptions: ExpenseKind[] = variant.kindScope ?? ['manual', 'logistics', 'rent', 'salary']
-  const canCreate = variant.createKind != null
-  const isSalaryVariant = variant.createKind === 'salary'
+  const { user } = useCurrentUser()
+  const isAdmin = canManageAdminFinance(user)
+  // Типы, доступные роли: админ — все 4, менеджер — только хозрасходы и логистика.
+  const kindOptions: ExpenseKind[] = isAdmin
+    ? ['manual', 'logistics', 'rent', 'salary']
+    : OPERATIONAL_KINDS
+  const monthMeta = useMemo(() => currentMonthMeta(), [])
 
   const [search, setSearch] = useFilterParam('search', '')
   const [categoryF, setCategoryF] = useFilterParam('category', '')
@@ -72,19 +86,41 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
+  // Активный тип в фильтре задаёт первичное действие: логистика заводится из рейса
+  // (создавать нельзя), аренда/ЗП — только под фильтром нужного типа, иначе хозрасход.
+  const selectedKind: ExpenseKind | '' =
+    kindOptions.includes(kindF as ExpenseKind) ? (kindF as ExpenseKind) : ''
+  const isSalaryMode = selectedKind === 'salary'
+  const isRentMode = selectedKind === 'rent'
+  const createKind: ExpenseKind | null =
+    selectedKind === 'logistics' ? null
+      : selectedKind === 'rent' ? 'rent'
+        : selectedKind === 'salary' ? 'salary'
+          : 'manual'
+  const canCreate = createKind != null
+  const createLabel =
+    createKind === 'rent' ? 'Добавить оплату аренды'
+      : createKind === 'salary' ? 'Выплатить ЗП'
+        : 'Добавить расход'
+
   const [dictTick, setDictTick] = useState(0)
   const [dataTick, setDataTick] = useState(0)
   const [edit, setEdit] = useState<{ id: string | null } | null>(null)
   const [dictsOpen, setDictsOpen] = useState(false)
   const [rosterOpen, setRosterOpen] = useState(false)
+  const [rentRosterOpen, setRentRosterOpen] = useState(false)
 
   const [accruing, setAccruing] = useState(false)
 
   const { data: categories } = useApi((s) => getExpenseDict('categories', s), [dictTick])
   const { data: paymentSources } = useApi((s) => getExpenseDict('payment-sources', s), [dictTick])
   const { data: empList } = useApi(
-    (s) => (isSalaryVariant ? getEmployees({ status: 'active' }, s) : Promise.resolve(null)),
-    [isSalaryVariant],
+    (s) => (isSalaryMode ? getEmployees({ status: 'active' }, s) : Promise.resolve(null)),
+    [isSalaryMode],
+  )
+  const { data: warehouseList } = useApi(
+    () => (isRentMode ? fetchSimpleDictionaryPage('/own-warehouses', 'name', { page: 1, limit: 100 }) : Promise.resolve(null)),
+    [isRentMode],
   )
   const cats = categories ?? []
   const srcs = paymentSources ?? []
@@ -105,8 +141,7 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
     category_id: categoryF || undefined,
     payment_source_id: sourceF || undefined,
     payment_status: statusF || undefined,
-    kind: showKind && kindF ? kindF : undefined,
-    kinds: variant.kindScope ? variant.kindScope.join(',') : undefined,
+    kind: selectedKind || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
   }
@@ -118,10 +153,30 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
   )
   const { data: summary } = useApi((s) => getExpensesSummary(filters, s), filterDeps)
 
+  // Плашка «за рабочий день»: область = выбранный тип, иначе операционные
+  // (хозрасходы + логистика). Так аренда/ЗП дают суточную трату только под своим фильтром.
+  const dailyKinds: ExpenseKind[] = selectedKind ? [selectedKind] : OPERATIONAL_KINDS
+  const dailyKindsKey = dailyKinds.join(',')
+  const dailyLabel =
+    selectedKind === 'salary' ? 'ЗП за раб. день'
+      : selectedKind === 'rent' ? 'Аренда за раб. день'
+        : selectedKind === 'logistics' ? 'Логистика за день'
+          : selectedKind === 'manual' ? 'Хозрасходы за день'
+            : 'Операц. за раб. день'
+  const { data: monthSummary } = useApi(
+    (s) => getExpensesSummary(
+      { kinds: dailyKindsKey, date_from: monthMeta.start, date_to: monthMeta.end },
+      s,
+    ),
+    [dailyKindsKey, monthMeta.start, monthMeta.end, dataTick],
+  )
+  const monthActive = monthSummary ? monthSummary.awaiting_amount + monthSummary.paid_amount : 0
+  const perWorkingDay = monthMeta.workingDays > 0 ? Math.round(monthActive / monthMeta.workingDays) : 0
+
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const hasFilters = !!(search || categoryF || sourceF || statusF || kindF || dateFrom || dateTo)
-  const colCount = showKind ? 8 : 7
+  const colCount = 8
 
   function afterSave() {
     setEdit(null)
@@ -130,36 +185,47 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
 
   return (
     <ListPage
-      title={variant.title}
-      subtitle={`${variant.subtitle ?? ''} · всего ${total}`}
+      title="Расходы"
+      subtitle={`${isAdmin ? 'Хозрасходы, логистика, аренда, ЗП' : 'Хозрасходы и логистика'} · всего ${total}`}
       actions={
         <>
           <button className="btn" onClick={() => setDictsOpen(true)}>
             <Icon name="book" size={14} />Справочники
           </button>
-          {isSalaryVariant && (
+          {isSalaryMode && (
             <button className="btn" onClick={() => setRosterOpen(true)} title="Сотрудники на окладе и месячный фонд по ним">
               <Icon name="users" size={14} />На окладе
             </button>
           )}
-          {isSalaryVariant && (
+          {isRentMode && (
+            <button className="btn" onClick={() => setRentRosterOpen(true)} title="Склады в аренде и месячная стоимость аренды по ним">
+              <Icon name="building" size={14} />В аренде
+            </button>
+          )}
+          {isSalaryMode && (
             <button className="btn" onClick={runAccruals} disabled={accruing} title="Начислить оклады за сегодня (15-е / последний день месяца)">
               <Icon name={accruing ? 'refresh' : 'calendar'} size={14} />Начислить
             </button>
           )}
           {canCreate && (
             <button className="btn primary" onClick={() => setEdit({ id: null })}>
-              <Icon name="plus" size={14} />{variant.createLabel ?? 'Добавить'}
+              <Icon name="plus" size={14} />{createLabel}
             </button>
           )}
         </>
       }
     >
       {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: '200px 170px 170px 1fr', gap: 14, marginBottom: 14, alignItems: 'stretch' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '200px 170px 170px 180px 1fr', gap: 14, marginBottom: 14, alignItems: 'stretch' }}>
           <Kpi icon="coins" label="Итого за период" value={kpiMoney(summary.total_amount)} sub={hasFilters ? 'по текущему фильтру' : 'за всё время'} />
           <Kpi icon="clock" label="Ожидает оплаты" value={kpiMoney(summary.awaiting_amount)} sub="к оплате" tone={summary.awaiting_amount > 0 ? 'warning' : 'default'} />
           <Kpi icon="check" label="Оплачено" value={kpiMoney(summary.paid_amount)} sub="проведено" />
+          <Kpi
+            icon="calendar"
+            label={dailyLabel}
+            value={kpiMoney(perWorkingDay)}
+            sub={`${monthMeta.monthLabel} · ${monthMeta.workingDays} раб. дн.`}
+          />
           <BreakdownCard title="По категориям" rows={summary.by_category} total={summary.total_amount} />
         </div>
       )}
@@ -182,7 +248,7 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
               ><Icon name="x" size={12} /></button>
             )}
           </div>
-          {showKind && kindOptions.length > 1 && (
+          {kindOptions.length > 1 && (
             <FilterSelect
               label="Тип" value={kindF}
               options={[{ value: '', label: 'Все типы' }, ...kindOptions.map((k) => ({ value: k, label: EXPENSE_KIND_LABELS[k] }))]}
@@ -190,10 +256,11 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
             />
           )}
           <FilterSelect label="Статус" value={statusF} options={STATUS_OPTIONS} onChange={setStatusF} />
-          <FilterSelect
+          <FilterCombobox
             label="Категория" value={categoryF}
             options={[{ value: '', label: 'Все категории' }, ...cats.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={setCategoryF}
+            placeholder="Категория…"
           />
           <FilterSelect
             label="Источник" value={sourceF}
@@ -218,7 +285,7 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
           <tr>
             <th style={{ width: 96 }}>Дата</th>
             <th style={{ width: 96 }}>№</th>
-            {showKind && <th style={{ width: 120 }}>Тип</th>}
+            <th style={{ width: 120 }}>Тип</th>
             <th>Наименование</th>
             <th style={{ width: 130, textAlign: 'right' }}>Сумма</th>
             <th style={{ width: 150 }}>Статус</th>
@@ -238,7 +305,7 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
                 sub={hasFilters ? 'По выбранным фильтрам ничего не найдено' : 'Здесь появятся расходы'}
                 action={!hasFilters && canCreate ? (
                   <button className="btn primary" onClick={() => setEdit({ id: null })}>
-                    <Icon name="plus" size={14} />{variant.createLabel ?? 'Добавить'}
+                    <Icon name="plus" size={14} />{createLabel}
                   </button>
                 ) : undefined}
               />
@@ -248,7 +315,7 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
               <tr key={it.id} onClick={() => setEdit({ id: it.id })}>
                 <Td><span className="mono" style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{fmtDate(it.spent_on)}</span></Td>
                 <Td><span className="mono" style={{ fontSize: 12 }}>{it.exp_number}</span></Td>
-                {showKind && <Td><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{it.kind_label}</span></Td>}
+                <Td><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{it.kind_label}</span></Td>
                 <Td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     {it.name}
@@ -270,10 +337,10 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
       {edit && (
         <ExpenseModal
           expenseId={edit.id}
-          createKind={variant.createKind ?? 'manual'}
+          createKind={createKind ?? 'manual'}
           categories={cats}
           paymentSources={srcs}
-          employees={isSalaryVariant ? salaryEmployees : undefined}
+          employees={isSalaryMode ? salaryEmployees : undefined}
           onClose={() => setEdit(null)}
           onSaved={afterSave}
           onManageDicts={() => setDictsOpen(true)}
@@ -287,6 +354,9 @@ export function ExpensesListFeature({ variant = OPERATIONAL }: { variant?: Ledge
       )}
       {rosterOpen && (
         <SalaryRosterModal employees={empList?.items ?? []} onClose={() => setRosterOpen(false)} />
+      )}
+      {rentRosterOpen && (
+        <RentRosterModal warehouses={warehouseList?.items ?? []} onClose={() => setRentRosterOpen(false)} />
       )}
     </ListPage>
   )

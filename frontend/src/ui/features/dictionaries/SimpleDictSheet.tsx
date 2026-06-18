@@ -58,6 +58,7 @@ const SIMPLE_API_PATHS: Record<string, string> = {
   suppliers: '/suppliers',
   'unloading-zones': '/unloading-zones',
   warehouses: '/warehouses',
+  'own-warehouses': '/own-warehouses',
   carriers: '/carriers',
   'vehicle-types': '/vehicle-types',
   positions: '/positions',
@@ -73,7 +74,7 @@ interface SimpleDictSheetProps {
   onSaved: () => void
   isNew: boolean
   kind: string
-  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
+  apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'
   initial?: AnyDictItem | null
 }
 
@@ -100,7 +101,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     const initialColorHex = initial && 'color_hex' in initial ? initial.color_hex : null
     setColorHex(apiType === 'colors' ? normalizeColorHex(initialColorHex ?? initial?.name ?? '') ?? DEFAULT_COLOR_HEX : DEFAULT_COLOR_HEX)
     const initialRent = initial && 'rent_monthly_kopecks' in initial ? initial.rent_monthly_kopecks : null
-    setRentRub(apiType === 'warehouses' && initialRent != null ? String(initialRent / 100) : '')
+    setRentRub(apiType === 'own-warehouses' && initialRent != null ? String(initialRent / 100) : '')
     setActive(initial?.is_active ?? true)
     setError(null)
     if (apiType === 'product-types' && initial) {
@@ -160,7 +161,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     }
     const colorPayload = apiType === 'colors' ? { color_hex: normalizeColorHex(colorHex) } : {}
     let rentPayload: { rent_monthly_kopecks?: number | null } = {}
-    if (apiType === 'warehouses') {
+    if (apiType === 'own-warehouses') {
       const s = rentRub.trim().replace(',', '.')
       if (s) {
         const n = Number(s)
@@ -260,8 +261,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         </Field>
       )}
 
-      {apiType === 'warehouses' && (
-        <Field label="Аренда, ₽ / мес" help="1-го числа каждого месяца автоматически создаётся расход «Оплата склада» со статусом «Ожидает оплаты». Оставьте пустым, если аренды нет.">
+      {apiType === 'own-warehouses' && (
+        <Field label="Аренда, ₽ / мес" help="1-го числа каждого месяца автоматически создаётся расход типа «Аренда» со статусом «Ожидает оплаты». Оставьте пустым, если аренды нет.">
           <Input
             className="num"
             inputMode="decimal"

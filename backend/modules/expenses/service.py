@@ -300,6 +300,13 @@ def load_detail(connection, expense_id: str) -> dict:
     item = _row_to_list_item(row)
     item["updated_at"] = row["updated_at"]
 
+    item["source_trip_number"] = None
+    if str(row["source_kind"] or "") == EXPENSE_SOURCE_TRIP and row["source_id"]:
+        trip = connection.execute(
+            "SELECT trip_number FROM trip_docs WHERE id = ?", (str(row["source_id"]),)
+        ).fetchone()
+        item["source_trip_number"] = str(trip["trip_number"]) if trip else None
+
     file_rows = connection.execute(
         "SELECT id, filename, url, mime_type, created_at FROM expense_files "
         "WHERE expense_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
@@ -566,7 +573,7 @@ def run_rent_accruals(connection, on_date: date, uid: str | None = None, *, forc
     period_end = date(y, m, last_day).isoformat()
 
     rows = connection.execute(
-        "SELECT id, name, rent_monthly_kopecks FROM warehouses "
+        "SELECT id, name, rent_monthly_kopecks FROM own_warehouses "
         "WHERE COALESCE(is_active, 0) = 1 AND COALESCE(is_deleted, 0) = 0 "
         "AND COALESCE(rent_monthly_kopecks, 0) > 0"
     ).fetchall()

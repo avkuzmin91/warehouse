@@ -5,10 +5,8 @@ interface DictionariesSidebarProps {
   active: DictionaryTypeId
   onSelect: (id: DictionaryTypeId) => void
   counts: Partial<Record<DictionaryTypeId, number>>
+  isAdmin: boolean
 }
-
-const mainItems = DICTIONARY_TYPES.filter((d) => d.group === 'main')
-const systemItems = DICTIONARY_TYPES.filter((d) => d.group === 'system')
 
 function NavItem({ d, active, onSelect, counts }: {
   d: typeof DICTIONARY_TYPES[0]
@@ -32,7 +30,10 @@ function NavItem({ d, active, onSelect, counts }: {
   )
 }
 
-export function DictionariesSidebar({ active, onSelect, counts }: DictionariesSidebarProps) {
+export function DictionariesSidebar({ active, onSelect, counts, isAdmin }: DictionariesSidebarProps) {
+  const visible = DICTIONARY_TYPES.filter((d) => !d.adminOnly || isAdmin)
+  const mainItems = visible.filter((d) => d.group === 'main')
+  const systemItems = visible.filter((d) => d.group === 'system')
   return (
     <div className="card" style={{ position: 'sticky', top: 0 }}>
       <div style={{ padding: 8 }}>

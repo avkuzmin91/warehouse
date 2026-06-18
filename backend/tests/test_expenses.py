@@ -126,14 +126,15 @@ def test_update_noop_writes_nothing(admin_client, dict_ids):
     assert after == before, "повтор без изменений не должен писать запись в журнал"
 
 
-def test_delete_removes_from_list(admin_client, dict_ids):
+def test_delete_is_forbidden(admin_client, dict_ids):
     cat, src = dict_ids
     eid = _create_expense(admin_client, cat, src)
-    assert admin_client.delete(f"/expenses/{eid}").status_code == 200
+    # Удаление расходов запрещено — записи реестра не удаляются (для снятия есть «Аннулировать»).
+    assert admin_client.delete(f"/expenses/{eid}").status_code == 405
 
-    assert admin_client.get(f"/expenses/{eid}").status_code == 404
+    assert admin_client.get(f"/expenses/{eid}").status_code == 200
     lst = admin_client.get("/expenses?limit=200").json()
-    assert eid not in {it["id"] for it in lst["items"]}
+    assert eid in {it["id"] for it in lst["items"]}
 
 
 def test_summary_aggregates(admin_client, dict_ids):
@@ -369,30 +370,32 @@ def test_salary_accruals_halves_idempotent(admin_client, manager_client):
 
 def test_rent_accruals_per_warehouse_idempotent(admin_client, manager_client):
     tag = uuid.uuid4().hex[:8]
-    # Два склада со ставкой + один без аренды + один архивный со ставкой.
-    assert admin_client.post("/warehouses", json={
+    # Два наших склада со ставкой + один без аренды + один архивный со ставкой.
+    assert admin_client.post("/own-warehouses", json={
         "name": f"СкладA-{tag}", "is_active": True, "rent_monthly_kopecks": 12000000,
     }).status_code == 200
-    assert admin_client.post("/warehouses", json={
+    assert admin_client.post("/own-warehouses", json={
         "name": f"СкладB-{tag}", "is_active": True, "rent_monthly_kopecks": 8000000,
     }).status_code == 200
-    assert admin_client.post("/warehouses", json={
+    assert admin_client.post("/own-warehouses", json={
         "name": f"СкладNoRent-{tag}", "is_active": True,
     }).status_code == 200
-    assert admin_client.post("/warehouses", json={
+    assert admin_client.post("/own-warehouses", json={
         "name": f"СкладArch-{tag}", "is_active": False, "rent_monthly_kopecks": 5000000,
     }).status_code == 200
 
     with get_connection() as conn:
         ids = {r["name"]: str(r["id"]) for r in conn.execute(
-            "SELECT id, name FROM warehouses WHERE name LIKE ?", (f"%-{tag}",)
+            "SELECT id, name FROM own_warehouses WHERE name LIKE ?", (f"%-{tag}",)
         ).fetchall()}
     a_id, b_id = ids[f"СкладA-{tag}"], ids[f"СкладB-{tag}"]
     no_rent_id, arch_id = ids[f"СкладNoRent-{tag}"], ids[f"СкладArch-{tag}"]
     try:
-        # Ставка round-trip через карточку склада.
-        wh = admin_client.get(f"/warehouses/{a_id}").json()
+        # Ставка round-trip через карточку нашего склада.
+        wh = admin_client.get(f"/own-warehouses/{a_id}").json()
         assert wh["rent_monthly_kopecks"] == 12000000
+        # Менеджер не видит справочник наших складов (admin-only).
+        assert manager_client.get("/own-warehouses").status_code == 403
 
         # Менеджер не может запускать начисление аренды (admin-only).
         assert manager_client.post("/expenses/rent/accruals/run?on_date=2026-06-01").status_code == 403
@@ -425,7 +428,7 @@ def test_rent_accruals_per_warehouse_idempotent(admin_client, manager_client):
                 f"DELETE FROM material_expenses WHERE source_kind='warehouse' AND source_id IN ({ph})",
                 wids,
             )
-            conn.execute(f"DELETE FROM warehouses WHERE id IN ({ph})", wids)
+            conn.execute(f"DELETE FROM own_warehouses WHERE id IN ({ph})", wids)
             conn.commit()
 
 

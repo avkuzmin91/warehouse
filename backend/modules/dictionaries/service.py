@@ -189,7 +189,7 @@ def _product_type_row_to_item(row: Mapping[str, Any]) -> ProductTypeDictionaryIt
 def get_dictionary_item(table_name: str, item_id: str, *, include_deleted: bool = False) -> DictionaryBaseItem:
     _ensure_dictionary_table(table_name)
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
-    rent_sql = "d.rent_monthly_kopecks" if table_name == "warehouses" else "NULL AS rent_monthly_kopecks"
+    rent_sql = "d.rent_monthly_kopecks" if table_name == "own_warehouses" else "NULL AS rent_monthly_kopecks"
     with get_connection() as connection:
         row = connection.execute(
             f"""
@@ -224,9 +224,9 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                     "INSERT INTO colors (id, name, color_hex, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
                     (item_id, name, color_hex, 1 if payload.is_active else 0, _now(), creator_id),
                 )
-            elif table_name == "warehouses":
+            elif table_name == "own_warehouses":
                 connection.execute(
-                    "INSERT INTO warehouses (id, name, rent_monthly_kopecks, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO own_warehouses (id, name, rent_monthly_kopecks, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
                     (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, _now(), creator_id),
                 )
             else:
@@ -278,7 +278,7 @@ def update_dictionary_item(
         if table_name == "colors" and "color_hex" in payload.model_fields_set:
             fields.append("color_hex = ?")
             values.append(_normalize_color_hex(payload.color_hex))
-        if table_name == "warehouses" and "rent_monthly_kopecks" in payload.model_fields_set:
+        if table_name == "own_warehouses" and "rent_monthly_kopecks" in payload.model_fields_set:
             fields.append("rent_monthly_kopecks = ?")
             values.append(payload.rent_monthly_kopecks)
         if payload.is_active is not None:
@@ -447,7 +447,7 @@ def list_dictionary_items_page(
 ) -> DictionaryListResponse:
     _ensure_dictionary_table(table_name)
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
-    rent_sql = "d.rent_monthly_kopecks" if table_name == "warehouses" else "NULL AS rent_monthly_kopecks"
+    rent_sql = "d.rent_monthly_kopecks" if table_name == "own_warehouses" else "NULL AS rent_monthly_kopecks"
     packing_sql = "COALESCE(d.is_packing_zone, 0) AS is_packing_zone" if table_name == "unloading_zones" else "0 AS is_packing_zone"
     shipping_sql = "COALESCE(d.is_shipping_zone, 0) AS is_shipping_zone" if table_name == "unloading_zones" else "0 AS is_shipping_zone"
     offset = (page - 1) * limit

@@ -230,7 +230,7 @@ export function productsPreviewText(preview: ProductPreview[], skuCount: number)
 /** Сводка-roll-up по выбранным отгрузкам: товары с суммарным количеством.
  *  Грузит агрегат с бэкенда (`getShipmentContents`) при смене набора отгрузок —
  *  чтобы сверить сумму счёта с фактическим объёмом, не открывая отгрузки. */
-export function SelectedContentsRollup({ shipmentIds }: { shipmentIds: string[] }) {
+export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по выбранным отгрузкам' }: { shipmentIds: string[]; label?: string }) {
   const key = [...shipmentIds].sort().join(',')
   const { data, loading } = useApi(
     (signal) => shipmentIds.length
@@ -244,7 +244,7 @@ export function SelectedContentsRollup({ shipmentIds }: { shipmentIds: string[] 
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
-        <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>Сводка по выбранным отгрузкам</span>
+        <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{label}</span>
         {data && (
           <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-muted)' }}>
             {data.total_qty.toLocaleString('ru-RU')} шт · {data.sku_count} SKU

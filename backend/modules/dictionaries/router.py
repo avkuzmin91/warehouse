@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from config import CLIENT_LIST_SORT_COLUMNS, COLOR_LIST_SORT_COLUMNS, SIZE_LIST_SORT_COLUMNS
-from modules.auth.service import get_current_admin
+from modules.auth.service import get_current_admin, get_current_user
+from security import FORBIDDEN_DETAIL
 
 from .schemas import (
     ClientStoreCreateRequest,
@@ -49,6 +50,13 @@ from .service import (
 from dbconn import get_connection
 
 router = APIRouter(tags=["dictionaries"])
+
+
+def _get_strict_admin(user=Depends(get_current_user)):
+    """Строго admin (а не бэк-офис get_current_admin) — для «Наших складов» со ставкой аренды."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+    return user
 
 
 @router.get("/system/record-actuality", response_model=list[RecordActualityFilterItem])
@@ -376,6 +384,52 @@ def update_warehouse(item_id: str, payload: DictionaryUpdateRequest, admin=Depen
 @router.delete("/warehouses/{item_id}", response_model=MessageResponse)
 def delete_warehouse(item_id: str, admin=Depends(get_current_admin)):
     return delete_dictionary_item("warehouses", item_id, admin["id"])
+
+
+# ── Own warehouses (наши склады, со ставкой аренды) ──────────────────────────────
+
+@router.get("/own-warehouses", response_model=DictionaryListResponse)
+def list_own_warehouses(
+    admin=Depends(_get_strict_admin),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    name: str | None = Query(None),
+    actuality_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    sort: str | None = Query(None),
+    include_deleted: bool = Query(False),
+):
+    _ = admin
+    return list_dictionary_items_page(
+        "own_warehouses", page, limit,
+        search=name, actuality_id=actuality_id,
+        date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
+        date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        include_deleted=include_deleted,
+    )
+
+
+@router.post("/own-warehouses", response_model=MessageResponse)
+def create_own_warehouse(payload: DictionaryCreateRequest, admin=Depends(_get_strict_admin)):
+    return create_dictionary_item("own_warehouses", payload, admin["id"])
+
+
+@router.get("/own-warehouses/{item_id}", response_model=DictionaryBaseItem)
+def get_own_warehouse(item_id: str, admin=Depends(_get_strict_admin), include_deleted: bool = Query(False)):
+    _ = admin
+    return get_dictionary_item("own_warehouses", item_id, include_deleted=include_deleted)
+
+
+@router.patch("/own-warehouses/{item_id}", response_model=MessageResponse)
+def update_own_warehouse(item_id: str, payload: DictionaryUpdateRequest, admin=Depends(_get_strict_admin)):
+    return update_dictionary_item("own_warehouses", item_id, payload, admin["id"])
+
+
+@router.delete("/own-warehouses/{item_id}", response_model=MessageResponse)
+def delete_own_warehouse(item_id: str, admin=Depends(_get_strict_admin)):
+    return delete_dictionary_item("own_warehouses", item_id, admin["id"])
 
 
 # ── Carriers ──────────────────────────────────────────────────────────────────

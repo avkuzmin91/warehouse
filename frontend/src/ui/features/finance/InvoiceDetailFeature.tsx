@@ -28,7 +28,7 @@ import { useLookups } from '../../../hooks/useLookups'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDate, fmtDateShort, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel } from './financeUI'
+import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel, SelectedContentsRollup } from './financeUI'
 import { InvoiceRailPanel, invoicePhase } from './InvoiceRail'
 import { PayModal, DueModal, AmountModal, AttachModal } from './InvoiceModals'
 
@@ -246,6 +246,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             {inv.shipments.length === 0 ? (
               <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>Нет привязанных отгрузок.</div>
             ) : (
+              <>
               <table className="t" style={{ margin: '0 -14px', width: 'calc(100% + 28px)' }}>
                 <tbody>
                   {inv.shipments.map((s) => {
@@ -253,11 +254,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                     return (
                       <Fragment key={s.shipment_doc_id}>
                         <tr>
-                          <td style={{ width: 36, textAlign: 'center' }}>
-                            <button className="btn ghost icon sm" title={open ? 'Свернуть состав' : 'Показать состав'} onClick={() => toggleShip(s.shipment_doc_id)}>
-                              <Icon name={open ? 'chevUp' : 'chevDown'} size={14} />
-                            </button>
-                          </td>
                           <td style={{ width: 120 }}>
                             <button
                               className="btn ghost sm" style={{ padding: '2px 6px', height: 'auto' }}
@@ -269,18 +265,28 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                           <td style={{ width: 84 }}><CargoTag cargoType={s.cargo_type} /></td>
                           <td><span style={{ color: 'var(--c-text-subtle)' }}>{s.destination ?? '—'}</span></td>
                           <td style={{ width: 104 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(s.ship_date)}</span></td>
-                          <td style={{ width: 110, textAlign: 'right' }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span></td>
-                          <td style={{ width: 44, textAlign: 'right' }}>
-                            {editable && (
-                              <button className="btn ghost icon sm" title="Отвязать" onClick={() => handleDetach(s.shipment_doc_id, s.doc_number)}>
-                                <Icon name="x" size={13} />
+                          <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span></td>
+                          <td style={{ width: 84, textAlign: 'right' }}>
+                            {/* «Отвязать» — крайнее справа (деструктивное действие), шеврон состава слева от него.
+                                Слот удаления зарезервирован по ширине, поэтому шеврон не сдвигается, когда на
+                                финальных статусах кнопка удаления исчезает. */}
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
+                              <button className="btn ghost icon sm" title={open ? 'Свернуть состав' : 'Показать состав'} onClick={() => toggleShip(s.shipment_doc_id)}>
+                                <Icon name={open ? 'chevUp' : 'chevDown'} size={14} />
                               </button>
-                            )}
+                              <span style={{ width: 26, display: 'inline-flex', justifyContent: 'center' }}>
+                                {editable && (
+                                  <button className="btn ghost icon sm" title="Отвязать" onClick={() => handleDetach(s.shipment_doc_id, s.doc_number)}>
+                                    <Icon name="x" size={13} />
+                                  </button>
+                                )}
+                              </span>
+                            </span>
                           </td>
                         </tr>
                         {open && (
                           <tr>
-                            <td colSpan={7} style={{ background: 'var(--c-bg-sunken)', padding: '8px 14px 10px 50px' }}>
+                            <td colSpan={6} style={{ background: 'var(--c-bg-sunken)', padding: '8px 14px 10px 16px' }}>
                               <ShipmentContentsPanel shipmentId={s.shipment_doc_id} />
                             </td>
                           </tr>
@@ -290,6 +296,8 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                   })}
                 </tbody>
               </table>
+              <SelectedContentsRollup shipmentIds={inv.shipments.map((s) => s.shipment_doc_id)} label="Сводка по товарам" />
+              </>
             )}
           </InvoiceSection>
 
