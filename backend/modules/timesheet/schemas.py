@@ -221,6 +221,11 @@ class WeekParam(BaseModel):
     week: str | None = None                           # суббота расчётной недели
 
 
+class FillFactRequest(BaseModel):
+    week:  str | None = None                          # суббота расчётной недели
+    force: bool = False                               # переписать факт планом даже на «не вышел» и заполненных днях
+
+
 # ── Выплаты / расчёт ──────────────────────────────────────────────────────────
 
 class PayrollRow(BaseModel):

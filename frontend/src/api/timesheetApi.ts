@@ -285,10 +285,10 @@ export function upsertEntry(payload: EntryUpsertPayload) {
   })
 }
 
-export function fillFact(week: string | undefined) {
+export function fillFact(week: string | undefined, force = false) {
   return request<{ message: string }>('/timesheet/fill-fact', {
     method: 'POST',
-    body: JSON.stringify({ week: week ?? null }),
+    body: JSON.stringify({ week: week ?? null, force }),
   })
 }
 
