@@ -271,6 +271,7 @@ def list_receipts(
             zone_name=r["zone_name"],
             ttn=r["ttn"],
             logistics_cost=float(r["logistics_cost"] or 0) if show_costs else None,
+            trips=[TripRef(id=str(t["id"]), number=str(t["number"])) for t in r.get("trips", [])],
             created_at=str(r["created_at"]),
             created_by=r["created_by"],
             sku_count=int(r["sku_count"] or 0),

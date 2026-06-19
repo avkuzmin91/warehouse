@@ -173,6 +173,7 @@ class ReceiptListItem(BaseModel):
     logistics_cost: float | None = None
     trip_id: str | None = None
     trip_number: str | None = None
+    trips: list[TripRef] = []
     created_at: str
     created_by: str | None = None
     sku_count: int = 0
