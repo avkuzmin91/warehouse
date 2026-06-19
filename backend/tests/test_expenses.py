@@ -249,6 +249,15 @@ def test_payment_lifecycle(admin_client, dict_ids):
     # Повторная оплата запрещена.
     assert admin_client.post(f"/expenses/{eid}/pay", json={}).status_code == 400
 
+    # Ошибочную оплату можно откатить: «оплачено» → «ожидает», дата оплаты снимается.
+    unpay = admin_client.post(f"/expenses/{eid}/unpay")
+    assert unpay.status_code == 200, unpay.text
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["payment_status"] == "awaiting" and d["paid_on"] is None
+    assert "unpay" in {o["op_type"] for o in d["ops"]}
+    # Откатывать можно только оплаченный расход.
+    assert admin_client.post(f"/expenses/{eid}/unpay").status_code == 400
+
     # Ожидающее обязательство можно отменить; отменённое — нельзя оплатить.
     eid2 = admin_client.post("/expenses", json={
         "spent_on": "2026-06-15", "category_id": cat, "name": "Отменяемое",

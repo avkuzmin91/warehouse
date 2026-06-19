@@ -11,6 +11,7 @@ import {
   getExpense,
   payExpense,
   unitPriceKopecks,
+  unpayExpense,
   updateExpense,
   uploadExpenseFile,
 } from '../../../../api/expensesApi'
@@ -38,6 +39,7 @@ const OP_DOT: Record<ExpenseOpType, string> = {
   file_add: 'var(--c-info)',
   file_delete: 'var(--c-text-muted)',
   pay: 'var(--c-success)',
+  unpay: 'var(--c-warning)',
   cancel: 'var(--c-text-muted)',
 }
 
@@ -219,6 +221,21 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
       .finally(() => setBusy(false))
   }
 
+  async function doUnpay() {
+    if (!expenseId || !detail) return
+    const ok = await confirm({
+      title: 'Вернуть в «Ожидает оплаты»?',
+      body: `${detail.exp_number} · ${detail.name}: отметка об оплате будет снята. Используйте, если расход помечен оплаченным по ошибке.`,
+      confirmLabel: 'Вернуть в ожидание',
+    })
+    if (!ok) return
+    setBusy(true)
+    unpayExpense(expenseId)
+      .then(() => { toast('Возвращено в ожидание оплаты', 'success'); onSaved() })
+      .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
+      .finally(() => setBusy(false))
+  }
+
   async function doCancel() {
     if (!expenseId || !detail) return
     const ok = await confirm({
@@ -257,9 +274,10 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   const kindWord = EXPENSE_KIND_LABELS[kind]
   const createTitle = isRent ? 'Оплата аренды' : kind === 'salary' ? 'Выплата ЗП' : 'Новый расход'
   const isAwaiting = isEdit && detail?.payment_status === 'awaiting'
+  const isPaid = isEdit && detail?.payment_status === 'paid'
   const canSave = editableForm && (!isEdit || detail?.payment_status !== 'cancelled')
   // Закрывает крестик в шапке — отдельная кнопка не нужна; футер скрываем, если действий нет.
-  const hasFooterButtons = !isEdit || isAwaiting || canSave
+  const hasFooterButtons = !isEdit || isAwaiting || isPaid || canSave
 
   return (
     <Modal
@@ -271,6 +289,11 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
           <>
             {!isEdit && <button className="btn ghost" onClick={onClose}>Отмена</button>}
             {isAwaiting && <button className="btn ghost danger" onClick={doCancel}>Аннулировать</button>}
+            {isPaid && (
+              <button className="btn ghost" onClick={doUnpay} disabled={busy}>
+                <Icon name="clock" size={14} />Вернуть в ожидание
+              </button>
+            )}
             {canSave && (
               <button className={isAwaiting ? 'btn' : 'btn primary'} onClick={submit} disabled={busy || (isEdit && loadingDetail)}>
                 <Icon name="check" size={14} />{busy ? 'Сохранение…' : isEdit ? 'Сохранить' : 'Добавить'}

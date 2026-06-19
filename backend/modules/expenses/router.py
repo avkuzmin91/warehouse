@@ -18,6 +18,7 @@ from config import (
     EXPENSE_OP_FILE_ADD,
     EXPENSE_OP_FILE_DELETE,
     EXPENSE_OP_PAY,
+    EXPENSE_OP_UNPAY,
     EXPENSE_OP_UPDATE,
     EXPENSE_PAYMENT_AWAITING,
     EXPENSE_PAYMENT_CANCELLED,
@@ -451,6 +452,33 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
         _journal(
             conn, expense_id, EXPENSE_OP_PAY,
             f"Оплачено: {format_kopecks(int(old['amount']))} · {src_name}", uid,
+        )
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/expenses/{expense_id}/unpay", response_model=MessageResponse)
+def unpay_expense(expense_id: str, user=Depends(_get_finance)):
+    """Откат ошибочной отметки об оплате: «оплачено» → «ожидает оплаты».
+    Снимает дату оплаты; источник оставляем как подсказку к повторной оплате."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        old = conn.execute(
+            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (expense_id,),
+        ).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Расход не найден")
+        _assert_visible(user, old)
+        if str(old["payment_status"]) != EXPENSE_PAYMENT_PAID:
+            raise HTTPException(status_code=400, detail="Вернуть в ожидание можно только оплаченный расход")
+        conn.execute(
+            "UPDATE material_expenses SET payment_status = ?, paid_on = NULL, updated_at = ? WHERE id = ?",
+            (EXPENSE_PAYMENT_AWAITING, now_iso(), expense_id),
+        )
+        _journal(
+            conn, expense_id, EXPENSE_OP_UNPAY,
+            f"Отметка об оплате снята: {format_kopecks(int(old['amount']))} · возврат в ожидание", uid,
         )
         conn.commit()
     return MessageResponse(message="ok")
