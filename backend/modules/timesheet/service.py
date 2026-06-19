@@ -131,13 +131,20 @@ def load_rates(connection, employee_ids: list[str] | None = None) -> dict[str, l
 
 
 def rate_on(rates_desc: list[dict] | None, day_iso: str) -> int | None:
-    """Ставка, действовавшая на дату (последняя запись с effective_from <= day)."""
+    """Ставка, действовавшая на дату: последняя запись с effective_from <= day.
+
+    Дни до самой ранней ставки оплачиваются по этой ранней ставке (тянем назад), а
+    не нулём — иначе часы, отработанные до того, как ставку завели, не заработали бы.
+    Повышения (новая ставка с более поздней датой) работают как обычно. Сравнение —
+    по дате: effective_from может прийти с временем, берём первые 10 символов, иначе
+    ставка не применилась бы в свой же первый день."""
     if not rates_desc:
         return None
-    for r in rates_desc:  # отсортированы по убыванию
-        if r["effective_from"] <= day_iso:
+    day = day_iso[:10]
+    for r in rates_desc:  # отсортированы по убыванию effective_from
+        if str(r["effective_from"])[:10] <= day:
             return int(r["rate_kopecks"])
-    return None
+    return int(rates_desc[-1]["rate_kopecks"])  # самая ранняя ставка — назад
 
 
 def current_rate(rates_desc: list[dict] | None) -> int | None:
