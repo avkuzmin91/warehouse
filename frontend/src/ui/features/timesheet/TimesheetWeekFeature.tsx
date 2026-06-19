@@ -99,6 +99,23 @@ export function TimesheetWeekFeature() {
     }
   }
 
+  const onFillFactForce = async () => {
+    const ok = await confirm({
+      title: 'Переписать факт планом?',
+      body: 'Во всех запланированных днях недели (кроме будущих) факт будет выставлен равным плану — затрёт и «не вышел», и уже внесённый факт. Действие нельзя отменить.',
+      danger: true,
+      confirmLabel: 'Переписать',
+    })
+    if (!ok) return
+    try {
+      const r = await fillFact(week || undefined, true)
+      toast(`Переписано дней: ${r.message}`, 'success')
+      reload()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось переписать', 'error')
+    }
+  }
+
   const legend: { key: keyof typeof CELL_TONE; label: string }[] = [
     { key: 'worked', label: 'Отработал' }, { key: 'planned', label: 'Запланирован' },
     { key: 'absent', label: 'Не вышел' }, { key: 'noplan', label: 'Без плана' }, { key: 'off', label: 'Выходной' },
@@ -118,6 +135,9 @@ export function TimesheetWeekFeature() {
           />
           <button className="btn" onClick={onFillFact}>
             <Icon name="check" size={14} />Факт = план (неделя)
+          </button>
+          <button className="btn" onClick={onFillFactForce}>
+            <Icon name="check" size={14} />Факт = план (перезапись)
           </button>
           <button className="btn primary" onClick={openDayFact} disabled={!data}>
             <Icon name="timer" size={14} />Внести факт за день

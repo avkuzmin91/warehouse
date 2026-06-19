@@ -41,6 +41,7 @@ from .schemas import (
     EntryDetailResponse,
     EntryOpItem,
     EntryUpsert,
+    FillFactRequest,
     PaymentCreate,
     PayHistoryItem,
     PayrollResponse,
@@ -584,28 +585,51 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
 
 
 @router.post("/timesheet/fill-fact")
-def fill_fact(body: SettleAllRequest, user=Depends(_get_timesheet)):
-    """Массово проставить факт = плану там, где день запланирован и факта ещё нет.
-    Невыходы и уже заполненные дни не трогаются."""
+def fill_fact(body: FillFactRequest, user=Depends(_get_timesheet)):
+    """Массово проставить факт = плану за расчётную неделю.
+
+    Обычный режим: только там, где день запланирован и факта ещё нет — невыходы и
+    уже заполненные дни не трогаются. Режим `force=1`: для всех запланированных
+    наступивших дней факт переписывается планом, снимая «не вышел» (для заполнения
+    задним числом, когда корректировать каждую запись вручную неудобно)."""
     sat = parse_week_param(body.week)
     days = week_days(sat)
     today_iso = business_today().isoformat()
     uid = str(user["id"])
     now = _now()
+    force = bool(body.force)
     filled = 0
     with get_connection() as conn:
         entries = load_entries_range(conn, days[0].isoformat(), days[-1].isoformat())
         for (emp_id, day_iso), entry in entries.items():
             if day_iso > today_iso:  # факт за ненаступивший день не проставляем
                 continue
-            if day_status(entry, day_iso, today_iso) != TIMESHEET_DAY_PLANNED:
-                continue
             ps, pe = entry.get("planned_start"), entry.get("planned_end")
+            entry_id = str(entry["id"])
+            if not force:
+                if day_status(entry, day_iso, today_iso) != TIMESHEET_DAY_PLANNED:
+                    continue
+                conn.execute(
+                    "UPDATE timesheet_entries SET actual_start=?,actual_end=?,updated_at=? WHERE id=?",
+                    (ps, pe, now, entry_id),
+                )
+                _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт по плану: {ps}–{pe}", uid, now)
+                filled += 1
+                continue
+            # force: переписываем факт планом для всех запланированных дней, снимая невыход
+            if not (ps and pe):
+                continue
+            was_absent = int(entry.get("is_absent") or 0) == 1
+            same_fact = (entry.get("actual_start"), entry.get("actual_end")) == (ps, pe)
+            if same_fact and not was_absent:
+                continue
             conn.execute(
-                "UPDATE timesheet_entries SET actual_start=?,actual_end=?,updated_at=? WHERE id=?",
-                (ps, pe, now, str(entry["id"])),
+                "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=0,updated_at=? WHERE id=?",
+                (ps, pe, now, entry_id),
             )
-            _op(conn, str(entry["id"]), TIMESHEET_OP_FACT_SET, f"Факт по плану: {ps}–{pe}", uid, now)
+            if was_absent:
+                _op(conn, entry_id, TIMESHEET_OP_ABSENT_CLEAR, "Снят «не вышел» (факт по плану)", uid, now)
+            _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт по плану: {ps}–{pe}", uid, now)
             filled += 1
         conn.commit()
     return {"message": str(filled)}
