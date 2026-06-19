@@ -236,7 +236,33 @@ def list_receipts_aggregated(
         params + [limit, offset],
     ).fetchall()
 
-    return total, [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+
+    # Рейсы по каждому поступлению одним запросом для всей страницы (без N+1):
+    # поступление может приезжать несколькими рейсами.
+    doc_ids = [r["id"] for r in out]
+    trips_by_doc: dict[str, list[dict]] = {}
+    if doc_ids:
+        placeholders = ",".join("?" for _ in doc_ids)
+        trip_rows = connection.execute(
+            f"""
+            SELECT DISTINCT tl.receipt_doc_id AS doc_id,
+                   t.id AS trip_id, t.trip_number AS trip_number
+            FROM trip_lines tl
+            JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0
+            WHERE tl.receipt_doc_id IN ({placeholders}) AND COALESCE(tl.is_deleted, 0) = 0
+            ORDER BY t.trip_number
+            """,
+            doc_ids,
+        ).fetchall()
+        for tr in trip_rows:
+            trips_by_doc.setdefault(str(tr["doc_id"]), []).append(
+                {"id": str(tr["trip_id"]), "number": str(tr["trip_number"])}
+            )
+    for r in out:
+        r["trips"] = trips_by_doc.get(str(r["id"]), [])
+
+    return total, out
 
 
 def list_receipt_lines(

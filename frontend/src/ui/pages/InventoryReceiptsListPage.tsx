@@ -266,16 +266,17 @@ export function InventoryReceiptsListPage() {
                 <th style={{ width: 100, textAlign: 'right' }}>План</th>
                 <th style={{ width: 100, textAlign: 'right' }}>Факт</th>
                 <th style={{ width: 130 }}>Статус</th>
+                <th style={{ width: 130 }}>Рейсы</th>
                 <th style={{ width: 160 }}>Принято</th>
                 <th style={{ width: 28 }} />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={9} />
+                <SkeletonRows rows={8} cols={10} />
               ) : loadError ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <EmptyState
                       title="Не удалось загрузить документы"
                       sub={loadError}
@@ -289,7 +290,7 @@ export function InventoryReceiptsListPage() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <EmptyState
                       title="Документов нет"
                       sub={isOverdueFilter ? 'Просроченных документов нет' : 'Создайте первый документ поступления'}
@@ -345,6 +346,24 @@ export function InventoryReceiptsListPage() {
                         <Badge tone={receiptStatusTone(item.status) as BadgeTone} dot>
                           {RECEIPT_STATUS_LABELS[item.status]}
                         </Badge>
+                      </Td>
+                      <Td>
+                        {!item.trips?.length ? (
+                          <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                        ) : (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {item.trips.map((t) => (
+                              <button
+                                key={t.id}
+                                className="mono"
+                                style={{ background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)', borderRadius: 5, padding: '1px 6px', fontSize: 11.5, color: 'var(--c-text-muted)', cursor: 'pointer' }}
+                                onClick={(e) => { e.stopPropagation(); navigate(`/logistics/trips/${t.id}`) }}
+                              >
+                                {t.number}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </Td>
                       <Td>
                         {(() => {
