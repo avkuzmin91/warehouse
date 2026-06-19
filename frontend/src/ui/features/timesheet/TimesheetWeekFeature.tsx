@@ -10,6 +10,7 @@ import {
   fmtHours, fmtMoney, addDays,
 } from './shared'
 import { DayCardDrawer } from './DayCardDrawer'
+import { DayFactDrawer } from './DayFactDrawer'
 import { getTimesheetWeek, fillFact, type WeekCell, type WeekDayMeta, type WeekResponse } from '../../../api/timesheetApi'
 
 function DayCellView({ cell, day, onClick }: { cell: WeekCell; day: WeekDayMeta; onClick: () => void }) {
@@ -63,6 +64,7 @@ export function TimesheetWeekFeature() {
   const [week, setWeek] = useFilterParam('week', '')
   const [tick, setTick] = useState(0)
   const [selected, setSelected] = useState<{ employeeId: string; name: string; date: string } | null>(null)
+  const [factDate, setFactDate] = useState<string | null>(null)
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -73,6 +75,13 @@ export function TimesheetWeekFeature() {
 
   const reload = () => setTick((t) => t + 1)
   const showMoney = data?.with_money ?? false
+
+  /** День по умолчанию для быстрого ввода факта: сегодня, если попадает в неделю; иначе её край. */
+  const openDayFact = () => {
+    if (!data) return
+    const { week_start, week_end, today } = data
+    setFactDate(today >= week_start && today <= week_end ? today : today > week_end ? week_end : week_start)
+  }
 
   const onFillFact = async () => {
     const ok = await confirm({
@@ -107,8 +116,11 @@ export function TimesheetWeekFeature() {
             onNext={() => data && setWeek(addDays(data.week_start, 7))}
             onToday={() => setWeek('')}
           />
-          <button className="btn primary" onClick={onFillFact}>
-            <Icon name="check" size={14} />Заполнить факт по плану
+          <button className="btn" onClick={onFillFact}>
+            <Icon name="check" size={14} />Факт = план (неделя)
+          </button>
+          <button className="btn primary" onClick={openDayFact} disabled={!data}>
+            <Icon name="timer" size={14} />Внести факт за день
           </button>
         </>
       }
@@ -145,7 +157,7 @@ export function TimesheetWeekFeature() {
                 <tr>
                   <th style={{ paddingLeft: 14 }}>Сотрудник</th>
                   {data.days.map((d) => (
-                    <th key={d.date} style={{ textAlign: 'center', borderLeft: '1px solid var(--c-border)', background: d.is_today ? 'var(--c-accent-bg)' : d.weekend ? 'var(--c-bg-active)' : undefined, color: d.is_today ? 'var(--c-accent-text)' : undefined }}>
+                    <th key={d.date} onClick={() => setFactDate(d.date)} title="Внести факт за день" style={{ textAlign: 'center', borderLeft: '1px solid var(--c-border)', cursor: 'pointer', background: d.is_today ? 'var(--c-accent-bg)' : d.weekend ? 'var(--c-bg-active)' : undefined, color: d.is_today ? 'var(--c-accent-text)' : undefined }}>
                       <div style={{ fontWeight: 700, fontSize: 11.5 }}>{d.dow}</div>
                       <div className="mono" style={{ fontSize: 11, fontWeight: 500, opacity: 0.8, marginTop: 1 }}>{d.dom}</div>
                     </th>
@@ -205,7 +217,7 @@ export function TimesheetWeekFeature() {
           </div>
 
           <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="coffee" size={12} />Часы за день = (уход − приход) − 1 ч обед. Клик по ячейке — карточка дня с правкой факта и журналом.
+            <Icon name="coffee" size={12} />Часы за день = (уход − приход) − 1 ч обед. «Внести факт за день» или клик по дню недели — быстрый ввод по всем сразу; клик по ячейке — карточка дня с журналом.
           </div>
         </>
       )}
@@ -221,6 +233,31 @@ export function TimesheetWeekFeature() {
           onSaved={reload}
         />
       )}
+
+      {factDate && data && (() => {
+        const idx = data.days.findIndex((d) => d.date === factDate)
+        if (idx < 0) return null
+        const day = data.days[idx]
+        const rows = data.rows.map((r) => ({
+          employee_id: r.employee_id,
+          full_name: r.full_name,
+          position: r.position,
+          cell: r.cells[idx],
+        }))
+        return (
+          <DayFactDrawer
+            key={factDate}
+            date={factDate}
+            dateLabel={`${day.dow}, ${day.date_ru}`}
+            rows={rows}
+            isFuture={factDate > data.today}
+            onClose={() => setFactDate(null)}
+            onSaved={reload}
+            onPrevDay={idx > 0 ? () => setFactDate(data.days[idx - 1].date) : undefined}
+            onNextDay={idx < data.days.length - 1 ? () => setFactDate(data.days[idx + 1].date) : undefined}
+          />
+        )
+      })()}
     </ListPage>
   )
 }

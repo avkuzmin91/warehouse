@@ -125,6 +125,7 @@ class WeekCell(BaseModel):
     planned_end:   str | None = None
     actual_start:  str | None = None
     actual_end:    str | None = None
+    is_absent:     bool = False
     hours:         float
     note:          str | None = None
 
@@ -201,6 +202,19 @@ class BulkPlanRequest(BaseModel):
     employee_ids:  list[str] = []
     planned_start: str
     planned_end:   str
+
+
+class DayFactItem(BaseModel):
+    employee_id:  str
+    actual_start: str | None = None
+    actual_end:   str | None = None
+    is_absent:    bool = False
+    note:         str | None = None
+
+
+class DayFactBulkRequest(BaseModel):
+    work_date: str                                    # YYYY-MM-DD
+    items:     list[DayFactItem] = []
 
 
 class WeekParam(BaseModel):
