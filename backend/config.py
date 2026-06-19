@@ -497,8 +497,9 @@ EXPENSE_KINDS_ADMIN_ONLY: frozenset[str] = frozenset({
 
 # Источник (origin) расхода — обратная ссылка на породивший объект.
 EXPENSE_SOURCE_TRIP      = "trip"       # рейс (логистика)
-EXPENSE_SOURCE_EMPLOYEE  = "employee"   # сотрудник (ЗП)
+EXPENSE_SOURCE_EMPLOYEE  = "employee"   # сотрудник (ЗП-оклад, авто-начисление)
 EXPENSE_SOURCE_WAREHOUSE = "warehouse"  # склад (аренда)
+EXPENSE_SOURCE_PAYROLL   = "payroll"    # выплата по табелю (ЗП почасовика), source_id = payroll_payments.id
 
 # Статус оплаты расхода. Рейсовая логистика создаётся «ожидает оплаты»; ручной
 # хозрасход по умолчанию «оплачено» (фиксация постфактум), но может быть и «ожидает».

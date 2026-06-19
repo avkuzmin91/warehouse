@@ -306,6 +306,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
                 "planned_end": entry.get("planned_end") if entry else None,
                 "actual_start": entry.get("actual_start") if entry else None,
                 "actual_end": entry.get("actual_end") if entry else None,
+                "is_absent": bool(int(entry.get("is_absent") or 0)) if entry else False,
                 "hours": round(h, 1),
                 "note": entry.get("note") if entry else None,
             }

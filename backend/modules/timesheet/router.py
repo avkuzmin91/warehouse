@@ -25,10 +25,12 @@ from config import (
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
+from modules.expenses.service import record_payroll_expense
 from security import can_view_payroll, ensure_payroll_access, ensure_timesheet_access
 
 from .schemas import (
     BulkPlanRequest,
+    DayFactBulkRequest,
     EmployeeCreate,
     EmployeeDetailResponse,
     EmployeeListItem,
@@ -120,6 +122,42 @@ def _emp_or_404(conn, emp_id: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
     return dict(row)
+
+
+def _record_payment(
+    conn,
+    *,
+    employee_id: str,
+    amount: int,
+    kind: str,
+    paid_on: str,
+    period_start: str,
+    period_end: str,
+    comment: str | None,
+    uid: str,
+) -> str:
+    """Пишет выплату в журнал табеля и зеркалит её расходом в едином реестре.
+    Расход создаётся только для почасовиков (окладники — через авто-начисление). Возвращает id выплаты."""
+    payment_id = str(uuid4())
+    conn.execute(
+        "INSERT INTO payroll_payments "
+        "(id,employee_id,amount_kopecks,kind,paid_on,period_start,period_end,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (payment_id, employee_id, int(amount), kind, paid_on,
+         period_start, period_end, comment, _now(), uid),
+    )
+    record_payroll_expense(
+        conn,
+        payment_id=payment_id,
+        employee_id=employee_id,
+        amount=int(amount),
+        kind=kind,
+        paid_on=paid_on,
+        period_start=period_start,
+        period_end=period_end,
+        uid=uid,
+    )
+    return payment_id
 
 
 def _op(conn, entry_id: str, op_type: str, comment: str, uid: str, now: str) -> None:
@@ -573,6 +611,87 @@ def fill_fact(body: SettleAllRequest, user=Depends(_get_timesheet)):
     return {"message": str(filled)}
 
 
+@router.put("/timesheet/day-fact")
+def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
+    """Быстрый ввод факта за один день списком: на каждого сотрудника — факт прихода/ухода
+    либо «не вышел». Меняет только факт/невыход/примечание, план не трогает. Зеркало
+    `plan/bulk`, но для факта (роль-агностично, как одиночный upsert)."""
+    work_date = str(body.work_date or "").strip()
+    if not work_date:
+        raise HTTPException(status_code=400, detail="Укажите день")
+    if work_date > business_today().isoformat():
+        raise HTTPException(status_code=400, detail="Нельзя внести факт за ненаступивший день")
+    uid = str(user["id"])
+    now = _now()
+    saved = 0
+
+    def _pair(a, b):
+        return f"{a}–{b}" if a and b else "нет"
+
+    with get_connection() as conn:
+        for item in body.items:
+            emp_id = str(item.employee_id or "").strip()
+            if not emp_id:
+                continue
+            if not conn.execute(
+                "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (emp_id,)
+            ).fetchone():
+                continue
+            absent = 1 if item.is_absent else 0
+            fs = None if absent else _time_or_none(item.actual_start, "Факт · приход")
+            fe = None if absent else _time_or_none(item.actual_end, "Факт · уход")
+            note = _clean(item.note)
+            row = conn.execute(
+                "SELECT * FROM timesheet_entries "
+                "WHERE employee_id = ? AND work_date = ? AND COALESCE(is_deleted, 0) = 0",
+                (emp_id, work_date),
+            ).fetchone()
+
+            if row is None:
+                if not (fs and fe) and not absent and note is None:
+                    continue
+                entry_id = str(uuid4())
+                conn.execute(
+                    "INSERT INTO timesheet_entries "
+                    "(id,employee_id,work_date,actual_start,actual_end,is_absent,note,created_at,created_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (entry_id, emp_id, work_date, fs, fe, absent, note, now, uid),
+                )
+                if fs and fe:
+                    _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт: {fs}–{fe}", uid, now)
+                if absent:
+                    _op(conn, entry_id, TIMESHEET_OP_ABSENT_MARK, "Отмечен «не вышел»", uid, now)
+                if note:
+                    _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note}»", uid, now)
+                saved += 1
+            else:
+                entry_id = str(row["id"])
+                old = dict(row)
+                changed = False
+                if (fs, fe) != (old.get("actual_start"), old.get("actual_end")):
+                    _op(conn, entry_id, TIMESHEET_OP_FACT_SET,
+                        f"Факт: {_pair(old.get('actual_start'), old.get('actual_end'))} → {_pair(fs, fe)}", uid, now)
+                    changed = True
+                if absent != int(old.get("is_absent") or 0):
+                    _op(conn, entry_id,
+                        TIMESHEET_OP_ABSENT_MARK if absent else TIMESHEET_OP_ABSENT_CLEAR,
+                        "Отмечен «не вышел»" if absent else "Снят «не вышел»", uid, now)
+                    changed = True
+                # Примечание правим только если прислано — пустое не затирает существующее.
+                if note is not None and note != old.get("note"):
+                    _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note}»", uid, now)
+                    changed = True
+                if changed:
+                    new_note = note if note is not None else old.get("note")
+                    conn.execute(
+                        "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=?,note=?,updated_at=? WHERE id=?",
+                        (fs, fe, absent, new_note, now, entry_id),
+                    )
+                    saved += 1
+        conn.commit()
+    return {"message": str(saved)}
+
+
 @router.post("/timesheet/plan/bulk")
 def bulk_plan(body: BulkPlanRequest, user=Depends(_get_timesheet)):
     work_date = str(body.work_date or "").strip()
@@ -646,15 +765,18 @@ def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
         raise HTTPException(status_code=400, detail="Укажите расчётную неделю")
     paid_on = _clean(body.paid_on) or business_today().isoformat()
     uid = str(user["id"])
-    now = _now()
     with get_connection() as conn:
         _emp_or_404(conn, body.employee_id)
-        conn.execute(
-            "INSERT INTO payroll_payments "
-            "(id,employee_id,amount_kopecks,kind,paid_on,period_start,period_end,comment,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (str(uuid4()), body.employee_id, int(body.amount_kopecks), kind, paid_on,
-             period_start, period_end, _clean(body.comment), now, uid),
+        _record_payment(
+            conn,
+            employee_id=body.employee_id,
+            amount=int(body.amount_kopecks),
+            kind=kind,
+            paid_on=paid_on,
+            period_start=period_start,
+            period_end=period_end,
+            comment=_clean(body.comment),
+            uid=uid,
         )
         conn.commit()
     return {"message": "ok"}
@@ -664,7 +786,6 @@ def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
 def settle_all(body: SettleAllRequest, user=Depends(_get_payroll)):
     sat = parse_week_param(body.week)
     uid = str(user["id"])
-    now = _now()
     today_iso = business_today().isoformat()
     settled = 0
     with get_connection() as conn:
@@ -673,12 +794,16 @@ def settle_all(body: SettleAllRequest, user=Depends(_get_payroll)):
         for r in data["rows"]:
             if r["settled"]:
                 continue
-            conn.execute(
-                "INSERT INTO payroll_payments "
-                "(id,employee_id,amount_kopecks,kind,paid_on,period_start,period_end,comment,created_at,created_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (str(uuid4()), r["employee_id"], int(r["to_pay"]), PAYROLL_KIND_SETTLEMENT,
-                 today_iso, period_start, period_end, "Пятничный расчёт", now, uid),
+            _record_payment(
+                conn,
+                employee_id=r["employee_id"],
+                amount=int(r["to_pay"]),
+                kind=PAYROLL_KIND_SETTLEMENT,
+                paid_on=today_iso,
+                period_start=period_start,
+                period_end=period_end,
+                comment="Пятничный расчёт",
+                uid=uid,
             )
             settled += 1
         conn.commit()

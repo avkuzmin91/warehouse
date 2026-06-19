@@ -19,6 +19,20 @@ function isoLocal(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
+/** Часы за день из факта: (уход − приход) − 1 ч обед, без минуса. Повторяет backend day_hours. */
+export function calcDayHours(start: string | null, end: string | null): number {
+  const toMin = (t: string | null): number | null => {
+    if (!t) return null
+    const [h, m] = t.split(':').map(Number)
+    return h * 60 + m
+  }
+  const a = toMin(start), b = toMin(end)
+  if (a == null || b == null) return 0
+  const gross = (b - a) / 60
+  if (gross <= 0) return 0
+  return Math.max(0, gross > 1 ? gross - 1 : 0)
+}
+
 /** ISO-дата + смещение в днях → ISO. */
 export function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00')

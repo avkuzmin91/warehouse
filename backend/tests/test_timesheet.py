@@ -128,6 +128,7 @@ def employee():
         emp_id["id"] = eid
     yield emp_id["id"]
     with get_connection() as conn:
+        _purge_payroll_expenses(conn, emp_id["id"])
         conn.execute("DELETE FROM payroll_payments WHERE employee_id = ?", (emp_id["id"],))
         conn.execute(
             "DELETE FROM timesheet_ops WHERE entry_id IN "
@@ -151,8 +152,19 @@ def _make_employee(full_name: str, user_id: str | None = None) -> str:
     return eid
 
 
+def _purge_payroll_expenses(conn, eid: str) -> None:
+    """Удаляет расходы (и их журнал), зеркалившие выплаты сотрудника по табелю."""
+    sub = ("SELECT id FROM material_expenses WHERE source_kind = 'payroll' AND source_id IN "
+           "(SELECT id FROM payroll_payments WHERE employee_id = ?)")
+    conn.execute(f"DELETE FROM expense_ops WHERE expense_id IN ({sub})", (eid,))
+    conn.execute(
+        "DELETE FROM material_expenses WHERE source_kind = 'payroll' AND source_id IN "
+        "(SELECT id FROM payroll_payments WHERE employee_id = ?)", (eid,))
+
+
 def _delete_employee(eid: str) -> None:
     with get_connection() as conn:
+        _purge_payroll_expenses(conn, eid)
         conn.execute("DELETE FROM payroll_payments WHERE employee_id = ?", (eid,))
         conn.execute(
             "DELETE FROM timesheet_ops WHERE entry_id IN "
@@ -255,6 +267,70 @@ def test_advance_reduces_to_pay_then_settle(manager_client, employee):
     row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
                if x["employee_id"] == employee)
     assert row["settled"] is True
+
+
+def test_payroll_payment_mirrors_to_expense_ledger(manager_client, employee):
+    _add_worked_day(manager_client, employee)   # заработано 385000
+
+    # Аванс почасовику → строка в реестре расходов
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 100000, "kind": "advance",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+
+    # Пятничный расчёт → вторая строка расхода на остаток к выдаче (285000)
+    assert manager_client.post("/timesheet/payroll/settle-all",
+                               json={"week": WEEK}).status_code == 200
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT me.kind, me.payment_status, me.amount, me.paid_on, pp.kind AS pay_kind "
+            "FROM material_expenses me JOIN payroll_payments pp ON pp.id = me.source_id "
+            "WHERE me.source_kind = 'payroll' AND pp.employee_id = ? "
+            "AND COALESCE(me.is_deleted, 0) = 0 ORDER BY me.amount",
+            (employee,),
+        ).fetchall()
+
+    by_amount = {int(r["amount"]): dict(r) for r in rows}
+    assert set(by_amount) == {100000, 285000}            # аванс + остаток расчёта
+    for r in rows:
+        assert r["kind"] == "salary"
+        assert r["payment_status"] == "paid"             # деньги уже выданы
+        assert r["paid_on"]
+    assert by_amount[100000]["pay_kind"] == "advance"
+    assert by_amount[285000]["pay_kind"] == "settlement"
+
+
+def test_fixed_salary_settle_not_mirrored(manager_client):
+    """Окладник в реестр расходов через табель не попадает — его ЗП идёт авто-начислением."""
+    from uuid import uuid4
+    eid = str(uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO employees (id,full_name,status,comp_type,fixed_salary_kopecks,created_at) "
+            "VALUES (?,?, 'active', 'fixed', 5000000, NOW())",
+            (eid, "Окладов Оклад Окладович"),
+        )
+        conn.execute(
+            "INSERT INTO employee_rates (id,employee_id,rate_kopecks,effective_from,created_at) "
+            "VALUES (?,?,?,?,NOW())",
+            (str(uuid4()), eid, RATE, "2024-01-01"),
+        )
+        conn.commit()
+    try:
+        _add_worked_day(manager_client, eid)             # к выдаче > 0, но это окладник
+        assert manager_client.post("/timesheet/payroll/settle-all",
+                                   json={"week": WEEK}).status_code == 200
+        with get_connection() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM material_expenses me "
+                "JOIN payroll_payments pp ON pp.id = me.source_id "
+                "WHERE me.source_kind = 'payroll' AND pp.employee_id = ?",
+                (eid,),
+            ).fetchone()["n"]
+        assert int(n) == 0
+    finally:
+        _delete_employee(eid)
 
 
 def test_entry_journal_appends_ops(manager_client, employee):

@@ -87,6 +87,7 @@ export type WeekCell = {
   planned_end: string | null
   actual_start: string | null
   actual_end: string | null
+  is_absent: boolean
   hours: number
   note: string | null
 }
@@ -145,6 +146,14 @@ export type EntryUpsertPayload = {
   work_date: string
   planned_start?: string | null
   planned_end?: string | null
+  actual_start?: string | null
+  actual_end?: string | null
+  is_absent?: boolean
+  note?: string | null
+}
+
+export type DayFactItem = {
+  employee_id: string
   actual_start?: string | null
   actual_end?: string | null
   is_absent?: boolean
@@ -280,6 +289,13 @@ export function fillFact(week: string | undefined) {
   return request<{ message: string }>('/timesheet/fill-fact', {
     method: 'POST',
     body: JSON.stringify({ week: week ?? null }),
+  })
+}
+
+export function dayFactBulk(workDate: string, items: DayFactItem[]) {
+  return request<{ message: string }>('/timesheet/day-fact', {
+    method: 'PUT',
+    body: JSON.stringify({ work_date: workDate, items }),
   })
 }
 

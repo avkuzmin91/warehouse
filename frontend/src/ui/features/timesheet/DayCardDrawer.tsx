@@ -1,22 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
-import { EmpAvatar, fmtHours } from './shared'
+import { EmpAvatar, fmtHours, calcDayHours } from './shared'
 import { getEntry, upsertEntry, type EntryDetail } from '../../../api/timesheetApi'
-
-const LUNCH = 1
-function toMin(t: string | null): number | null {
-  if (!t) return null
-  const [h, m] = t.split(':').map(Number)
-  return h * 60 + m
-}
-function calcHours(start: string | null, end: string | null): number {
-  const a = toMin(start), b = toMin(end)
-  if (a == null || b == null) return 0
-  const gross = (b - a) / 60
-  if (gross <= 0) return 0
-  return Math.max(0, gross > LUNCH ? gross - LUNCH : 0)
-}
 
 const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 function fmtDateRu(iso: string): string {
@@ -64,7 +50,7 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
     return () => ctrl.abort()
   }, [employeeId, workDate])
 
-  const hours = calcHours(fs || null, fe || null)
+  const hours = calcDayHours(fs || null, fe || null)
   const isFuture = !!today && workDate > today
 
   const factEqualsPlan = () => { setFs(ps); setFe(pe); setAbsent(false) }
