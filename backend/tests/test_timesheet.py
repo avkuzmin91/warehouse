@@ -96,7 +96,9 @@ def test_rate_on_picks_historical():
     assert rate_on(rates, "2026-06-10") == 38000
     assert rate_on(rates, "2026-03-01") == 36000
     assert rate_on(rates, "2025-12-01") == 34000
-    assert rate_on(rates, "2025-01-01") is None   # до первой ставки
+    assert rate_on(rates, "2025-01-01") == 34000  # до первой ставки — тянем раннюю назад
+    # effective_from с временем не должен «съедать» первый день ставки
+    assert rate_on([{"rate_kopecks": 34000, "effective_from": "2025-11-10T00:00:00"}], "2025-11-10") == 34000
     assert rate_on(None, "2026-06-10") is None
 
 
