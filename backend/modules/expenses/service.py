@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from config import (
     EMPLOYEE_COMP_FIXED,
+    EMPLOYEE_COMP_HOURLY,
     EMPLOYEE_STATUS_ACTIVE,
     EXPENSE_KIND_LABELS,
     EXPENSE_KIND_LOGISTICS,
@@ -20,11 +21,13 @@ from config import (
     EXPENSE_PAYMENT_PAID,
     EXPENSE_PAYMENT_STATUS_LABELS,
     EXPENSE_SOURCE_EMPLOYEE,
+    EXPENSE_SOURCE_PAYROLL,
     EXPENSE_SOURCE_TRIP,
     EXPENSE_SOURCE_WAREHOUSE,
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,
     EXPENSE_SYSTEM_CATEGORY_SALARY,
+    PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
 
@@ -557,6 +560,67 @@ def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> in
         )
         created += 1
     return created
+
+
+def record_payroll_expense(
+    connection,
+    *,
+    payment_id: str,
+    employee_id: str,
+    amount: int,
+    kind: str,
+    paid_on: str,
+    period_start: str,
+    period_end: str,
+    uid: str | None = None,
+) -> bool:
+    """Зеркалит выплату по табелю (аванс/расчёт почасовика) строкой в едином реестре расходов.
+
+    Окладники (comp_type=fixed) сюда не попадают — их ЗП заводит авто-начисление
+    run_salary_accruals, иначе расход задвоится. Инвариант «1 выплата → 1 расход»
+    (source_kind=payroll, source_id=payment_id) делает повторный вызов безопасным.
+    Деньги уже выданы в момент расчёта → статус сразу «оплачено». Не коммитит."""
+    amount = int(amount)
+    if amount <= 0:
+        return False
+
+    emp = connection.execute(
+        "SELECT full_name, comp_type FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (str(employee_id),),
+    ).fetchone()
+    if not emp or str(emp["comp_type"] or EMPLOYEE_COMP_HOURLY) != EMPLOYEE_COMP_HOURLY:
+        return False
+
+    exists = connection.execute(
+        "SELECT 1 FROM material_expenses WHERE source_kind = ? AND source_id = ? "
+        "AND COALESCE(is_deleted, 0) = 0",
+        (EXPENSE_SOURCE_PAYROLL, str(payment_id)),
+    ).fetchone()
+    if exists:
+        return False
+
+    label = PAYROLL_KIND_LABELS.get(str(kind), str(kind))
+    cat_id = resolve_system_category_id(connection, EXPENSE_SYSTEM_CATEGORY_SALARY)
+    expense_id = str(uuid4())
+    exp_number = next_expense_number(connection)
+    name = f"{label} ЗП — {emp['full_name']}"
+    connection.execute(
+        """INSERT INTO material_expenses
+           (id,exp_number,spent_on,category_id,name,quantity,unit,amount,
+            payment_source_id,supplier,comment,kind,payment_status,paid_on,
+            period_start,period_end,source_kind,source_id,created_at,created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (expense_id, exp_number, paid_on, cat_id, name, 1, None, amount,
+         None, None, None, EXPENSE_KIND_SALARY, EXPENSE_PAYMENT_PAID, paid_on,
+         period_start, period_end, EXPENSE_SOURCE_PAYROLL, str(payment_id), now_iso(), uid),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, EXPENSE_OP_CREATE,
+         f"Создано из табеля: {label} ЗП · {format_kopecks(amount)} · оплачено", now_iso(), uid),
+    )
+    return True
 
 
 def run_rent_accruals(connection, on_date: date, uid: str | None = None, *, force: bool = False) -> int:
