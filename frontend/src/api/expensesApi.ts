@@ -10,7 +10,7 @@ export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary'
 export type ExpensePaymentStatus = 'awaiting' | 'paid' | 'cancelled'
 
 export type ExpenseOpType =
-  | 'create' | 'update' | 'delete' | 'restore' | 'file_add' | 'file_delete' | 'pay' | 'cancel'
+  | 'create' | 'update' | 'delete' | 'restore' | 'file_add' | 'file_delete' | 'pay' | 'unpay' | 'cancel'
 
 export type ExpenseOp = {
   id: string
@@ -178,6 +178,10 @@ export function payExpense(expenseId: string, payload: ExpensePayPayload = {}) {
   })
 }
 
+export function unpayExpense(expenseId: string) {
+  return request<{ message: string }>(`/expenses/${expenseId}/unpay`, { method: 'POST' })
+}
+
 export function cancelExpense(expenseId: string) {
   return request<{ message: string }>(`/expenses/${expenseId}/cancel`, { method: 'POST' })
 }
@@ -234,6 +238,7 @@ export const EXPENSE_OP_LABELS: Record<ExpenseOpType, string> = {
   file_add: 'Файл прикреплён',
   file_delete: 'Файл удалён',
   pay: 'Оплачено',
+  unpay: 'Оплата отменена',
   cancel: 'Аннулирование',
 }
 

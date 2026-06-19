@@ -457,6 +457,7 @@ EXPENSE_OP_RESTORE     = "restore"
 EXPENSE_OP_FILE_ADD    = "file_add"
 EXPENSE_OP_FILE_DELETE = "file_delete"
 EXPENSE_OP_PAY         = "pay"
+EXPENSE_OP_UNPAY       = "unpay"
 EXPENSE_OP_CANCEL      = "cancel"
 
 EXPENSE_OP_LABELS: dict[str, str] = {
@@ -467,6 +468,7 @@ EXPENSE_OP_LABELS: dict[str, str] = {
     EXPENSE_OP_FILE_ADD:    "Файл прикреплён",
     EXPENSE_OP_FILE_DELETE: "Файл удалён",
     EXPENSE_OP_PAY:         "Оплачено",
+    EXPENSE_OP_UNPAY:       "Оплата отменена",
     EXPENSE_OP_CANCEL:      "Аннулирование",
 }
 
