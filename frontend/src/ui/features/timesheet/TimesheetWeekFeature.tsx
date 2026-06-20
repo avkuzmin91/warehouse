@@ -37,6 +37,10 @@ function DayCellView({ cell, day, onClick }: { cell: WeekCell; day: WeekDayMeta;
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-danger)', fontSize: 12, fontWeight: 600 }}>
             <Icon name="userX" size={12} />Не вышел
           </div>
+        ) : st === 'not_called' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-text-muted)', fontSize: 12, fontWeight: 600 }}>
+            <Icon name="pause" size={12} />Не вызван
+          </div>
         ) : st === 'planned' ? (
           <div style={{ fontSize: 12, color: 'var(--c-info)', fontWeight: 500 }}>ждём факт</div>
         ) : (
@@ -83,7 +87,8 @@ export function TimesheetWeekFeature() {
 
   const legend: { key: keyof typeof CELL_TONE; label: string }[] = [
     { key: 'worked', label: 'Отработал' }, { key: 'planned', label: 'Запланирован' },
-    { key: 'absent', label: 'Не вышел' }, { key: 'noplan', label: 'Без плана' }, { key: 'off', label: 'Выходной' },
+    { key: 'absent', label: 'Не вышел' }, { key: 'noplan', label: 'Без плана' },
+    { key: 'not_called', label: 'Не вызван' }, { key: 'off', label: 'Выходной' },
   ]
 
   return (
@@ -124,7 +129,7 @@ export function TimesheetWeekFeature() {
             ))}
           </div>
 
-          <div className="t-wrap" style={{ overflow: 'hidden' }}>
+          <div className="t-wrap t-sticky" style={{ overflow: 'clip' }}>
             <table className="t" style={{ width: '100%', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: 210 }} />

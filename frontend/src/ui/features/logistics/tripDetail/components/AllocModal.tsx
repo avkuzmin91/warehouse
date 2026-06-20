@@ -82,16 +82,11 @@ function byClient(a?: AllocDoc, b?: AllocDoc): number {
     || (a?.doc_number ?? '').localeCompare(b?.doc_number ?? '', 'ru')
 }
 
-/** Календарная плитка плановой даты — крупный день над месяцем, акцентная полоса сверху. */
-function DateTile({ date, label }: { date: string | null | undefined; label?: string }) {
-  if (!date) return <span className="date-tile empty" title="Плановая дата не указана"><Icon name="calendar" size={15} /></span>
-  const d = new Date(date)
-  const day = d.toLocaleDateString('ru-RU', { day: 'numeric' })
-  const mon = d.toLocaleDateString('ru-RU', { month: 'short' }).replace('.', '')
+/** Компактная инлайновая плановая дата для карточки кандидата: иконка + «5 мар». */
+function DateMini({ date, label }: { date: string; label: string }) {
   return (
-    <span className="date-tile" title={label ? `${label}: ${fmtDateLong(date)}` : fmtDateLong(date)}>
-      <span className="date-tile-day">{day}</span>
-      <span className="date-tile-mon">{mon}</span>
+    <span className="cand-date" title={`${label}: ${fmtDateLong(date)}`}>
+      <Icon name="calendar" size={11} />{fmtDateShort(date)}
     </span>
   )
 }
@@ -359,13 +354,15 @@ function Picker({ candidates, addedIds, previewId, dateLabel, onHover, onCancel,
             onFocus={() => onHover(c.doc_id)}
           >
             <span className="cand-cb">{sel.has(c.doc_id) && <Icon name="check" size={12} />}</span>
-            <DateTile date={c.date} label={dateLabel} />
             <span className="cand-body">
-              <span className="cand-client">{c.client ?? 'Без клиента'}</span>
+              <span className="cand-row">
+                <span className="cand-client">{c.client ?? 'Без клиента'}</span>
+                <span className={`badge ${c.status_tone}`}><span className="dot" />{c.status_label}</span>
+              </span>
               <span className="cand-sub">
+                {c.date && <><DateMini date={c.date} label={dateLabel} /><span className="cand-dot">·</span></>}
                 <span className="mono">{c.doc_number}</span>
-                {c.sub && <><span>·</span><span>{c.sub}</span></>}
-                <span className={`badge ${c.status_tone}`} style={{ marginLeft: 'auto' }}><span className="dot" />{c.status_label}</span>
+                {c.sub && <><span className="cand-dot">·</span><span>{c.sub}</span></>}
               </span>
             </span>
           </button>

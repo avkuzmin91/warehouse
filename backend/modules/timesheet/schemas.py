@@ -126,6 +126,7 @@ class WeekCell(BaseModel):
     actual_start:  str | None = None
     actual_end:    str | None = None
     is_absent:     bool = False
+    not_called:    bool = False
     hours:         float
     note:          str | None = None
 
@@ -181,6 +182,7 @@ class EntryDetailResponse(BaseModel):
     actual_start:  str | None = None
     actual_end:    str | None = None
     is_absent:     bool = False
+    not_called:    bool = False
     status:        str
     hours:         float
     note:          str | None = None
@@ -196,6 +198,7 @@ class EntryUpsert(BaseModel):
     actual_start:  str | None = None
     actual_end:    str | None = None
     is_absent:     bool = False
+    not_called:    bool = False
     note:          str | None = None
 
 
@@ -211,6 +214,7 @@ class DayFactItem(BaseModel):
     actual_start: str | None = None
     actual_end:   str | None = None
     is_absent:    bool = False
+    not_called:   bool = False
     note:         str | None = None
 
 

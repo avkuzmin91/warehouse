@@ -4,11 +4,12 @@ import { useToast } from '../../feedback/Toast'
 import { EmpAvatar, fmtHours, calcDayHours } from './shared'
 import { dayFactBulk, type WeekCell, type DayFactItem } from '../../../api/timesheetApi'
 
-type Mode = 'work' | 'absent' | 'none'
+type Mode = 'work' | 'absent' | 'idle' | 'none'
 type RowInput = { employee_id: string; full_name: string; position: string | null; cell: WeekCell; locked: boolean }
 type RowState = { mode: Mode; fs: string; fe: string }
 
 function initState(cell: WeekCell): RowState {
+  if (cell.not_called) return { mode: 'idle', fs: '', fe: '' }
   if (cell.is_absent) return { mode: 'absent', fs: '', fe: '' }
   if (cell.actual_start && cell.actual_end) return { mode: 'work', fs: cell.actual_start, fe: cell.actual_end }
   return { mode: 'none', fs: cell.planned_start ?? '', fe: cell.planned_end ?? '' }
@@ -17,6 +18,7 @@ function initState(cell: WeekCell): RowState {
 /** Сворачиваем состояние строки в сравнимую строку, чтобы понять, изменилась ли запись. */
 function eff(s: RowState): string {
   if (s.mode === 'absent') return 'A'
+  if (s.mode === 'idle') return 'I'
   if (s.mode === 'work') return `W:${s.fs}-${s.fe}`
   return 'N'
 }
@@ -32,16 +34,21 @@ interface Props {
   onNextDay?: () => void
 }
 
-const segBtn = (active: boolean, tone: 'success' | 'danger'): React.CSSProperties => ({
-  border: 'none',
-  cursor: 'pointer',
-  padding: '0 12px',
-  height: 30,
-  fontSize: 12,
-  fontWeight: active ? 700 : 500,
-  background: active ? `color-mix(in oklab, var(--c-${tone}) 16%, transparent)` : 'transparent',
-  color: active ? `var(--c-${tone})` : 'var(--c-text-muted)',
-})
+const segBtn = (active: boolean, tone: 'success' | 'danger' | 'muted'): React.CSSProperties => {
+  const c = tone === 'muted' ? 'var(--c-text-muted)' : `var(--c-${tone})`
+  return {
+    border: 'none',
+    cursor: 'pointer',
+    padding: '0 12px',
+    height: 30,
+    fontSize: 12,
+    fontWeight: active ? 700 : 500,
+    background: active
+      ? (tone === 'muted' ? 'var(--c-bg-active)' : `color-mix(in oklab, ${c} 16%, transparent)`)
+      : 'transparent',
+    color: active ? c : 'var(--c-text-muted)',
+  }
+}
 
 export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSaved, onPrevDay, onNextDay }: Props) {
   const toast = useToast()
@@ -86,20 +93,32 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
     const o = orig[r.employee_id], c = state[r.employee_id]
     if (eff(o) === eff(c)) continue
     if (c.mode === 'absent') items.push({ employee_id: r.employee_id, is_absent: true })
+    else if (c.mode === 'idle') items.push({ employee_id: r.employee_id, not_called: true })
     else if (c.mode === 'work') {
       if (c.fs && c.fe) items.push({ employee_id: r.employee_id, actual_start: c.fs, actual_end: c.fe, is_absent: false })
-    } else items.push({ employee_id: r.employee_id, actual_start: null, actual_end: null, is_absent: false })
+    } else items.push({ employee_id: r.employee_id, actual_start: null, actual_end: null, is_absent: false, not_called: false })
   }
+
+  const allNotCalled = () =>
+    setState((s) => {
+      const next = { ...s }
+      for (const r of rows) {
+        if (r.locked) continue
+        next[r.employee_id] = { ...next[r.employee_id], mode: 'idle' }
+      }
+      return next
+    })
 
   const counts = rows.reduce(
     (a, r) => {
       const m = state[r.employee_id].mode
       if (m === 'work') a.work++
       else if (m === 'absent') a.absent++
+      else if (m === 'idle') a.idle++
       else a.none++
       return a
     },
-    { work: 0, absent: 0, none: 0 },
+    { work: 0, absent: 0, idle: 0, none: 0 },
   )
 
   const save = async () => {
@@ -158,10 +177,12 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
           <>
             <div style={{ padding: '10px 18px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <button className="btn sm" onClick={allByPlan}><Icon name="check" size={13} />Все по плану</button>
+              <button className="btn sm" onClick={allNotCalled}><Icon name="pause" size={13} />Никого не вызывали</button>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 11.5, display: 'flex', gap: 12 }}>
                 <span style={{ color: 'var(--c-success)' }}>{counts.work} был</span>
                 <span style={{ color: 'var(--c-danger)' }}>{counts.absent} не выш.</span>
+                {counts.idle > 0 && <span style={{ color: 'var(--c-text-muted)' }}>{counts.idle} не выз.</span>}
                 {counts.none > 0 && <span style={{ color: 'var(--c-text-faint)' }}>{counts.none} без отметки</span>}
               </span>
             </div>
@@ -189,6 +210,7 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, color: 'var(--c-text-subtle)', fontSize: 12 }}>
                         {s.mode === 'work' && <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{s.fs}–{s.fe}</span>}
                         {s.mode === 'absent' && <span style={{ color: 'var(--c-danger)' }}>не вышел</span>}
+                        {s.mode === 'idle' && <span style={{ color: 'var(--c-text-muted)' }}>не вызван</span>}
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                           <Icon name="lock" size={13} />расчёт проведён
                         </span>
@@ -208,6 +230,12 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
                       >
                         Не вышел
                       </button>
+                      <button
+                        onClick={() => set(r.employee_id, { mode: 'idle' })}
+                        style={{ ...segBtn(s.mode === 'idle', 'muted'), borderLeft: '1px solid var(--c-border-strong)' }}
+                      >
+                        Не вызван
+                      </button>
                     </div>
 
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
@@ -222,6 +250,11 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
                       {s.mode === 'absent' && (
                         <span style={{ fontSize: 12.5, color: 'var(--c-danger)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
                           <Icon name="userX" size={13} />Не вышел
+                        </span>
+                      )}
+                      {s.mode === 'idle' && (
+                        <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="pause" size={13} />Не вызван
                         </span>
                       )}
                       {s.mode === 'none' && <span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>нужно отметить</span>}

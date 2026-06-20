@@ -30,6 +30,7 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
   const [fs, setFs] = useState('')
   const [fe, setFe] = useState('')
   const [absent, setAbsent] = useState(false)
+  const [notCalled, setNotCalled] = useState(false)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -44,6 +45,7 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
         setFs(d.actual_start ?? '')
         setFe(d.actual_end ?? '')
         setAbsent(d.is_absent)
+        setNotCalled(d.not_called)
         setNote(d.note ?? '')
       })
       .catch(() => {})
@@ -55,8 +57,10 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
   const locked = detail?.fact_locked ?? false
   const factDisabled = isFuture || locked
 
-  const factEqualsPlan = () => { setFs(ps); setFe(pe); setAbsent(false) }
-  const markAbsent = () => { setAbsent(true); setFs(''); setFe('') }
+  const factEqualsPlan = () => { setFs(ps); setFe(pe); setAbsent(false); setNotCalled(false) }
+  const markAbsent = () => { setAbsent(true); setNotCalled(false); setFs(''); setFe('') }
+  const markNotCalled = () => { setNotCalled(true); setAbsent(false); setFs(''); setFe('') }
+  const noFact = absent || notCalled
 
   const save = async () => {
     setSaving(true)
@@ -66,9 +70,10 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
         work_date: workDate,
         planned_start: ps || null,
         planned_end: pe || null,
-        actual_start: absent ? null : (fs || null),
-        actual_end: absent ? null : (fe || null),
+        actual_start: noFact ? null : (fs || null),
+        actual_end: noFact ? null : (fe || null),
         is_absent: absent,
+        not_called: notCalled,
         note: note || null,
       })
       toast('Запись сохранена', 'success')
@@ -111,11 +116,11 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
             </div>
             <div>
               <label style={labelStyle}>Факт · приход</label>
-              <input className="input sm" type="time" style={timeInput} value={fs} disabled={absent || factDisabled} onChange={(e) => setFs(e.target.value)} />
+              <input className="input sm" type="time" style={timeInput} value={fs} disabled={noFact || factDisabled} onChange={(e) => setFs(e.target.value)} />
             </div>
             <div>
               <label style={labelStyle}>Факт · уход</label>
-              <input className="input sm" type="time" style={timeInput} value={fe} disabled={absent || factDisabled} onChange={(e) => setFe(e.target.value)} />
+              <input className="input sm" type="time" style={timeInput} value={fe} disabled={noFact || factDisabled} onChange={(e) => setFe(e.target.value)} />
             </div>
           </div>
 
@@ -146,7 +151,7 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn sm" onClick={factEqualsPlan} disabled={!ps || !pe || factDisabled}><Icon name="check" size={13} />Факт = план</button>
             <button
               className="btn sm"
@@ -155,6 +160,14 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
               style={absent ? { color: 'var(--c-danger)', borderColor: 'var(--c-danger)' } : undefined}
             >
               <Icon name="userX" size={13} />{absent ? 'Снять «не вышел»' : 'Отметить «не вышел»'}
+            </button>
+            <button
+              className="btn sm"
+              onClick={() => (notCalled ? setNotCalled(false) : markNotCalled())}
+              disabled={locked}
+              style={notCalled ? { color: 'var(--c-text-muted)', borderColor: 'var(--c-border-strong)' } : undefined}
+            >
+              <Icon name="pause" size={13} />{notCalled ? 'Снять «не вызван»' : 'Не вызывали'}
             </button>
           </div>
 

@@ -412,6 +412,7 @@ def _ensure_runtime_schema() -> None:
                 actual_start  TEXT,
                 actual_end    TEXT,
                 is_absent     INTEGER NOT NULL DEFAULT 0,
+                not_called    INTEGER NOT NULL DEFAULT 0,
                 note          TEXT,
                 created_at    TEXT NOT NULL,
                 created_by    TEXT,

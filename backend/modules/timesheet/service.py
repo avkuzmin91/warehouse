@@ -16,6 +16,7 @@ from config import (
     PAYROLL_KIND_SETTLEMENT,
     TIMESHEET_DAY_ABSENT,
     TIMESHEET_DAY_NOPLAN,
+    TIMESHEET_DAY_NOT_CALLED,
     TIMESHEET_DAY_OFF,
     TIMESHEET_DAY_PLANNED,
     TIMESHEET_DAY_WORKED,
@@ -164,6 +165,8 @@ def _has_fact(entry: dict) -> bool:
 def day_status(entry: dict | None, day_iso: str, today_iso: str) -> str:
     if not entry:
         return TIMESHEET_DAY_OFF
+    if int(entry.get("not_called") or 0) == 1:
+        return TIMESHEET_DAY_NOT_CALLED
     if int(entry.get("is_absent") or 0) == 1:
         return TIMESHEET_DAY_ABSENT
     if _has_fact(entry):
@@ -345,6 +348,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
                 "actual_start": entry.get("actual_start") if entry else None,
                 "actual_end": entry.get("actual_end") if entry else None,
                 "is_absent": bool(int(entry.get("is_absent") or 0)) if entry else False,
+                "not_called": bool(int(entry.get("not_called") or 0)) if entry else False,
                 "hours": round(h, 1),
                 "note": entry.get("note") if entry else None,
             }

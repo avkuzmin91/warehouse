@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -17,6 +17,7 @@ from modules.timesheet.service import (
     day_status,
     rate_on,
     week_start_for,
+    week_stats,
 )
 
 
@@ -83,6 +84,33 @@ def test_day_status_explicit_absent():
     e = {"planned_start": "08:00", "planned_end": "20:00",
          "actual_start": None, "actual_end": None, "is_absent": 1}
     assert day_status(e, "2025-01-20", "2025-01-10") == "absent"
+
+
+def test_day_status_not_called_is_not_absent():
+    # План был, но склад не вывел сотрудника — даже на прошедший день это «не вызван», не прогул.
+    e = {"planned_start": "08:00", "planned_end": "20:00",
+         "actual_start": None, "actual_end": None, "is_absent": 0, "not_called": 1}
+    assert day_status(e, "2025-01-06", "2025-01-10") == "not_called"
+    # «Не вызван» имеет приоритет над случайно выставленным is_absent.
+    e2 = {**e, "is_absent": 1}
+    assert day_status(e2, "2025-01-06", "2025-01-10") == "not_called"
+
+
+def test_week_stats_not_called_excluded_from_absent_and_pay():
+    days = [date(2025, 1, 4) + timedelta(days=i) for i in range(7)]
+    # Сб..Пт: один день «не вызван» с планом, остальные пустые.
+    entries = {
+        ("emp", "2025-01-06"): {
+            "planned_start": "08:00", "planned_end": "20:00",
+            "actual_start": None, "actual_end": None, "is_absent": 0, "not_called": 1,
+        },
+    }
+    rates = [{"rate_kopecks": 40000, "effective_from": "2025-01-01"}]
+    s = week_stats("emp", days, entries, rates, "2025-01-31")
+    assert s["absent"] == 0       # «не вызван» не идёт в невыходы
+    assert s["worked_days"] == 0
+    assert s["hours"] == 0.0
+    assert s["earned"] == 0       # и не оплачивается
 
 
 # ── Юнит: ставка по дате (effective-dated) ────────────────────────────────────
