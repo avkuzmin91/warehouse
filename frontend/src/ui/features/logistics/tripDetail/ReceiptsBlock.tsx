@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import type { TripReceiptItem, TripReceiptLinkItem } from '../../../../api/tripsApi'
 import { RECEIPT_STATUS_LABELS, receiptStatusTone, getReceiptTripRemaining } from '../../../../api/receiptsApi'
 import type { ReceiptListItem, ReceiptStatus } from '../../../../api/receiptsApi'
-import { fmtDateShort } from '../../../../utils/format'
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import { ReceiptCard } from '../components/ReceiptCard'
@@ -149,7 +148,7 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
           onClose={() => setDrawerOpen(false)}
           tripNumber={link.tripNumber}
           tripDestination={link.tripOrigin}
-          lex={{ headerIcon: 'inbox', docsGen: 'поступления', addTitle: 'Поступления', flowLabel: 'Прибывает рейсом' }}
+          lex={{ headerIcon: 'inbox', docsGen: 'поступления', addTitle: 'Поступления', flowLabel: 'Прибывает рейсом', dateLabel: 'Плановое прибытие' }}
           linkedDocs={receipts.map((r): AllocDoc => ({
             doc_id: r.receipt_doc_id,
             client: r.client_name,
@@ -163,7 +162,7 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
             doc_number: c.doc_number,
             status_label: RECEIPT_STATUS_LABELS[c.status] ?? c.status,
             status_tone: receiptStatusTone(c.status),
-            meta: c.arrival_date ? fmtDateShort(c.arrival_date) : null,
+            date: c.arrival_date ?? null,
             sub: `${c.sku_count} SKU · ${c.total_planned} шт`,
           }))}
           fetchLines={async (docId): Promise<AllocLine[]> => {

@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import type { TripShipmentItem, TripShipmentLinkItem } from '../../../../api/tripsApi'
 import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES, getShipmentTripRemaining } from '../../../../api/shipmentsApi'
 import type { ShipmentListItem, ShipmentStatus } from '../../../../api/shipmentsApi'
-import { fmtDateShort } from '../../../../utils/format'
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import { ExpandableShipmentRow } from '../components/ExpandableShipmentRow'
@@ -151,7 +150,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
           onClose={() => setDrawerOpen(false)}
           tripNumber={link.tripNumber}
           tripDestination={link.tripDestination}
-          lex={{ headerIcon: 'boxOut', docsGen: 'отгрузки', addTitle: 'Отгрузки', flowLabel: 'Уходит в рейс' }}
+          lex={{ headerIcon: 'boxOut', docsGen: 'отгрузки', addTitle: 'Отгрузки', flowLabel: 'Уходит в рейс', dateLabel: 'Плановая отгрузка' }}
           linkedDocs={shipments.map((s): AllocDoc => ({
             doc_id: s.shipment_doc_id,
             client: s.client_name,
@@ -165,7 +164,7 @@ export function ShipmentsBlock({ title = 'Отгрузки в рейсе', right
             doc_number: c.doc_number,
             status_label: SHIPMENT_STATUS_LABELS[c.status] ?? c.status,
             status_tone: SHIPMENT_STATUS_TONES[c.status] ?? '',
-            meta: c.ship_date ? fmtDateShort(c.ship_date) : null,
+            date: c.ship_date ?? null,
             sub: `${c.sku_count} SKU · свободно ${c.total_free_qty ?? 0} шт`,
           }))}
           fetchLines={async (docId): Promise<AllocLine[]> => {

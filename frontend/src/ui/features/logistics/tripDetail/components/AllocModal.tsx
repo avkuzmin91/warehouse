@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
 import { foldCiSearch } from '../../../../../utils/foldCiSearch'
 import { colorSwatch } from '../../../../../utils/colorSwatch'
+import { fmtDateShort, fmtDateLong } from '../../../../../utils/format'
 
 /* ====================================================================== */
 /* Полноэкранный модал «Распределение по рейсу»: левый рейл документов +   */
@@ -16,8 +18,8 @@ export type AllocDoc = {
   doc_number: string | null
   status_label: string
   status_tone: string
-  /** Дата для шапки главной панели (с иконкой календаря). */
-  meta?: string | null
+  /** Плановая дата документа (ISO YYYY-MM-DD): отгрузки — дата отгрузки, поступления — прибытия. */
+  date?: string | null
   /** Подпись в пикере: «N SKU · M шт». */
   sub?: string | null
 }
@@ -47,6 +49,8 @@ export type AllocLexicon = {
   addTitle: string
   /** глагол в строке итога: «Уходит в рейс» / «Прибывает рейсом». */
   flowLabel: string
+  /** подпись плановой даты в шапке: «Плановая отгрузка» / «Плановое прибытие». */
+  dateLabel: string
 }
 
 export type AllocModalProps = {
@@ -70,6 +74,37 @@ function lineState(line: AllocLine, q: number): 'distributed' | 'over' | 'full' 
   if (q === line.max) return 'full'
   if (q > 0) return 'partial'
   return 'zero'
+}
+
+/** Сортировка документов по имени клиента, затем по номеру. */
+function byClient(a?: AllocDoc, b?: AllocDoc): number {
+  return (a?.client ?? '').localeCompare(b?.client ?? '', 'ru')
+    || (a?.doc_number ?? '').localeCompare(b?.doc_number ?? '', 'ru')
+}
+
+/** Календарная плитка плановой даты — крупный день над месяцем, акцентная полоса сверху. */
+function DateTile({ date, label }: { date: string | null | undefined; label?: string }) {
+  if (!date) return <span className="date-tile empty" title="Плановая дата не указана"><Icon name="calendar" size={15} /></span>
+  const d = new Date(date)
+  const day = d.toLocaleDateString('ru-RU', { day: 'numeric' })
+  const mon = d.toLocaleDateString('ru-RU', { month: 'short' }).replace('.', '')
+  return (
+    <span className="date-tile" title={label ? `${label}: ${fmtDateLong(date)}` : fmtDateLong(date)}>
+      <span className="date-tile-day">{day}</span>
+      <span className="date-tile-mon">{mon}</span>
+    </span>
+  )
+}
+
+/** Инлайновый чип плановой даты для шапок: иконка + подпись + дата. */
+function DateChip({ date, label, style }: { date: string; label: string; style?: CSSProperties }) {
+  return (
+    <span className="date-chip" style={style} title={`${label}: ${fmtDateLong(date)}`}>
+      <Icon name="calendar" size={12} />
+      <span className="date-chip-label">{label}</span>
+      {fmtDateShort(date)}
+    </span>
+  )
 }
 
 /* ---------------- doc chip (left rail) ---------------- */
@@ -250,7 +285,7 @@ function MainPane({ doc, lines, qty, setQty, fillAll, clearAll, query, setQuery,
           <span className="main-head-client">{doc.client ?? 'Без клиента'}</span>
           <span className="mono subtle" style={{ fontSize: 12 }}>{doc.doc_number}</span>
           <span className={`badge ${doc.status_tone}`} style={{ marginLeft: 2 }}><span className="dot" />{doc.status_label}</span>
-          {doc.meta && <span className="row" style={{ marginLeft: 'auto', gap: 6, fontSize: 12, color: 'var(--c-text-subtle)' }}><Icon name="calendar" size={11} />{doc.meta}</span>}
+          {doc.date && <DateChip date={doc.date} label={lex.dateLabel} style={{ marginLeft: 'auto' }} />}
         </div>
         <div className="main-stats">
           <div className="main-stat"><div className="main-stat-label">План</div><div className="main-stat-val">{t.plan}<span className="unit">шт</span></div></div>
@@ -281,10 +316,11 @@ function MainPane({ doc, lines, qty, setQty, fillAll, clearAll, query, setQuery,
 }
 
 /* ---------------- candidate picker ---------------- */
-function Picker({ candidates, addedIds, previewId, onHover, onCancel, onAdd }: {
+function Picker({ candidates, addedIds, previewId, dateLabel, onHover, onCancel, onAdd }: {
   candidates: AllocDoc[]
   addedIds: string[]
   previewId: string | null
+  dateLabel: string
   onHover: (id: string) => void
   onCancel: () => void
   onAdd: (ids: string[]) => void
@@ -294,8 +330,8 @@ function Picker({ candidates, addedIds, previewId, onHover, onCancel, onAdd }: {
   const avail = candidates.filter((c) => !addedIds.includes(c.doc_id))
   const filtered = useMemo(() => {
     const f = foldCiSearch(q.trim())
-    if (!f) return avail
-    return avail.filter((c) => foldCiSearch(`${c.doc_number ?? ''} ${c.client ?? ''}`).includes(f))
+    const base = f ? avail.filter((c) => foldCiSearch(`${c.doc_number ?? ''} ${c.client ?? ''}`).includes(f)) : avail
+    return [...base].sort(byClient)
   }, [avail, q])
   function toggle(id: string) { setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n }) }
   return (
@@ -323,14 +359,13 @@ function Picker({ candidates, addedIds, previewId, onHover, onCancel, onAdd }: {
             onFocus={() => onHover(c.doc_id)}
           >
             <span className="cand-cb">{sel.has(c.doc_id) && <Icon name="check" size={12} />}</span>
+            <DateTile date={c.date} label={dateLabel} />
             <span className="cand-body">
-              <span className="cand-top">
-                <span className="cand-client">{c.client ?? 'Без клиента'}</span>
-                <span className={`badge ${c.status_tone}`}><span className="dot" />{c.status_label}</span>
-              </span>
+              <span className="cand-client">{c.client ?? 'Без клиента'}</span>
               <span className="cand-sub">
                 <span className="mono">{c.doc_number}</span>
                 {c.sub && <><span>·</span><span>{c.sub}</span></>}
+                <span className={`badge ${c.status_tone}`} style={{ marginLeft: 'auto' }}><span className="dot" />{c.status_label}</span>
               </span>
             </span>
           </button>
@@ -357,10 +392,11 @@ function PreviewHint({ lex }: { lex: AllocLexicon }) {
   )
 }
 
-function PreviewPane({ doc, lines, onAdd }: {
+function PreviewPane({ doc, lines, onAdd, lex }: {
   doc: AllocDoc
   lines: AllocLine[] | undefined
   onAdd: () => void
+  lex: AllocLexicon
 }) {
   const t = useMemo(() => {
     let plan = 0, max = 0
@@ -377,7 +413,8 @@ function PreviewPane({ doc, lines, onAdd }: {
           <span className="main-head-client">{doc.client ?? 'Без клиента'}</span>
           <span className="mono subtle" style={{ fontSize: 12 }}>{doc.doc_number}</span>
           <span className={`badge ${doc.status_tone}`} style={{ marginLeft: 2 }}><span className="dot" />{doc.status_label}</span>
-          <button type="button" className="btn primary sm" style={{ marginLeft: 'auto' }} onClick={onAdd}><Icon name="plus" size={13} /> Добавить в рейс</button>
+          {doc.date && <DateChip date={doc.date} label={lex.dateLabel} style={{ marginLeft: 'auto' }} />}
+          <button type="button" className="btn primary sm" style={{ marginLeft: doc.date ? 8 : 'auto' }} onClick={onAdd}><Icon name="plus" size={13} /> Добавить в рейс</button>
         </div>
         <div className="main-stats">
           <div className="main-stat"><div className="main-stat-label">План</div><div className="main-stat-val">{t.plan}<span className="unit">шт</span></div></div>
@@ -508,6 +545,11 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
     return { q, leftover, over, skuCount: skus.size, docCount: activeDocsCnt }
   }, [addedIds, qty, linesByDoc])
 
+  const sortedAddedIds = useMemo(
+    () => [...addedIds].sort((a, b) => byClient(docMap[a], docMap[b])),
+    [addedIds, docMap],
+  )
+
   const canSubmit = tripT.over === 0 && tripT.q > 0 && !saving && !busy
 
   async function submit() {
@@ -561,18 +603,18 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
             </div>
             <div className="rail-list">
               {addedIds.length === 0 && <div className="subtle" style={{ fontSize: 12.5, padding: '8px 2px', textAlign: 'center' }}>Пусто. Добавьте документы ниже.</div>}
-              {addedIds.map((id) => (
+              {sortedAddedIds.map((id) => (
                 <DocChip key={id} doc={docMap[id]} lines={linesByDoc[id]} qty={qty} active={id === activeId} onClick={() => switchDoc(id)} onRemove={() => removeDoc(id)} />
               ))}
             </div>
             <div className="rail-foot">
               <button type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={openPicker}><Icon name="plus" size={14} /> Добавить</button>
             </div>
-            {picking && <Picker candidates={candidates} addedIds={addedIds} previewId={previewId} onHover={preview} onCancel={closePicker} onAdd={addDocs} />}
+            {picking && <Picker candidates={candidates} addedIds={addedIds} previewId={previewId} dateLabel={lex.dateLabel} onHover={preview} onCancel={closePicker} onAdd={addDocs} />}
           </div>
 
           {picking && previewId && docMap[previewId] && !addedIds.includes(previewId)
-            ? <PreviewPane doc={docMap[previewId]} lines={linesByDoc[previewId]} onAdd={() => addDocs([previewId])} />
+            ? <PreviewPane doc={docMap[previewId]} lines={linesByDoc[previewId]} onAdd={() => addDocs([previewId])} lex={lex} />
             : picking && !previewId && addedIds.length === 0
               ? <PreviewHint lex={lex} />
               : <MainPane doc={activeDoc} lines={activeLines} qty={qty} setQty={setLineQty} fillAll={fillAll} clearAll={clearAll} query={query} setQuery={setQuery} lex={lex} />}
