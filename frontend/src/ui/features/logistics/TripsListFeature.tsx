@@ -263,11 +263,11 @@ export function TripsListFeature() {
           ) : (
             dayGroups.map((g) => (
               <Fragment key={g.key}>
-                <tr className="trip-day-row">
+                <tr className="list-day-row">
                   <td colSpan={colCount}>
-                    <div className="trip-day-head">
-                      <span className="trip-day-title"><Icon name="calendar" size={14} />{g.label}</span>
-                      <span className="trip-day-counts">
+                    <div className="list-day-head">
+                      <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                      <span className="list-day-counts">
                         {g.outCount > 0 && <span style={{ color: 'var(--c-info)' }}>{g.outCount} отгр.</span>}
                         {g.outCount > 0 && g.inCount > 0 && <span className="t-sub">·</span>}
                         {g.inCount > 0 && <span style={{ color: 'var(--c-success)' }}>{g.inCount} поступл.</span>}

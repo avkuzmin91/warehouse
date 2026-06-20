@@ -1,16 +1,30 @@
+import { Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listShipmentLines, SHIPMENT_STATUS_TONES } from '../../../api/shipmentsApi'
-import type { ShipmentCargoType, ShipmentStatus } from '../../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentStatus, ShipmentLinesListItem } from '../../../api/shipmentsApi'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
-import { fmtDateShort as fmtDate } from '../../../utils/format'
+import { Icon } from '../../primitives/Icon'
+import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../utils/format'
 import { useApi } from '../../../hooks/useApi'
 
 const PAGE_SIZE = 50
+
+/** Группировка строк товаров по дате отгрузки с сохранением порядка выдачи backend. */
+function groupLinesByDay(items: ShipmentLinesListItem[]) {
+  const groups: { key: string; label: string; rows: ShipmentLinesListItem[] }[] = []
+  for (const it of items) {
+    const key = dayGroupKey(it.ship_date)
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.rows.push(it)
+    else groups.push({ key, label: dayGroupLabel(it.ship_date), rows: [it] })
+  }
+  return groups
+}
 
 type Props = {
   search?:    string
@@ -72,7 +86,17 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, carg
               <EmptyState title="Товаров нет" sub="Измените фильтры или создайте отгрузку" />
             </td></tr>
           ) : (
-            items.map((it) => (
+            groupLinesByDay(items).map((g) => (
+              <Fragment key={g.key}>
+                <tr className="list-day-row">
+                  <td colSpan={10}>
+                    <div className="list-day-head">
+                      <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                      <span className="list-day-counts"><span className="t-sub">{g.rows.length}</span></span>
+                    </div>
+                  </td>
+                </tr>
+                {g.rows.map((it) => (
               <tr
                 key={it.line_id}
                 style={{ cursor: 'pointer' }}
@@ -103,6 +127,8 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, carg
                   </Badge>
                 </Td>
               </tr>
+                ))}
+              </Fragment>
             ))
           )}
         </tbody>

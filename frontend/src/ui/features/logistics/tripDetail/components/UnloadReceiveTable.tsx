@@ -52,10 +52,13 @@ export function UnloadReceiveTable({ receipts, zones, acceptByLine, zoneByLine, 
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {a.product_sku}
-                    {a.variant ? <span style={{ color: 'var(--c-text-subtle)' }}> · {a.variant}</span> : null}
+                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {a.product_name ?? a.product_sku ?? '—'}
+                    {a.variant ? <span style={{ color: 'var(--c-text-subtle)', fontWeight: 500 }}> · {a.variant}</span> : null}
                   </div>
+                  {a.product_name && a.product_sku ? (
+                    <div className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{a.product_sku}</div>
+                  ) : null}
                   <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                     план рейса {a.qty} шт
                     {short ? <> · <span style={{ color: 'var(--c-warning)' }}>недовоз</span></> : null}

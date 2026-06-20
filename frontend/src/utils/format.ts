@@ -48,6 +48,28 @@ export function parseRublesToKopecks(input: string): number | null {
   return Math.round(n * 100)
 }
 
+/** YYYY-MM-DD (или ISO datetime) → ключ дня для группировки списков ('no-date' если пусто/некорректно). */
+export function dayGroupKey(s: string | null): string {
+  if (!s) return 'no-date'
+  const ymd = s.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : 'no-date'
+}
+
+/** Заголовок дня-разделителя в списках: "Сегодня · 20 июня · пятница". */
+export function dayGroupLabel(s: string | null, emptyLabel = 'Без даты'): string {
+  const key = dayGroupKey(s)
+  if (key === 'no-date') return emptyLabel
+  const [y, m, d] = key.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const now = new Date()
+  const todayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const diffDays = Math.round((date.getTime() - todayMs) / 86_400_000)
+  const rel = diffDays === 0 ? 'Сегодня' : diffDays === 1 ? 'Завтра' : diffDays === -1 ? 'Вчера' : null
+  const dm = date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })
+  const weekday = date.toLocaleDateString('ru-RU', { weekday: 'long' })
+  return rel ? `${rel} · ${dm} · ${weekday}` : `${dm} · ${weekday}`
+}
+
 /** Local calendar date as YYYY-MM-DD. */
 export function localTodayYmd(): string {
   const d = new Date()

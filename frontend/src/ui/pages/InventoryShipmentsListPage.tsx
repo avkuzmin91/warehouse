@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
@@ -25,7 +25,7 @@ import { Dropdown } from '../primitives/Dropdown'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
-import { fmtDateShort as fmtDate } from '../../utils/format'
+import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../utils/format'
 import { useLookups } from '../../hooks/useLookups'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
@@ -63,6 +63,18 @@ function shipmentProgress(item: ShipmentListItem) {
   const qtyReady = linesCount > 0 && (item.lines_with_shipped_qty ?? 0) === linesCount
   const zoneReady = item.cargo_type !== 'good' || (linesCount > 0 && (item.lines_with_zone ?? 0) === linesCount)
   return { pct, shippedQty, totalQty, qtyReady, zoneReady }
+}
+
+/** Группировка строк списка по дате отгрузки с сохранением порядка выдачи backend. */
+function groupShipmentsByDay(items: ShipmentListItem[]) {
+  const groups: { key: string; label: string; rows: ShipmentListItem[] }[] = []
+  for (const item of items) {
+    const key = dayGroupKey(item.ship_date)
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.rows.push(item)
+    else groups.push({ key, label: dayGroupLabel(item.ship_date), rows: [item] })
+  }
+  return groups
 }
 
 export function InventoryShipmentsListPage() {
@@ -340,7 +352,17 @@ export function InventoryShipmentsListPage() {
                   />
                 </td></tr>
               ) : (
-                items.map((item) => {
+                groupShipmentsByDay(items).map((g) => (
+                  <Fragment key={g.key}>
+                    <tr className="list-day-row">
+                      <td colSpan={9}>
+                        <div className="list-day-head">
+                          <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                          <span className="list-day-counts"><span className="t-sub">{g.rows.length}</span></span>
+                        </div>
+                      </td>
+                    </tr>
+                    {g.rows.map((item) => {
                   const overdue = isShipmentOverdue(item)
                   return (
                     <tr
@@ -427,7 +449,9 @@ export function InventoryShipmentsListPage() {
                       </Td>
                     </tr>
                   )
-                })
+                    })}
+                  </Fragment>
+                ))
               )}
             </tbody>
           </Table>
