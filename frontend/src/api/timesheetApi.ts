@@ -3,7 +3,7 @@ import { request } from './http'
 // --- Types ---
 
 export type EmployeeStatus = 'active' | 'archived'
-export type DayStatus = 'worked' | 'planned' | 'absent' | 'noplan' | 'off'
+export type DayStatus = 'worked' | 'planned' | 'absent' | 'noplan' | 'not_called' | 'off'
 export type PayKind = 'settlement' | 'advance'
 
 export type CompType = 'hourly' | 'fixed'
@@ -88,6 +88,7 @@ export type WeekCell = {
   actual_start: string | null
   actual_end: string | null
   is_absent: boolean
+  not_called: boolean
   hours: number
   note: string | null
 }
@@ -137,6 +138,7 @@ export type EntryDetail = {
   actual_start: string | null
   actual_end: string | null
   is_absent: boolean
+  not_called: boolean
   status: DayStatus
   hours: number
   note: string | null
@@ -151,6 +153,7 @@ export type EntryUpsertPayload = {
   actual_start?: string | null
   actual_end?: string | null
   is_absent?: boolean
+  not_called?: boolean
   note?: string | null
 }
 
@@ -159,6 +162,7 @@ export type DayFactItem = {
   actual_start?: string | null
   actual_end?: string | null
   is_absent?: boolean
+  not_called?: boolean
   note?: string | null
 }
 
@@ -345,6 +349,7 @@ export const DAY_STATUS_LABELS: Record<DayStatus, string> = {
   planned: 'Запланирован',
   absent: 'Не вышел',
   noplan: 'Без плана',
+  not_called: 'Не вызван',
   off: 'Выходной',
 }
 
@@ -353,6 +358,7 @@ export const DAY_STATUS_TONE: Record<DayStatus, string> = {
   planned: 'info',
   absent: 'danger',
   noplan: 'warning',
+  not_called: '',
   off: '',
 }
 

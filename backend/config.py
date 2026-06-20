@@ -567,32 +567,38 @@ EMPLOYEE_COMP_LABELS: dict[str, str] = {
     EMPLOYEE_COMP_FIXED:  "Оклад (фикс)",
 }
 
-# Статус дня (производный, для UI). Хранится только is_absent; остальное считается.
-#   worked  — есть факт по плану
-#   planned — план есть, факта нет, день не закрыт (сегодня/будущее)
-#   absent  — «не вышел» (план был, факта нет на прошедший день или отмечено явно)
-#   noplan  — факт есть, плана не было
-#   off     — выходной / нет записи
-TIMESHEET_DAY_WORKED  = "worked"
-TIMESHEET_DAY_PLANNED = "planned"
-TIMESHEET_DAY_ABSENT  = "absent"
-TIMESHEET_DAY_NOPLAN  = "noplan"
-TIMESHEET_DAY_OFF     = "off"
+# Статус дня (производный, для UI). Хранятся is_absent и not_called; остальное считается.
+#   worked     — есть факт по плану
+#   planned    — план есть, факта нет, день не закрыт (сегодня/будущее)
+#   absent     — «не вышел» (план был, факта нет на прошедший день или отмечено явно)
+#   noplan     — факт есть, плана не было
+#   not_called — «не вызван»: склад намеренно не вывел сотрудника (нет товара и т.п.),
+#                не прогул и не оплачивается; план может сохраняться
+#   off        — выходной / нет записи
+TIMESHEET_DAY_WORKED     = "worked"
+TIMESHEET_DAY_PLANNED    = "planned"
+TIMESHEET_DAY_ABSENT     = "absent"
+TIMESHEET_DAY_NOPLAN     = "noplan"
+TIMESHEET_DAY_NOT_CALLED = "not_called"
+TIMESHEET_DAY_OFF        = "off"
 TIMESHEET_DAY_LABELS: dict[str, str] = {
-    TIMESHEET_DAY_WORKED:  "Отработал",
-    TIMESHEET_DAY_PLANNED: "Запланирован",
-    TIMESHEET_DAY_ABSENT:  "Не вышел",
-    TIMESHEET_DAY_NOPLAN:  "Без плана",
-    TIMESHEET_DAY_OFF:     "Выходной",
+    TIMESHEET_DAY_WORKED:     "Отработал",
+    TIMESHEET_DAY_PLANNED:    "Запланирован",
+    TIMESHEET_DAY_ABSENT:     "Не вышел",
+    TIMESHEET_DAY_NOPLAN:     "Без плана",
+    TIMESHEET_DAY_NOT_CALLED: "Не вызван",
+    TIMESHEET_DAY_OFF:        "Выходной",
 }
 
 # Типы операций журнала табеля (append-only)
-TIMESHEET_OP_PLAN_SET     = "plan_set"
-TIMESHEET_OP_FACT_SET     = "fact_set"
-TIMESHEET_OP_ABSENT_MARK  = "absent_mark"
-TIMESHEET_OP_ABSENT_CLEAR = "absent_clear"
-TIMESHEET_OP_NOTE         = "note"
-TIMESHEET_OP_CLEARED      = "cleared"
+TIMESHEET_OP_PLAN_SET         = "plan_set"
+TIMESHEET_OP_FACT_SET         = "fact_set"
+TIMESHEET_OP_ABSENT_MARK      = "absent_mark"
+TIMESHEET_OP_ABSENT_CLEAR     = "absent_clear"
+TIMESHEET_OP_NOT_CALLED_MARK  = "not_called_mark"
+TIMESHEET_OP_NOT_CALLED_CLEAR = "not_called_clear"
+TIMESHEET_OP_NOTE             = "note"
+TIMESHEET_OP_CLEARED          = "cleared"
 
 # Типы выплат
 PAYROLL_KIND_SETTLEMENT = "settlement"   # пятничный расчёт за неделю

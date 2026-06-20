@@ -20,6 +20,8 @@ from config import (
     TIMESHEET_OP_ABSENT_CLEAR,
     TIMESHEET_OP_ABSENT_MARK,
     TIMESHEET_OP_FACT_SET,
+    TIMESHEET_OP_NOT_CALLED_CLEAR,
+    TIMESHEET_OP_NOT_CALLED_MARK,
     TIMESHEET_OP_NOTE,
     TIMESHEET_OP_PLAN_SET,
 )
@@ -514,6 +516,7 @@ def get_entry(
         actual_start=entry.get("actual_start") if entry else None,
         actual_end=entry.get("actual_end") if entry else None,
         is_absent=bool(entry.get("is_absent")) if entry else False,
+        not_called=bool(entry.get("not_called")) if entry else False,
         status=day_status(entry, work_date, today_iso),
         hours=entry_hours(entry),
         note=entry.get("note") if entry else None,
@@ -532,7 +535,11 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
     fs = _time_or_none(body.actual_start, "Факт · приход")
     fe = _time_or_none(body.actual_end, "Факт · уход")
     note = _clean(body.note)
-    absent = 1 if body.is_absent else 0
+    not_called = 1 if body.not_called else 0
+    # «Не вызван» и «не вышел» взаимоисключающие; простой обнуляет факт и невыход.
+    absent = 0 if not_called else (1 if body.is_absent else 0)
+    if not_called:
+        fs = fe = None
     if (fs or fe or absent) and work_date > business_today().isoformat():
         raise HTTPException(status_code=400, detail="Нельзя внести факт за ненаступивший день")
     uid = str(user["id"])
@@ -549,10 +556,11 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
         # Факт за день, по которому прошёл расчёт, менять нельзя (план/примечание — можно).
         if is_fact_locked(conn, body.employee_id, work_date):
             if row is None:
-                fact_changed = bool(fs or fe or absent)
+                fact_changed = bool(fs or fe or absent or not_called)
             else:
                 fact_changed = (fs, fe) != (row["actual_start"], row["actual_end"]) \
-                    or absent != int(row["is_absent"] or 0)
+                    or absent != int(row["is_absent"] or 0) \
+                    or not_called != int(row["not_called"] or 0)
             if fact_changed:
                 raise HTTPException(status_code=400, detail=_FACT_LOCKED_MSG)
 
@@ -560,9 +568,9 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
             entry_id = str(uuid4())
             conn.execute(
                 "INSERT INTO timesheet_entries "
-                "(id,employee_id,work_date,planned_start,planned_end,actual_start,actual_end,is_absent,note,created_at,created_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (entry_id, body.employee_id, work_date, ps, pe, fs, fe, absent, note, now, uid),
+                "(id,employee_id,work_date,planned_start,planned_end,actual_start,actual_end,is_absent,not_called,note,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (entry_id, body.employee_id, work_date, ps, pe, fs, fe, absent, not_called, note, now, uid),
             )
             if ps and pe:
                 _op(conn, entry_id, TIMESHEET_OP_PLAN_SET, f"План: {ps}–{pe}", uid, now)
@@ -570,6 +578,8 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
                 _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт: {fs}–{fe}", uid, now)
             if absent:
                 _op(conn, entry_id, TIMESHEET_OP_ABSENT_MARK, "Отмечен «не вышел»", uid, now)
+            if not_called:
+                _op(conn, entry_id, TIMESHEET_OP_NOT_CALLED_MARK, "Отмечен «не вызван»", uid, now)
             if note:
                 _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note}»", uid, now)
         else:
@@ -589,13 +599,17 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
                 _op(conn, entry_id,
                     TIMESHEET_OP_ABSENT_MARK if absent else TIMESHEET_OP_ABSENT_CLEAR,
                     "Отмечен «не вышел»" if absent else "Снят «не вышел»", uid, now)
+            if not_called != int(old.get("not_called") or 0):
+                _op(conn, entry_id,
+                    TIMESHEET_OP_NOT_CALLED_MARK if not_called else TIMESHEET_OP_NOT_CALLED_CLEAR,
+                    "Отмечен «не вызван»" if not_called else "Снят «не вызван»", uid, now)
             if note != old.get("note"):
                 _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note or ''}»", uid, now)
 
             conn.execute(
                 "UPDATE timesheet_entries SET planned_start=?,planned_end=?,actual_start=?,actual_end=?,"
-                "is_absent=?,note=?,updated_at=? WHERE id=?",
-                (ps, pe, fs, fe, absent, note, now, entry_id),
+                "is_absent=?,not_called=?,note=?,updated_at=? WHERE id=?",
+                (ps, pe, fs, fe, absent, not_called, note, now, entry_id),
             )
         conn.commit()
     return {"message": "ok"}
@@ -623,6 +637,8 @@ def fill_fact(body: FillFactRequest, user=Depends(_get_timesheet)):
             if emp_id in settled:  # неделя закрыта расчётом — факт не трогаем
                 continue
             if day_iso > today_iso:  # факт за ненаступивший день не проставляем
+                continue
+            if int(entry.get("not_called") or 0) == 1:  # простой — факт по плану не проставляем
                 continue
             ps, pe = entry.get("planned_start"), entry.get("planned_end")
             entry_id = str(entry["id"])
@@ -684,9 +700,10 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
                 "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (emp_id,)
             ).fetchone():
                 continue
-            absent = 1 if item.is_absent else 0
-            fs = None if absent else _time_or_none(item.actual_start, "Факт · приход")
-            fe = None if absent else _time_or_none(item.actual_end, "Факт · уход")
+            not_called = 1 if item.not_called else 0
+            absent = 0 if not_called else (1 if item.is_absent else 0)
+            fs = None if (absent or not_called) else _time_or_none(item.actual_start, "Факт · приход")
+            fe = None if (absent or not_called) else _time_or_none(item.actual_end, "Факт · уход")
             note = _clean(item.note)
             row = conn.execute(
                 "SELECT * FROM timesheet_entries "
@@ -695,19 +712,21 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
             ).fetchone()
 
             if row is None:
-                if not (fs and fe) and not absent and note is None:
+                if not (fs and fe) and not absent and not not_called and note is None:
                     continue
                 entry_id = str(uuid4())
                 conn.execute(
                     "INSERT INTO timesheet_entries "
-                    "(id,employee_id,work_date,actual_start,actual_end,is_absent,note,created_at,created_by) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    (entry_id, emp_id, work_date, fs, fe, absent, note, now, uid),
+                    "(id,employee_id,work_date,actual_start,actual_end,is_absent,not_called,note,created_at,created_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (entry_id, emp_id, work_date, fs, fe, absent, not_called, note, now, uid),
                 )
                 if fs and fe:
                     _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт: {fs}–{fe}", uid, now)
                 if absent:
                     _op(conn, entry_id, TIMESHEET_OP_ABSENT_MARK, "Отмечен «не вышел»", uid, now)
+                if not_called:
+                    _op(conn, entry_id, TIMESHEET_OP_NOT_CALLED_MARK, "Отмечен «не вызван»", uid, now)
                 if note:
                     _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note}»", uid, now)
                 saved += 1
@@ -724,6 +743,11 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
                         TIMESHEET_OP_ABSENT_MARK if absent else TIMESHEET_OP_ABSENT_CLEAR,
                         "Отмечен «не вышел»" if absent else "Снят «не вышел»", uid, now)
                     changed = True
+                if not_called != int(old.get("not_called") or 0):
+                    _op(conn, entry_id,
+                        TIMESHEET_OP_NOT_CALLED_MARK if not_called else TIMESHEET_OP_NOT_CALLED_CLEAR,
+                        "Отмечен «не вызван»" if not_called else "Снят «не вызван»", uid, now)
+                    changed = True
                 # Примечание правим только если прислано — пустое не затирает существующее.
                 if note is not None and note != old.get("note"):
                     _op(conn, entry_id, TIMESHEET_OP_NOTE, f"Примечание: «{note}»", uid, now)
@@ -731,8 +755,8 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
                 if changed:
                     new_note = note if note is not None else old.get("note")
                     conn.execute(
-                        "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=?,note=?,updated_at=? WHERE id=?",
-                        (fs, fe, absent, new_note, now, entry_id),
+                        "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=?,not_called=?,note=?,updated_at=? WHERE id=?",
+                        (fs, fe, absent, not_called, new_note, now, entry_id),
                     )
                     saved += 1
         conn.commit()

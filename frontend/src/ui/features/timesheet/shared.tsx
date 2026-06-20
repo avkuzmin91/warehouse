@@ -198,5 +198,6 @@ export const CELL_TONE: Record<DayStatus, { line: string; bg: string }> = {
   planned: { line: 'var(--c-info)', bg: 'color-mix(in oklab, var(--c-info) 6%, transparent)' },
   absent: { line: 'var(--c-danger)', bg: 'color-mix(in oklab, var(--c-danger) 7%, transparent)' },
   noplan: { line: 'var(--c-warning)', bg: 'color-mix(in oklab, var(--c-warning) 8%, transparent)' },
+  not_called: { line: 'var(--c-text-faint)', bg: 'color-mix(in oklab, var(--c-text-faint) 10%, transparent)' },
   off: { line: 'transparent', bg: 'transparent' },
 }

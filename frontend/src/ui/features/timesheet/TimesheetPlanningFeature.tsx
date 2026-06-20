@@ -46,13 +46,14 @@ export function TimesheetPlanningFeature() {
   )
   const reload = () => setTick((t) => t + 1)
 
-  // Базовый payload сохраняет факт/примечание/невыход — планирование меняет только смену.
+  // Базовый payload сохраняет факт/примечание/невыход/простой — планирование меняет только смену.
   const base = (employeeId: string, cell: WeekCell) => ({
     employee_id: employeeId,
     work_date: cell.date,
     actual_start: cell.actual_start,
     actual_end: cell.actual_end,
     is_absent: cell.status === 'absent',
+    not_called: cell.not_called,
     note: cell.note,
   })
 
@@ -168,7 +169,7 @@ export function TimesheetPlanningFeature() {
             <MiniStat icon="userX" label="Дни с нехваткой" value={understaffed ? `${understaffed} дн.` : 'нет'} tone={understaffed ? 'danger' : undefined} />
           </div>
 
-          <div className="t-wrap" style={{ overflow: editing ? 'visible' : 'hidden', position: 'relative' }}>
+          <div className="t-wrap t-sticky" style={{ overflow: editing ? 'visible' : 'clip', position: 'relative' }}>
             <table className="t" style={{ width: '100%', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: 250 }} />
