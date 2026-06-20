@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getProduct, getProductVariants } from '../../../api/adminApi'
+import { deleteProduct, getProduct, getProductVariants } from '../../../api/adminApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { Table, Td } from '../../data/Table'
 import { DetailPage } from '../../layouts/DetailPage'
 import { Modal } from '../../feedback/Modal'
+import { useConfirm } from '../../feedback/ConfirmDialog'
+import { useToast } from '../../feedback/Toast'
 import { Badge } from '../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../primitives/Card'
 import { EmptyState } from '../../primitives/EmptyState'
@@ -36,6 +39,10 @@ function MetricTile({ label, value, color }: { label: string; value: number; col
 
 export function ProductViewFeature({ productId }: Props) {
   const navigate = useNavigate()
+  const confirm = useConfirm()
+  const toast = useToast()
+  const { user } = useCurrentUser()
+  const isAdmin = user?.role === 'admin'
   const productState = useApi((signal) => getProduct(productId, signal), [productId])
   const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId])
   const product = productState.data
@@ -43,6 +50,28 @@ export function ProductViewFeature({ productId }: Props) {
 
   const [mainIdx, setMainIdx] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  async function handleDelete() {
+    if (!product) return
+    const ok = await confirm({
+      title: 'Удалить товар?',
+      body: `Товар «${product.name}» будет удалён без возможности восстановления. Удаление возможно, только если товар не использовался в поступлениях и никогда не был на остатках.`,
+      danger: true,
+      confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    setDeleting(true)
+    try {
+      await deleteProduct(productId)
+      toast('Товар удалён', 'success')
+      navigate('/dictionaries/products')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось удалить товар', 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const images = product?.image_urls ?? []
   const mainImage = images[mainIdx] ?? images[0] ?? null
@@ -64,6 +93,11 @@ export function ProductViewFeature({ productId }: Props) {
         product ? (
           <>
             <Badge tone={product.is_active ? 'success' : ''}>{product.is_active ? 'Активен' : 'Архив'}</Badge>
+            {isAdmin && (
+              <button className="btn ghost danger" onClick={handleDelete} disabled={deleting}>
+                <Icon name="trash" size={14} />Удалить
+              </button>
+            )}
             <button className="btn primary" onClick={() => navigate(`/dictionaries/products/${productId}/edit`)}>
               <Icon name="edit" size={14} />Редактировать
             </button>

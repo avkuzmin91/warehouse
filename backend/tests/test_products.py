@@ -174,6 +174,156 @@ def test_product_sku_stays_unique_inside_client_on_update(admin_client):
             conn.commit()
 
 
+def test_delete_product_succeeds_when_never_used(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-del-{suffix}"
+    client_id = f"client-del-{suffix}"
+    product_id = f"product-del-{suffix}"
+    variant_id = f"variant-del-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type Del {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Del {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_id, f"Product Del {suffix}", type_id, client_id, f"DEL-SKU-{suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO product_variants (id, product_id, length, width, height, sku, created_at) VALUES (?, ?, 0, 0, 0, ?, NOW())",
+            (variant_id, product_id, f"DEL-VAR-{suffix}"),
+        )
+        conn.commit()
+
+    try:
+        res = admin_client.delete(f"/products/{product_id}")
+        assert res.status_code == 200, res.text
+        with get_connection() as conn:
+            assert conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone() is None
+            assert conn.execute("SELECT 1 FROM product_variants WHERE id = ?", (variant_id,)).fetchone() is None
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_delete_product_blocked_when_used_in_receipts(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-delr-{suffix}"
+    client_id = f"client-delr-{suffix}"
+    product_id = f"product-delr-{suffix}"
+    doc_id = f"rdoc-delr-{suffix}"
+    line_id = f"rline-delr-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type DelR {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client DelR {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_id, f"Product DelR {suffix}", type_id, client_id, f"DELR-SKU-{suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO receipt_docs (id, doc_number, client_id, status, created_at) VALUES (?, ?, ?, 'draft', NOW())",
+            (doc_id, f"WH-DELR-{suffix}", client_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO receipt_lines
+                (id, doc_id, product_id, product_name, product_sku, planned_qty, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, NOW())
+            """,
+            (line_id, doc_id, product_id, f"Product DelR {suffix}", f"DELR-SKU-{suffix}"),
+        )
+        conn.commit()
+
+    try:
+        res = admin_client.delete(f"/products/{product_id}")
+        assert res.status_code == 409, res.text
+        assert "поступления" in res.json()["detail"]
+        with get_connection() as conn:
+            assert conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone() is not None
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM receipt_lines WHERE id = ?", (line_id,))
+            conn.execute("DELETE FROM receipt_docs WHERE id = ?", (doc_id,))
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_delete_product_forbidden_for_non_admin(manager_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-delm-{suffix}"
+    client_id = f"client-delm-{suffix}"
+    product_id = f"product-delm-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type DelM {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client DelM {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_id, f"Product DelM {suffix}", type_id, client_id, f"DELM-SKU-{suffix}"),
+        )
+        conn.commit()
+
+    try:
+        res = manager_client.delete(f"/products/{product_id}")
+        assert res.status_code == 403, res.text
+        with get_connection() as conn:
+            assert conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone() is not None
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
 def test_product_items_per_pallet_roundtrip(admin_client):
     suffix = uuid.uuid4().hex[:10]
     type_id = f"ptype-pallet-{suffix}"
