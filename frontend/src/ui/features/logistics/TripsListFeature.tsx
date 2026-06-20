@@ -1,4 +1,5 @@
-import { Fragment, useMemo } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { getTrips, tripStatusLabel, tripStatusTone } from '../../../api/tripsApi'
 import type { TripListItem, TripStatus, TripDirection } from '../../../api/tripsApi'
@@ -48,14 +49,87 @@ function TimeCell({ eta }: { eta: string | null }) {
   return <span className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
 }
 
-/** Клиенты рейса: первый + «+N» при нескольких; полный список — в title. */
+/** Клиенты рейса: первый + пилюля «+N» при нескольких; полный список — карточкой-списком при наведении.
+ *  Список рендерится в портал с position:fixed — иначе overflow:hidden у .t-wrap срезает поповер. */
 function ClientsCell({ names }: { names: string[] }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+
   if (!names || names.length === 0) return <>—</>
-  if (names.length === 1) return <span title={names[0]}>{names[0]}</span>
+  if (names.length === 1) {
+    return <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names[0]}</span>
+  }
+
+  const open = () => {
+    const el = ref.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - 288))
+    const placeAbove = window.innerHeight - r.bottom < 220
+    setPos(placeAbove
+      ? { left, bottom: window.innerHeight - r.top + 6 }
+      : { left, top: r.bottom + 6 })
+  }
+
   return (
-    <span title={names.join(', ')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    <span
+      ref={ref}
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}
+      onMouseEnter={open}
+      onMouseLeave={() => setPos(null)}
+    >
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names[0]}</span>
-      <span className="num" style={{ flexShrink: 0 }}>+{names.length - 1}</span>
+      <span style={{
+        flexShrink: 0,
+        fontSize: 11,
+        fontWeight: 600,
+        lineHeight: 1.4,
+        padding: '1px 6px',
+        borderRadius: 999,
+        background: 'var(--c-bg-sunken)',
+        color: 'var(--c-text-subtle)',
+      }}>+{names.length - 1}</span>
+      {pos && createPortal(
+        <div style={{
+          position: 'fixed',
+          left: pos.left,
+          top: pos.top,
+          bottom: pos.bottom,
+          zIndex: 80,
+          minWidth: 180,
+          maxWidth: 280,
+          padding: '6px 0',
+          background: 'var(--c-bg-elev)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-2)',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            padding: '2px 12px 6px',
+            fontSize: 10.5,
+            fontWeight: 600,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+            color: 'var(--c-text-subtle)',
+          }}>Клиенты · {names.length}</div>
+          {names.map((n, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '3px 12px',
+              fontSize: 12.5,
+              color: 'var(--c-text)',
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ width: 4, height: 4, borderRadius: 999, background: 'var(--c-text-subtle)', flexShrink: 0 }} />
+              {n}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
     </span>
   )
 }
