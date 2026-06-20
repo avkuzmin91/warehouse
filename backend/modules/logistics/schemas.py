@@ -204,6 +204,7 @@ class TripListItem(BaseModel):
     logistics_cost_actual: float | None = None
     created_at: str
     receipts_count: int = 0
+    items_qty: int = 0
 
 
 class TripListResponse(BaseModel):

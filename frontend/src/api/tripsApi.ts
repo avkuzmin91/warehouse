@@ -134,6 +134,7 @@ export type TripListItem = {
   logistics_cost_actual: number | null
   created_at: string
   receipts_count: number
+  items_qty: number
 }
 
 export type TripListResponse = {

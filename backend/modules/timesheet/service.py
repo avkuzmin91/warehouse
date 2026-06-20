@@ -218,6 +218,36 @@ def load_payments_period(connection, start_iso: str, end_iso: str) -> dict[str, 
     return out
 
 
+# ── Закрытие недели расчётом (блокировка факта) ───────────────────────────────
+
+def settled_employee_ids(connection, week_start_iso: str, week_end_iso: str) -> set[str]:
+    """ID сотрудников, по которым за расчётную неделю уже проведён расчёт (settlement).
+    Факт за такую неделю менять нельзя — суммы посчитаны и выплачены."""
+    rows = connection.execute(
+        "SELECT DISTINCT employee_id FROM payroll_payments "
+        "WHERE kind = ? AND COALESCE(is_deleted, 0) = 0 "
+        "AND period_start = ? AND period_end = ?",
+        (PAYROLL_KIND_SETTLEMENT, week_start_iso, week_end_iso),
+    ).fetchall()
+    return {str(r["employee_id"]) for r in rows}
+
+
+def settled_ids_for_date(connection, work_date: str) -> set[str]:
+    """ID сотрудников с проведённым расчётом за расчётную неделю, в которую попадает день."""
+    try:
+        d = date.fromisoformat(work_date[:10])
+    except ValueError:
+        return set()
+    sat = week_start_for(d)
+    fri = sat + timedelta(days=6)
+    return settled_employee_ids(connection, sat.isoformat(), fri.isoformat())
+
+
+def is_fact_locked(connection, employee_id: str, work_date: str) -> bool:
+    """Факт за день закрыт, если по расчётной неделе этого дня уже проведён расчёт."""
+    return employee_id in settled_ids_for_date(connection, work_date)
+
+
 # ── Производные числа за неделю по сотруднику ─────────────────────────────────
 
 def week_stats(
@@ -279,6 +309,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids) if with_money else {}
+    settled = settled_employee_ids(connection, sat.isoformat(), fri.isoformat())
 
     day_meta = [
         {
@@ -331,6 +362,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
             "worked_days": s["worked_days"],
             "absent": s["absent"],
             "earned": s["earned"] if with_money else None,
+            "fact_locked": e["id"] in settled,
         }
         rows.append(row)
 

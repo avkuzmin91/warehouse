@@ -1,12 +1,12 @@
+import { Fragment, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getTrips, tripStatusLabel, tripStatusTone } from '../../../api/tripsApi'
 import type { TripListItem, TripStatus, TripDirection } from '../../../api/tripsApi'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
-import { FilterSelect } from '../../data/FiltersBar'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../../data/FiltersBar'
 import { DateRange } from '../../data/DateRange'
 import { Pagination } from '../../data/Pagination'
-import { KPI } from '../../primitives/KPI'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { Dropdown } from '../../primitives/Dropdown'
@@ -21,9 +21,6 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
-const ACTIVE: TripStatus[] = ['draft', 'awaiting_arrival', 'unloading', 'costing']
-const IN_QUEUE: TripStatus[] = ['awaiting_arrival', 'unloading']
-
 const TYPE_OPTIONS: { value: '' | TripDirection; label: string }[] = [
   { value: '', label: 'Все типы' },
   { value: 'inbound', label: 'Поступление' },
@@ -31,45 +28,24 @@ const TYPE_OPTIONS: { value: '' | TripDirection; label: string }[] = [
 ]
 
 const GROUPS: { id: string; label: string; statuses: TripStatus[] }[] = [
-  { id: 'all', label: 'Все', statuses: [] },
+  { id: 'all', label: 'Все статусы', statuses: [] },
   { id: 'draft', label: 'Черновики', statuses: ['draft'] },
   { id: 'warehouse', label: 'На складе', statuses: ['awaiting_arrival', 'unloading'] },
   { id: 'costing', label: 'Уточнение', statuses: ['costing'] },
   { id: 'closed', label: 'Закрыты', statuses: ['closed', 'cancelled'] },
 ]
 
+const STATUS_OPTIONS = GROUPS.map((g) => ({ value: g.id === 'all' ? '' : g.id, label: g.label }))
+
 function fmtMoney(v: number | null | undefined): string {
   return v == null ? '—' : v.toLocaleString('ru-RU')
 }
 
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        height: 30, padding: '0 14px', borderRadius: 99, cursor: 'pointer', fontFamily: 'inherit',
-        border: `1px solid ${active ? 'transparent' : 'var(--c-border-strong)'}`,
-        background: active ? 'var(--c-accent-bg)' : 'transparent',
-        color: active ? 'var(--c-accent-text)' : 'var(--c-text-muted)',
-        fontSize: 12.5, fontWeight: 500,
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function EtaCell({ eta }: { eta: string | null }) {
+function TimeCell({ eta }: { eta: string | null }) {
   if (!eta) return <span className="t-sub">—</span>
   const d = new Date(eta)
   if (Number.isNaN(d.getTime())) return <span className="mono">{eta}</span>
-  return (
-    <div style={{ lineHeight: 1.3 }}>
-      <div className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}</div>
-      <div className="t-sub mono" style={{ fontSize: 11 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</div>
-    </div>
-  )
+  return <span className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
 }
 
 function tripDirection(direction: string | null | undefined): TripDirection {
@@ -79,23 +55,65 @@ function tripDirection(direction: string | null | undefined): TripDirection {
 function TypeBadge({ direction }: { direction: string | null | undefined }) {
   const outbound = tripDirection(direction) === 'outbound'
   return (
-    <Badge
-      style={{
-        background: 'var(--c-bg-sunken)',
-        borderColor: 'var(--c-border)',
-        color: 'var(--c-text-muted)',
-      }}
-    >
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-        <Icon
-          name={outbound ? 'truckOut' : 'truckIn'}
-          size={16}
-          style={{ color: outbound ? 'var(--c-info)' : 'var(--c-success)' }}
-        />
-        {outbound ? 'Отгрузка' : 'Поступление'}
-      </span>
+    <Badge tone={outbound ? 'info' : 'success'}>
+      <Icon name={outbound ? 'arrowUp' : 'arrowDown'} size={13} />
+      {outbound ? 'Отгрузка' : 'Поступление'}
     </Badge>
   )
+}
+
+type TripDayGroup = {
+  key: string
+  label: string
+  outCount: number
+  inCount: number
+  rows: TripListItem[]
+}
+
+function startOfDayMs(d: Date): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+function dayKeyOf(eta: string | null): string {
+  if (!eta) return 'no-date'
+  const d = new Date(eta)
+  if (Number.isNaN(d.getTime())) return 'no-date'
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+function dayLabelOf(eta: string | null, today: number): string {
+  if (!eta) return 'Без плановой даты'
+  const d = new Date(eta)
+  if (Number.isNaN(d.getTime())) return 'Без плановой даты'
+  const diffDays = Math.round((startOfDayMs(d) - today) / 86_400_000)
+  const rel = diffDays === 0 ? 'Сегодня' : diffDays === 1 ? 'Завтра' : diffDays === -1 ? 'Вчера' : null
+  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })
+  const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long' })
+  return rel ? `${rel} · ${date} · ${weekday}` : `${date} · ${weekday}`
+}
+
+/** Группировка рейсов по плановому дню; внутри дня — сначала отгрузки, затем поступления.
+ *  Порядок дней наследуется из выдачи backend (eta DESC, no-date в конце). */
+function groupTripsByDay(trips: TripListItem[], today: number): TripDayGroup[] {
+  const map = new Map<string, TripDayGroup>()
+  for (const t of trips) {
+    const key = dayKeyOf(t.eta)
+    let g = map.get(key)
+    if (!g) {
+      g = { key, label: dayLabelOf(t.eta, today), outCount: 0, inCount: 0, rows: [] }
+      map.set(key, g)
+    }
+    if (tripDirection(t.direction) === 'outbound') g.outCount += 1
+    else g.inCount += 1
+    g.rows.push(t)
+  }
+  for (const g of map.values()) {
+    g.rows = [
+      ...g.rows.filter((r) => tripDirection(r.direction) === 'outbound'),
+      ...g.rows.filter((r) => tripDirection(r.direction) !== 'outbound'),
+    ]
+  }
+  return [...map.values()]
 }
 
 export function TripsListFeature() {
@@ -105,6 +123,7 @@ export function TripsListFeature() {
   const showCosts = canViewCosts(user)
   const canCreate = canCreateDocuments(user)
 
+  const [search, setSearch] = useFilterParam('search', '')
   const [typeRaw, setType] = useFilterParam('type', '')
   const typeFilter: '' | TripDirection = typeRaw === 'outbound' || typeRaw === 'inbound' ? typeRaw : ''
   const [group, setGroup] = useFilterParam('group', 'all')
@@ -124,17 +143,16 @@ export function TripsListFeature() {
       direction: typeFilter || undefined,
       statuses,
       carrier_id: carrier || undefined,
+      search: search.trim() || undefined,
       eta_from: from || undefined,
       eta_to: to || undefined,
     }, signal),
-    [typeFilter, group, carrier, from, to, page],
+    [typeFilter, group, carrier, search, from, to, page],
   )
   const trips: TripListItem[] = data?.items ?? []
   const total = data?.total ?? 0
-  const colCount = showCosts ? 9 : 7
-
-  const { data: activeData } = useApi((signal) => getTrips({ direction: typeFilter || undefined, statuses: ACTIVE, limit: 1 }, signal), [typeFilter])
-  const { data: queueData } = useApi((signal) => getTrips({ direction: typeFilter || undefined, statuses: IN_QUEUE, limit: 1 }, signal), [typeFilter])
+  const colCount = showCosts ? 10 : 8
+  const dayGroups = useMemo(() => groupTripsByDay(trips, startOfDayMs(new Date())), [trips])
 
   return (
     <ListPage
@@ -169,19 +187,26 @@ export function TripsListFeature() {
         />
         ) : undefined
       }
-    >
-      <div className="kpi-grid" style={{ marginBottom: 16 }}>
-        <KPI label="Активных рейсов" value={activeData ? activeData.total : '…'} />
-        <KPI label="В очереди склада" value={queueData ? queueData.total : '…'} />
-        <KPI label="Простой за период" value="—" />
-        <KPI label="Ср. обработка" value="—" />
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-        {GROUPS.map((g) => (
-          <Chip key={g.id} active={group === g.id} onClick={() => setGroup(g.id)}>{g.label}</Chip>
-        ))}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+      filters={
+        <FiltersBar>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
+            <input
+              className="input sm"
+              style={{ paddingLeft: 28, width: 240, paddingRight: search ? 26 : undefined }}
+              placeholder="Номер, маршрут, SKU, товар…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => setSearch('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
+          </div>
           <FilterSelect
             label="Тип"
             value={typeFilter}
@@ -189,10 +214,17 @@ export function TripsListFeature() {
             onChange={(v) => setType(v)}
           />
           <FilterSelect
+            label="Статус"
+            value={group === 'all' ? '' : group}
+            options={STATUS_OPTIONS}
+            onChange={(v) => setGroup(v || 'all')}
+          />
+          <FilterCombobox
             label="Перевозчик"
             value={carrier}
             options={[{ value: '', label: 'Все перевозчики' }, ...carriers.map((c) => ({ value: c.id, label: c.name }))]}
             onChange={(v) => setCarrier(v)}
+            placeholder="Поиск перевозчика…"
           />
           <DateRange
             from={from} to={to}
@@ -200,19 +232,25 @@ export function TripsListFeature() {
             onToChange={(v) => setTo(v)}
             onClear={() => setMany({ from: '', to: '' })}
           />
-        </div>
-      </div>
-
+          {(typeFilter || carrier || from || to || search || group !== 'all') && (
+            <button className="btn ghost sm" onClick={() => setMany({ type: '', carrier: '', from: '', to: '', search: '', group: '' })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
+        </FiltersBar>
+      }
+    >
       <Table>
         <thead>
           <tr>
             <th style={{ width: 130 }}>Тип</th>
             <th style={{ width: 120 }}>Номер</th>
+            <th style={{ width: 90 }}>Время</th>
             <th style={{ width: 170 }}>Статус</th>
             <th>Маршрут</th>
             <th style={{ width: 160 }}>Перевозчик</th>
             <th style={{ textAlign: 'right', width: 90 }}>Строки</th>
-            <th style={{ width: 130 }}>План</th>
+            <th style={{ textAlign: 'right', width: 90 }}>Товар</th>
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>}
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>Факт ₽</th>}
           </tr>
@@ -223,34 +261,46 @@ export function TripsListFeature() {
           ) : trips.length === 0 ? (
             <tr><td colSpan={colCount}><EmptyState title="Рейсов нет" sub={group === 'all' ? 'Создайте первый рейс' : undefined} /></td></tr>
           ) : (
-            trips.map((t) => {
-              const direction = tripDirection(t.direction)
-              return (
-                <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
-                  <Td><TypeBadge direction={direction} /></Td>
-                  <Td className="mono" style={{ fontWeight: 500 }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      {t.trip_number}
-                      {direction === 'outbound' && t.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
-                    </span>
-                  </Td>
-                  <Td>
-                    <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{tripStatusLabel(t.status, direction)}</Badge>
-                  </Td>
-                  <Td>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <Icon name={direction === 'outbound' ? 'truckOut' : 'truckIn'} size={14} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
-                      {t.origin_name ?? '—'}
-                    </span>
-                  </Td>
-                  <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
-                  <Td className="num">{t.receipts_count}</Td>
-                  <Td><EtaCell eta={t.eta} /></Td>
-                  {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
-                  {showCosts && <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>}
+            dayGroups.map((g) => (
+              <Fragment key={g.key}>
+                <tr className="trip-day-row">
+                  <td colSpan={colCount}>
+                    <div className="trip-day-head">
+                      <span className="trip-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                      <span className="trip-day-counts">
+                        {g.outCount > 0 && <span style={{ color: 'var(--c-info)' }}>{g.outCount} отгр.</span>}
+                        {g.outCount > 0 && g.inCount > 0 && <span className="t-sub">·</span>}
+                        {g.inCount > 0 && <span style={{ color: 'var(--c-success)' }}>{g.inCount} поступл.</span>}
+                      </span>
+                    </div>
+                  </td>
                 </tr>
-              )
-            })
+                {g.rows.map((t) => {
+                  const direction = tripDirection(t.direction)
+                  return (
+                    <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/logistics/trips/${t.id}`)}>
+                      <Td style={{ borderLeft: `3px solid ${direction === 'outbound' ? 'var(--c-info)' : 'var(--c-success)'}` }}><TypeBadge direction={direction} /></Td>
+                      <Td className="mono" style={{ fontWeight: 500 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {t.trip_number}
+                          {direction === 'outbound' && t.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                        </span>
+                      </Td>
+                      <Td><TimeCell eta={t.eta} /></Td>
+                      <Td>
+                        <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{tripStatusLabel(t.status, direction)}</Badge>
+                      </Td>
+                      <Td>{t.origin_name ?? '—'}</Td>
+                      <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
+                      <Td className="num">{t.receipts_count}</Td>
+                      <Td className="num">{t.items_qty}</Td>
+                      {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}
+                      {showCosts && <Td className="num">{fmtMoney(t.logistics_cost_actual)}</Td>}
+                    </tr>
+                  )
+                })}
+              </Fragment>
+            ))
           )}
         </tbody>
       </Table>

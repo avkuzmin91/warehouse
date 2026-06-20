@@ -493,6 +493,11 @@ export function revertShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/revert`, { method: 'POST' })
 }
 
+// Менеджер возвращает отгрузку «Ожидает рейс» → «На упаковке» (задача снова у начальника смены).
+export function returnShipmentToPacking(id: string) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
+}
+
 export function cancelShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/cancel`, { method: 'POST' })
 }

@@ -25,7 +25,7 @@ from config import (
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
-from modules.expenses.service import record_payroll_expense
+from modules.expenses.service import record_payroll_expense, reverse_payroll_expense
 from security import can_view_payroll, ensure_payroll_access, ensure_timesheet_access
 
 from .schemas import (
@@ -60,15 +60,20 @@ from .service import (
     day_status,
     entry_hours,
     fmt_date_ru,
+    is_fact_locked,
     list_employees,
     load_entries_range,
     load_rates,
     now_iso,
     parse_week_param,
+    settled_employee_ids,
+    settled_ids_for_date,
     week_days,
     week_start_for,
     week_stats,
 )
+
+_FACT_LOCKED_MSG = "Нельзя менять факт за день: по этой расчётной неделе уже проведён расчёт"
 
 router = APIRouter(tags=["timesheet"])
 
@@ -483,6 +488,7 @@ def get_entry(
             (employee_id, work_date),
         ).fetchone()
         entry = dict(row) if row else None
+        fact_locked = is_fact_locked(conn, employee_id, work_date)
         ops: list[EntryOpItem] = []
         if entry:
             op_rows = conn.execute(
@@ -511,6 +517,7 @@ def get_entry(
         status=day_status(entry, work_date, today_iso),
         hours=entry_hours(entry),
         note=entry.get("note") if entry else None,
+        fact_locked=fact_locked,
         ops=ops,
     )
 
@@ -538,6 +545,16 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
             "WHERE employee_id = ? AND work_date = ? AND COALESCE(is_deleted, 0) = 0",
             (body.employee_id, work_date),
         ).fetchone()
+
+        # Факт за день, по которому прошёл расчёт, менять нельзя (план/примечание — можно).
+        if is_fact_locked(conn, body.employee_id, work_date):
+            if row is None:
+                fact_changed = bool(fs or fe or absent)
+            else:
+                fact_changed = (fs, fe) != (row["actual_start"], row["actual_end"]) \
+                    or absent != int(row["is_absent"] or 0)
+            if fact_changed:
+                raise HTTPException(status_code=400, detail=_FACT_LOCKED_MSG)
 
         if row is None:
             entry_id = str(uuid4())
@@ -601,7 +618,10 @@ def fill_fact(body: FillFactRequest, user=Depends(_get_timesheet)):
     filled = 0
     with get_connection() as conn:
         entries = load_entries_range(conn, days[0].isoformat(), days[-1].isoformat())
+        settled = settled_employee_ids(conn, days[0].isoformat(), days[-1].isoformat())
         for (emp_id, day_iso), entry in entries.items():
+            if emp_id in settled:  # неделя закрыта расчётом — факт не трогаем
+                continue
             if day_iso > today_iso:  # факт за ненаступивший день не проставляем
                 continue
             ps, pe = entry.get("planned_start"), entry.get("planned_end")
@@ -653,9 +673,12 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
         return f"{a}–{b}" if a and b else "нет"
 
     with get_connection() as conn:
+        settled = settled_ids_for_date(conn, work_date)
         for item in body.items:
             emp_id = str(item.employee_id or "").strip()
             if not emp_id:
+                continue
+            if emp_id in settled:  # неделя закрыта расчётом — факт не трогаем
                 continue
             if not conn.execute(
                 "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (emp_id,)
@@ -802,6 +825,28 @@ def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
             comment=_clean(body.comment),
             uid=uid,
         )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/timesheet/payments/{payment_id}")
+def cancel_payment(payment_id: str, user=Depends(_get_payroll)):
+    """Отмена ошибочной выплаты (неверные часы/ставка/сотрудник): мягко удаляет запись
+    в журнале табеля и снимает зеркальный расход из единого реестра. Расчётная неделя
+    при этом разблокируется — факт можно поправить и провести расчёт заново."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payroll_payments WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (payment_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Выплата не найдена")
+        conn.execute(
+            "UPDATE payroll_payments SET is_deleted = 1 WHERE id = ?",
+            (payment_id,),
+        )
+        reverse_payroll_expense(conn, payment_id=payment_id, uid=uid)
         conn.commit()
     return {"message": "ok"}
 

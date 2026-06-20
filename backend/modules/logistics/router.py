@@ -253,6 +253,7 @@ def list_trips(
             logistics_cost_actual=float(r["logistics_cost_actual"]) if show_costs and r["logistics_cost_actual"] is not None else None,
             created_at=str(r["created_at"]),
             receipts_count=int(r["receipts_count"] or 0),
+            items_qty=int(r["items_qty"] or 0),
         )
         for r in rows
     ]

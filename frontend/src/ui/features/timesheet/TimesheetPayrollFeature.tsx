@@ -1,13 +1,12 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
-import { useToast } from '../../feedback/Toast'
-import { useConfirm } from '../../feedback/ConfirmDialog'
-import { EmpAvatar, Badge, WeekNavigator, fmtHours, fmtMoney, fmtMoneyShort, fmtRate, addDays } from './shared'
+import { EmpIdentity, Badge, WeekNavigator, fmtHours, fmtMoney, fmtMoneyShort, fmtRate, addDays } from './shared'
 import { SettleModal } from './modals'
-import { getPayroll, settleAll, type PayrollResponse, type PayrollRow } from '../../../api/timesheetApi'
+import { getPayroll, type PayrollResponse, type PayrollRow } from '../../../api/timesheetApi'
 
 function BigNum({ icon, label, value, sub, tone, big }: { icon: string; label: string; value: string; sub?: string; tone?: 'accent' | 'warning'; big?: boolean }) {
   const accent = tone === 'accent'
@@ -25,11 +24,10 @@ function BigNum({ icon, label, value, sub, tone, big }: { icon: string; label: s
 }
 
 export function TimesheetPayrollFeature() {
+  const navigate = useNavigate()
   const [week, setWeek] = useFilterParam('week', '')
   const [tick, setTick] = useState(0)
   const [settle, setSettle] = useState<PayrollRow | null>(null)
-  const toast = useToast()
-  const confirm = useConfirm()
 
   const { data, loading, error } = useApi<PayrollResponse>(
     (signal) => getPayroll(week || undefined, signal),
@@ -37,37 +35,16 @@ export function TimesheetPayrollFeature() {
   )
   const reload = () => setTick((t) => t + 1)
 
-  const onSettleAll = async () => {
-    if (!data) return
-    const ok = await confirm({
-      title: 'Рассчитать всех?',
-      body: `Зафиксируем выплату типа «Расчёт» всем нерассчитанным (${data.totals.left}). Сумма каждому = «к выдаче». Действие записывается в историю.`,
-      confirmLabel: 'Рассчитать всех',
-    })
-    if (!ok) return
-    try {
-      const r = await settleAll(week || undefined)
-      toast(`Рассчитано: ${r.message}`, 'success')
-      reload()
-    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') }
-  }
-
   return (
     <ListPage
       title="Пятничный расчёт"
       subtitle={data ? `Неделя ${data.week_label} · день выплат — пятница` : 'Загрузка…'}
       actions={
-        <>
-          <WeekNavigator
-            label={data?.week_label ?? '…'}
-            onPrev={() => data && setWeek(addDays(data.week_start, -7))}
-            onNext={() => data && setWeek(addDays(data.week_start, 7))}
-            onToday={() => setWeek('')}
-          />
-          <button className="btn primary" onClick={onSettleAll} disabled={!data || data.totals.left === 0}>
-            <Icon name="check" size={14} />Рассчитать всех{data ? ` (${data.totals.left})` : ''}
-          </button>
-        </>
+        <WeekNavigator
+          label={data?.week_label ?? '…'}
+          onPrev={() => data && setWeek(addDays(data.week_start, -7))}
+          onNext={() => data && setWeek(addDays(data.week_start, 7))}
+        />
       }
     >
       {error && <div className="card" style={{ padding: 16, color: 'var(--c-danger)' }}>{error.message}</div>}
@@ -96,14 +73,8 @@ export function TimesheetPayrollFeature() {
               <tbody>
                 {data.rows.map((r) => (
                   <tr key={r.employee_id} style={r.settled ? { background: 'color-mix(in oklab, var(--c-success) 4%, transparent)' } : undefined}>
-                    <td style={{ paddingLeft: 14 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                        <EmpAvatar name={r.full_name} size={26} />
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 500 }}>{r.full_name}</div>
-                          <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>{r.position} · {fmtRate(r.rate_kopecks)}</div>
-                        </div>
-                      </div>
+                    <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${r.employee_id}`)}>
+                      <EmpIdentity name={r.full_name} subtitle={<>{r.position} · {fmtRate(r.rate_kopecks)}</>} />
                     </td>
                     <td className="num">{fmtHours(r.hours)}</td>
                     <td className="num" style={{ fontWeight: 500 }}>{fmtMoney(r.earned)}</td>

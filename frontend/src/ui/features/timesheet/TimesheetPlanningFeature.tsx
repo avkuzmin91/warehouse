@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import { useToast } from '../../feedback/Toast'
-import { EmpAvatar, MiniStat, WeekNavigator, addDays, nextWeekStartIso } from './shared'
-import { getTimesheetWeek, upsertEntry, bulkPlan, type WeekResponse, type WeekRow, type WeekCell } from '../../../api/timesheetApi'
+import { useNavigate } from 'react-router-dom'
+import { EmpIdentity, MiniStat, WeekNavigator, addDays, nextWeekStartIso } from './shared'
+import { getTimesheetWeek, upsertEntry, type WeekResponse, type WeekRow, type WeekCell } from '../../../api/timesheetApi'
 
 const STD: [string, string] = ['08:00', '20:00']
 const MIN_STAFF = 4
@@ -36,6 +37,7 @@ export function TimesheetPlanningFeature() {
   const [tick, setTick] = useState(0)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [editing, setEditing] = useState<EditCell | null>(null)
+  const navigate = useNavigate()
   const toast = useToast()
 
   const { data, loading, error } = useApi<WeekResponse>(
@@ -64,22 +66,6 @@ export function TimesheetPlanningFeature() {
       toast(e instanceof Error ? e.message : 'Ошибка', 'error')
     } finally {
       setSavingKey(null)
-    }
-  }
-
-  const standardForAll = async () => {
-    if (!data) return
-    setEditing(null)
-    try {
-      const ids = data.rows.map((r) => r.employee_id)
-      for (const d of data.days) {
-        if (d.weekend) continue
-        await bulkPlan({ work_date: d.date, employee_ids: ids, planned_start: STD[0], planned_end: STD[1] })
-      }
-      toast('Стандартный план проставлен', 'success')
-      reload()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
     }
   }
 
@@ -121,6 +107,37 @@ export function TimesheetPlanningFeature() {
     }
   }
 
+  // Копирует план прошлой недели этому сотруднику: дни сопоставляются по индексу (Сб→Пт).
+  const copyPrevWeekForEmployee = async (row: WeekRow) => {
+    if (!data) return
+    setEditing(null)
+    setSavingKey(`emp:${row.employee_id}`)
+    try {
+      const prev = await getTimesheetWeek(addDays(data.week_start, -7))
+      const prevRow = prev.rows.find((r) => r.employee_id === row.employee_id)
+      if (!prevRow) {
+        toast('В прошлой неделе нет данных по сотруднику', 'error')
+        return
+      }
+      let changed = 0
+      for (let i = 0; i < data.days.length; i++) {
+        const cell = row.cells[i]
+        const src = prevRow.cells[i]
+        const ps = src.planned_start ?? null
+        const pe = src.planned_end ?? null
+        if ((cell.planned_start ?? null) === ps && (cell.planned_end ?? null) === pe) continue
+        await upsertEntry({ ...base(row.employee_id, cell), planned_start: ps, planned_end: pe })
+        changed++
+      }
+      toast(changed ? `Скопировано из прошлой недели: ${changed} дн.` : 'Уже совпадает с прошлой неделей', 'success')
+      reload()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
   const perDay = data ? data.days.map((_, i) => data.rows.filter((r) => r.cells[i].planned_start).length) : []
   const totalShifts = data ? data.rows.reduce((s, r) => s + r.cells.filter((c) => c.planned_start).length, 0) : 0
   const understaffed = data ? data.days.filter((d, i) => !d.weekend && perDay[i] < MIN_STAFF).length : 0
@@ -134,15 +151,11 @@ export function TimesheetPlanningFeature() {
       title="Планирование смен"
       subtitle={data ? `Неделя ${data.week_label} · по умолчанию 08:00–20:00, крестиком уберите выходные, карандашом меняйте часы` : 'Загрузка…'}
       actions={
-        <>
-          <WeekNavigator
-            label={data?.week_label ?? '…'}
-            onPrev={() => data && setWeekParam(addDays(data.week_start, -7))}
-            onNext={() => data && setWeekParam(addDays(data.week_start, 7))}
-            onToday={() => setWeekParam(nextWeekStartIso())}
-          />
-          <button className="btn" onClick={standardForAll}><Icon name="zap" size={14} />Стандарт всем</button>
-        </>
+        <WeekNavigator
+          label={data?.week_label ?? '…'}
+          onPrev={() => data && setWeekParam(addDays(data.week_start, -7))}
+          onNext={() => data && setWeekParam(addDays(data.week_start, 7))}
+        />
       }
     >
       {error && <div className="card" style={{ padding: 16, color: 'var(--c-danger)' }}>{error.message}</div>}
@@ -180,23 +193,21 @@ export function TimesheetPlanningFeature() {
                   const empBusy = savingKey === `emp:${row.employee_id}`
                   return (
                     <tr key={row.employee_id}>
-                      <td style={{ paddingLeft: 14 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                          <EmpAvatar name={row.full_name} size={26} />
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.full_name}</div>
-                            <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>{row.position}</div>
-                          </div>
-                          <div className="plan-row-actions" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                            <button className="btn ghost sm" title="Стандартная неделя 08:00–20:00 этому сотруднику"
-                              onClick={() => standardForEmployee(row)} disabled={empBusy} style={{ height: 26, padding: '0 8px' }}>
-                              <Icon name="zap" size={12} />Стандарт
-                            </button>
-                            <button className="btn ghost icon sm" title="Очистить — всю неделю в выходные"
-                              onClick={() => clearForEmployee(row)} disabled={empBusy} style={{ width: 26, height: 26 }}>
-                              <Icon name="x" size={12} />
-                            </button>
-                          </div>
+                      <td className="emp-cell" style={{ paddingLeft: 14, position: 'relative' }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${row.employee_id}`)}>
+                        <EmpIdentity name={row.full_name} subtitle={row.position} />
+                        <div className="plan-row-actions" onClick={(ev) => ev.stopPropagation()} style={{ position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 3, padding: 3, borderRadius: 'var(--r-md)', background: 'var(--c-bg-elev)', boxShadow: 'var(--sh-2)' }}>
+                          <button className="btn ghost icon sm" title="Стандартная неделя 08:00–20:00 этому сотруднику"
+                            onClick={() => standardForEmployee(row)} disabled={empBusy} style={{ width: 26, height: 26 }}>
+                            <Icon name="zap" size={13} />
+                          </button>
+                          <button className="btn ghost icon sm" title="Скопировать план прошлой недели"
+                            onClick={() => copyPrevWeekForEmployee(row)} disabled={empBusy} style={{ width: 26, height: 26 }}>
+                            <Icon name="history" size={13} />
+                          </button>
+                          <button className="btn ghost icon sm" title="Очистить — всю неделю в выходные"
+                            onClick={() => clearForEmployee(row)} disabled={empBusy} style={{ width: 26, height: 26 }}>
+                            <Icon name="x" size={13} />
+                          </button>
                         </div>
                       </td>
                       {row.cells.map((cell, i) => {
@@ -248,7 +259,7 @@ export function TimesheetPlanningFeature() {
 
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Icon name="edit" size={12} />Клик по выходному — смена. Крестик убирает день, карандаш меняет часы. Наведите на строку — «Стандарт» заполнит неделю одному. Минимум в смене — {MIN_STAFF} чел.
+              <Icon name="edit" size={12} />Клик по выходному — смена. Крестик убирает день, карандаш меняет часы. Наведите на строку: ⚡ — стандартная неделя, ⟲ — копировать прошлую, ✕ — очистить. Минимум в смене — {MIN_STAFF} чел.
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 11.5, color: 'var(--c-text-muted)' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'var(--c-info)' }} />полная смена</span>
@@ -350,6 +361,17 @@ function ShiftEditor({
   onSet: (s: string, e: string) => void
   onClose: () => void
 }) {
+  const popRef = useRef<HTMLDivElement>(null)
+  // Для нижних строк таблицы поповер не помещается под ячейкой и уходит за край без скролла —
+  // после монтирования измеряем и при нехватке места открываем вверх.
+  const [above, setAbove] = useState(false)
+  useLayoutEffect(() => {
+    const el = popRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    if (r.bottom > window.innerHeight - 8 && r.top - el.offsetHeight > 8) setAbove(true)
+  }, [])
+
   const stepper = (which: 'start' | 'end') => {
     const cur = which === 'start' ? start : end
     const apply = (delta: number) => {
@@ -372,7 +394,7 @@ function ShiftEditor({
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-      <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', width: 248, zIndex: 50, background: 'var(--c-bg-elev)', borderRadius: 'var(--r-lg)', border: '1px solid var(--c-border)', boxShadow: 'var(--sh-3)', padding: 12 }}>
+      <div ref={popRef} style={{ position: 'absolute', ...(above ? { bottom: 'calc(100% + 6px)' } : { top: 'calc(100% + 6px)' }), left: '50%', transform: 'translateX(-50%)', width: 248, zIndex: 50, background: 'var(--c-bg-elev)', borderRadius: 'var(--r-lg)', border: '1px solid var(--c-border)', boxShadow: 'var(--sh-3)', padding: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
           <Icon name="clock" size={13} style={{ color: 'var(--c-accent)' }} />
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>Часы смены</span>

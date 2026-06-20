@@ -82,6 +82,7 @@ from modules.shipments.service import (
     return_defect_to_storage,
     return_line_from_packing,
     return_packing_pool_to_storage,
+    return_to_packing,
     reverse_packing_entry,
     shipment_alloc_remaining,
 )
@@ -942,6 +943,14 @@ def finish_shipment_defect_relocation(doc_id: str, body: ShipmentFinishDefectRel
     uid = str(user["id"])
     with get_connection() as conn:
         next_status = finish_defect_relocation(conn, doc_id, body.lines, uid)
+    return {"message": next_status}
+
+
+@router.post("/shipments/{doc_id}/return-to-packing")
+def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        next_status = return_to_packing(conn, doc_id, uid)
     return {"message": next_status}
 
 

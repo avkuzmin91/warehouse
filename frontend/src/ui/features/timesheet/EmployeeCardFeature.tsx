@@ -8,7 +8,7 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { canViewPayroll } from '../../../utils/access'
 import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate } from './shared'
 import { AdvanceModal, RateModal, EditEmployeeModal } from './modals'
-import { getEmployee, archiveEmployee, restoreEmployee, type EmployeeDetail, type RateHistoryItem } from '../../../api/timesheetApi'
+import { getEmployee, archiveEmployee, restoreEmployee, cancelPayment, type EmployeeDetail, type RateHistoryItem, type PayHistoryItem } from '../../../api/timesheetApi'
 
 function SumCell({ label, value, big, tone }: { label: string; value: string; big?: boolean; tone?: 'accent' | 'danger' }) {
   const col = tone === 'accent' ? 'var(--c-accent-text)' : tone === 'danger' ? 'var(--c-danger)' : 'var(--c-text)'
@@ -95,6 +95,16 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
     try { await restoreEmployee(empId); toast('Восстановлен', 'success'); reload() }
     catch (err) { toast(err instanceof Error ? err.message : 'Ошибка', 'error') }
   }
+  const onCancelPay = async (p: PayHistoryItem) => {
+    const ok = await confirm({
+      title: 'Отменить выплату?',
+      body: `${p.kind_label} ${fmtMoney(p.amount_kopecks)} будет отменён: запись уйдёт из истории, связанный расход снимется из реестра, а неделя разблокируется для пересчёта. Используйте при ошибке в часах, ставке или сотруднике.`,
+      danger: true, confirmLabel: 'Отменить выплату',
+    })
+    if (!ok) return
+    try { await cancelPayment(p.id); toast('Выплата отменена', 'success'); reload() }
+    catch (err) { toast(err instanceof Error ? err.message : 'Ошибка', 'error') }
+  }
 
   if (error) return <div className="page"><div className="card" style={{ padding: 16, color: 'var(--c-danger)' }}>{error.message}</div></div>
   if (!e) return <div className="page" style={{ padding: 24, color: 'var(--c-text-subtle)' }}>{loading ? 'Загрузка…' : null}</div>
@@ -150,7 +160,10 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
                         <td className="num" style={{ fontWeight: 600 }}>{fmtMoney(p.amount_kopecks)}</td>
                         <td><span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{p.period_start ? `${p.period_start} — ${p.period_end}` : ''}</span></td>
                         <td style={{ width: 120 }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{p.paid_on ?? ''}</span></td>
-                        <td style={{ width: 160, color: 'var(--c-text-subtle)', fontSize: 12 }}>{p.comment}</td>
+                        <td style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{p.comment}</td>
+                        <td style={{ width: 40, paddingRight: 14, textAlign: 'right' }}>
+                          <button className="btn ghost icon sm" title="Отменить выплату" onClick={() => onCancelPay(p)}><Icon name="trash" size={13} /></button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

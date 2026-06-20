@@ -100,6 +100,7 @@ export type WeekRow = {
   worked_days: number
   absent: number
   earned: number | null
+  fact_locked: boolean
 }
 export type WeekTotals = {
   hours: number
@@ -139,6 +140,7 @@ export type EntryDetail = {
   status: DayStatus
   hours: number
   note: string | null
+  fact_locked: boolean
   ops: EntryOpItem[]
 }
 export type EntryUpsertPayload = {
@@ -320,6 +322,12 @@ export function addPayment(payload: PaymentCreatePayload) {
   return request<{ message: string }>('/timesheet/payments', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export function cancelPayment(paymentId: string) {
+  return request<{ message: string }>(`/timesheet/payments/${paymentId}`, {
+    method: 'DELETE',
   })
 }
 

@@ -303,6 +303,63 @@ def test_payroll_payment_mirrors_to_expense_ledger(manager_client, employee):
     assert by_amount[285000]["pay_kind"] == "settlement"
 
 
+def test_cancel_payment_removes_record_and_mirrored_expense(manager_client, employee):
+    _add_worked_day(manager_client, employee)
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 100000, "kind": "advance",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+
+    hist = manager_client.get(f"/employees/{employee}").json()["pay_history"]
+    assert len(hist) == 1
+    pid = hist[0]["id"]
+
+    assert manager_client.delete(f"/timesheet/payments/{pid}").status_code == 200
+
+    # Запись ушла из истории
+    assert manager_client.get(f"/employees/{employee}").json()["pay_history"] == []
+
+    # Зеркальный расход снят (soft-delete)
+    with get_connection() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM material_expenses "
+            "WHERE source_kind = 'payroll' AND source_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (pid,),
+        ).fetchone()["n"]
+    assert int(n) == 0
+
+
+def test_cancel_settlement_unlocks_week(manager_client, employee):
+    _add_worked_day(manager_client, employee)
+    assert manager_client.post("/timesheet/payroll/settle-all",
+                               json={"week": WEEK}).status_code == 200
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["fact_locked"] is True
+
+    hist = manager_client.get(f"/employees/{employee}").json()["pay_history"]
+    pid = next(p["id"] for p in hist if p["kind"] == "settlement")
+    assert manager_client.delete(f"/timesheet/payments/{pid}").status_code == 200
+
+    # Неделя разблокирована — факт снова правится
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["fact_locked"] is False
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": "10:00", "actual_end": "20:00",
+    }).status_code == 200
+
+
+def test_cancel_payment_404_unknown(manager_client):
+    assert manager_client.delete("/timesheet/payments/does-not-exist").status_code == 404
+
+
+def test_cancel_payment_forbidden_for_supervisor(shift_supervisor_client):
+    assert shift_supervisor_client.delete("/timesheet/payments/whatever").status_code == 403
+
+
 def test_fixed_salary_settle_not_mirrored(manager_client):
     """Окладник в реестр расходов через табель не попадает — его ЗП идёт авто-начислением."""
     from uuid import uuid4
@@ -363,6 +420,69 @@ def test_fact_rejected_for_future_day(manager_client, employee):
     assert manager_client.put("/timesheet/entry", json={
         "employee_id": employee, "work_date": future, "is_absent": True,
     }).status_code == 400
+
+
+def test_fact_locked_after_settlement(manager_client, employee):
+    """После расчёта факт за дни этой недели менять нельзя; план/примечание — можно."""
+    _add_worked_day(manager_client, employee)
+
+    # До расчёта факт правится свободно
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": "09:00", "actual_end": "20:00",
+    }).status_code == 200
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["fact_locked"] is False
+
+    # Провели расчёт за неделю
+    assert manager_client.post("/timesheet/payroll/settle-all",
+                               json={"week": WEEK}).status_code == 200
+
+    body = manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()
+    assert body["fact_locked"] is True
+    week_row = next(x for x in manager_client.get(f"/timesheet/week?week={WEEK}").json()["rows"]
+                    if x["employee_id"] == employee)
+    assert week_row["fact_locked"] is True
+
+    # Менять факт нельзя
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": "10:00", "actual_end": "20:00",
+    }).status_code == 400
+    # «Не вышел» тоже нельзя
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00", "is_absent": True,
+    }).status_code == 400
+
+    # Факт в БД не изменился
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["actual_start"] == "09:00"
+
+    # План/примечание править можно (факт не трогаем)
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "07:00", "planned_end": "20:00",
+        "actual_start": "09:00", "actual_end": "20:00",
+        "note": "правка плана после расчёта",
+    }).status_code == 200
+
+    # Массовое «факт = план» и быстрый ввод за день закрытую неделю не трогают
+    assert manager_client.post("/timesheet/fill-fact",
+                               json={"week": WEEK, "force": True}).json()["message"] == "0"
+    assert manager_client.put("/timesheet/day-fact", json={
+        "work_date": WORK_DATE,
+        "items": [{"employee_id": employee, "actual_start": "10:00", "actual_end": "20:00"}],
+    }).json()["message"] == "0"
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["actual_start"] == "09:00"
 
 
 # ── Плоская модель доступа: все роли табеля видят и правят всех ────────────────

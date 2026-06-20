@@ -88,6 +88,23 @@ export function EmpAvatar({ name, size = 28 }: { name: string; size?: number }) 
   )
 }
 
+/** Аватар + ФИО + подпись. Кликабельность вешается на ячейку-обёртку (класс `emp-cell`). */
+export function EmpIdentity({
+  name, subtitle, avatarSize = 26,
+}: { name: string; subtitle?: React.ReactNode; avatarSize?: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+      <EmpAvatar name={name} size={avatarSize} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="emp-name" style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+        {subtitle != null && (
+          <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function MiniStat({
   icon, label, value, tone, muted,
 }: { icon: string; label: string; value: string; tone?: 'danger' | 'accent'; muted?: boolean }) {
@@ -112,25 +129,22 @@ export function MiniStat({
   )
 }
 
-/** Навигатор недели: ◀ [метка] ▶ + «Сегодня». */
+/** Навигатор недели: ◀ [метка] ▶. */
 export function WeekNavigator({
-  label, onPrev, onNext, onToday,
-}: { label: string; onPrev: () => void; onNext: () => void; onToday: () => void }) {
+  label, onPrev, onNext,
+}: { label: string; onPrev: () => void; onNext: () => void }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--c-bg-elev)' }}>
-        <button className="btn ghost icon sm" style={{ borderRadius: 0, borderRight: '1px solid var(--c-border)' }} onClick={onPrev} title="Предыдущая неделя">
-          <Icon name="chev" size={14} style={{ transform: 'rotate(180deg)' }} />
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '0 12px', height: 30 }}>
-          <Icon name="calendar" size={14} style={{ color: 'var(--c-text-subtle)' }} />
-          <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
-        </div>
-        <button className="btn ghost icon sm" style={{ borderRadius: 0, borderLeft: '1px solid var(--c-border)' }} onClick={onNext} title="Следующая неделя">
-          <Icon name="chev" size={14} />
-        </button>
+    <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--c-bg-elev)' }}>
+      <button className="btn ghost icon sm" style={{ borderRadius: 0, borderRight: '1px solid var(--c-border)' }} onClick={onPrev} title="Предыдущая неделя">
+        <Icon name="chev" size={14} style={{ transform: 'rotate(180deg)' }} />
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '0 12px', height: 30 }}>
+        <Icon name="calendar" size={14} style={{ color: 'var(--c-text-subtle)' }} />
+        <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
       </div>
-      <button className="btn sm" onClick={onToday}>Сегодня</button>
+      <button className="btn ghost icon sm" style={{ borderRadius: 0, borderLeft: '1px solid var(--c-border)' }} onClick={onNext} title="Следующая неделя">
+        <Icon name="chev" size={14} />
+      </button>
     </div>
   )
 }

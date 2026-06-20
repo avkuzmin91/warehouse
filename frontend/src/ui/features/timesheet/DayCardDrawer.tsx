@@ -52,6 +52,8 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
 
   const hours = calcDayHours(fs || null, fe || null)
   const isFuture = !!today && workDate > today
+  const locked = detail?.fact_locked ?? false
+  const factDisabled = isFuture || locked
 
   const factEqualsPlan = () => { setFs(ps); setFe(pe); setAbsent(false) }
   const markAbsent = () => { setAbsent(true); setFs(''); setFe('') }
@@ -109,13 +111,20 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
             </div>
             <div>
               <label style={labelStyle}>Факт · приход</label>
-              <input className="input sm" type="time" style={timeInput} value={fs} disabled={absent || isFuture} onChange={(e) => setFs(e.target.value)} />
+              <input className="input sm" type="time" style={timeInput} value={fs} disabled={absent || factDisabled} onChange={(e) => setFs(e.target.value)} />
             </div>
             <div>
               <label style={labelStyle}>Факт · уход</label>
-              <input className="input sm" type="time" style={timeInput} value={fe} disabled={absent || isFuture} onChange={(e) => setFe(e.target.value)} />
+              <input className="input sm" type="time" style={timeInput} value={fe} disabled={absent || factDisabled} onChange={(e) => setFe(e.target.value)} />
             </div>
           </div>
+
+          {locked && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 16, borderRadius: 'var(--r-lg)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)', borderLeft: '3px solid var(--c-accent)' }}>
+              <Icon name="lock" size={15} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
+              <div style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>По этой расчётной неделе уже проведён расчёт — факт изменить нельзя. План и примечание править можно.</div>
+            </div>
+          )}
 
           {isFuture && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 16, borderRadius: 'var(--r-lg)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)', borderLeft: '3px solid var(--c-warning)' }}>
@@ -138,11 +147,11 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
           )}
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button className="btn sm" onClick={factEqualsPlan} disabled={!ps || !pe || isFuture}><Icon name="check" size={13} />Факт = план</button>
+            <button className="btn sm" onClick={factEqualsPlan} disabled={!ps || !pe || factDisabled}><Icon name="check" size={13} />Факт = план</button>
             <button
               className="btn sm"
               onClick={() => (absent ? setAbsent(false) : markAbsent())}
-              disabled={isFuture}
+              disabled={factDisabled}
               style={absent ? { color: 'var(--c-danger)', borderColor: 'var(--c-danger)' } : undefined}
             >
               <Icon name="userX" size={13} />{absent ? 'Снять «не вышел»' : 'Отметить «не вышел»'}
