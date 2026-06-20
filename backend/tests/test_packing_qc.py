@@ -754,6 +754,97 @@ def test_all_defect_shipment_manager_complete(api, client_id):
     assert not any(t["doc_id"] == doc_id for t in mgr_tasks2)
 
 
+def test_return_to_packing_reverts_relocation(api, client_id):
+    """Менеджер возвращает «Ожидает рейс» → «На упаковке»: годный снова «Готов к отгрузке»
+    в зоне упаковки, брак — на упаковочном столе; задача упаковки снова у начальника смены,
+    из «На упаковке» отгрузка снова доходит до «Ожидает рейс» (стоки на месте)."""
+    from modules.tasks.service import list_my_tasks
+
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+    defect_zone = str(uuid.uuid4())
+    with get_connection() as c:
+        packing_id, _ = get_packing_zone(c)
+
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)      # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack",
+             json={"good_delta": 7, "defect_delta": 3, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)   # on_packing → relocating
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id,
+         "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 7}],
+         "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 3}]},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    assert _zone_qty(client_id, pos, good_zone, "good") == 7
+    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 3
+
+    # Начальник смены вернуть на упаковку не вправе.
+    _as(_SHIFT)
+    forbidden = api.post(f"/shipments/{doc_id}/return-to-packing")
+    assert forbidden.status_code == 403, forbidden.text
+
+    # Менеджер возвращает на упаковку.
+    _as(_ADMIN)
+    ret = api.post(f"/shipments/{doc_id}/return-to-packing")
+    assert ret.status_code == 200 and ret.json()["message"] == "on_packing", ret.text
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
+
+    # Годный снова «Готов к отгрузке» в зоне упаковки; брак снова на столе упаковки.
+    assert _balance(client_id, pos) == (7, 3, 0, 0)
+    assert _zone_qty(client_id, pos, packing_id, "good") == 7
+    assert _zone_qty(client_id, pos, good_zone, "good") == 0
+    assert _zone_qty(client_id, pos, packing_id, "defect") == 3
+    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 0
+    det_line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    assert det_line["packed_good"] == 7 and det_line["packed_defect"] == 3
+
+    # Задача упаковки снова у начальника смены.
+    with get_connection() as conn:
+        shift_tasks = list_my_tasks(conn, user={"role": "shift_supervisor"})
+    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_pack" for t in shift_tasks)
+
+    # Из «На упаковке» снова доходим до «Ожидает рейс» — стоки на месте, повторная раскладка проходит.
+    _as(_SHIFT)
+    adv = _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    assert adv.status_code == 200 and adv.json()["message"] == "relocating", adv.text
+    fin2 = _finish_relocation(api, doc_id, [
+        {"line_id": line_id,
+         "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 7}],
+         "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 3}]},
+    ])
+    assert fin2.status_code == 200 and fin2.json()["message"] == "awaiting_trip", fin2.text
+    assert _zone_qty(client_id, pos, good_zone, "good") == 7
+    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 3
+
+
+def test_return_to_packing_rejects_defect_and_wrong_status(api, client_id):
+    """Возврат на упаковку доступен только товарной отгрузке из «Ожидает рейс»."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+
+    # «В плане» — ещё рано возвращать.
+    _as(_ADMIN)
+    early = api.post(f"/shipments/{doc_id}/return-to-packing")
+    assert early.status_code == 400, early.text
+
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+    # «На упаковке» — возвращать тоже нечего (статус неподходящий).
+    _as(_ADMIN)
+    mid = api.post(f"/shipments/{doc_id}/return-to-packing")
+    assert mid.status_code == 400, mid.text
+
+
 def test_normal_awaiting_trip_not_completable_and_no_defect_task(api, client_id):
     """Обычная товарная отгрузка с готовым годным в awaiting_trip: задачи «Завершить» нет,
     через complete-no-goods её не закрыть — она ждёт реальный рейс."""

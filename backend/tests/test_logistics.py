@@ -923,6 +923,40 @@ def test_warehouse_trip_costs_are_hidden_and_readonly(admin_client, warehouse_cl
     assert forbidden.status_code == 403
 
 
+def test_trips_search_by_product_sku_and_name(admin_client, client_id):
+    """Поиск рейса по SKU и названию товара из привязанного поступления."""
+    marker = uuid.uuid4().hex[:8].upper()
+    sku = f"SKU-{marker}"
+    name = f"Куртка-{marker}"
+    pid = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    r = admin_client.post("/receipts", json={
+        "client_id": client_id, "client_name": "Test Client",
+        "lines": [{"product_id": pid, "product_name": name, "product_sku": sku,
+                   "color_id": cid, "color_name": "Red", "size_id": None, "size_name": None,
+                   "planned_qty": 5}],
+    })
+    assert r.status_code == 200, r.text
+    receipt_id = r.json()["message"]
+    assert admin_client.post(f"/receipts/{receipt_id}/advance").json()["message"] == "planned"
+
+    create = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]})
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+
+    by_sku = admin_client.get("/trips", params={"search": sku, "limit": 200})
+    assert by_sku.status_code == 200, by_sku.text
+    assert any(i["id"] == trip_id for i in by_sku.json()["items"]), "рейс не найден по SKU"
+
+    by_name = admin_client.get("/trips", params={"search": name, "limit": 200})
+    assert by_name.status_code == 200, by_name.text
+    assert any(i["id"] == trip_id for i in by_name.json()["items"]), "рейс не найден по названию товара"
+
+    miss = admin_client.get("/trips", params={"search": f"НЕТ-{marker}", "limit": 200})
+    assert miss.status_code == 200, miss.text
+    assert all(i["id"] != trip_id for i in miss.json()["items"]), "рейс не должен находиться по чужому запросу"
+
+
 def test_warehouse_cannot_edit_trip_transport_planning(admin_client, warehouse_client, client_id):
     receipt_id = _planned_receipt(admin_client, client_id)
     trip_id = _handoff_ready_trip(admin_client, receipt_id)

@@ -76,6 +76,52 @@ def _handoff_ready_outbound(admin_client, shipment_id: str, cargo_type: str = "g
     return create.json()["message"]
 
 
+def test_trips_search_by_shipment_product(admin_client, client_id):
+    """Поиск рейса отгрузки по SKU и названию товара из привязанной отгрузки."""
+    marker = uuid.uuid4().hex[:8].upper()
+    sku = f"OSK-{marker}"
+    name = f"Пальто-{marker}"
+    pid = str(uuid.uuid4())
+    create_ship = admin_client.post("/shipments", json={
+        "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
+        "destination": "Москва", "ship_date": "2026-06-10", "comment": "ТЗ",
+        "lines": [{"product_id": pid, "product_name": name, "product_sku": sku,
+                   "color_id": None, "color_name": None, "size_id": None, "size_name": None, "qty": 4}],
+    })
+    assert create_ship.status_code == 200, create_ship.text
+    shipment_id = create_ship.json()["message"]
+    line_id = admin_client.get(f"/shipments/{shipment_id}").json()["lines"][0]["id"]
+    # Привязка к рейсу считает остаток по факту готового — сеем ready-остаток в журнал
+    # и ставим «Ожидает рейс» (полный путь приёмка→упаковка→раскладка не нужен для поиска).
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO zone_relocations
+               (id, product_id, product_name, product_sku, client_id, client_name,
+                from_op, to_op, from_quality, to_quality, to_zone_id, to_zone_name,
+                qty, created_at, created_by, shipment_line_id)
+               VALUES (?, ?, ?, ?, ?, 'Test Client',
+                       'packing', 'ready', 'good', 'good', 'zone-ready', 'Готов',
+                       4, NOW(), 'test', ?)""",
+            (str(uuid.uuid4()), pid, name, sku, client_id, line_id),
+        )
+        conn.execute("UPDATE shipment_docs SET status = 'awaiting_trip' WHERE id = ?", (shipment_id,))
+        conn.commit()
+
+    create = admin_client.post("/trips", json={
+        "direction": "outbound", "shipment_doc_ids": [shipment_id],
+    })
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+
+    by_sku = admin_client.get("/trips", params={"search": sku, "limit": 200})
+    assert by_sku.status_code == 200, by_sku.text
+    assert any(i["id"] == trip_id for i in by_sku.json()["items"]), "рейс не найден по SKU отгрузки"
+
+    by_name = admin_client.get("/trips", params={"search": name, "limit": 200})
+    assert by_name.status_code == 200, by_name.text
+    assert any(i["id"] == trip_id for i in by_name.json()["items"]), "рейс не найден по названию товара отгрузки"
+
+
 def test_outbound_full_flow_cascades_shipment_to_shipped(admin_client, client_id):
     shipment_id = _packing_shipment(admin_client, client_id)
     trip_id = _handoff_ready_outbound(admin_client, shipment_id)

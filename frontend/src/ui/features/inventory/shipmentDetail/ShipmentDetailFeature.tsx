@@ -13,6 +13,7 @@ import {
   uploadShipmentLineFile,
   deleteShipmentLineFile,
   returnShipmentLineFromPacking,
+  returnShipmentToPacking,
   SHIPMENT_STATUS_LABELS,
 } from '../../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
@@ -587,6 +588,16 @@ export function ShipmentDetailFeature() {
     await act(() => cancelShipment(docId!), '/inventory/shipments')
   }
 
+  async function handleReturnToPacking() {
+    const ok = await confirm({
+      title: 'Вернуть на упаковку?',
+      body: 'Отгрузка вернётся в статус «На упаковке», задача снова появится у начальника смены. Готовый товар вернётся в зону упаковки, брак — на упаковочный стол. Действие можно повторить заново.',
+      confirmLabel: 'Вернуть на упаковку',
+    })
+    if (!ok) return
+    await act(() => returnShipmentToPacking(docId!))
+  }
+
   async function handleCompleteNoGoods() {
     const ok = await confirm({
       title: 'Завершить отгрузку без рейса?',
@@ -683,6 +694,11 @@ export function ShipmentDetailFeature() {
             {canEdit && (isPacking || (isDefectCargo && (isRelocating || isAwaitingTrip))) && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
+              </button>
+            )}
+            {canEditPlanning && isAwaitingTrip && !isDefectCargo && (
+              <button className="btn ghost" disabled={acting} onClick={handleReturnToPacking}>
+                <Icon name="arrowLeft" size={14} />Вернуть на упаковку
               </button>
             )}
             {canEditPlanning && allDefectStuck && (

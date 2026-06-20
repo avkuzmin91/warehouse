@@ -15,6 +15,7 @@ from config import (
     EXPENSE_KIND_RENT,
     EXPENSE_KIND_SALARY,
     EXPENSE_OP_CREATE,
+    EXPENSE_OP_DELETE,
     EXPENSE_OP_LABELS,
     EXPENSE_OP_UPDATE,
     EXPENSE_PAYMENT_AWAITING,
@@ -619,6 +620,31 @@ def record_payroll_expense(
         "VALUES (?,?,?,?,?,?)",
         (str(uuid4()), expense_id, EXPENSE_OP_CREATE,
          f"Создано из табеля: {label} ЗП · {format_kopecks(amount)} · оплачено", now_iso(), uid),
+    )
+    return True
+
+
+def reverse_payroll_expense(connection, *, payment_id: str, uid: str | None = None) -> bool:
+    """Снимает зеркальный расход при отмене ошибочной выплаты по табелю: soft-delete + журнал.
+    Парный к record_payroll_expense (source_kind=payroll, source_id=payment_id); soft-delete
+    оставляет повторную выплату идемпотентной (CTE-проверка существования игнорирует удалённые).
+    Не коммитит. Возвращает True, если расход был найден и снят."""
+    row = connection.execute(
+        "SELECT id, amount FROM material_expenses WHERE source_kind = ? AND source_id = ? "
+        "AND COALESCE(is_deleted, 0) = 0",
+        (EXPENSE_SOURCE_PAYROLL, str(payment_id)),
+    ).fetchone()
+    if not row:
+        return False
+    connection.execute(
+        "UPDATE material_expenses SET is_deleted = 1, updated_at = ? WHERE id = ?",
+        (now_iso(), row["id"]),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), row["id"], EXPENSE_OP_DELETE,
+         f"Выплата отменена в табеле: {format_kopecks(int(row['amount']))} · расход снят", now_iso(), uid),
     )
     return True
 

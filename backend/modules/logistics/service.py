@@ -93,8 +93,19 @@ def list_trips_aggregated(
         params.append(eta_to)
     if search:
         s = like_substring_param(search)
-        conds.append("(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?)")
-        params += [s, s, s]
+        conds.append(
+            "(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?"
+            " OR EXISTS ("
+            "   SELECT 1 FROM trip_lines tl"
+            "   JOIN trip_alloc ta ON ta.trip_line_id = tl.id AND COALESCE(ta.is_deleted, 0) = 0"
+            "   LEFT JOIN receipt_lines rl ON rl.id = ta.receipt_line_id"
+            "   LEFT JOIN shipment_lines sl ON sl.id = ta.shipment_line_id"
+            "   WHERE tl.trip_id = d.id AND tl.is_deleted = 0"
+            "     AND (rl.product_sku LIKE ? OR rl.product_name LIKE ?"
+            "          OR sl.product_sku LIKE ? OR sl.product_name LIKE ?)"
+            "))"
+        )
+        params += [s, s, s, s, s, s, s]
 
     where = " AND ".join(conds)
 
@@ -110,7 +121,12 @@ def list_trips_aggregated(
             d.id, d.trip_number, d.direction, d.cargo_type, d.status, d.origin_name, d.carrier_name,
             d.vehicle_type_name, d.eta, d.arrived_at, d.cost_estimate, d.logistics_cost_actual,
             d.created_at,
-            COUNT(l.id) AS receipts_count
+            COUNT(l.id) AS receipts_count,
+            COALESCE((
+                SELECT SUM(ta.qty) FROM trip_lines tl2
+                JOIN trip_alloc ta ON ta.trip_line_id = tl2.id AND COALESCE(ta.is_deleted, 0) = 0
+                WHERE tl2.trip_id = d.id AND tl2.is_deleted = 0
+            ), 0) AS items_qty
         FROM trip_docs d
         LEFT JOIN trip_lines l ON l.trip_id = d.id AND l.is_deleted = 0
         WHERE {where}

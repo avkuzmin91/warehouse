@@ -4,7 +4,6 @@ import type { ShipmentLine, ShipmentMoveAllocation } from '../../../../../api/sh
 import { Drawer } from '../../../../feedback/Drawer'
 import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
-import { NumberStep } from '../../../inventory/shared/NumberStep'
 import { Icon } from '../../../../primitives/Icon'
 import { useToast } from '../../../../feedback/Toast'
 
@@ -166,14 +165,28 @@ export function MoveToPackingDrawer({ docId, line, mode, zoneOptions, onClose, o
                       </div>
                     )}
                   </div>
-                  <NumberStep
-                    value={row.qty}
-                    min={0}
-                    onChange={(v) => setRow(i, { qty: Math.max(0, v) })}
+                  <input
+                    inputMode="numeric"
+                    className="input"
+                    placeholder="0"
+                    value={row.qty === 0 ? '' : String(row.qty)}
                     disabled={saving}
-                    tone={row.zoneId && row.qty > avail ? 'warning' : 'normal'}
-                    width={96}
-                    height={34}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '')
+                      setRow(i, { qty: raw === '' ? 0 : Math.max(0, parseInt(raw, 10)) })
+                    }}
+                    style={{
+                      width: 110,
+                      height: 34,
+                      flexShrink: 0,
+                      textAlign: 'center',
+                      fontFamily: 'var(--font-num)',
+                      fontSize: 15,
+                      fontVariantNumeric: 'tabular-nums',
+                      fontFeatureSettings: "'tnum' 1",
+                      borderColor: row.zoneId && row.qty > avail ? 'var(--c-warning)' : undefined,
+                      color: row.zoneId && row.qty > avail ? 'var(--c-warning)' : undefined,
+                    }}
                   />
                   <button
                     className="btn ghost icon sm"

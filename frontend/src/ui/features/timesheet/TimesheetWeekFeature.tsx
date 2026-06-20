@@ -1,17 +1,16 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
-import { useToast } from '../../feedback/Toast'
-import { useConfirm } from '../../feedback/ConfirmDialog'
 import {
-  EmpAvatar, MiniStat, WeekNavigator, CELL_TONE,
+  EmpIdentity, MiniStat, WeekNavigator, CELL_TONE,
   fmtHours, fmtMoney, addDays,
 } from './shared'
 import { DayCardDrawer } from './DayCardDrawer'
 import { DayFactDrawer } from './DayFactDrawer'
-import { getTimesheetWeek, fillFact, type WeekCell, type WeekDayMeta, type WeekResponse } from '../../../api/timesheetApi'
+import { getTimesheetWeek, type WeekCell, type WeekDayMeta, type WeekResponse } from '../../../api/timesheetApi'
 
 function DayCellView({ cell, day, onClick }: { cell: WeekCell; day: WeekDayMeta; onClick: () => void }) {
   const st = cell.status
@@ -61,12 +60,11 @@ function DayCellView({ cell, day, onClick }: { cell: WeekCell; day: WeekDayMeta;
 }
 
 export function TimesheetWeekFeature() {
+  const navigate = useNavigate()
   const [week, setWeek] = useFilterParam('week', '')
   const [tick, setTick] = useState(0)
   const [selected, setSelected] = useState<{ employeeId: string; name: string; date: string } | null>(null)
   const [factDate, setFactDate] = useState<string | null>(null)
-  const toast = useToast()
-  const confirm = useConfirm()
 
   const { data, loading, error } = useApi<WeekResponse>(
     (signal) => getTimesheetWeek(week || undefined, signal),
@@ -81,39 +79,6 @@ export function TimesheetWeekFeature() {
     if (!data) return
     const { week_start, week_end, today } = data
     setFactDate(today >= week_start && today <= week_end ? today : today > week_end ? week_end : week_start)
-  }
-
-  const onFillFact = async () => {
-    const ok = await confirm({
-      title: 'Заполнить факт по плану?',
-      body: 'Тем, у кого день запланирован, но факт ещё не внесён, проставим фактические часы равными плану. Невыходы и уже заполненные дни не трогаются.',
-      confirmLabel: 'Заполнить',
-    })
-    if (!ok) return
-    try {
-      const r = await fillFact(week || undefined)
-      toast(`Заполнено дней: ${r.message}`, 'success')
-      reload()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Не удалось заполнить', 'error')
-    }
-  }
-
-  const onFillFactForce = async () => {
-    const ok = await confirm({
-      title: 'Переписать факт планом?',
-      body: 'Во всех запланированных днях недели (кроме будущих) факт будет выставлен равным плану — затрёт и «не вышел», и уже внесённый факт. Действие нельзя отменить.',
-      danger: true,
-      confirmLabel: 'Переписать',
-    })
-    if (!ok) return
-    try {
-      const r = await fillFact(week || undefined, true)
-      toast(`Переписано дней: ${r.message}`, 'success')
-      reload()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Не удалось переписать', 'error')
-    }
   }
 
   const legend: { key: keyof typeof CELL_TONE; label: string }[] = [
@@ -131,14 +96,7 @@ export function TimesheetWeekFeature() {
             label={data?.week_label ?? '…'}
             onPrev={() => data && setWeek(addDays(data.week_start, -7))}
             onNext={() => data && setWeek(addDays(data.week_start, 7))}
-            onToday={() => setWeek('')}
           />
-          <button className="btn" onClick={onFillFact}>
-            <Icon name="check" size={14} />Факт = план (неделя)
-          </button>
-          <button className="btn" onClick={onFillFactForce}>
-            <Icon name="check" size={14} />Факт = план (перезапись)
-          </button>
           <button className="btn primary" onClick={openDayFact} disabled={!data}>
             <Icon name="timer" size={14} />Внести факт за день
           </button>
@@ -188,14 +146,8 @@ export function TimesheetWeekFeature() {
               <tbody>
                 {data.rows.map((row) => (
                   <tr key={row.employee_id}>
-                    <td style={{ paddingLeft: 14 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                        <EmpAvatar name={row.full_name} size={26} />
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.full_name}</div>
-                          <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>{row.position}</div>
-                        </div>
-                      </div>
+                    <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${row.employee_id}`)}>
+                      <EmpIdentity name={row.full_name} subtitle={row.position} />
                     </td>
                     {row.cells.map((cell, i) => (
                       <DayCellView
@@ -212,6 +164,11 @@ export function TimesheetWeekFeature() {
                           ? <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-accent-text)' }}>{fmtMoney(row.earned)}</span>
                           : <span style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>{row.worked_days} смен</span>}
                         {row.absent > 0 && <span style={{ fontSize: 10, color: 'var(--c-danger)' }}>{row.absent} невыход{row.absent > 1 ? 'а' : ''}</span>}
+                        {row.fact_locked && (
+                          <span style={{ fontSize: 10, color: 'var(--c-text-subtle)', display: 'inline-flex', alignItems: 'center', gap: 3 }} title="По этой неделе проведён расчёт — факт не изменить">
+                            <Icon name="lock" size={10} />расчёт проведён
+                          </span>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -263,6 +220,7 @@ export function TimesheetWeekFeature() {
           full_name: r.full_name,
           position: r.position,
           cell: r.cells[idx],
+          locked: r.fact_locked,
         }))
         return (
           <DayFactDrawer

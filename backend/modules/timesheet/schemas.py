@@ -139,6 +139,7 @@ class WeekRow(BaseModel):
     worked_days: int
     absent:      int
     earned:      int | None = None
+    fact_locked: bool = False                         # неделя закрыта расчётом — факт не менять
 
 
 class WeekTotals(BaseModel):
@@ -183,6 +184,7 @@ class EntryDetailResponse(BaseModel):
     status:        str
     hours:         float
     note:          str | None = None
+    fact_locked:   bool = False                       # неделя закрыта расчётом — факт не менять
     ops:           list[EntryOpItem] = []
 
 

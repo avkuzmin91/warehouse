@@ -5,7 +5,7 @@ import { EmpAvatar, fmtHours, calcDayHours } from './shared'
 import { dayFactBulk, type WeekCell, type DayFactItem } from '../../../api/timesheetApi'
 
 type Mode = 'work' | 'absent' | 'none'
-type RowInput = { employee_id: string; full_name: string; position: string | null; cell: WeekCell }
+type RowInput = { employee_id: string; full_name: string; position: string | null; cell: WeekCell; locked: boolean }
 type RowState = { mode: Mode; fs: string; fe: string }
 
 function initState(cell: WeekCell): RowState {
@@ -66,6 +66,7 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
     setState((s) => {
       const next = { ...s }
       for (const r of rows) {
+        if (r.locked) continue
         const cur = next[r.employee_id]
         const pl = plan[r.employee_id]
         if (cur.mode === 'none' && pl.ps && pl.pe) next[r.employee_id] = { mode: 'work', fs: pl.ps, fe: pl.pe }
@@ -74,12 +75,14 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
     })
 
   const invalid = rows.filter((r) => {
+    if (r.locked) return false
     const s = state[r.employee_id]
     return s.mode === 'work' && !(s.fs && s.fe)
   })
 
   const items: DayFactItem[] = []
   for (const r of rows) {
+    if (r.locked) continue
     const o = orig[r.employee_id], c = state[r.employee_id]
     if (eff(o) === eff(c)) continue
     if (c.mode === 'absent') items.push({ employee_id: r.employee_id, is_absent: true })
@@ -182,6 +185,16 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
                       </div>
                     </div>
 
+                    {r.locked ? (
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, color: 'var(--c-text-subtle)', fontSize: 12 }}>
+                        {s.mode === 'work' && <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{s.fs}–{s.fe}</span>}
+                        {s.mode === 'absent' && <span style={{ color: 'var(--c-danger)' }}>не вышел</span>}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="lock" size={13} />расчёт проведён
+                        </span>
+                      </div>
+                    ) : (
+                      <>
                     <div style={{ display: 'flex', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', overflow: 'hidden', flexShrink: 0 }}>
                       <button
                         onClick={() => set(r.employee_id, { mode: 'work', fs: s.fs || pl.ps || '', fe: s.fe || pl.pe || '' })}
@@ -213,6 +226,8 @@ export function DayFactDrawer({ date, dateLabel, rows, isFuture, onClose, onSave
                       )}
                       {s.mode === 'none' && <span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>нужно отметить</span>}
                     </div>
+                      </>
+                    )}
                   </div>
                 )
               })}
