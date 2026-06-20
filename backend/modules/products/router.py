@@ -16,7 +16,7 @@ from config import (
     MAX_UPLOAD_BYTES,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_admin, get_current_manager
+from modules.auth.service import get_current_admin, get_current_manager, get_current_user
 
 from .schemas import (
     MessageResponse,
@@ -57,6 +57,13 @@ from .service import (
 )
 
 router = APIRouter(tags=["products"])
+
+
+def _get_strict_admin(user=Depends(get_current_user)):
+    """Строго admin — удаление товара доступно только администратору."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
+    return user
 
 
 @router.get("/products", response_model=ProductListResponse)
@@ -399,19 +406,40 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
 
 
 @router.delete("/products/{item_id}", response_model=MessageResponse)
-def delete_product(item_id: str, admin=Depends(get_current_admin)):
-    now = _now()
+def delete_product(item_id: str, admin=Depends(_get_strict_admin)):
+    _ = admin
     with get_connection() as connection:
         exists = connection.execute("SELECT id FROM products WHERE id = ?", (item_id,)).fetchone()
         if not exists:
-            raise HTTPException(status_code=404, detail="Запись не найдена")
-        connection.execute(
-            "UPDATE products SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?, updated_at = ?, updated_by_id = ? WHERE id = ?",
-            (now, admin["id"], now, admin["id"], item_id),
-        )
-        _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        used_in_receipts = connection.execute(
+            "SELECT 1 FROM receipt_lines WHERE product_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        if used_in_receipts:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Нельзя удалить товар: по нему есть поступления",
+            )
+        had_stock = connection.execute(
+            "SELECT 1 FROM zone_relocations WHERE product_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        if had_stock:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Нельзя удалить товар: он был на остатках",
+            )
+        used_in_shipments = connection.execute(
+            "SELECT 1 FROM shipment_lines WHERE product_id = ? LIMIT 1", (item_id,)
+        ).fetchone()
+        if used_in_shipments:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Нельзя удалить товар: он участвует в отгрузках",
+            )
+        connection.execute("DELETE FROM product_variants WHERE product_id = ?", (item_id,))
+        connection.execute("DELETE FROM products WHERE id = ?", (item_id,))
         connection.commit()
-    return MessageResponse(message="Удалено")
+    return MessageResponse(message="Товар удалён")
 
 
 @router.get("/products/{item_id}/variants", response_model=list[ProductVariantItem])

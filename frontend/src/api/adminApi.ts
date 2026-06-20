@@ -335,6 +335,10 @@ export function updateProduct(
   })
 }
 
+export function deleteProduct(id: string) {
+  return request<{ message: string }>(`/products/${id}`, { method: 'DELETE' })
+}
+
 export function getProductVariants(productId: string, signal?: AbortSignal) {
   return request<ProductVariantItem[]>(`/products/${productId}/variants`, { signal })
 }
