@@ -1,16 +1,34 @@
+import { Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getReceiptLines, RECEIPT_STATUS_LABELS, receiptStatusTone } from '../../../api/receiptsApi'
-import type { ReceiptStatus } from '../../../api/receiptsApi'
+import type { ReceiptStatus, ReceiptLinesListItem } from '../../../api/receiptsApi'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
-import { fmtDate } from '../../../utils/format'
+import { Icon } from '../../primitives/Icon'
+import { fmtDate, dayGroupKey, dayGroupLabel } from '../../../utils/format'
 import { useApi } from '../../../hooks/useApi'
 
 const PAGE_SIZE = 50
+
+function lineDayDate(it: ReceiptLinesListItem): string | null {
+  return it.actual_arrival_date ?? it.arrival_date
+}
+
+/** Группировка строк товаров по дню прибытия с сохранением порядка выдачи backend. */
+function groupLinesByDay(items: ReceiptLinesListItem[]) {
+  const groups: { key: string; label: string; rows: ReceiptLinesListItem[] }[] = []
+  for (const it of items) {
+    const key = dayGroupKey(lineDayDate(it))
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.rows.push(it)
+    else groups.push({ key, label: dayGroupLabel(lineDayDate(it)), rows: [it] })
+  }
+  return groups
+}
 
 type Props = {
   search?:    string
@@ -69,7 +87,17 @@ export function ReceiptLinesView({ search, sku, clientId, status, overdue, dateF
               <EmptyState title="Товаров нет" sub="Измените фильтры или создайте поступление" />
             </td></tr>
           ) : (
-            items.map((it) => (
+            groupLinesByDay(items).map((g) => (
+              <Fragment key={g.key}>
+                <tr className="list-day-row">
+                  <td colSpan={10}>
+                    <div className="list-day-head">
+                      <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                      <span className="list-day-counts"><span className="t-sub">{g.rows.length}</span></span>
+                    </div>
+                  </td>
+                </tr>
+                {g.rows.map((it) => (
               <tr
                 key={it.line_id}
                 style={{ cursor: 'pointer' }}
@@ -118,6 +146,8 @@ export function ReceiptLinesView({ search, sku, clientId, status, overdue, dateF
                   })()}
                 </Td>
               </tr>
+                ))}
+              </Fragment>
             ))
           )}
         </tbody>

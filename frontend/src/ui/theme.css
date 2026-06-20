@@ -430,13 +430,13 @@ a { color: inherit; text-decoration: none; }
   .exp-chev { transition: none; }
 }
 
-/* Список рейсов: строка-разделитель планового дня */
-.t tbody tr.trip-day-row td { padding: 0; background: var(--c-bg-sunken); }
-.t tbody tr.trip-day-row:hover { background: transparent; cursor: default; }
-.trip-day-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px var(--cell-px); }
-.trip-day-title { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 550; color: var(--c-text); }
-.trip-day-title svg { color: var(--c-text-subtle); flex-shrink: 0; }
-.trip-day-counts { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+/* Списки документов: строка-разделитель дня (рейсы, поступления, отгрузки) */
+.t tbody tr.list-day-row td { padding: 0; background: var(--c-bg-sunken); }
+.t tbody tr.list-day-row:hover { background: transparent; cursor: default; }
+.list-day-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px var(--cell-px); }
+.list-day-title { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 550; color: var(--c-text); }
+.list-day-title svg { color: var(--c-text-subtle); flex-shrink: 0; }
+.list-day-counts { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
 
 /* === Badges === */
 .badge {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   getReceipts,
@@ -20,7 +20,7 @@ import type { BadgeTone } from '../primitives/Badge'
 import { Icon } from '../primitives/Icon'
 import { SkeletonRows } from '../primitives/Skeleton'
 import { EmptyState } from '../primitives/EmptyState'
-import { fmtDate } from '../../utils/format'
+import { fmtDate, dayGroupKey, dayGroupLabel } from '../../utils/format'
 import { useLookups } from '../../hooks/useLookups'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { canCreateDocuments } from '../../utils/access'
@@ -40,6 +40,22 @@ const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] =
   { status: 'on_review', label: 'На проверке',  tone: 'warning' },
   { status: 'done',      label: 'Завершён',      tone: 'success' },
 ]
+
+function receiptDayDate(item: ReceiptListItem): string | null {
+  return item.actual_arrival_date ?? item.arrival_date
+}
+
+/** Группировка строк списка по дню прибытия с сохранением порядка выдачи backend. */
+function groupReceiptsByDay(items: ReceiptListItem[]) {
+  const groups: { key: string; label: string; rows: ReceiptListItem[] }[] = []
+  for (const item of items) {
+    const key = dayGroupKey(receiptDayDate(item))
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.rows.push(item)
+    else groups.push({ key, label: dayGroupLabel(receiptDayDate(item)), rows: [item] })
+  }
+  return groups
+}
 
 export function InventoryReceiptsListPage() {
   const navigate = useNavigate()
@@ -305,7 +321,17 @@ export function InventoryReceiptsListPage() {
                   </td>
                 </tr>
               ) : (
-                items.map((item) => {
+                groupReceiptsByDay(items).map((g) => (
+                  <Fragment key={g.key}>
+                    <tr className="list-day-row">
+                      <td colSpan={10}>
+                        <div className="list-day-head">
+                          <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                          <span className="list-day-counts"><span className="t-sub">{g.rows.length}</span></span>
+                        </div>
+                      </td>
+                    </tr>
+                    {g.rows.map((item) => {
                   const overdue = isReceiptOverdue(item)
                   return (
                     <tr
@@ -394,7 +420,9 @@ export function InventoryReceiptsListPage() {
                       </Td>
                     </tr>
                   )
-                })
+                    })}
+                  </Fragment>
+                ))
               )}
             </tbody>
           </Table>
