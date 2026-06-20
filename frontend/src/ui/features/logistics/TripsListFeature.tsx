@@ -98,21 +98,13 @@ function ClientsCell({ names }: { names: string[] }) {
           zIndex: 80,
           minWidth: 180,
           maxWidth: 280,
-          padding: '6px 0',
+          padding: '5px 0',
           background: 'var(--c-bg-elev)',
           border: '1px solid var(--c-border)',
           borderRadius: 'var(--r-lg)',
           boxShadow: 'var(--sh-2)',
           pointerEvents: 'none',
         }}>
-          <div style={{
-            padding: '2px 12px 6px',
-            fontSize: 10.5,
-            fontWeight: 600,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            color: 'var(--c-text-subtle)',
-          }}>Клиенты · {names.length}</div>
           {names.map((n, i) => (
             <div key={i} style={{
               display: 'flex',
