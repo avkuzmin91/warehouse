@@ -126,7 +126,12 @@ def list_trips_aggregated(
                 SELECT SUM(ta.qty) FROM trip_lines tl2
                 JOIN trip_alloc ta ON ta.trip_line_id = tl2.id AND COALESCE(ta.is_deleted, 0) = 0
                 WHERE tl2.trip_id = d.id AND tl2.is_deleted = 0
-            ), 0) AS items_qty
+            ), 0) AS items_qty,
+            COALESCE((
+                SELECT array_agg(DISTINCT tl3.client_name ORDER BY tl3.client_name)
+                FROM trip_lines tl3
+                WHERE tl3.trip_id = d.id AND tl3.is_deleted = 0 AND tl3.client_name IS NOT NULL
+            ), ARRAY[]::text[]) AS client_names
         FROM trip_docs d
         LEFT JOIN trip_lines l ON l.trip_id = d.id AND l.is_deleted = 0
         WHERE {where}
