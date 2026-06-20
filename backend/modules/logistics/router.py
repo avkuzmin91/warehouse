@@ -254,6 +254,7 @@ def list_trips(
             created_at=str(r["created_at"]),
             receipts_count=int(r["receipts_count"] or 0),
             items_qty=int(r["items_qty"] or 0),
+            client_names=[str(n) for n in (r["client_names"] or []) if n],
         )
         for r in rows
     ]

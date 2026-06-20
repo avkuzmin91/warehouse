@@ -135,6 +135,7 @@ export type TripListItem = {
   created_at: string
   receipts_count: number
   items_qty: number
+  client_names: string[]
 }
 
 export type TripListResponse = {

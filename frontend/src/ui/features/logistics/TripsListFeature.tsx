@@ -48,6 +48,18 @@ function TimeCell({ eta }: { eta: string | null }) {
   return <span className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
 }
 
+/** Клиенты рейса: первый + «+N» при нескольких; полный список — в title. */
+function ClientsCell({ names }: { names: string[] }) {
+  if (!names || names.length === 0) return <>—</>
+  if (names.length === 1) return <span title={names[0]}>{names[0]}</span>
+  return (
+    <span title={names.join(', ')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names[0]}</span>
+      <span className="num" style={{ flexShrink: 0 }}>+{names.length - 1}</span>
+    </span>
+  )
+}
+
 function tripDirection(direction: string | null | undefined): TripDirection {
   return direction === 'outbound' ? 'outbound' : 'inbound'
 }
@@ -248,7 +260,7 @@ export function TripsListFeature() {
             <th style={{ width: 90 }}>Время</th>
             <th style={{ width: 170 }}>Статус</th>
             <th>Маршрут</th>
-            <th style={{ width: 160 }}>Перевозчик</th>
+            <th style={{ width: 200 }}>Клиенты</th>
             <th style={{ textAlign: 'right', width: 90 }}>Строки</th>
             <th style={{ textAlign: 'right', width: 90 }}>Товар</th>
             {showCosts && <th style={{ textAlign: 'right', width: 90 }}>План ₽</th>}
@@ -291,7 +303,7 @@ export function TripsListFeature() {
                         <Badge tone={tripStatusTone(t.status) as BadgeTone} dot>{tripStatusLabel(t.status, direction)}</Badge>
                       </Td>
                       <Td>{t.origin_name ?? '—'}</Td>
-                      <Td className="t-sub">{t.carrier_name ?? '—'}</Td>
+                      <Td className="t-sub"><ClientsCell names={t.client_names} /></Td>
                       <Td className="num">{t.receipts_count}</Td>
                       <Td className="num">{t.items_qty}</Td>
                       {showCosts && <Td className="num">{fmtMoney(t.cost_estimate)}</Td>}

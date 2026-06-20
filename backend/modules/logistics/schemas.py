@@ -205,6 +205,7 @@ class TripListItem(BaseModel):
     created_at: str
     receipts_count: int = 0
     items_qty: int = 0
+    client_names: list[str] = []
 
 
 class TripListResponse(BaseModel):
