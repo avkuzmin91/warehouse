@@ -14,17 +14,17 @@ export function getInventoryColors(signal?: AbortSignal) {
   return request<DictionaryItem[]>('/inventory/lookups/colors', { signal })
 }
 
-export function getInventoryColorsForProductSku(sku: string, signal?: AbortSignal) {
-  const s = sku.trim()
+// Ключ — product_id (а не SKU): товары «ожидают SKU» имеют пустой SKU.
+export function getInventoryColorsForProduct(productId: string, signal?: AbortSignal) {
   return request<DictionaryItem[]>(
-    `/inventory/lookups/colors-for-sku?sku=${encodeURIComponent(s)}`,
+    `/inventory/lookups/colors-for-sku?product_id=${encodeURIComponent(productId)}`,
     { signal },
   )
 }
 
-export function getInventorySizesForProductSkuAndColor(sku: string, colorId: string, signal?: AbortSignal) {
+export function getInventorySizesForProductAndColor(productId: string, colorId: string, signal?: AbortSignal) {
   const sp = new URLSearchParams()
-  sp.set('sku', sku.trim())
+  sp.set('product_id', productId)
   sp.set('color_id', colorId)
   return request<DictionaryItem[]>(`/inventory/lookups/sizes-for-sku?${sp.toString()}`, { signal })
 }

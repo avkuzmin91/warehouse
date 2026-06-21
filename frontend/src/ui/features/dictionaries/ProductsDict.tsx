@@ -27,6 +27,12 @@ const ACTUALITY_OPTIONS = [
   { value: 'inactive', label: 'Неактивные' },
 ]
 
+const SKU_OPTIONS = [
+  { value: '', label: 'Все' },
+  { value: 'pending', label: 'Без SKU' },
+  { value: 'assigned', label: 'С SKU' },
+]
+
 interface ProductsDictProps {
   refreshKey: number
   onTotalLoaded: (total: number) => void
@@ -44,6 +50,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
   const [typeId, setTypeId] = useState('')
   const [clientId, setClientId] = useState('')
   const [actuality, setActuality] = useState('')
+  const [skuState, setSkuState] = useState('')
 
   const [productTypes, setProductTypes] = useState<InventoryProductTypeLookup[]>([])
   const { clients } = useLookups()
@@ -56,10 +63,11 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
     getInventoryProductTypes().then(setProductTypes).catch(() => {})
   }, [])
 
-  const load = useCallback(async (q: string, tid: string, cid: string, act: string, pg: number) => {
+  const load = useCallback(async (q: string, tid: string, cid: string, act: string, skuSt: string, pg: number) => {
     setLoading(true)
     try {
       const actuality_id = act === 'active' ? 'active' : act === 'inactive' ? 'inactive' : undefined
+      const sku_pending = skuSt === 'pending' ? true : skuSt === 'assigned' ? false : undefined
       const res = await getProducts({
         page: pg,
         limit: LIMIT,
@@ -67,6 +75,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
         type_id: tid || undefined,
         client_id: cid || undefined,
         actuality_id,
+        sku_pending,
       })
       setProducts(res.items)
       setTotal(res.total)
@@ -78,12 +87,12 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
 
   // Debounce search; immediate on filter changes
   useEffect(() => {
-    const timer = setTimeout(() => load(search, typeId, clientId, actuality, page), search ? 250 : 0)
+    const timer = setTimeout(() => load(search, typeId, clientId, actuality, skuState, page), search ? 250 : 0)
     return () => clearTimeout(timer)
-  }, [search, typeId, clientId, actuality, page, load, refreshKey])
+  }, [search, typeId, clientId, actuality, skuState, page, load, refreshKey])
 
   // Reset to page 1 when filters change
-  useEffect(() => { setPage(1) }, [search, typeId, clientId, actuality])
+  useEffect(() => { setPage(1) }, [search, typeId, clientId, actuality, skuState])
 
   useEffect(() => {
     if (!selectedId) { setVariants([]); return }
@@ -105,7 +114,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
     ...clients.map((c) => ({ value: c.id, label: c.name })),
   ]
 
-  const hasFilters = !!(search || typeId || clientId || actuality)
+  const hasFilters = !!(search || typeId || clientId || actuality || skuState)
 
   return (
     <div>
@@ -124,8 +133,9 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
         <FilterSelect label="Тип" value={typeId} options={typeOptions} onChange={(v) => { setTypeId(v); setPage(1) }} />
         <FilterSelect label="Клиент" value={clientId} options={clientOptions} onChange={(v) => { setClientId(v); setPage(1) }} />
         <FilterSelect label="Статус" value={actuality} options={ACTUALITY_OPTIONS} onChange={(v) => { setActuality(v); setPage(1) }} />
+        <FilterSelect label="SKU" value={skuState} options={SKU_OPTIONS} onChange={(v) => { setSkuState(v); setPage(1) }} />
         {hasFilters && (
-          <button className="btn ghost sm" onClick={() => { setSearch(''); setTypeId(''); setClientId(''); setActuality(''); setPage(1) }}>
+          <button className="btn ghost sm" onClick={() => { setSearch(''); setTypeId(''); setClientId(''); setActuality(''); setSkuState(''); setPage(1) }}>
             <Icon name="x" size={12} />Сбросить
           </button>
         )}
@@ -183,7 +193,10 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
                       <td>
                         <div style={{ fontWeight: 450 }}>{p.name}</div>
                         <div className="text-xs subtle">
-                          <span className="mono">{p.sku_base}</span> · {variantCountLabel(p.variant_count)}
+                          {p.sku_pending
+                            ? <Badge tone="warning">Без SKU</Badge>
+                            : <span className="mono">{p.sku_base}</span>}
+                          {' · '}{variantCountLabel(p.variant_count)}
                         </div>
                       </td>
                       <td>
@@ -252,7 +265,9 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
                 </button>
               </div>
               <div style={{ padding: '6px 14px 10px', borderBottom: '1px solid var(--c-border)', fontSize: 12, color: 'var(--c-text-subtle)' }}>
-                <span className="mono">{selectedProduct.sku_base}</span>
+                {selectedProduct.sku_pending
+                  ? <Badge tone="warning">Без SKU</Badge>
+                  : <span className="mono">{selectedProduct.sku_base}</span>}
                 {selectedProduct.client_name && <span style={{ marginLeft: 8 }}>{selectedProduct.client_name}</span>}
               </div>
               <div className="card-body" style={{ padding: 0 }}>

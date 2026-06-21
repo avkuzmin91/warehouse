@@ -19,6 +19,7 @@ from tests.conftest import (  # noqa: F401
     admin_client,
     cleanup_client,
     make_client_id,
+    seed_storage_good,
 )
 
 CABINET_GET_PATHS = [
@@ -137,6 +138,12 @@ def _accept_receipt(admin_client, doc_id: str) -> None:
 
 
 def _create_shipment(admin_client, client_id: str, *, advance: bool = False) -> str:
+    line = {
+        "product_id": str(uuid.uuid4()),
+        "product_name": "Тестовый товар",
+        "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
+        "qty": 7,
+    }
     r = admin_client.post("/shipments", json={
         "cargo_type": "good",
         "client_id": client_id,
@@ -145,16 +152,16 @@ def _create_shipment(admin_client, client_id: str, *, advance: bool = False) -> 
         "ship_date": "2026-06-25",
         "logistics_cost": 555.0,
         "comment": "внутренний комментарий",
-        "lines": [{
-            "product_id": str(uuid.uuid4()),
-            "product_name": "Тестовый товар",
-            "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
-            "qty": 7,
-        }],
+        "lines": [line],
     })
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
     if advance:
+        # Гейт перевода в план требует наличия товара на остатках.
+        seed_storage_good(
+            client_id, product_id=line["product_id"], product_name=line["product_name"],
+            product_sku=line["product_sku"], qty=line["qty"],
+        )
         adv = admin_client.post(f"/shipments/{doc_id}/advance")
         assert adv.status_code == 200, adv.text
     return doc_id

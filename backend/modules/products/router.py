@@ -33,6 +33,7 @@ from .schemas import (
     ProductCreateMeta,
 )
 from .service import (
+    _assign_variant_skus_from_base,
     _build_variant_rows_for_create,
     _decode_images_json,
     _encode_images_json,
@@ -77,6 +78,7 @@ def list_products(
     type_id: str | None = Query(None),
     client_id: str | None = Query(None),
     actuality_id: str | None = Query(None),
+    sku_pending: bool | None = Query(None),
     sort: str | None = Query(None),
     include_deleted: bool = Query(False),
 ):
@@ -100,6 +102,9 @@ def list_products(
     if client_id is not None and str(client_id).strip():
         conds.append("p.client_id = ?")
         params.append(str(client_id).strip())
+    if sku_pending is not None:
+        conds.append("COALESCE(p.sku_pending, 0) = ?")
+        params.append(1 if sku_pending else 0)
     if not include_deleted:
         conds.append("COALESCE(p.is_deleted, 0) = 0")
     join_sql = """
@@ -142,7 +147,8 @@ def list_products(
         )
         rows = connection.execute(
             f"""
-            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
+            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base,
+                   COALESCE(p.sku_pending, 0) AS sku_pending, p.weight_grams,
                    p.items_per_pallet,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size,
@@ -176,7 +182,8 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
     with get_connection() as connection:
         row = connection.execute(
             f"""
-            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base, p.weight_grams,
+            SELECT p.id, p.name, p.type_id, pt.name AS type_name, p.sku AS sku_base,
+                   COALESCE(p.sku_pending, 0) AS sku_pending, p.weight_grams,
                    p.items_per_pallet,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size,
@@ -272,9 +279,13 @@ async def create_product(
         if requires_color and not parsed.colors:
             raise HTTPException(status_code=400, detail="Для этого типа товара выберите хотя бы один цвет")
         cid = _require_active_client(connection, inner.client_id)
-        sku_base = _normalize_sku(inner.sku_base)
-        if _sku_taken_for_client_except_product(connection, sku_base, cid, None):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
+        sku_pending = bool(inner.sku_pending)
+        if sku_pending:
+            sku_base = ""
+        else:
+            sku_base = _normalize_sku(inner.sku_base or "")
+            if _sku_taken_for_client_except_product(connection, sku_base, cid, None):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
         variant_rows = _build_variant_rows_for_create(
             connection,
             requires_size=requires_size,
@@ -282,6 +293,7 @@ async def create_product(
             client_id=cid,
             color_ids=parsed.colors,
             dimensions=parsed.dimensions,
+            sku_pending=sku_pending,
         )
         pid = str(uuid4())
         now = _now()
@@ -290,18 +302,18 @@ async def create_product(
         try:
             connection.execute(
                 """
-                INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, weight_grams, items_per_pallet, image_url, gallery_json, is_active, created_at, creator_id)
-                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, sku_pending, weight_grams, items_per_pallet, image_url, gallery_json, is_active, created_at, creator_id)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (pid, _normalize_name(inner.name), tid, cid, sku_base, inner.weight_grams, inner.items_per_pallet, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
+                (pid, _normalize_name(inner.name), tid, cid, sku_base, 1 if sku_pending else 0, inner.weight_grams, inner.items_per_pallet, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
             )
             for vr in variant_rows:
                 connection.execute(
                     """
-                    INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, length, width, height, sku, images_json, is_active, created_at, is_deleted)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
+                    INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, length, width, height, sku, sku_pending, images_json, is_active, created_at, is_deleted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)
                     """,
-                    (str(uuid4()), pid, cid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], vr["images_json"], now),
+                    (str(uuid4()), pid, cid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], 1 if sku_pending else 0, vr["images_json"], now),
                 )
             connection.commit()
         except IntegrityError as exc:
@@ -315,13 +327,14 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
     now = _now()
     with get_connection() as connection:
         meta = connection.execute(
-            "SELECT COALESCE(is_deleted, 0) AS del, sku, type_id, client_id FROM products WHERE id = ?",
+            "SELECT COALESCE(is_deleted, 0) AS del, sku, COALESCE(sku_pending, 0) AS sku_pending, type_id, client_id FROM products WHERE id = ?",
             (item_id,),
         ).fetchone()
         if not meta:
             raise HTTPException(status_code=404, detail="Товар не найден")
         is_del = bool(meta["del"])
         cur_sku = str(meta["sku"])
+        cur_pending = bool(meta["sku_pending"])
         cur_type = str(meta["type_id"])
         cur_client_id = str(meta["client_id"]) if meta["client_id"] else None
         target_client_id = cur_client_id
@@ -357,17 +370,31 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
-        if payload.sku_base is not None:
-            new_sku = _normalize_sku(payload.sku_base)
-            if target_client_id is not None and _sku_taken_for_client_except_product(connection, new_sku, target_client_id, item_id):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
-            if new_sku != cur_sku:
+        provided_sku = payload.sku_base.strip() if payload.sku_base is not None else None
+        if cur_pending:
+            # Товар «ожидает SKU»: дозаполнение базового SKU присваивает его товару и
+            # всем вариантам, снимая признак ожидания.
+            if provided_sku:
+                new_sku = _normalize_sku(provided_sku)
+                if target_client_id is not None and _sku_taken_for_client_except_product(connection, new_sku, target_client_id, item_id):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
+                _assign_variant_skus_from_base(connection, product_id=item_id, new_base_sku=new_sku, updated_at=now, client_id=target_client_id)
+                fields.append("sku = ?")
+                values.append(new_sku)
+                fields.append("sku_pending = 0")
+            elif payload.sku_pending is False:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите SKU, чтобы снять ожидание")
+        else:
+            if provided_sku and provided_sku != cur_sku:
+                new_sku = _normalize_sku(provided_sku)
+                if target_client_id is not None and _sku_taken_for_client_except_product(connection, new_sku, target_client_id, item_id):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
                 _rebase_variant_skus_for_new_product_base(connection, product_id=item_id, old_base_sku=cur_sku, new_base_sku=new_sku, updated_at=now, client_id=target_client_id)
                 fields.append("sku = ?")
                 values.append(new_sku)
-        elif target_client_id is not None and target_client_id != cur_client_id:
-            if _sku_taken_for_client_except_product(connection, cur_sku, target_client_id, item_id):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
+            elif target_client_id is not None and target_client_id != cur_client_id:
+                if _sku_taken_for_client_except_product(connection, cur_sku, target_client_id, item_id):
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
         if "weight_grams" in payload.model_fields_set:
             fields.append("weight_grams = ?")
             values.append(payload.weight_grams)

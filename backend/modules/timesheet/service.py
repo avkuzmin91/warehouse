@@ -49,16 +49,31 @@ def _to_min(t: str | None) -> int | None:
         return None
 
 
-def day_hours(start: str | None, end: str | None) -> float:
-    """Часы за день = (уход − приход) − 1 ч обед. На коротком дне не уходит в минус:
-    если грязное время ≤ обеда — зачёт 0 (как в дизайне)."""
+def day_hours(
+    start: str | None,
+    end: str | None,
+    *,
+    lunch: bool = True,
+    end_next_day: bool = False,
+) -> float:
+    """Часы за день = (уход − приход) − 1 ч обед.
+
+    `end_next_day` — смена закончилась на следующий день (08:00 → 02:00): к уходу
+    добавляем +24 ч. `lunch=False` — вышел без обеда, час не вычитаем (и короткий
+    день не обнуляем, ведь обнуление существует только чтобы вычет обеда не уходил
+    в минус). На коротком дне с обедом зачёт 0, а не минус (как в дизайне)."""
     a, b = _to_min(start), _to_min(end)
     if a is None or b is None:
         return 0.0
+    if end_next_day:
+        b += 24 * 60
     gross = (b - a) / 60.0
     if gross <= 0:
         return 0.0
-    net = gross - TIMESHEET_LUNCH_HOURS if gross > TIMESHEET_LUNCH_HOURS else 0.0
+    if not lunch:
+        net = gross
+    else:
+        net = gross - TIMESHEET_LUNCH_HOURS if gross > TIMESHEET_LUNCH_HOURS else 0.0
     return max(0.0, round(net, 2))
 
 
@@ -178,18 +193,44 @@ def day_status(entry: dict | None, day_iso: str, today_iso: str) -> str:
 
 def entry_hours(entry: dict | None) -> float:
     if entry and _has_fact(entry):
-        return day_hours(entry["actual_start"], entry["actual_end"])
+        return day_hours(
+            entry["actual_start"],
+            entry["actual_end"],
+            lunch=int(entry.get("no_lunch") or 0) == 0,
+            end_next_day=int(entry.get("end_next_day") or 0) == 1,
+        )
     return 0.0
 
 
 # ── Загрузчики ────────────────────────────────────────────────────────────────
 
-def load_active_employees(connection) -> list[dict]:
+def load_week_employees(connection, sat_iso: str, fri_iso: str) -> list[dict]:
+    """Сотрудники, относящиеся к расчётной неделе [sat..fri] (для сетки и расчёта).
+
+    Сотрудник попадает в неделю, если выполнено хотя бы одно:
+    - он активен и принят на работу не позже конца недели — новичок появляется
+      с момента приёма (по hired_on, иначе по дате создания), а не задним числом;
+    - за эту неделю по нему есть запись табеля;
+    - за эту неделю по нему есть выплата.
+
+    Два последних условия держат историю: архивный сотрудник остаётся в неделях,
+    где он работал или получал выплаты (суммы сходятся), но пропадает из текущих и
+    будущих недель, где данных по нему уже нет."""
     rows = connection.execute(
         "SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.status "
         "FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
-        "WHERE COALESCE(e.is_deleted, 0) = 0 AND e.status = ? ORDER BY e.full_name",
-        (EMPLOYEE_STATUS_ACTIVE,),
+        "WHERE COALESCE(e.is_deleted, 0) = 0 AND ("
+        "  (e.status = ? AND COALESCE(e.hired_on, SUBSTR(e.created_at, 1, 10)) <= ?)"
+        "  OR EXISTS (SELECT 1 FROM timesheet_entries t "
+        "             WHERE t.employee_id = e.id AND COALESCE(t.is_deleted, 0) = 0 "
+        "               AND t.work_date >= ? AND t.work_date <= ?)"
+        "  OR EXISTS (SELECT 1 FROM payroll_payments pp "
+        "             WHERE pp.employee_id = e.id AND COALESCE(pp.is_deleted, 0) = 0 "
+        "               AND pp.period_start = ? AND pp.period_end = ?)"
+        ") "
+        "ORDER BY (e.status = ?) DESC, e.full_name",
+        (EMPLOYEE_STATUS_ACTIVE, fri_iso, sat_iso, fri_iso,
+         sat_iso, fri_iso, EMPLOYEE_STATUS_ACTIVE),
     ).fetchall()
     return [
         {"id": str(r["id"]), "full_name": str(r["full_name"]),
@@ -308,7 +349,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
     today = business_today()
     today_iso = today.isoformat()
 
-    employees = load_active_employees(connection)
+    employees = load_week_employees(connection, sat.isoformat(), fri.isoformat())
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids) if with_money else {}
@@ -349,6 +390,8 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
                 "actual_end": entry.get("actual_end") if entry else None,
                 "is_absent": bool(int(entry.get("is_absent") or 0)) if entry else False,
                 "not_called": bool(int(entry.get("not_called") or 0)) if entry else False,
+                "no_lunch": bool(int(entry.get("no_lunch") or 0)) if entry else False,
+                "end_next_day": bool(int(entry.get("end_next_day") or 0)) if entry else False,
                 "hours": round(h, 1),
                 "note": entry.get("note") if entry else None,
             }
@@ -367,6 +410,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
             "absent": s["absent"],
             "earned": s["earned"] if with_money else None,
             "fact_locked": e["id"] in settled,
+            "archived": e["status"] != EMPLOYEE_STATUS_ACTIVE,
         }
         rows.append(row)
 
@@ -395,7 +439,7 @@ def build_payroll(connection, sat: date) -> dict:
     fri = days[-1]
     today_iso = business_today().isoformat()
 
-    employees = load_active_employees(connection)
+    employees = load_week_employees(connection, sat.isoformat(), fri.isoformat())
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids)
@@ -425,6 +469,7 @@ def build_payroll(connection, sat: date) -> dict:
             "to_pay": s["to_pay"],
             "overpaid": s["overpaid"],
             "settled": s["settled"],
+            "archived": e["status"] != EMPLOYEE_STATUS_ACTIVE,
         })
 
     return {
@@ -439,6 +484,101 @@ def build_payroll(connection, sat: date) -> dict:
             "employees": len(employees),
             "left": left,
         },
+    }
+
+
+# ── Посещаемость карточки: 4 недели Сб→Пт + итоги за всё время ────────────────
+
+ATTENDANCE_WEEKS = 4
+
+
+def late_minutes(entry: dict | None) -> int:
+    """Опоздание в минутах = факт. приход − плановый приход (если позже плана).
+    Имеет смысл только когда есть и план, и факт; иначе 0."""
+    if not entry:
+        return 0
+    planned, actual = _to_min(entry.get("planned_start")), _to_min(entry.get("actual_start"))
+    if planned is None or actual is None:
+        return 0
+    return max(0, actual - planned)
+
+
+def _att_status(entry: dict | None, day_iso: str, today_iso: str, hired: str) -> str:
+    """Статус ячейки тепловой карты. Дни до приёма и будущие дни — отдельные
+    немые статусы (prehire/future), остальное — обычный day_status."""
+    if hired and day_iso < hired:
+        return "prehire"
+    if day_iso > today_iso:
+        return "future"
+    return day_status(entry, day_iso, today_iso)
+
+
+def attendance_alltime(connection, employee_id: str, today_iso: str) -> dict:
+    """Смены / внеплановые выходы / прогулы за всё время работы сотрудника."""
+    rows = connection.execute(
+        "SELECT * FROM timesheet_entries "
+        "WHERE employee_id = ? AND COALESCE(is_deleted, 0) = 0 AND work_date <= ?",
+        (employee_id, today_iso),
+    ).fetchall()
+    shifts = noplan = absent = 0
+    for r in rows:
+        entry = dict(r)
+        st = day_status(entry, str(r["work_date"]), today_iso)
+        if st in (TIMESHEET_DAY_WORKED, TIMESHEET_DAY_NOPLAN):
+            shifts += 1
+        if st == TIMESHEET_DAY_NOPLAN:
+            noplan += 1
+        if st == TIMESHEET_DAY_ABSENT:
+            absent += 1
+    return {"shifts": shifts, "noplan": noplan, "absent": absent}
+
+
+def build_attendance(connection, employee_id: str, hired_on: str | None) -> dict:
+    """Тепловая карта посещаемости: всегда последние 4 расчётные недели Сб→Пт
+    (включая текущую), плюс итоги за показанный период и за всё время."""
+    today = business_today()
+    today_iso = today.isoformat()
+    cur_sat = week_start_for(today)
+    start_sat = cur_sat - timedelta(weeks=ATTENDANCE_WEEKS - 1)
+    fri = cur_sat + timedelta(days=6)
+    days = [start_sat + timedelta(days=i) for i in range(ATTENDANCE_WEEKS * 7)]
+    entries = load_entries_range(connection, start_sat.isoformat(), fri.isoformat())
+    hired = (hired_on or "")[:10]
+
+    cells: list[dict] = []
+    shifts = noplan = absent = 0
+    hours = 0.0
+    for d in days:
+        day_iso = d.isoformat()
+        entry = entries.get((employee_id, day_iso))
+        st = _att_status(entry, day_iso, today_iso, hired)
+        h = entry_hours(entry)
+        if st in (TIMESHEET_DAY_WORKED, TIMESHEET_DAY_NOPLAN):
+            shifts += 1
+            hours += h
+        if st == TIMESHEET_DAY_NOPLAN:
+            noplan += 1
+        if st == TIMESHEET_DAY_ABSENT:
+            absent += 1
+        cells.append({
+            "date": day_iso,
+            "dom": d.day,
+            "weekend": is_weekend(d),
+            "status": st,
+            "hours": round(h, 1),
+            "late_minutes": late_minutes(entry) if st == TIMESHEET_DAY_WORKED else 0,
+        })
+
+    return {
+        "range_label": f"{fmt_date_ru(start_sat)} — {fmt_date_ru(fri)} {fri.year}",
+        "days": cells,
+        "stats": {
+            "shifts": shifts,
+            "noplan": noplan,
+            "absent": absent,
+            "hours": round(hours, 1),
+        },
+        "alltime": attendance_alltime(connection, employee_id, today_iso),
     }
 
 

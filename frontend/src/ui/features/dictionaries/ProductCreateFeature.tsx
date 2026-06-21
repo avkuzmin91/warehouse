@@ -72,6 +72,7 @@ export function ProductCreateFeature() {
   const [typeId, setTypeId] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
   const [skuBase, setSkuBase] = useState('')
+  const [skuPending, setSkuPending] = useState(false)
   const [weightGrams, setWeightGrams] = useState('')
   const [itemsPerPallet, setItemsPerPallet] = useState('')
   const [isActive, setIsActive] = useState(true)
@@ -122,12 +123,12 @@ export function ProductCreateFeature() {
     return {
       name:       !name.trim(),
       type_id:    !typeId,
-      sku_base:   !skuBase.trim(),
+      sku_base:   !skuPending && !skuBase.trim(),
       client_id:  !clientId,
       colors:     requiresColor && colorIds.length === 0,
       dimensions: !dimsOk,
     }
-  }, [name, typeId, skuBase, clientId, colorIds, dims, requiresColor, requiresSize])
+  }, [name, typeId, skuBase, skuPending, clientId, colorIds, dims, requiresColor, requiresSize])
 
   const touch = (key: FieldKey) => setTouched((t) => ({ ...t, [key]: true }))
   const err = (key: FieldKey) => touched[key] && invalid[key]
@@ -180,7 +181,8 @@ export function ProductCreateFeature() {
           product: {
             name: name.trim(),
             type_id: typeId!,
-            sku_base: skuBase.trim(),
+            sku_base: skuPending ? undefined : skuBase.trim(),
+            sku_pending: skuPending,
             weight_grams: parseOptionalWeight(weightGrams),
             items_per_pallet: parseOptionalInteger(itemsPerPallet),
             client_id: clientId!,
@@ -240,15 +242,23 @@ export function ProductCreateFeature() {
                   <ErrMsg msg={err('name') ? 'Обязательное поле' : undefined} />
                 </Field>
 
-                <Field label="SKU / штрих-код" required>
+                <Field label="SKU / штрих-код" required={!skuPending}>
                   <Input
-                    value={skuBase}
+                    value={skuPending ? '' : skuBase}
                     onChange={(e) => setSkuBase(e.target.value)}
                     onBlur={() => touch('sku_base')}
-                    placeholder="BASE-001"
+                    placeholder={skuPending ? 'Будет уточнён позже' : 'BASE-001'}
+                    disabled={skuPending}
                     style={{ fontFamily: 'var(--font-code)', ...(err('sku_base') ? { borderColor: 'var(--c-danger)' } : {}) }}
                   />
                   <ErrMsg msg={err('sku_base') ? 'Обязательное поле' : undefined} />
+                  <div style={{ marginTop: 8 }}>
+                    <Toggle
+                      checked={skuPending}
+                      onChange={(v) => { setSkuPending(v); if (v) setSubmitError('') }}
+                      label="SKU будет уточнён позже"
+                    />
+                  </div>
                 </Field>
 
                 <Field label="Тип товара" required>

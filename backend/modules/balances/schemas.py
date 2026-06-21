@@ -33,6 +33,32 @@ class BalanceListResponse(BaseModel):
     limit: int
 
 
+class PlannableItem(BaseModel):
+    """Позиция, доступная для планирования отгрузки: остаток на складе + товар в пути.
+
+    `in_transit` — заявленное, но ещё не приехавшее (planned − accepted по активным
+    поступлениям). Менеджер может положить такую позицию в черновик отгрузки, а
+    перевести в план — только когда товар появится на остатках (storage_good)."""
+
+    product_id: str
+    product_name: str
+    product_sku: str
+    sku_pending: bool = False
+    client_id: str | None
+    client_name: str | None
+    color_id: str | None
+    color_name: str | None
+    size_id: str | None
+    size_name: str | None
+    storage_good: int
+    storage_defect: int
+    in_transit: int
+
+
+class PlannableListResponse(BaseModel):
+    items: list[PlannableItem]
+
+
 class BalanceSummaryResponse(BaseModel):
     """Итоги по всем позициям (не зависят от пагинации списка)."""
 

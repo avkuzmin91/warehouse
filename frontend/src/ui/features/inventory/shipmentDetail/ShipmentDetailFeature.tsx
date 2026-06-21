@@ -19,7 +19,7 @@ import {
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../api/constants'
 import { getBalances, getBalancesByZone } from '../../../../api/balancesApi'
-import type { BalanceItem, BalanceZoneItem } from '../../../../api/balancesApi'
+import type { BalanceItem, BalanceZoneItem, PlannableItem } from '../../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../../api/domainTypes'
 import { ShipmentPriorityControl } from '../../inventory/ShipmentPriorityControl'
@@ -355,6 +355,17 @@ export function ShipmentDetailFeature() {
     (line) => line.available_for_pack > 0 || line.packed_good + line.packed_defect > 0,
   )
 
+  // Остаток позиции на складе (для гейта перевода черновика в план). Позиция, которой
+  // ещё нет на остатках (товар в пути), в balances отсутствует → 0 → перевод блокируется.
+  function lineOnHand(line: ShipmentLine): number {
+    const matched = balances.find((b) => balanceKey(b) === balanceKey(line))
+    if (!matched) return 0
+    return isDefectCargo ? matched.storage_defect : matched.storage_good
+  }
+  // Перевод в план — всё-или-ничего: каждая позиция должна быть покрыта остатком на
+  // складе. Бэкенд проверяет авторитетно при advance; здесь — для готовности/блокировок.
+  const allLinesOnStock = (doc?.lines ?? []).every((line) => getDraft(line).qty <= lineOnHand(line))
+
   // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
   // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
   // Брак-отгрузка: ТЗ не требуется, места-источники выберет кладовщик при подготовке.
@@ -370,6 +381,13 @@ export function ShipmentDetailFeature() {
           label: 'План заполнен',
           error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
         },
+        ...(isDraft
+          ? [{
+              ok: allLinesOnStock,
+              label: 'Весь товар на остатках',
+              error: 'Часть товара ещё в пути — дождитесь прихода на склад и повторите',
+            }]
+          : []),
         ...(isDraft && !isDefectCargo
           ? [{
               ok: infoComment.trim() !== '',
@@ -409,7 +427,7 @@ export function ShipmentDetailFeature() {
     await loadBalances()
   }
 
-  async function handleAddLine(item: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
+  async function handleAddLine(item: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) {
     if (!docId) return
     await act(async () => {
       await addShipmentLine(docId, {
@@ -629,7 +647,7 @@ export function ShipmentDetailFeature() {
   // «Состав» — только про план (Менеджер). Подсвечиваем как активный лишь при создании;
   // в «В плане» ход у Кладовщика (блок «Передача»), поэтому Состав не подсвечиваем.
   const compState: 'active' | 'done' = isDraft ? 'active' : 'done'
-  const compHint = isDraft ? 'Товар из остатков клиента'
+  const compHint = isDraft ? 'Товар на остатках и в пути'
     : isPacking ? 'План можно править до передачи на упаковку'
     : undefined
 
@@ -917,7 +935,7 @@ export function ShipmentDetailFeature() {
               <div style={{ padding: '32px 0' }}>
                 <EmptyState
                   title="Состав пуст"
-                  sub={canDelete ? 'Добавьте товар из остатков, чтобы запланировать отгрузку' : 'Нет позиций'}
+                  sub={canDelete ? 'Добавьте товар — остатки и товар в пути' : 'Нет позиций'}
                 />
               </div>
             ) : (

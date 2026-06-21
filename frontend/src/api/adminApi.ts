@@ -279,6 +279,7 @@ export function getProducts(params?: ProductListQueryParams) {
   if (params?.actuality_id != null && params.actuality_id.trim() !== '') {
     sp.set('actuality_id', params.actuality_id.trim())
   }
+  if (params?.sku_pending != null) sp.set('sku_pending', params.sku_pending ? 'true' : 'false')
   if (params?.sort != null && params.sort.trim() !== '') sp.set('sort', params.sort.trim())
   const q = sp.toString()
   return request<ProductListResponse>(q ? `/products?${q}` : '/products')
@@ -293,7 +294,8 @@ export function createProduct(payload: {
     product: {
       name: string
       type_id: string
-      sku_base: string
+      sku_base?: string | null
+      sku_pending?: boolean
       weight_grams?: number | null
       items_per_pallet?: number | null
       client_id: string
@@ -324,6 +326,7 @@ export function updateProduct(
     is_active?: boolean
     is_deleted?: boolean
     sku_base?: string
+    sku_pending?: boolean
     weight_grams?: number | null
     items_per_pallet?: number | null
     image_urls?: string[]

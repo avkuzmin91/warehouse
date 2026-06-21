@@ -84,6 +84,35 @@ class EmployeeWeekSummary(BaseModel):
     overpaid:    int | None = None
 
 
+class AttendanceDay(BaseModel):
+    date:         str
+    dom:          int
+    weekend:      bool
+    status:       str
+    hours:        float
+    late_minutes: int = 0
+
+
+class AttendanceStats(BaseModel):
+    shifts: int
+    noplan: int
+    absent: int
+    hours:  float
+
+
+class AttendanceAllTime(BaseModel):
+    shifts: int
+    noplan: int
+    absent: int
+
+
+class AttendanceBlock(BaseModel):
+    range_label: str
+    days:        list[AttendanceDay] = []
+    stats:       AttendanceStats
+    alltime:     AttendanceAllTime
+
+
 class EmployeeDetailResponse(BaseModel):
     id:                 str
     full_name:          str
@@ -103,6 +132,7 @@ class EmployeeDetailResponse(BaseModel):
     week_end:      str
     week_label:    str
     this_week:     EmployeeWeekSummary
+    attendance:    AttendanceBlock
     rate_history:  list[RateHistoryItem] = []         # менеджер
     pay_history:   list[PayHistoryItem] = []          # менеджер
 
@@ -127,6 +157,8 @@ class WeekCell(BaseModel):
     actual_end:    str | None = None
     is_absent:     bool = False
     not_called:    bool = False
+    no_lunch:      bool = False
+    end_next_day:  bool = False
     hours:         float
     note:          str | None = None
 
@@ -141,6 +173,7 @@ class WeekRow(BaseModel):
     absent:      int
     earned:      int | None = None
     fact_locked: bool = False                         # неделя закрыта расчётом — факт не менять
+    archived:    bool = False                          # сотрудник в архиве — строка осталась за историю недели
 
 
 class WeekTotals(BaseModel):
@@ -183,6 +216,8 @@ class EntryDetailResponse(BaseModel):
     actual_end:    str | None = None
     is_absent:     bool = False
     not_called:    bool = False
+    no_lunch:      bool = False
+    end_next_day:  bool = False
     status:        str
     hours:         float
     note:          str | None = None
@@ -199,6 +234,8 @@ class EntryUpsert(BaseModel):
     actual_end:    str | None = None
     is_absent:     bool = False
     not_called:    bool = False
+    no_lunch:      bool = False
+    end_next_day:  bool = False
     note:          str | None = None
 
 
@@ -215,6 +252,8 @@ class DayFactItem(BaseModel):
     actual_end:   str | None = None
     is_absent:    bool = False
     not_called:   bool = False
+    no_lunch:     bool = False
+    end_next_day: bool = False
     note:         str | None = None
 
 
@@ -245,6 +284,7 @@ class PayrollRow(BaseModel):
     to_pay:       int
     overpaid:     int
     settled:      bool
+    archived:     bool = False                         # сотрудник в архиве — строка осталась за историю недели
 
 
 class PayrollTotals(BaseModel):

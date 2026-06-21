@@ -74,7 +74,7 @@ export function TimesheetPayrollFeature() {
                 {data.rows.map((r) => (
                   <tr key={r.employee_id} style={r.settled ? { background: 'color-mix(in oklab, var(--c-success) 4%, transparent)' } : undefined}>
                     <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${r.employee_id}`)}>
-                      <EmpIdentity name={r.full_name} subtitle={<>{r.position} · {fmtRate(r.rate_kopecks)}</>} />
+                      <EmpIdentity name={r.full_name} archived={r.archived} subtitle={<>{r.position} · {fmtRate(r.rate_kopecks)}</>} />
                     </td>
                     <td className="num">{fmtHours(r.hours)}</td>
                     <td className="num" style={{ fontWeight: 500 }}>{fmtMoney(r.earned)}</td>

@@ -92,6 +92,7 @@ export function ProductViewFeature({ productId }: Props) {
       actions={
         product ? (
           <>
+            {product.sku_pending && <Badge tone="warning">Ожидает SKU</Badge>}
             <Badge tone={product.is_active ? 'success' : ''}>{product.is_active ? 'Активен' : 'Архив'}</Badge>
             {isAdmin && (
               <button className="btn ghost danger" onClick={handleDelete} disabled={deleting}>
@@ -166,7 +167,7 @@ export function ProductViewFeature({ productId }: Props) {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14 }}>
                   <Info label="Тип" value={product.type_name ?? '—'} />
                   <Info label="Клиент" value={product.client_name ?? '—'} />
-                  <Info label="Базовый SKU" value={product.sku_base} mono />
+                  <Info label="Базовый SKU" value={product.sku_pending ? 'Ожидает уточнения' : product.sku_base} mono={!product.sku_pending} />
                   <Info label="Вес" value={product.weight_grams == null ? '—' : `${product.weight_grams.toLocaleString('ru-RU')} г`} />
                   <Info label="На паллете" value={product.items_per_pallet == null ? '—' : `${product.items_per_pallet.toLocaleString('ru-RU')} шт`} />
                   <Info label="Вариантов" value={product.variant_count.toLocaleString('ru-RU')} />

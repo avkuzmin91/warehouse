@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 from modules.auth.service import get_current_user
-from tests.conftest import make_client_id, cleanup_client
+from tests.conftest import make_client_id, cleanup_client, seed_storage_good
 
 
 _TODAY = "2026-06-09"
@@ -69,9 +69,15 @@ def _create_packing_doc(api, client_id: str) -> tuple[str, str]:
     r = api.post("/shipments", json=_payload(client_id))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
-    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
-    line_id = api.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
-    return doc_id, line_id
+    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    # Гейт перевода в план требует, чтобы позиция лежала на складе.
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], qty=line["qty"],
+    )
+    adv = api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
+    return doc_id, line["id"]
 
 
 # Полный поток упаковки (move-to-packing → pack good/defect → балансы) покрыт в test_packing_qc.py.

@@ -152,7 +152,7 @@ export function TimesheetWeekFeature() {
                 {data.rows.map((row) => (
                   <tr key={row.employee_id}>
                     <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${row.employee_id}`)}>
-                      <EmpIdentity name={row.full_name} subtitle={row.position} />
+                      <EmpIdentity name={row.full_name} archived={row.archived} subtitle={row.position} />
                     </td>
                     {row.cells.map((cell, i) => (
                       <DayCellView

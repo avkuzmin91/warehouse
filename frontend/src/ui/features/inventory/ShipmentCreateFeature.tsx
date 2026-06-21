@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile } from '../../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
-import type { BalanceItem } from '../../../api/balancesApi'
+import type { PlannableItem } from '../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../api/domainTypes'
 import { Combobox } from '../../data/Combobox'
@@ -28,7 +28,7 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = ShipmentLineIn & { _uid: string; _key: string; available: number; files: File[] }
+type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; files: File[] }
 type DraftLineFilePreview = FilePreviewMeta & { file: File }
 
 export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
@@ -70,7 +70,11 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
 
   const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
-  const hasOverflow = lines.some((l) => l.qty > l.available)
+  // Сверх остатка, но в пределах «остаток + в пути» — товар ещё едет: сохранить
+  // черновик можно, запланировать — только после прихода. Сверх «в пути» — реальный перебор.
+  const hasInTransit = lines.some((l) => l.qty > l.onHand && l.qty <= l.onHand + l.inTransit)
+  const hasOverCap = lines.some((l) => l.qty > l.onHand + l.inTransit)
+  const allOnStock = lines.every((l) => l.qty <= l.onHand)
   const logisticsCostNumber = Number(logisticsCost)
   const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
   // Брак-отгрузка минует упаковку: ТЗ не требуется, у строк должно быть местоположение.
@@ -82,7 +86,8 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : [{ ok: comment.trim() !== '', label: 'Техническое задание заполнено', error: 'Заполните техническое задание' }]),
     ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
-    { ok: !hasOverflow, label: 'Количество в пределах остатка', error: 'Уменьшите количество в позициях, где запрошено больше остатка' },
+    { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
+    { ok: allOnStock, label: 'Весь товар на остатках', error: 'Часть товара ещё в пути — сохраните черновик и запланируйте после прихода' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -132,7 +137,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
-  function addFromBalance(b: BalanceItem, qty: number, zoneId: string | null, zoneName: string | null) {
+  function addFromBalance(b: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) {
     setLines((ls) => [...ls, {
       _uid:              `line-${lineUidSeq.current++}`,
       _key:              balanceKey(b),
@@ -144,7 +149,8 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       size_id:           b.size_id,
       size_name:         b.size_name,
       qty,
-      available:         cargoType === 'defect' ? b.storage_defect : b.storage_good,
+      onHand:            cargoType === 'defect' ? b.storage_defect : b.storage_good,
+      inTransit:         cargoType === 'defect' ? 0 : b.in_transit,
       storage_zone_id:   zoneId,
       storage_zone_name: zoneName,
       store_id:          null,
@@ -237,6 +243,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         actions={
           <>
             <button className="btn" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
+            <button
+              className="btn"
+              disabled={saving || !clientId || lines.length === 0}
+              onClick={() => void handleSave(false)}
+              title="Сохранить как черновик — для товара, который ещё в пути"
+            >
+              <Icon name="save" size={13} />Сохранить черновик
+            </button>
             <PrimaryAction
               icon="check"
               label="Запланировать отгрузку"
@@ -250,9 +264,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         }
       />
 
-      {hasOverflow && (
+      {hasOverCap && (
         <Alert tone="warning" style={{ marginBottom: 14 }}>
-          <span style={{ fontWeight: 500 }}>Запрошено больше, чем доступно по одной или нескольким позициям.</span>
+          <span style={{ fontWeight: 500 }}>Запрошено больше, чем остаток и товар в пути по одной или нескольким позициям.</span>
+        </Alert>
+      )}
+      {!hasOverCap && hasInTransit && (
+        <Alert tone="info" style={{ marginBottom: 14 }}>
+          <span>Часть товара ещё в пути. Сохраните черновик — запланировать отгрузку можно будет после прихода.</span>
         </Alert>
       )}
 
@@ -302,7 +321,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
           </PhaseBlock>
 
           <PhaseBlock icon="boxes" title="Состав отгрузки" role="manager" state="active"
-            hint="Товар из остатков клиента"
+            hint="Товар на остатках и в пути"
             right={
               <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
                 <Icon name="plus" size={12} />Добавить товар
@@ -311,7 +330,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
 
             {lines.length === 0 ? (
               <div style={{ padding: '32px 0' }}>
-                <EmptyState title="Состав пуст" sub={clientId ? 'Нажмите «Добавить товар» для выбора из остатков' : 'Сначала выберите клиента'} />
+                <EmptyState title="Состав пуст" sub={clientId ? 'Нажмите «Добавить товар» — остатки и товар в пути' : 'Сначала выберите клиента'} />
               </div>
             ) : (
               <table className="t">
@@ -331,9 +350,10 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                 </thead>
                 <tbody>
                   {lines.map((l) => {
-                    const over = l.qty > l.available
+                    const overCap = l.qty > l.onHand + l.inTransit
+                    const waiting = !overCap && l.qty > l.onHand
                     return (
-                      <tr key={l._uid} style={over ? { background: 'var(--c-warning-bg)' } : {}}>
+                      <tr key={l._uid} style={overCap ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td>
                           <div style={{ width: 26, height: 26, borderRadius: 4, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <Icon name="box" size={12} style={{ color: 'var(--c-text-muted)' }} />
@@ -357,7 +377,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                             <NumberStep value={l.qty} onChange={(v) => updateQty(l._uid, v)} />
-                            {over && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
+                            {overCap ? (
+                              <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />
+                            ) : waiting ? (
+                              <Icon name="clock" size={13} style={{ color: 'var(--c-text-subtle)' }} />
+                            ) : null}
+                          </div>
+                          <div className="t-sub" style={{ textAlign: 'right', marginTop: 2 }}>
+                            на складе {l.onHand}{!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
                           </div>
                         </td>
                         <td style={{ textAlign: 'center' }}>

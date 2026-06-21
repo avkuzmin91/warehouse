@@ -103,6 +103,8 @@ def _ensure_runtime_schema() -> None:
             ALTER TABLE IF EXISTS products
                 ADD COLUMN IF NOT EXISTS weight_grams INTEGER
         """)
+        conn.execute("ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS sku_pending INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE IF EXISTS product_variants ADD COLUMN IF NOT EXISTS sku_pending INTEGER NOT NULL DEFAULT 0")
         # Орг. структура табеля: справочник должностей + связь сотрудника с учёткой/руководителем.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS positions (
@@ -413,6 +415,8 @@ def _ensure_runtime_schema() -> None:
                 actual_end    TEXT,
                 is_absent     INTEGER NOT NULL DEFAULT 0,
                 not_called    INTEGER NOT NULL DEFAULT 0,
+                no_lunch      INTEGER NOT NULL DEFAULT 0,
+                end_next_day  INTEGER NOT NULL DEFAULT 0,
                 note          TEXT,
                 created_at    TEXT NOT NULL,
                 created_by    TEXT,

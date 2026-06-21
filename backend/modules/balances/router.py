@@ -8,6 +8,7 @@ from modules.balances.schemas import (
     BalanceListResponse,
     BalanceSummaryResponse,
     BalanceZonesResponse,
+    PlannableListResponse,
     QualityChangeCreate,
     StockEntryCreate,
     WriteOffCreate,
@@ -22,6 +23,7 @@ from modules.balances.service import (
     get_balances,
     get_balances_by_zone,
     get_balances_summary,
+    get_plannable_items,
     list_zone_relocations,
 )
 
@@ -63,6 +65,25 @@ def balances_summary(
             client_id=client_id,
             search=search,
             has_defect=has_defect,
+        )
+
+
+@router.get("/balances/plannable", response_model=PlannableListResponse)
+def list_plannable_items(
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    cargo_type: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    user=Depends(get_current_shipment_viewer),
+):
+    """Позиции для планирования отгрузки: остаток на складе + товар в пути."""
+    with get_connection() as conn:
+        return get_plannable_items(
+            conn,
+            client_id=client_id,
+            search=search,
+            cargo_type=cargo_type,
+            limit=limit,
         )
 
 

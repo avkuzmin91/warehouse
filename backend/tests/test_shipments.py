@@ -10,7 +10,7 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
-from tests.conftest import admin_client, warehouse_client, make_client_id, cleanup_client  # noqa: F401
+from tests.conftest import admin_client, warehouse_client, make_client_id, cleanup_client, seed_storage_good  # noqa: F401
 
 
 @pytest.fixture
@@ -97,14 +97,83 @@ def _fake_line() -> dict:
 
 def test_shipment_cancel_allowed_in_packing(admin_client, client_id):
     """Аннулировать можно в черновике и «В плане» (до передачи на упаковку)."""
-    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [_fake_line()]))
+    line = _fake_line()
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=line["qty"],
+    )
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
 
     r_cancel = admin_client.post(f"/shipments/{doc_id}/cancel")
     assert r_cancel.status_code == 200, r_cancel.text
     assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "cancelled"
+
+
+def test_shipment_plan_gate_blocks_when_in_transit(admin_client, client_id):
+    """Перевод в план блокируется, если товара ещё нет на остатках (он в пути)."""
+    line = _fake_line()
+    line["qty"] = 10  # ничего не засеяли в storage → на складе 0
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")
+    assert adv.status_code == 400, adv.text
+    assert "в пути" in adv.json()["detail"].lower()
+
+
+def test_shipment_plan_gate_passes_when_stock_arrives(admin_client, client_id):
+    """Как только товар появился на остатках — перевод в план проходит."""
+    line = _fake_line()
+    line["qty"] = 10
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    doc_id = r.json()["message"]
+    assert admin_client.post(f"/shipments/{doc_id}/advance").status_code == 400
+
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=10,
+    )
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
+
+
+def test_shipment_plan_gate_partial_stock_blocks(admin_client, client_id):
+    """Частичного покрытия мало — нужен весь объём (всё-или-ничего)."""
+    line = _fake_line()
+    line["qty"] = 10
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=6,  # на складе только 6 из 10
+    )
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    doc_id = r.json()["message"]
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")
+    assert adv.status_code == 400, adv.text
+
+
+def test_plannable_lists_stock_and_in_transit(admin_client, client_id):
+    """Эндпоинт планирования отдаёт остаток на складе и товар в пути."""
+    line = _fake_line()
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=15,
+    )
+    r = admin_client.get(f"/balances/plannable?client_id={client_id}")
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    match = next((i for i in items if i["product_id"] == line["product_id"]), None)
+    assert match is not None
+    assert match["storage_good"] == 15
+    assert match["in_transit"] == 0
 
 
 def test_shipment_list_returns_pagination(admin_client):

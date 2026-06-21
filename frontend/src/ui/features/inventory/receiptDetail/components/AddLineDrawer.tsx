@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { addReceiptLine } from '../../../../../api/receiptsApi'
 import {
-  getInventoryColorsForProductSku,
+  getInventoryColorsForProduct,
   getInventoryProducts,
-  getInventorySizesForProductSkuAndColor,
+  getInventorySizesForProductAndColor,
 } from '../../../../../api/inventoryLookupsApi'
 import type { DictionaryItem, InventoryProductLookup } from '../../../../../api/domainTypes'
 import { Combobox } from '../../../../data/Combobox'
@@ -53,18 +53,18 @@ export function AddLineDrawer({ docId, clientId, open, existingKeys = [], onClos
     setColors([])
     setSizeId('')
     setSizes([])
-    if (selectedProduct?.sku) {
-      getInventoryColorsForProductSku(selectedProduct.sku).then(setColors)
+    if (selectedProduct) {
+      getInventoryColorsForProduct(selectedProduct.id).then(setColors)
     }
-  }, [productId, selectedProduct?.sku])
+  }, [productId, selectedProduct?.id])
 
   useEffect(() => {
     setSizeId('')
     setSizes([])
-    if (selectedProduct?.sku && colorId) {
-      getInventorySizesForProductSkuAndColor(selectedProduct.sku, colorId).then(setSizes)
+    if (selectedProduct && colorId) {
+      getInventorySizesForProductAndColor(selectedProduct.id, colorId).then(setSizes)
     }
-  }, [colorId, selectedProduct?.sku])
+  }, [colorId, selectedProduct?.id])
 
   const needsColor = receiptLineColorRequired(selectedProduct)
   const needsSize = receiptLineSizeRequired(selectedProduct)
@@ -125,7 +125,7 @@ export function AddLineDrawer({ docId, clientId, open, existingKeys = [], onClos
         <Combobox
           value={productId}
           placeholder="Поиск по SKU или названию…"
-          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku }))}
+          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku_pending ? 'Без SKU' : p.sku }))}
           onChange={(v) => setProductId(String(v ?? ''))}
           prefix="search"
         />
