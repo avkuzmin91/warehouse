@@ -41,6 +41,20 @@ def test_day_hours_missing():
     assert day_hours("08:00", None) == 0.0
 
 
+def test_day_hours_no_lunch():
+    assert day_hours("08:00", "20:00", lunch=False) == 12.0   # без обеда — час не вычитаем
+    # короткий день без обеда не обнуляется (обнуление защищало вычет от ухода в минус)
+    assert day_hours("08:00", "08:30", lunch=False) == 0.5
+
+
+def test_day_hours_end_next_day():
+    assert day_hours("08:00", "02:00", end_next_day=True) == 17.0   # (26:00−08:00)−1 ч
+    # ночная смена без обеда
+    assert day_hours("08:00", "02:00", lunch=False, end_next_day=True) == 18.0
+    # без флага уход ≤ приход → 0 (нельзя случайно посчитать ночную как дневную)
+    assert day_hours("08:00", "02:00") == 0.0
+
+
 # ── Юнит: расчётная неделя Сб → Пт ────────────────────────────────────────────
 
 def test_week_start_saturday_is_itself():
@@ -145,8 +159,8 @@ def employee():
         from uuid import uuid4
         eid = str(uuid4())
         conn.execute(
-            "INSERT INTO employees (id,full_name,position,status,created_at) "
-            "VALUES (?,?,?, 'active', NOW())",
+            "INSERT INTO employees (id,full_name,position,status,hired_on,created_at) "
+            "VALUES (?,?,?, 'active', '2024-01-01', NOW())",
             (eid, "Тестов Тест Тестович", "Грузчик"),
         )
         conn.execute(
@@ -173,9 +187,11 @@ def _make_employee(full_name: str, user_id: str | None = None) -> str:
     from uuid import uuid4
     eid = str(uuid4())
     with get_connection() as conn:
+        # hired_on до WEEK — давний сотрудник, попадает в историческую тестовую неделю
+        # (неделя показывает активных, принятых не позже её конца).
         conn.execute(
-            "INSERT INTO employees (id,full_name,status,user_id,created_at) "
-            "VALUES (?,?, 'active', ?, NOW())",
+            "INSERT INTO employees (id,full_name,status,user_id,hired_on,created_at) "
+            "VALUES (?,?, 'active', ?, '2024-01-01', NOW())",
             (eid, full_name, user_id),
         )
         conn.commit()
@@ -246,6 +262,54 @@ def test_week_grid_hours_and_money_for_manager(manager_client, employee):
     assert row["earned"] == round(11.0 * RATE)   # 385000
 
 
+def test_entry_overnight_no_lunch_hours_and_money(manager_client, employee):
+    # Ночная смена 08:00 → 02:00 без обеда: (26:00−08:00) = 18 ч, час не вычитаем.
+    r = manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": "08:00", "actual_end": "02:00",
+        "end_next_day": True, "no_lunch": True,
+    })
+    assert r.status_code == 200, r.text
+
+    body = manager_client.get(f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}").json()
+    assert body["end_next_day"] is True
+    assert body["no_lunch"] is True
+    assert body["hours"] == 18.0
+
+    row = next(x for x in manager_client.get(f"/timesheet/week?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert row["hours"] == 18.0
+    assert row["earned"] == round(18.0 * RATE)
+
+    # Флаги без полного факта не сохраняются (свойство факта, не плана).
+    r2 = manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": None, "actual_end": None,
+        "no_lunch": True, "end_next_day": True,
+    })
+    assert r2.status_code == 200, r2.text
+    body2 = manager_client.get(f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}").json()
+    assert body2["no_lunch"] is False
+    assert body2["end_next_day"] is False
+
+
+def test_day_fact_bulk_overnight_no_lunch(manager_client, employee):
+    r = manager_client.put("/timesheet/day-fact", json={
+        "work_date": WORK_DATE,
+        "items": [{
+            "employee_id": employee, "actual_start": "08:00", "actual_end": "02:00",
+            "end_next_day": True, "no_lunch": True,
+        }],
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "1"
+    body = manager_client.get(f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}").json()
+    assert body["hours"] == 18.0
+    assert body["end_next_day"] is True and body["no_lunch"] is True
+
+
 def test_week_grid_hides_money_for_supervisor(shift_supervisor_client, sup_employee):
     # Начальник смены ведёт факт своего подчинённого и видит часы, но не деньги.
     _add_worked_day(shift_supervisor_client, sup_employee)
@@ -268,6 +332,55 @@ def test_rates_forbidden_for_supervisor(shift_supervisor_client, employee):
         json={"rate_kopecks": 40000, "effective_from": "2026-01-01"},
     )
     assert r.status_code == 403
+
+
+def test_archived_employee_keeps_historical_payroll(manager_client, employee):
+    # Сотрудник отработал и получил аванс на WEEK, затем ушёл в архив.
+    _add_worked_day(manager_client, employee)
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 100000, "kind": "advance",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+    assert manager_client.post(f"/employees/{employee}/archive").status_code == 200
+
+    # Историческая неделя сохраняет строку — суммы сходятся, помечено «архив».
+    row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert row["earned"] == 385000
+    assert row["advances"] == 100000
+    assert row["archived"] is True
+    wrow = next(x for x in manager_client.get(f"/timesheet/week?week={WEEK}").json()["rows"]
+                if x["employee_id"] == employee)
+    assert wrow["archived"] is True
+
+
+def test_archived_employee_drops_from_empty_week(manager_client, employee):
+    # Архивный без данных за неделю — в этой неделе его уже нет.
+    assert manager_client.post(f"/employees/{employee}/archive").status_code == 200
+    pids = {x["employee_id"] for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]}
+    assert employee not in pids
+
+
+def test_new_hire_absent_from_weeks_before_hire(manager_client):
+    # Сотрудник принят 01.06.2026 — на неделях до приёма его быть не должно.
+    from uuid import uuid4
+    eid = str(uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO employees (id,full_name,status,hired_on,created_at) "
+            "VALUES (?,?, 'active', '2026-06-01', NOW())",
+            (eid, "Новичков Новичок"),
+        )
+        conn.commit()
+    try:
+        # Старая неделя (2025) — новичка нет.
+        old_ids = {x["employee_id"] for x in manager_client.get(f"/timesheet/week?week={WEEK}").json()["rows"]}
+        assert eid not in old_ids
+        # Неделя приёма (Сб 31.05.2026) — уже есть.
+        hire_ids = {x["employee_id"] for x in manager_client.get("/timesheet/week?week=2026-05-31").json()["rows"]}
+        assert eid in hire_ids
+    finally:
+        _delete_employee(eid)
 
 
 def test_advance_reduces_to_pay_then_settle(manager_client, employee):

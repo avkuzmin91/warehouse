@@ -11,7 +11,10 @@ from config import (
     INV_Q_GOOD,
     INV_QUALITY_LABELS,
     RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
+    RECEIPT_STATUS_PLANNED,
+    SHIPMENT_CARGO_DEFECT,
     WRITEOFF_REASON_OTHER,
 )
 from dbconn import like_substring_param
@@ -21,7 +24,15 @@ from modules.balances.schemas import (
     BalanceSummaryResponse,
     BalanceZoneItem,
     BalanceZonesResponse,
+    PlannableItem,
+    PlannableListResponse,
 )
+
+# Поступления, товар которых ещё «в пути»: заявлен (planned) либо рейс пришёл и идёт
+# приёмка (on_intake). Принятое уже лежит в storage (попадает в storage_good), поэтому
+# «в пути» = planned − accepted; on_review/done/cancelled — не в пути.
+_IN_TRANSIT_STATUSES = (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE)
+_IN_TRANSIT_STATUS_SQL = ", ".join(f"'{s}'" for s in _IN_TRANSIT_STATUSES)
 
 # Модель остатков на двух осях — чистый replay журнала zone_relocations:
 #   операционный статус: storage «На хранении» | packing «На упаковке» |
@@ -202,6 +213,120 @@ def get_balances(
         )
 
     return BalanceListResponse(items=items, total=total, page=page, limit=limit)
+
+
+def get_plannable_items(
+    connection,
+    *,
+    client_id: str | None,
+    search: str | None,
+    cargo_type: str | None,
+    limit: int,
+) -> PlannableListResponse:
+    """Позиции, доступные для планирования отгрузки: остаток на складе + товар в пути.
+
+    Объединяет журнальный остаток `storage` (good/defect) с заявленным, но ещё не
+    приехавшим товаром (`planned − accepted` по поступлениям planned/on_intake).
+    Видимость: для годного груза — есть годный остаток ИЛИ что-то в пути; для брака —
+    есть остаток брака на хранении (брак в пути не считаем — он рождается на складе).
+    """
+    is_defect = cargo_type == SHIPMENT_CARGO_DEFECT
+
+    query = f"""
+        WITH stock AS (
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(product_name) AS product_name, MAX(product_sku) AS product_sku,
+                   MAX(color_name) AS color_name, MAX(size_name) AS size_name,
+                   MAX(client_name) AS client_name,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS storage_good,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS storage_defect
+            FROM zone_relocations
+            GROUP BY product_id, client_id, color_id, size_id
+        ),
+        incoming AS (
+            SELECT l.product_id, d.client_id, l.color_id, l.size_id,
+                   MAX(l.product_name) AS product_name, MAX(l.product_sku) AS product_sku,
+                   MAX(l.color_name) AS color_name, MAX(l.size_name) AS size_name,
+                   MAX(cl.name) AS client_name,
+                   SUM(GREATEST(COALESCE(l.planned_qty, 0) - COALESCE(l.accepted_qty, 0), 0)) AS in_transit
+            FROM receipt_lines l
+            JOIN receipt_docs d  ON d.id = l.doc_id
+            LEFT JOIN clients cl ON cl.id = d.client_id
+            WHERE l.is_deleted = 0 AND d.is_deleted = 0 AND d.status IN ({_IN_TRANSIT_STATUS_SQL})
+            GROUP BY l.product_id, d.client_id, l.color_id, l.size_id
+        ),
+        keys AS (
+            SELECT product_id, client_id, color_id, size_id FROM stock
+            UNION
+            SELECT product_id, client_id, color_id, size_id FROM incoming
+        )
+        SELECT k.product_id, k.client_id AS client_id, k.color_id, k.size_id,
+               COALESCE(s.product_name, i.product_name) AS product_name,
+               COALESCE(s.product_sku,  i.product_sku)  AS product_sku,
+               COALESCE(s.color_name,   i.color_name)   AS color_name,
+               COALESCE(s.size_name,    i.size_name)    AS size_name,
+               COALESCE(s.client_name,  i.client_name)  AS client_name,
+               COALESCE(s.storage_good, 0)   AS storage_good,
+               COALESCE(s.storage_defect, 0) AS storage_defect,
+               COALESCE(i.in_transit, 0)     AS in_transit
+        FROM keys k
+        LEFT JOIN stock s
+            ON s.product_id = k.product_id
+           AND s.client_id IS NOT DISTINCT FROM k.client_id
+           AND s.color_id  IS NOT DISTINCT FROM k.color_id
+           AND s.size_id   IS NOT DISTINCT FROM k.size_id
+        LEFT JOIN incoming i
+            ON i.product_id = k.product_id
+           AND i.client_id IS NOT DISTINCT FROM k.client_id
+           AND i.color_id  IS NOT DISTINCT FROM k.color_id
+           AND i.size_id   IS NOT DISTINCT FROM k.size_id
+    """
+
+    conds: list[str] = []
+    params: list = []
+    if client_id:
+        conds.append("p.client_id = ?")
+        params.append(client_id.strip())
+    if search:
+        s = like_substring_param(search)
+        conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ?)")
+        params += [s, s]
+    conds.append("p.storage_defect > 0" if is_defect else "(p.storage_good > 0 OR p.in_transit > 0)")
+    where = "WHERE " + " AND ".join(conds)
+
+    rows = connection.execute(
+        f"""
+        SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending
+        FROM ({query}) p
+        LEFT JOIN products prod ON prod.id = p.product_id
+        {where}
+        ORDER BY p.product_name, p.color_name, p.size_name
+        LIMIT ?
+        """,
+        params + [limit],
+    ).fetchall()
+
+    items = [
+        PlannableItem(
+            product_id=str(r["product_id"]),
+            product_name=str(r["product_name"]),
+            product_sku=str(r["product_sku"]),
+            sku_pending=bool(r["sku_pending"]),
+            client_id=r["client_id"],
+            client_name=r["client_name"],
+            color_id=r["color_id"],
+            color_name=r["color_name"],
+            size_id=r["size_id"],
+            size_name=r["size_name"],
+            storage_good=int(r["storage_good"] or 0),
+            storage_defect=int(r["storage_defect"] or 0),
+            in_transit=0 if is_defect else int(r["in_transit"] or 0),
+        )
+        for r in rows
+    ]
+    return PlannableListResponse(items=items)
 
 
 def get_balances_summary(

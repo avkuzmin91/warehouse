@@ -40,6 +40,7 @@ from .schemas import (
     EmployeeLookupItem,
     EmployeeUpdate,
     EmployeeWeekSummary,
+    AttendanceBlock,
     EntryDetailResponse,
     EntryOpItem,
     EntryUpsert,
@@ -55,6 +56,7 @@ from .schemas import (
     WeekResponse,
 )
 from .service import (
+    build_attendance,
     build_payroll,
     build_week,
     business_today,
@@ -166,6 +168,18 @@ def _record_payment(
         uid=uid,
     )
     return payment_id
+
+
+def _fact_text(fs: str | None, fe: str | None, no_lunch: int, end_next_day: int) -> str:
+    """Человекочитаемое описание факта для журнала: «08:00–02:00 (+1 день, без обеда)»."""
+    if not (fs and fe):
+        return "нет"
+    extra: list[str] = []
+    if end_next_day:
+        extra.append("+1 день")
+    if no_lunch:
+        extra.append("без обеда")
+    return f"{fs}–{fe}" + (f" ({', '.join(extra)})" if extra else "")
 
 
 def _op(conn, entry_id: str, op_type: str, comment: str, uid: str, now: str) -> None:
@@ -307,6 +321,7 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         ).fetchone()
         entries = load_entries_range(conn, sat.isoformat(), fri.isoformat())
         rates = load_rates(conn, [emp_id]).get(emp_id) if with_money else None
+        attendance = build_attendance(conn, emp_id, emp["hired_on"])
 
         pays_period = None
         rate_history: list[RateHistoryItem] = []
@@ -379,6 +394,7 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
             to_pay=s["to_pay"] if with_money else None,
             overpaid=s["overpaid"] if with_money else None,
         ),
+        attendance=AttendanceBlock(**attendance),
         rate_history=rate_history,
         pay_history=pay_history,
     )
@@ -517,6 +533,8 @@ def get_entry(
         actual_end=entry.get("actual_end") if entry else None,
         is_absent=bool(entry.get("is_absent")) if entry else False,
         not_called=bool(entry.get("not_called")) if entry else False,
+        no_lunch=bool(entry.get("no_lunch")) if entry else False,
+        end_next_day=bool(entry.get("end_next_day")) if entry else False,
         status=day_status(entry, work_date, today_iso),
         hours=entry_hours(entry),
         note=entry.get("note") if entry else None,
@@ -540,6 +558,9 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
     absent = 0 if not_called else (1 if body.is_absent else 0)
     if not_called:
         fs = fe = None
+    # Флаги — свойства факта: без полного факта (приход+уход) обнуляем.
+    no_lunch = 1 if (body.no_lunch and fs and fe) else 0
+    end_next_day = 1 if (body.end_next_day and fs and fe) else 0
     if (fs or fe or absent) and work_date > business_today().isoformat():
         raise HTTPException(status_code=400, detail="Нельзя внести факт за ненаступивший день")
     uid = str(user["id"])
@@ -560,7 +581,9 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
             else:
                 fact_changed = (fs, fe) != (row["actual_start"], row["actual_end"]) \
                     or absent != int(row["is_absent"] or 0) \
-                    or not_called != int(row["not_called"] or 0)
+                    or not_called != int(row["not_called"] or 0) \
+                    or no_lunch != int(row["no_lunch"] or 0) \
+                    or end_next_day != int(row["end_next_day"] or 0)
             if fact_changed:
                 raise HTTPException(status_code=400, detail=_FACT_LOCKED_MSG)
 
@@ -568,14 +591,15 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
             entry_id = str(uuid4())
             conn.execute(
                 "INSERT INTO timesheet_entries "
-                "(id,employee_id,work_date,planned_start,planned_end,actual_start,actual_end,is_absent,not_called,note,created_at,created_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (entry_id, body.employee_id, work_date, ps, pe, fs, fe, absent, not_called, note, now, uid),
+                "(id,employee_id,work_date,planned_start,planned_end,actual_start,actual_end,is_absent,not_called,no_lunch,end_next_day,note,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (entry_id, body.employee_id, work_date, ps, pe, fs, fe, absent, not_called, no_lunch, end_next_day, note, now, uid),
             )
             if ps and pe:
                 _op(conn, entry_id, TIMESHEET_OP_PLAN_SET, f"План: {ps}–{pe}", uid, now)
             if fs and fe:
-                _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт: {fs}–{fe}", uid, now)
+                _op(conn, entry_id, TIMESHEET_OP_FACT_SET,
+                    f"Факт: {_fact_text(fs, fe, no_lunch, end_next_day)}", uid, now)
             if absent:
                 _op(conn, entry_id, TIMESHEET_OP_ABSENT_MARK, "Отмечен «не вышел»", uid, now)
             if not_called:
@@ -585,6 +609,7 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
         else:
             entry_id = str(row["id"])
             old = dict(row)
+            old_nl, old_end = int(old.get("no_lunch") or 0), int(old.get("end_next_day") or 0)
 
             def _pair(a, b):
                 return f"{a}–{b}" if a and b else "нет"
@@ -592,9 +617,11 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
             if (ps, pe) != (old.get("planned_start"), old.get("planned_end")):
                 _op(conn, entry_id, TIMESHEET_OP_PLAN_SET,
                     f"План: {_pair(old.get('planned_start'), old.get('planned_end'))} → {_pair(ps, pe)}", uid, now)
-            if (fs, fe) != (old.get("actual_start"), old.get("actual_end")):
+            if (fs, fe) != (old.get("actual_start"), old.get("actual_end")) \
+                    or (no_lunch, end_next_day) != (old_nl, old_end):
                 _op(conn, entry_id, TIMESHEET_OP_FACT_SET,
-                    f"Факт: {_pair(old.get('actual_start'), old.get('actual_end'))} → {_pair(fs, fe)}", uid, now)
+                    f"Факт: {_fact_text(old.get('actual_start'), old.get('actual_end'), old_nl, old_end)}"
+                    f" → {_fact_text(fs, fe, no_lunch, end_next_day)}", uid, now)
             if absent != int(old.get("is_absent") or 0):
                 _op(conn, entry_id,
                     TIMESHEET_OP_ABSENT_MARK if absent else TIMESHEET_OP_ABSENT_CLEAR,
@@ -608,8 +635,8 @@ def upsert_entry(body: EntryUpsert, user=Depends(_get_timesheet)):
 
             conn.execute(
                 "UPDATE timesheet_entries SET planned_start=?,planned_end=?,actual_start=?,actual_end=?,"
-                "is_absent=?,not_called=?,note=?,updated_at=? WHERE id=?",
-                (ps, pe, fs, fe, absent, not_called, note, now, entry_id),
+                "is_absent=?,not_called=?,no_lunch=?,end_next_day=?,note=?,updated_at=? WHERE id=?",
+                (ps, pe, fs, fe, absent, not_called, no_lunch, end_next_day, note, now, entry_id),
             )
         conn.commit()
     return {"message": "ok"}
@@ -685,9 +712,6 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
     now = _now()
     saved = 0
 
-    def _pair(a, b):
-        return f"{a}–{b}" if a and b else "нет"
-
     with get_connection() as conn:
         settled = settled_ids_for_date(conn, work_date)
         for item in body.items:
@@ -704,6 +728,8 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
             absent = 0 if not_called else (1 if item.is_absent else 0)
             fs = None if (absent or not_called) else _time_or_none(item.actual_start, "Факт · приход")
             fe = None if (absent or not_called) else _time_or_none(item.actual_end, "Факт · уход")
+            no_lunch = 1 if (item.no_lunch and fs and fe) else 0
+            end_next_day = 1 if (item.end_next_day and fs and fe) else 0
             note = _clean(item.note)
             row = conn.execute(
                 "SELECT * FROM timesheet_entries "
@@ -717,12 +743,13 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
                 entry_id = str(uuid4())
                 conn.execute(
                     "INSERT INTO timesheet_entries "
-                    "(id,employee_id,work_date,actual_start,actual_end,is_absent,not_called,note,created_at,created_by) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (entry_id, emp_id, work_date, fs, fe, absent, not_called, note, now, uid),
+                    "(id,employee_id,work_date,actual_start,actual_end,is_absent,not_called,no_lunch,end_next_day,note,created_at,created_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (entry_id, emp_id, work_date, fs, fe, absent, not_called, no_lunch, end_next_day, note, now, uid),
                 )
                 if fs and fe:
-                    _op(conn, entry_id, TIMESHEET_OP_FACT_SET, f"Факт: {fs}–{fe}", uid, now)
+                    _op(conn, entry_id, TIMESHEET_OP_FACT_SET,
+                        f"Факт: {_fact_text(fs, fe, no_lunch, end_next_day)}", uid, now)
                 if absent:
                     _op(conn, entry_id, TIMESHEET_OP_ABSENT_MARK, "Отмечен «не вышел»", uid, now)
                 if not_called:
@@ -733,10 +760,13 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
             else:
                 entry_id = str(row["id"])
                 old = dict(row)
+                old_nl, old_end = int(old.get("no_lunch") or 0), int(old.get("end_next_day") or 0)
                 changed = False
-                if (fs, fe) != (old.get("actual_start"), old.get("actual_end")):
+                if (fs, fe) != (old.get("actual_start"), old.get("actual_end")) \
+                        or (no_lunch, end_next_day) != (old_nl, old_end):
                     _op(conn, entry_id, TIMESHEET_OP_FACT_SET,
-                        f"Факт: {_pair(old.get('actual_start'), old.get('actual_end'))} → {_pair(fs, fe)}", uid, now)
+                        f"Факт: {_fact_text(old.get('actual_start'), old.get('actual_end'), old_nl, old_end)}"
+                        f" → {_fact_text(fs, fe, no_lunch, end_next_day)}", uid, now)
                     changed = True
                 if absent != int(old.get("is_absent") or 0):
                     _op(conn, entry_id,
@@ -755,8 +785,8 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
                 if changed:
                     new_note = note if note is not None else old.get("note")
                     conn.execute(
-                        "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=?,not_called=?,note=?,updated_at=? WHERE id=?",
-                        (fs, fe, absent, not_called, new_note, now, entry_id),
+                        "UPDATE timesheet_entries SET actual_start=?,actual_end=?,is_absent=?,not_called=?,no_lunch=?,end_next_day=?,note=?,updated_at=? WHERE id=?",
+                        (fs, fe, absent, not_called, no_lunch, end_next_day, new_note, now, entry_id),
                     )
                     saved += 1
         conn.commit()

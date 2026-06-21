@@ -102,6 +102,7 @@ export type ProductItem = {
   type_id: string
   type_name: string | null
   sku_base: string
+  sku_pending?: boolean
   weight_grams: number | null
   items_per_pallet: number | null
   requires_color: boolean
@@ -189,6 +190,7 @@ export type ProductListQueryParams = {
   type_id?: string
   client_id?: string
   actuality_id?: string
+  sku_pending?: boolean
   sort?: string
 }
 
@@ -203,6 +205,7 @@ export type InventoryProductLookup = {
   id: string
   name: string
   sku: string
+  sku_pending?: boolean
   type_id: string
   type_name: string
   supplier_id: string | null

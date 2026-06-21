@@ -5,7 +5,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import { useToast } from '../../feedback/Toast'
 import { useNavigate } from 'react-router-dom'
-import { EmpIdentity, MiniStat, WeekNavigator, addDays, nextWeekStartIso } from './shared'
+import { EmpIdentity, MiniStat, WeekNavigator, addDays, currentWeekStartIso } from './shared'
 import { getTimesheetWeek, upsertEntry, type WeekResponse, type WeekRow, type WeekCell } from '../../../api/timesheetApi'
 
 const STD: [string, string] = ['08:00', '20:00']
@@ -33,7 +33,7 @@ type EditCell = { employeeId: string; date: string }
 
 export function TimesheetPlanningFeature() {
   const [weekParam, setWeekParam] = useFilterParam('week', '')
-  const week = weekParam || nextWeekStartIso()
+  const week = weekParam || currentWeekStartIso()
   const [tick, setTick] = useState(0)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [editing, setEditing] = useState<EditCell | null>(null)
@@ -54,6 +54,8 @@ export function TimesheetPlanningFeature() {
     actual_end: cell.actual_end,
     is_absent: cell.status === 'absent',
     not_called: cell.not_called,
+    no_lunch: cell.no_lunch,
+    end_next_day: cell.end_next_day,
     note: cell.note,
   })
 

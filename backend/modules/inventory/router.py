@@ -26,6 +26,7 @@ class InventoryProductLookup(BaseModel):
     id: str
     name: str
     sku: str
+    sku_pending: bool = False
     type_id: str
     type_name: str
     supplier_id: str | None = None
@@ -207,7 +208,8 @@ def lookup_products(
     with get_connection() as connection:
         rows = connection.execute(
             f"""
-            SELECT p.id, p.name, p.sku, p.type_id, pt.name AS type_name,
+            SELECT p.id, p.name, p.sku, COALESCE(p.sku_pending, 0) AS sku_pending,
+                   p.type_id, pt.name AS type_name,
                    p.supplier_id, s.name AS supplier_name,
                    COALESCE(pt.requires_color, 0) AS requires_color,
                    COALESCE(pt.requires_size, 0) AS requires_size
@@ -226,6 +228,7 @@ def lookup_products(
             id=str(row["id"]),
             name=str(row["name"]),
             sku=str(row["sku"]),
+            sku_pending=bool(row["sku_pending"]),
             type_id=str(row["type_id"]),
             type_name=str(row["type_name"]),
             supplier_id=str(row["supplier_id"]) if row["supplier_id"] else None,
@@ -253,14 +256,26 @@ def lookup_skus(user=Depends(get_current_manager)):
 
 
 @router.get("/lookups/colors-for-sku", response_model=list[DictionaryBaseItem])
-def lookup_colors_for_sku(sku: str = Query(""), user=Depends(get_current_manager)):
+def lookup_colors_for_sku(
+    sku: str = Query(""),
+    product_id: str = Query(""),
+    user=Depends(get_current_manager),
+):
     _ = user
     sku_t = sku.strip()
-    if not sku_t:
+    pid_t = product_id.strip()
+    # Товары «ожидают SKU» имеют пустой SKU, поэтому ключом служит product_id, если он задан.
+    if not pid_t and not sku_t:
         return []
+    if pid_t:
+        match_sql = "v.product_id = ?"
+        match_params: tuple = (pid_t,)
+    else:
+        match_sql = "(LOWER(TRIM(p.sku)) = LOWER(?) OR LOWER(TRIM(v.sku)) = LOWER(?))"
+        match_params = (sku_t, sku_t)
     with get_connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             SELECT DISTINCT c.id, c.name, c.is_active, COALESCE(c.is_deleted, 0) AS is_deleted,
                    c.deleted_at, deleter.email AS deleted_by,
                    c.created_at, creator.email AS created_by,
@@ -271,13 +286,13 @@ def lookup_colors_for_sku(sku: str = Query(""), user=Depends(get_current_manager
             LEFT JOIN users creator ON creator.id = c.creator_id
             LEFT JOIN users editor ON editor.id = c.updated_by_id
             LEFT JOIN users deleter ON deleter.id = c.deleted_by_id
-            WHERE (LOWER(TRIM(p.sku)) = LOWER(?) OR LOWER(TRIM(v.sku)) = LOWER(?))
+            WHERE {match_sql}
               AND p.is_active = 1 AND COALESCE(p.is_deleted, 0) = 0
               AND v.is_active = 1 AND COALESCE(v.is_deleted, 0) = 0
               AND c.is_active = 1 AND COALESCE(c.is_deleted, 0) = 0
             ORDER BY c.name ASC
             """,
-            (sku_t, sku_t),
+            match_params,
         ).fetchall()
     return [_dict_item(row) for row in rows]
 
@@ -285,17 +300,25 @@ def lookup_colors_for_sku(sku: str = Query(""), user=Depends(get_current_manager
 @router.get("/lookups/sizes-for-sku", response_model=list[DictionaryBaseItem])
 def lookup_sizes_for_sku(
     sku: str = Query(""),
+    product_id: str = Query(""),
     color_id: str = Query(""),
     user=Depends(get_current_manager),
 ):
     _ = user
     sku_t = sku.strip()
+    pid_t = product_id.strip()
     color_t = color_id.strip()
-    if not sku_t or not color_t:
+    if not color_t or (not pid_t and not sku_t):
         return []
+    if pid_t:
+        match_sql = "v.product_id = ?"
+        match_params: tuple = (pid_t,)
+    else:
+        match_sql = "(LOWER(TRIM(p.sku)) = LOWER(?) OR LOWER(TRIM(v.sku)) = LOWER(?))"
+        match_params = (sku_t, sku_t)
     with get_connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             SELECT DISTINCT sz.id, sz.name, sz.is_active, COALESCE(sz.is_deleted, 0) AS is_deleted,
                    sz.deleted_at, deleter.email AS deleted_by,
                    sz.created_at, creator.email AS created_by,
@@ -306,13 +329,13 @@ def lookup_sizes_for_sku(
             LEFT JOIN users creator ON creator.id = sz.creator_id
             LEFT JOIN users editor ON editor.id = sz.updated_by_id
             LEFT JOIN users deleter ON deleter.id = sz.deleted_by_id
-            WHERE (LOWER(TRIM(p.sku)) = LOWER(?) OR LOWER(TRIM(v.sku)) = LOWER(?))
+            WHERE {match_sql}
               AND v.color_id = ?
               AND p.is_active = 1 AND COALESCE(p.is_deleted, 0) = 0
               AND v.is_active = 1 AND COALESCE(v.is_deleted, 0) = 0
               AND sz.is_active = 1 AND COALESCE(sz.is_deleted, 0) = 0
             ORDER BY sz.name ASC
             """,
-            (sku_t, sku_t, color_t),
+            (*match_params, color_t),
         ).fetchall()
     return [_dict_item(row) for row in rows]

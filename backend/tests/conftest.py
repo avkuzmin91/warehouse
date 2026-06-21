@@ -151,3 +151,37 @@ def cleanup_client(cid: str) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.commit()
+
+
+def seed_storage_good(
+    client_id: str,
+    *,
+    product_id: str,
+    product_name: str = "Seed Product",
+    product_sku: str = "SEED-001",
+    color_id: str | None = None,
+    color_name: str | None = None,
+    size_id: str | None = None,
+    size_name: str | None = None,
+    qty: int,
+) -> None:
+    """Засеять годный остаток «На хранении» по позиции (журнальное движение intake→storage).
+
+    Нужен тестам, которые переводят отгрузку в план: с гейтом покрытия остатком
+    позиция должна реально лежать на складе."""
+    from modules.balances.service import insert_inventory_move
+
+    with get_connection() as conn:
+        insert_inventory_move(
+            conn,
+            product_id=product_id, product_name=product_name, product_sku=product_sku,
+            color_id=color_id, color_name=color_name,
+            size_id=size_id, size_name=size_name,
+            client_id=client_id, client_name="Test Client",
+            from_op="intake", to_op="storage",
+            from_quality="good", to_quality="good",
+            from_zone_id=None, from_zone_name=None,
+            to_zone_id=None, to_zone_name=None,
+            qty=qty, user_id="test-admin-id",
+        )
+        conn.commit()

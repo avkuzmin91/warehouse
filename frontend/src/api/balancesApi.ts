@@ -49,6 +49,39 @@ export type BalanceItem = {
   docs_count: number
 }
 
+/**
+ * Позиция для планирования отгрузки: остаток на складе + товар в пути.
+ * `in_transit` — заявленное, но ещё не приехавшее (planned − accepted по активным
+ * поступлениям). Позицию можно положить в черновик, а перевести в план — только
+ * когда товар появится на остатках (storage_good).
+ */
+export type PlannableItem = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  sku_pending?: boolean
+  client_id: string | null
+  client_name: string | null
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
+  storage_good: number
+  storage_defect: number
+  in_transit: number
+}
+
+export type PlannableListResponse = {
+  items: PlannableItem[]
+}
+
+export type PlannableParams = {
+  client_id?:  string
+  search?:     string
+  cargo_type?: 'good' | 'defect'
+  limit?:      number
+}
+
 export type BalanceSummary = {
   storage_good: number
   storage_defect: number
@@ -122,6 +155,16 @@ export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getPlannableItems(params: PlannableParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.search)     sp.set('search', params.search)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  if (params.limit)      sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<PlannableListResponse>(`/balances/plannable${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getBalancesSummary(params: BalanceSummaryParams = {}, signal?: AbortSignal) {

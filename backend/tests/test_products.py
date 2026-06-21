@@ -324,6 +324,218 @@ def test_delete_product_forbidden_for_non_admin(manager_client):
             conn.commit()
 
 
+def test_create_product_with_pending_sku(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-pend-{suffix}"
+    client_id = f"client-pend-{suffix}"
+    color_id = f"color-pend-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 1, 0, 0, NOW())
+            """,
+            (type_id, f"Type Pend {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Pend {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (color_id, f"Color Pend {suffix}"),
+        )
+        conn.commit()
+
+    def pending_payload(name: str) -> dict[str, str]:
+        return {
+            "meta": json.dumps({
+                "product": {
+                    "name": name,
+                    "type_id": type_id,
+                    "sku_pending": True,
+                    "client_id": client_id,
+                    "is_active": True,
+                },
+                "colors": [color_id],
+                "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+            }),
+        }
+
+    try:
+        first = admin_client.post("/products", data=pending_payload(f"Pending A {suffix}"))
+        assert first.status_code == 200, first.text
+        # Второй pending-товар того же клиента не должен конфликтовать по уникальности SKU.
+        second = admin_client.post("/products", data=pending_payload(f"Pending B {suffix}"))
+        assert second.status_code == 200, second.text
+
+        listed = admin_client.get(f"/products?client_id={client_id}&sku_pending=true&limit=100")
+        assert listed.status_code == 200, listed.text
+        items = listed.json()["items"]
+        assert len(items) == 2
+        assert all(it["sku_pending"] is True for it in items)
+        assert all(it["sku_base"] == "" for it in items)
+
+        with get_connection() as conn:
+            vrows = conn.execute(
+                "SELECT sku, COALESCE(sku_pending, 0) AS sku_pending FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE client_id = ?)",
+                (client_id,),
+            ).fetchall()
+            assert len(vrows) == 2
+            assert all(str(r["sku"]) == "" and int(r["sku_pending"]) == 1 for r in vrows)
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE client_id = ?)", (client_id,))
+            conn.execute("DELETE FROM products WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_assign_sku_to_pending_product(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-assign-{suffix}"
+    client_id = f"client-assign-{suffix}"
+    color_id = f"color-assign-{suffix}"
+    new_sku = f"REAL-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 1, 0, 0, NOW())
+            """,
+            (type_id, f"Type Assign {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Assign {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (color_id, f"ColorAssign{suffix}"),
+        )
+        conn.commit()
+
+    payload = {
+        "meta": json.dumps({
+            "product": {
+                "name": f"Assign {suffix}",
+                "type_id": type_id,
+                "sku_pending": True,
+                "client_id": client_id,
+                "is_active": True,
+            },
+            "colors": [color_id],
+            "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+        }),
+    }
+
+    try:
+        created = admin_client.post("/products", data=payload)
+        assert created.status_code == 200, created.text
+        listed = admin_client.get(f"/products?client_id={client_id}&limit=100")
+        product_id = listed.json()["items"][0]["id"]
+
+        res = admin_client.patch(f"/products/{product_id}", json={"sku_base": new_sku})
+        assert res.status_code == 200, res.text
+
+        detail = admin_client.get(f"/products/{product_id}")
+        assert detail.json()["sku_pending"] is False
+        assert detail.json()["sku_base"] == new_sku
+
+        variants = admin_client.get(f"/products/{product_id}/variants")
+        assert variants.status_code == 200, variants.text
+        vitems = variants.json()
+        assert len(vitems) == 1
+        assert vitems[0]["sku"].startswith(new_sku)
+
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(sku_pending, 0) AS sku_pending FROM product_variants WHERE product_id = ?",
+                (product_id,),
+            ).fetchone()
+            assert int(row["sku_pending"]) == 0
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE client_id = ?)", (client_id,))
+            conn.execute("DELETE FROM products WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
+def test_colors_lookup_by_product_id_for_pending_product(admin_client):
+    """У товара «ожидает SKU» цвета подбираются по product_id (SKU пустой)."""
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-lk-{suffix}"
+    client_id = f"client-lk-{suffix}"
+    color_id = f"color-lk-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 1, 0, 0, NOW())
+            """,
+            (type_id, f"Type Lk {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Lk {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (color_id, f"ColorLk{suffix}"),
+        )
+        conn.commit()
+
+    payload = {
+        "meta": json.dumps({
+            "product": {
+                "name": f"Lk {suffix}",
+                "type_id": type_id,
+                "sku_pending": True,
+                "client_id": client_id,
+                "is_active": True,
+            },
+            "colors": [color_id],
+            "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+        }),
+    }
+
+    try:
+        created = admin_client.post("/products", data=payload)
+        assert created.status_code == 200, created.text
+        product_id = admin_client.get(f"/products?client_id={client_id}&limit=100").json()["items"][0]["id"]
+
+        # По пустому SKU цвет не найти — а по product_id находится.
+        by_pid = admin_client.get(f"/inventory/lookups/colors-for-sku?product_id={product_id}")
+        assert by_pid.status_code == 200, by_pid.text
+        ids = {c["id"] for c in by_pid.json()}
+        assert color_id in ids
+
+        # Товар в lookup помечен как ожидающий SKU.
+        plist = admin_client.get(f"/inventory/lookups/products?client_id={client_id}")
+        assert plist.status_code == 200, plist.text
+        prod = next(p for p in plist.json() if p["id"] == product_id)
+        assert prod["sku_pending"] is True
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE client_id = ?)", (client_id,))
+            conn.execute("DELETE FROM products WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
 def test_product_items_per_pallet_roundtrip(admin_client):
     suffix = uuid.uuid4().hex[:10]
     type_id = f"ptype-pallet-{suffix}"

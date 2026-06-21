@@ -139,7 +139,7 @@ export function CreateReceiptForm({ value, onChange }: {
                   <Combobox
                     value={l.product_id}
                     placeholder="SKU или название…"
-                    options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku }))}
+                    options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku_pending ? 'Без SKU' : p.sku }))}
                     onChange={(v) => setLineProduct(l._id, String(v ?? ''))}
                     prefix="box"
                   />

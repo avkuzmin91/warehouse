@@ -19,17 +19,27 @@ function isoLocal(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-/** Часы за день из факта: (уход − приход) − 1 ч обед, без минуса. Повторяет backend day_hours. */
-export function calcDayHours(start: string | null, end: string | null): number {
+/** Часы за день из факта: (уход − приход) − 1 ч обед, без минуса. Повторяет backend day_hours.
+ * `endNextDay` — смена до следующего дня (08:00 → 02:00), +24 ч к уходу.
+ * `lunch=false` — без обеда: час не вычитаем и короткий день не обнуляем. */
+export function calcDayHours(
+  start: string | null,
+  end: string | null,
+  opts?: { lunch?: boolean; endNextDay?: boolean },
+): number {
+  const lunch = opts?.lunch ?? true
   const toMin = (t: string | null): number | null => {
     if (!t) return null
     const [h, m] = t.split(':').map(Number)
     return h * 60 + m
   }
-  const a = toMin(start), b = toMin(end)
+  const a = toMin(start)
+  let b = toMin(end)
   if (a == null || b == null) return 0
+  if (opts?.endNextDay) b += 24 * 60
   const gross = (b - a) / 60
   if (gross <= 0) return 0
+  if (!lunch) return gross
   return Math.max(0, gross > 1 ? gross - 1 : 0)
 }
 
@@ -51,6 +61,11 @@ export function weekStartIso(d: Date): string {
 export function nextWeekStartIso(): string {
   const t = new Date()
   return weekStartIso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + 7))
+}
+
+/** Суббота текущей расчётной недели от сегодня. */
+export function currentWeekStartIso(): string {
+  return weekStartIso(new Date())
 }
 
 /** Бейдж в стиле дизайн-системы: точка currentColor + текст. */
@@ -90,13 +105,22 @@ export function EmpAvatar({ name, size = 28 }: { name: string; size?: number }) 
 
 /** Аватар + ФИО + подпись. Кликабельность вешается на ячейку-обёртку (класс `emp-cell`). */
 export function EmpIdentity({
-  name, subtitle, avatarSize = 26,
-}: { name: string; subtitle?: React.ReactNode; avatarSize?: number }) {
+  name, subtitle, avatarSize = 26, archived = false,
+}: { name: string; subtitle?: React.ReactNode; avatarSize?: number; archived?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
       <EmpAvatar name={name} size={avatarSize} />
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div className="emp-name" style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+        <div className="emp-name" style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+          {archived && (
+            <span style={{
+              flex: 'none', fontSize: 9.5, fontWeight: 600, letterSpacing: 0.3, textTransform: 'uppercase',
+              color: 'var(--c-text-subtle)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)',
+              borderRadius: 'var(--r-sm)', padding: '0 5px', lineHeight: '15px',
+            }}>Архив</span>
+          )}
+        </div>
         {subtitle != null && (
           <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</div>
         )}

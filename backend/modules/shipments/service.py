@@ -268,6 +268,47 @@ def _check_duplicate_lines(connection, doc_id: str) -> None:
         )
 
 
+def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
+    """Гейт перевода в план: каждая позиция должна быть покрыта свободным годным
+    остатком «На хранении». Иначе товар ещё в пути — документ держим в черновике.
+
+    Спрос агрегируем по варианту (product/color/size): одна позиция может быть в
+    нескольких строках (разные магазины), а остаток у неё общий."""
+    from modules.balances.service import get_available_total
+
+    rows = connection.execute(
+        """SELECT product_id, color_id, size_id,
+                  MIN(product_name) AS product_name, MIN(product_sku) AS product_sku,
+                  MIN(color_name) AS color_name, MIN(size_name) AS size_name,
+                  SUM(qty) AS demand
+           FROM shipment_lines
+           WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0
+           GROUP BY product_id, color_id, size_id""",
+        (doc_id,),
+    ).fetchall()
+
+    short: list[str] = []
+    for r in rows:
+        available = get_available_total(
+            connection,
+            product_id=str(r["product_id"]),
+            color_id=r["color_id"],
+            size_id=r["size_id"],
+            client_id=client_id,
+            op=INV_OP_STORAGE,
+            quality=INV_Q_GOOD,
+        )
+        demand = int(r["demand"] or 0)
+        if demand > available:
+            label = " · ".join(x for x in [r["product_sku"], r["color_name"], r["size_name"]] if x) or r["product_name"]
+            short.append(f"«{label}»: нужно {demand}, на складе {available}")
+    if short:
+        raise HTTPException(
+            status_code=400,
+            detail="Часть товара ещё не на остатках (в пути) — дождитесь прихода. " + "; ".join(short),
+        )
+
+
 def _line_pos_conds(line, prefix: str, client_col: str, client_id):
     """Условия позиции (product/color/size/client) для SQL по строке отгрузки."""
     conds = [f"{prefix}product_id = ?"]
@@ -1343,6 +1384,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)
+        _check_lines_covered_by_stock(connection, doc_id, row["client_id"])
     elif next_status == SHIPMENT_STATUS_ON_PACKING:
         if _doc_moved_to_packing_qty(connection, doc_id) <= 0:
             raise HTTPException(status_code=400, detail="Передайте на упаковку хотя бы часть товара")

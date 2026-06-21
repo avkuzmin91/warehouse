@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../primitives/Icon'
+import { TimePicker } from '../../data/TimePicker'
 import { useToast } from '../../feedback/Toast'
 import { EmpAvatar, fmtHours, calcDayHours } from './shared'
 import { getEntry, upsertEntry, type EntryDetail } from '../../../api/timesheetApi'
@@ -20,7 +21,6 @@ interface Props {
 }
 
 const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: 'var(--c-text-muted)', marginBottom: 6, display: 'block' }
-const timeInput: React.CSSProperties = { width: '100%', height: 34 }
 
 export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClose, onSaved }: Props) {
   const toast = useToast()
@@ -31,6 +31,8 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
   const [fe, setFe] = useState('')
   const [absent, setAbsent] = useState(false)
   const [notCalled, setNotCalled] = useState(false)
+  const [noLunch, setNoLunch] = useState(false)
+  const [endNextDay, setEndNextDay] = useState(false)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -46,13 +48,15 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
         setFe(d.actual_end ?? '')
         setAbsent(d.is_absent)
         setNotCalled(d.not_called)
+        setNoLunch(d.no_lunch)
+        setEndNextDay(d.end_next_day)
         setNote(d.note ?? '')
       })
       .catch(() => {})
     return () => ctrl.abort()
   }, [employeeId, workDate])
 
-  const hours = calcDayHours(fs || null, fe || null)
+  const hours = calcDayHours(fs || null, fe || null, { lunch: !noLunch, endNextDay })
   const isFuture = !!today && workDate > today
   const locked = detail?.fact_locked ?? false
   const factDisabled = isFuture || locked
@@ -60,7 +64,12 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
   const factEqualsPlan = () => { setFs(ps); setFe(pe); setAbsent(false); setNotCalled(false) }
   const markAbsent = () => { setAbsent(true); setNotCalled(false); setFs(''); setFe('') }
   const markNotCalled = () => { setNotCalled(true); setAbsent(false); setFs(''); setFe('') }
+  // Выход вне плана: смена не планировалась, а человек вышел — подставляем стандартную
+  // смену 08:00–20:00 как заготовку, дальше время правится вручную.
+  const markOutOfPlan = () => { setFs('08:00'); setFe('20:00'); setAbsent(false); setNotCalled(false) }
   const noFact = absent || notCalled
+  const hasPlan = !!(ps && pe)
+  const outOfPlan = !hasPlan && !noFact && !!(fs && fe)
 
   const save = async () => {
     setSaving(true)
@@ -74,6 +83,8 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
         actual_end: noFact ? null : (fe || null),
         is_absent: absent,
         not_called: notCalled,
+        no_lunch: noFact ? false : noLunch,
+        end_next_day: noFact ? false : endNextDay,
         note: note || null,
       })
       toast('Запись сохранена', 'success')
@@ -108,19 +119,37 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
             <div>
               <label style={labelStyle}>План · приход</label>
-              <input className="input sm" type="time" style={timeInput} value={ps} onChange={(e) => setPs(e.target.value)} />
+              <TimePicker value={ps} onChange={setPs} height={34} />
             </div>
             <div>
               <label style={labelStyle}>План · уход</label>
-              <input className="input sm" type="time" style={timeInput} value={pe} onChange={(e) => setPe(e.target.value)} />
+              <TimePicker value={pe} onChange={setPe} height={34} />
             </div>
             <div>
               <label style={labelStyle}>Факт · приход</label>
-              <input className="input sm" type="time" style={timeInput} value={fs} disabled={noFact || factDisabled} onChange={(e) => setFs(e.target.value)} />
+              <TimePicker value={fs} onChange={setFs} disabled={noFact || factDisabled} height={34} />
             </div>
             <div>
-              <label style={labelStyle}>Факт · уход</label>
-              <input className="input sm" type="time" style={timeInput} value={fe} disabled={noFact || factDisabled} onChange={(e) => setFe(e.target.value)} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>Факт · уход</label>
+                <button
+                  type="button"
+                  onClick={() => setEndNextDay((v) => !v)}
+                  disabled={noFact || factDisabled}
+                  title="Смена закончилась на следующий день (08:00 → 02:00)"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 7px', height: 18,
+                    borderRadius: 99, cursor: noFact || factDisabled ? 'default' : 'pointer', fontSize: 10.5, fontWeight: 600,
+                    border: '1px solid ' + (endNextDay ? 'var(--c-accent)' : 'var(--c-border-strong)'),
+                    background: endNextDay ? 'var(--c-accent-bg)' : 'transparent',
+                    color: endNextDay ? 'var(--c-accent-text)' : 'var(--c-text-subtle)',
+                    opacity: noFact || factDisabled ? 0.5 : 1,
+                  }}
+                >
+                  <Icon name="clock" size={10} />+1 дн
+                </button>
+              </div>
+              <TimePicker value={fe} onChange={setFe} disabled={noFact || factDisabled} height={34} />
             </div>
           </div>
 
@@ -139,20 +168,56 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
           )}
 
           {!isFuture && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 16, borderRadius: 'var(--r-lg)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}>
-              <Icon name="timer" size={18} style={{ color: 'var(--c-accent)' }} />
-              <div style={{ flex: 1, fontSize: 12, color: 'var(--c-text-muted)' }}>
-                {fs && fe ? <><span className="mono">{fe} − {fs}</span> − <span className="mono">1 ч</span> обед</> : 'Внесите факт прихода и ухода'}
+            <div style={{ marginBottom: 16, borderRadius: 'var(--r-lg)', background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px' }}>
+                <Icon name="timer" size={18} style={{ color: 'var(--c-accent)' }} />
+                <div style={{ flex: 1, fontSize: 12, color: 'var(--c-text-muted)' }}>
+                  {fs && fe ? (
+                    <>
+                      <span className="mono">{fe}{endNextDay ? ' +1д' : ''} − {fs}</span>
+                      {noLunch ? <> · <span style={{ color: 'var(--c-accent-text)' }}>без обеда</span></> : <> − <span className="mono">1 ч</span> обед</>}
+                    </>
+                  ) : 'Внесите факт прихода и ухода'}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{fmtHours(hours)}</div>
+                  <div style={{ fontSize: 10.5, color: outOfPlan ? 'var(--c-warning)' : 'var(--c-text-subtle)' }}>
+                    {outOfPlan ? 'вне плана' : 'отработано'}
+                  </div>
+                </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{fmtHours(hours)}</div>
-                <div style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>отработано</div>
-              </div>
+              <label
+                onClick={() => { if (!(noFact || factDisabled)) setNoLunch(!noLunch) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', borderTop: '1px solid var(--c-border)',
+                  cursor: noFact || factDisabled ? 'default' : 'pointer', opacity: noFact || factDisabled ? 0.5 : 1, userSelect: 'none',
+                }}
+              >
+                <span
+                  className={`t-checkbox ${noLunch ? 'checked' : ''}`}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                >
+                  {noLunch && <Icon name="check" size={10} />}
+                </span>
+                <Icon name="coffee" size={14} style={{ color: 'var(--c-text-subtle)' }} />
+                <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Вышел без обеда — не вычитать час</span>
+              </label>
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn sm" onClick={factEqualsPlan} disabled={!ps || !pe || factDisabled}><Icon name="check" size={13} />Факт = план</button>
+            {!hasPlan && (
+              <button
+                className="btn sm"
+                onClick={markOutOfPlan}
+                disabled={factDisabled}
+                title="Сотрудник вышел без планирования смены"
+                style={outOfPlan ? { color: 'var(--c-warning)', borderColor: 'var(--c-warning)' } : undefined}
+              >
+                <Icon name="zap" size={13} />Выход без плана
+              </button>
+            )}
             <button
               className="btn sm"
               onClick={() => (absent ? setAbsent(false) : markAbsent())}

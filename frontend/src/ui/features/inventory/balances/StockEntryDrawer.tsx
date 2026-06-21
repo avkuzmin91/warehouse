@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { createStockEntry } from '../../../../api/balancesApi'
 import type { StockEntryLine } from '../../../../api/balancesApi'
 import {
-  getInventoryColorsForProductSku,
+  getInventoryColorsForProduct,
   getInventoryProducts,
-  getInventorySizesForProductSkuAndColor,
+  getInventorySizesForProductAndColor,
 } from '../../../../api/inventoryLookupsApi'
 import type { DictionaryItem, InventoryProductLookup } from '../../../../api/domainTypes'
 import { Combobox } from '../../../data/Combobox'
@@ -56,13 +56,13 @@ export function StockEntryDrawer({ open, onClose, onDone }: Props) {
 
   useEffect(() => {
     setColorId(''); setColors([]); setSizeId(''); setSizes([])
-    if (selectedProduct?.sku) getInventoryColorsForProductSku(selectedProduct.sku).then(setColors)
-  }, [productId, selectedProduct?.sku])
+    if (selectedProduct) getInventoryColorsForProduct(selectedProduct.id).then(setColors)
+  }, [productId, selectedProduct?.id])
 
   useEffect(() => {
     setSizeId(''); setSizes([])
-    if (selectedProduct?.sku && colorId) getInventorySizesForProductSkuAndColor(selectedProduct.sku, colorId).then(setSizes)
-  }, [colorId, selectedProduct?.sku])
+    if (selectedProduct && colorId) getInventorySizesForProductAndColor(selectedProduct.id, colorId).then(setSizes)
+  }, [colorId, selectedProduct?.id])
 
   const needsColor = receiptLineColorRequired(selectedProduct)
   const needsSize = receiptLineSizeRequired(selectedProduct)
@@ -139,7 +139,7 @@ export function StockEntryDrawer({ open, onClose, onDone }: Props) {
         <Combobox
           value={productId}
           placeholder={clientId ? 'Поиск по SKU или названию…' : 'Сначала выберите клиента'}
-          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku }))}
+          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku_pending ? 'Без SKU' : p.sku }))}
           onChange={(v) => setProductId(String(v ?? ''))}
           prefix="search"
         />

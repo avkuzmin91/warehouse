@@ -49,6 +49,24 @@ export type EmployeeWeekSummary = {
   to_pay: number | null
   overpaid: number | null
 }
+export type AttendanceStatus = DayStatus | 'prehire' | 'future'
+export type AttendanceDay = {
+  date: string
+  dom: number
+  weekend: boolean
+  status: AttendanceStatus
+  hours: number
+  late_minutes: number
+}
+export type AttendanceStats = { shifts: number; noplan: number; absent: number; hours: number }
+export type AttendanceAllTime = { shifts: number; noplan: number; absent: number }
+export type AttendanceBlock = {
+  range_label: string
+  days: AttendanceDay[]
+  stats: AttendanceStats
+  alltime: AttendanceAllTime
+}
+
 export type EmployeeDetail = {
   id: string
   full_name: string
@@ -68,6 +86,7 @@ export type EmployeeDetail = {
   week_end: string
   week_label: string
   this_week: EmployeeWeekSummary
+  attendance: AttendanceBlock
   rate_history: RateHistoryItem[]
   pay_history: PayHistoryItem[]
 }
@@ -89,6 +108,8 @@ export type WeekCell = {
   actual_end: string | null
   is_absent: boolean
   not_called: boolean
+  no_lunch: boolean
+  end_next_day: boolean
   hours: number
   note: string | null
 }
@@ -102,6 +123,7 @@ export type WeekRow = {
   absent: number
   earned: number | null
   fact_locked: boolean
+  archived: boolean
 }
 export type WeekTotals = {
   hours: number
@@ -139,6 +161,8 @@ export type EntryDetail = {
   actual_end: string | null
   is_absent: boolean
   not_called: boolean
+  no_lunch: boolean
+  end_next_day: boolean
   status: DayStatus
   hours: number
   note: string | null
@@ -154,6 +178,8 @@ export type EntryUpsertPayload = {
   actual_end?: string | null
   is_absent?: boolean
   not_called?: boolean
+  no_lunch?: boolean
+  end_next_day?: boolean
   note?: string | null
 }
 
@@ -163,6 +189,8 @@ export type DayFactItem = {
   actual_end?: string | null
   is_absent?: boolean
   not_called?: boolean
+  no_lunch?: boolean
+  end_next_day?: boolean
   note?: string | null
 }
 
@@ -177,6 +205,7 @@ export type PayrollRow = {
   to_pay: number
   overpaid: number
   settled: boolean
+  archived: boolean
 }
 export type PayrollTotals = {
   earned: number

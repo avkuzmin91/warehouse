@@ -218,7 +218,10 @@ export function ProductEditFeature({ id }: { id: string }) {
   }
 
   async function saveProductPart() {
-    if (!id || nameInvalid || !skuBase.trim() || !clientId) throw new Error('Заполните обязательные поля товара')
+    const pending = product?.sku_pending ?? false
+    if (!id || nameInvalid || !clientId || (!pending && !skuBase.trim())) {
+      throw new Error('Заполните обязательные поля товара')
+    }
     const uploadedByPreview = new Map<string, string>()
     for (const img of images) {
       if (img.kind !== 'file') continue
@@ -231,9 +234,12 @@ export function ProductEditFeature({ id }: { id: string }) {
       .map((img) => (img.kind === 'url' ? img.serverUrl : uploadedByPreview.get(img.previewUrl) ?? ''))
       .filter((u) => u !== '')
 
+    const trimmedSku = skuBase.trim()
     await updateProduct(id, {
       name: name.trim(),
-      sku_base: skuBase.trim(),
+      // Пустой SKU допустим только для товара «ожидает SKU» — тогда поле не отправляем
+      // (бэкенд оставит признак ожидания). Непустой SKU у pending-товара снимает ожидание.
+      ...(trimmedSku ? { sku_base: trimmedSku } : {}),
       weight_grams: parseOptionalWeight(weightGrams),
       items_per_pallet: parseOptionalInteger(itemsPerPallet),
       client_id: clientId,
@@ -272,6 +278,9 @@ export function ProductEditFeature({ id }: { id: string }) {
     try {
       await saveProductPart()
       await saveVariantsPart()
+      const fresh = await getProduct(id)
+      setProduct(fresh)
+      setSkuBase(fresh.sku_base)
       await loadVariants()
       toast('Изменения сохранены', 'success')
     } catch (e: unknown) {
@@ -356,6 +365,7 @@ export function ProductEditFeature({ id }: { id: string }) {
       backTo={`/dictionaries/products/${id}`}
       actions={
         <>
+          {product.sku_pending && <Badge tone="warning">Ожидает SKU</Badge>}
           <Badge tone={product.is_active ? 'success' : ''}>{product.is_active ? 'Активен' : 'Неактивен'}</Badge>
           <button type="button" className="btn ghost" onClick={() => navigate(`/dictionaries/products/${id}`)} disabled={busy}>
             Отмена
@@ -390,12 +400,18 @@ export function ProductEditFeature({ id }: { id: string }) {
                     </div>
                   )}
                 </Field>
-                <Field label="SKU" required>
+                <Field label="SKU" required={!product.sku_pending}>
                   <Input
                     value={skuBase}
                     onChange={(e) => setSkuBase(e.target.value)}
+                    placeholder={product.sku_pending ? 'Укажите SKU, когда станет известен' : undefined}
                     style={{ fontFamily: 'var(--font-code)' }}
                   />
+                  {product.sku_pending && (
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6 }}>
+                      Товар ожидает SKU. Как заполните и сохраните — SKU присвоится товару и всем вариантам.
+                    </div>
+                  )}
                 </Field>
                 <Field label="Название" required>
                   <Input
@@ -559,7 +575,7 @@ export function ProductEditFeature({ id }: { id: string }) {
                             {meta.sku}
                           </span>
                         ) : (
-                          <span className="faint text-xs">новый</span>
+                          <span className="faint text-xs">{row.id && product.sku_pending ? 'ожидает' : 'новый'}</span>
                         )}
                       </Td>
                       <Td>
