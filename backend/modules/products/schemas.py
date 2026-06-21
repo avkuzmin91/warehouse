@@ -81,11 +81,16 @@ class ProductVariantItem(BaseModel):
     size_id: str | None = None
     size_name: str | None = None
     sku: str
+    barcode: str | None = None
     images: list[str] = Field(default_factory=list)
     is_active: bool
     stock: int = 0
     defect_qty: int = 0
     has_receipts: bool = False
+
+
+class VariantBarcodeUpdate(BaseModel):
+    barcode: str | None = None
 
 
 class ProductVariantDeletePatchRequest(BaseModel):
@@ -126,6 +131,24 @@ class ProductVariantFindResponse(BaseModel):
     found: bool
     variant: ProductVariantFindItem | None = None
     needs_size: bool = False
+
+
+class BarcodeMatch(BaseModel):
+    variant_id: str
+    product_id: str
+    product_name: str
+    sku: str
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+    client_id: str | None = None
+    client_name: str | None = None
+
+
+class BarcodeLookupResponse(BaseModel):
+    found: bool
+    match: BarcodeMatch | None = None
 
 
 class ProductListResponse(BaseModel):

@@ -119,7 +119,7 @@ def list_trips_aggregated(
         f"""
         SELECT
             d.id, d.trip_number, d.direction, d.cargo_type, d.status, d.origin_name, d.carrier_name,
-            d.vehicle_type_name, d.eta, d.arrived_at, d.cost_estimate, d.logistics_cost_actual,
+            d.vehicle_type_name, d.vehicle_number, d.eta, d.arrived_at, d.cost_estimate, d.logistics_cost_actual,
             d.created_at,
             COUNT(l.id) AS receipts_count,
             COALESCE((

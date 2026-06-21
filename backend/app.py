@@ -467,6 +467,7 @@ async def _accrual_loop() -> None:
     """Фоновое автоначисление: ЗП-оклады (15-е и последний день месяца) и аренда складов
     (1-е число). Будится раз в час; дедуп по периоду делает повторные прогоны и рестарты
     безопасными. Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
+    from idempotency import purge_expired_idempotency_keys
     from modules.expenses.service import run_rent_accruals, run_salary_accruals
     from modules.timesheet.service import business_today
 
@@ -478,6 +479,8 @@ async def _accrual_loop() -> None:
                 created += run_rent_accruals(conn, today)
                 if created:
                     conn.commit()
+                purge_expired_idempotency_keys(conn)
+                conn.commit()
         except asyncio.CancelledError:
             raise
         except Exception:

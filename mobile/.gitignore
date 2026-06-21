@@ -1,0 +1,8 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# Capacitor native projects (генерируются на Mac / с Android SDK)
+/ios
+/android

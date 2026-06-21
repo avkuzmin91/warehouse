@@ -105,6 +105,7 @@ export type ShipmentLine = {
   product_id:        string
   product_name:      string
   product_sku:       string
+  sku_pending:       boolean
   color_id:          string | null
   color_name:        string | null
   size_id:           string | null

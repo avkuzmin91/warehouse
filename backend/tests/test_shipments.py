@@ -58,6 +58,32 @@ def test_shipment_advance_draft_to_packing(admin_client, client_id):
     assert r2.json()["message"] == "packing"
 
 
+def test_shipment_advance_idempotent_replay(admin_client, client_id):
+    """Повтор /advance с тем же X-Request-Id отдаёт прежний ответ и НЕ двигает статус.
+
+    Регрессия на finish_idempotent: ответ должен коммититься вместе с операцией,
+    иначе в non-pool пути повтор получает 409 «ещё обрабатывается» (см. idempotency.py).
+    """
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
+    assert r.status_code == 200
+    doc_id = r.json()["message"]
+    rid = str(uuid.uuid4())
+    try:
+        first = admin_client.post(f"/shipments/{doc_id}/advance", headers={"X-Request-Id": rid})
+        assert first.status_code == 200, first.text
+        assert first.json()["message"] == "packing"
+
+        replay = admin_client.post(f"/shipments/{doc_id}/advance", headers={"X-Request-Id": rid})
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["message"] == "packing"  # прежний ответ, не on_packing
+
+        assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "packing"
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM idempotency_keys WHERE request_id = ?", (rid,))
+            conn.commit()
+
+
 def test_shipment_advance_requires_technical_task(admin_client, client_id):
     payload = _make_shipment_payload(client_id)
     payload["comment"] = "  "

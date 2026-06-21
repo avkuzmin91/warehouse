@@ -59,13 +59,15 @@ type CompositionTableProps = {
   onUploadFile:    (lineId: string, files: File[]) => void
   onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile:    (lineId: string, fileId: string) => void
+  // Дозаполнение SKU для товара «ожидает SKU» прямо из состава отгрузки.
+  onAssignSku?:    (line: ShipmentLine) => void
 }
 
 /** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
 export function CompositionTable({
   lines, showZone = false, canEditPlan, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
-  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile,
+  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onAssignSku,
 }: CompositionTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
@@ -104,6 +106,22 @@ export function CompositionTable({
               </Td>
               <Td>
                 <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+                {line.sku_pending ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <span className="badge warning">Без SKU</span>
+                    {canEditPlan && onAssignSku && (
+                      <button className="btn ghost sm" disabled={busy} onClick={() => onAssignSku(line)}>
+                        <Icon name="edit" size={12} />Указать SKU
+                      </button>
+                    )}
+                  </div>
+                ) : canEditPlan && onAssignSku && (
+                  <div style={{ marginTop: 4 }}>
+                    <button className="btn ghost sm" disabled={busy} onClick={() => onAssignSku(line)}>
+                      <Icon name="edit" size={12} />Изменить SKU
+                    </button>
+                  </div>
+                )}
               </Td>
               {showZone && (
                 <Td style={{ fontSize: 13 }}>

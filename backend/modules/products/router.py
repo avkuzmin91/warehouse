@@ -16,9 +16,16 @@ from config import (
     MAX_UPLOAD_BYTES,
 )
 from dbconn import get_connection
-from modules.auth.service import get_current_admin, get_current_manager, get_current_user
+from modules.auth.service import (
+    get_current_admin,
+    get_current_manager,
+    get_current_user,
+    get_current_warehouse,
+)
 
 from .schemas import (
+    BarcodeLookupResponse,
+    BarcodeMatch,
     MessageResponse,
     ProductItem,
     ProductListResponse,
@@ -31,6 +38,7 @@ from .schemas import (
     ProductVariantsPatchRequest,
     ProductVariantFindItem,
     ProductCreateMeta,
+    VariantBarcodeUpdate,
 )
 from .service import (
     _assign_variant_skus_from_base,
@@ -483,7 +491,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             f"""
             SELECT v.id, v.color_id, col.name AS color_name,
                    v.size_id, sz.name AS size_name,
-                   v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
+                   v.length, v.width, v.height, v.sku, v.barcode, v.images_json, v.is_active,
                    GREATEST(0, COALESCE(b.good_in, 0)) AS stock,
                    GREATEST(0, COALESCE(b.defect_in, 0)) AS defect_qty,
                    CASE WHEN EXISTS (
@@ -524,6 +532,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             size_id=str(r["size_id"]) if r["size_id"] else None,
             size_name=r["size_name"],
             sku=str(r["sku"]),
+            barcode=str(r["barcode"]) if r["barcode"] else None,
             images=_decode_images_json(r["images_json"]),
             is_active=bool(r["is_active"]),
             stock=max(0, int(r["stock"])),
@@ -648,3 +657,78 @@ def find_product_variant_for_receipt(
                 first_image_url=first_img,
             ),
         )
+
+
+@router.patch("/products/{item_id}/variants/{variant_id}/barcode", response_model=MessageResponse)
+def set_variant_barcode(item_id: str, variant_id: str, payload: VariantBarcodeUpdate, admin=Depends(get_current_admin)):
+    code = (payload.barcode or "").strip()
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT id FROM product_variants WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (variant_id, item_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Вариант не найден")
+        if code:
+            dup = connection.execute(
+                "SELECT 1 FROM product_variants "
+                "WHERE barcode = ? AND id <> ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+                (code, variant_id),
+            ).fetchone()
+            if dup:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту")
+        try:
+            connection.execute(
+                "UPDATE product_variants SET barcode = ?, updated_at = ? WHERE id = ? AND product_id = ?",
+                (code or None, _now(), variant_id, item_id),
+            )
+            connection.commit()
+        except IntegrityError as exc:
+            connection.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту") from exc
+    return MessageResponse(message="Штрих-код обновлён" if code else "Штрих-код снят")
+
+
+@router.get("/products/by-barcode/{code}", response_model=BarcodeLookupResponse)
+def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
+    """Сканер кладовщика: штрих-код варианта → товар/вариант. found=false, если не найден."""
+    _ = user
+    bc = (code or "").strip()
+    if not bc:
+        return BarcodeLookupResponse(found=False)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT v.id AS variant_id, v.product_id, p.name AS product_name, v.sku,
+                   v.color_id, col.name AS color_name,
+                   v.size_id, sz.name AS size_name,
+                   p.client_id, cl.name AS client_name
+            FROM product_variants v
+            JOIN products p ON p.id = v.product_id
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
+            LEFT JOIN clients cl ON cl.id = p.client_id
+            WHERE v.barcode = ?
+              AND COALESCE(v.is_deleted, 0) = 0
+              AND COALESCE(p.is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (bc,),
+        ).fetchone()
+    if not row:
+        return BarcodeLookupResponse(found=False)
+    return BarcodeLookupResponse(
+        found=True,
+        match=BarcodeMatch(
+            variant_id=str(row["variant_id"]),
+            product_id=str(row["product_id"]),
+            product_name=str(row["product_name"]),
+            sku=str(row["sku"]),
+            color_id=str(row["color_id"]) if row["color_id"] else None,
+            color_name=str(row["color_name"]) if row["color_name"] else None,
+            size_id=str(row["size_id"]) if row["size_id"] else None,
+            size_name=str(row["size_name"]) if row["size_name"] else None,
+            client_id=str(row["client_id"]) if row["client_id"] else None,
+            client_name=str(row["client_name"]).strip() if row["client_name"] else None,
+        ),
+    )

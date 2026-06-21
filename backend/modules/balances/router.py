@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 
 from dbconn import get_connection
+from idempotency import begin_idempotent
 from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.balances.schemas import (
     BalanceListResponse,
@@ -104,9 +105,19 @@ def list_balances_by_zone(
 
 
 @router.post("/balances/relocations")
-def create_relocation(payload: ZoneRelocationCreate, user=Depends(get_current_manager)):
+def create_relocation(
+    payload: ZoneRelocationCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
+    uid = str(user["id"])
     with get_connection() as conn:
-        create_zone_relocation(conn, payload, str(user["id"]))
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "balance_relocation", response={"message": "ok"}
+        )
+        if not proceed:
+            return stored
+        create_zone_relocation(conn, payload, uid)
     return {"message": "ok"}
 
 

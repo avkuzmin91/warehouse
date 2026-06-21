@@ -128,6 +128,7 @@ export type TripListItem = {
   origin_name: string | null
   carrier_name: string | null
   vehicle_type_name: string | null
+  vehicle_number: string | null
   eta: string | null
   arrived_at: string | null
   cost_estimate: number | null
@@ -338,7 +339,7 @@ export type TripLexicon = {
   arrivalLabel: string       // «Прибытие»
   unloadStartLabel: string   // «Начало разгрузки» | «Начало погрузки»
   unloadEndLabel: string     // «Окончание разгрузки» | «Окончание погрузки»
-  etaLabel: string           // «Плановое отправление» | «Плановое прибытие»
+  etaLabel: string           // «Плановое прибытие» (для обоих направлений — приход транспорта)
   finishAction: string       // «Завершить разгрузку» | «Завершить погрузку»
   arrivedAction: string      // «Машина приехала» | «Машина прибыла»
   progressTitle: string      // «Идёт разгрузка» | «Идёт погрузка»
@@ -357,7 +358,7 @@ export function tripLexicon(direction: string | null | undefined): TripLexicon {
         arrivalLabel: 'Прибытие',
         unloadStartLabel: 'Начало погрузки',
         unloadEndLabel: 'Окончание погрузки',
-        etaLabel: 'Плановое отправление',
+        etaLabel: 'Плановое прибытие',
         finishAction: 'Завершить погрузку',
         arrivedAction: 'Машина прибыла',
         progressTitle: 'Идёт погрузка',

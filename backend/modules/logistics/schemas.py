@@ -198,6 +198,7 @@ class TripListItem(BaseModel):
     origin_name: str | None = None
     carrier_name: str | None = None
     vehicle_type_name: str | None = None
+    vehicle_number: str | None = None
     eta: str | None = None
     arrived_at: str | None = None
     cost_estimate: float | None = None

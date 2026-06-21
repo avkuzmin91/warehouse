@@ -21,6 +21,8 @@ export type TaskItem = {
   status: string
   role: string
   direction: 'inbound' | 'outbound' | null
+  eta: string | null
+  vehicle_number: string | null
   since: string | null
   priority_rank: number | null
 }

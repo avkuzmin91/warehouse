@@ -177,6 +177,7 @@ class ShipmentLineItem(BaseModel):
     product_id:        str
     product_name:      str
     product_sku:       str
+    sku_pending:       bool = False
     color_id:          str | None
     color_name:        str | None
     size_id:           str | None

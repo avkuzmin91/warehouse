@@ -24,6 +24,12 @@ AUTH_REFRESH_COOKIE_PATH = "/api"
 AUTH_REFRESH_TTL_DAYS = 30
 AUTH_REFRESH_COOKIE_SAMESITE = "lax"
 
+# Мобильный клиент (Capacitor) шлёт заголовок X-Client: mobile. В этом режиме
+# refresh-токен ходит в теле ответа (cookie в нативной обёртке ненадёжна) —
+# приложение хранит его в secure storage. См. docs/mobile-plan.md §6.1.
+AUTH_CLIENT_HEADER = "X-Client"
+AUTH_CLIENT_MOBILE = "mobile"
+
 AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
 AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
 AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))

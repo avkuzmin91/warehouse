@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from idempotency import begin_idempotent
 from config import (
     INV_OP_INTAKE,
     INV_OP_STORAGE,
@@ -247,6 +248,7 @@ def list_trips(
             origin_name=r["origin_name"],
             carrier_name=r["carrier_name"],
             vehicle_type_name=r["vehicle_type_name"],
+            vehicle_number=r["vehicle_number"],
             eta=r["eta"],
             arrived_at=r["arrived_at"],
             cost_estimate=float(r["cost_estimate"]) if show_costs and r["cost_estimate"] is not None else None,
@@ -287,11 +289,14 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             alloc_rows = conn.execute(
                 """
                 SELECT ta.trip_line_id, ta.qty,
-                       sl.id AS shipment_line_id, sl.product_sku, sl.product_name,
+                       sl.id AS shipment_line_id,
+                       COALESCE(NULLIF(sl.product_sku, ''), p.sku) AS product_sku,
+                       COALESCE(NULLIF(sl.product_name, ''), p.name) AS product_name,
                        sl.color_name, sl.size_name, sl.qty AS line_qty, sl.shipped_qty
                 FROM trip_alloc ta
                 JOIN trip_lines l ON l.id = ta.trip_line_id
                 JOIN shipment_lines sl ON sl.id = ta.shipment_line_id
+                LEFT JOIN products p ON p.id = sl.product_id
                 WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
                 ORDER BY sl.product_sku
                 """,
@@ -312,12 +317,15 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             recv_alloc_rows = conn.execute(
                 """
                 SELECT ta.trip_line_id, ta.qty,
-                       rl.id AS receipt_line_id, rl.product_sku, rl.product_name,
+                       rl.id AS receipt_line_id,
+                       COALESCE(NULLIF(rl.product_sku, ''), p.sku) AS product_sku,
+                       COALESCE(NULLIF(rl.product_name, ''), p.name) AS product_name,
                        rl.color_name, rl.size_name, rl.planned_qty, rl.accepted_qty,
                        rl.storage_zone_id, rl.storage_zone_name
                 FROM trip_alloc ta
                 JOIN trip_lines l ON l.id = ta.trip_line_id
                 JOIN receipt_lines rl ON rl.id = ta.receipt_line_id
+                LEFT JOIN products p ON p.id = rl.product_id
                 WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
                 ORDER BY rl.product_sku
                 """,
@@ -591,7 +599,7 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
             ("vehicle_number", "Гос. номер"),
             ("cost_estimate", "Стоимость логистики (план)"),
             ("transport_ordered_at", "Транспорт заказан"),
-            ("eta", "Плановое отправление" if outbound else "Плановое прибытие"),
+            ("eta", "Плановое прибытие"),
         ]
         missing = [label for col, label in required if doc_row[col] in (None, "")]
         if missing:
@@ -599,11 +607,7 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
         if str(doc_row["eta"]) < str(doc_row["transport_ordered_at"]):
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "Плановое отправление не может быть раньше заказа транспорта"
-                    if outbound else
-                    "Плановое прибытие не может быть раньше заказа транспорта"
-                ),
+                detail="Плановое прибытие не может быть раньше заказа транспорта",
             )
         to_ru = trip_status_ru(str(doc_row["direction"]), TRIP_STATUS_AWAITING_ARRIVAL)
         _advance(conn, trip_id, to_status=TRIP_STATUS_AWAITING_ARRIVAL,
@@ -613,9 +617,19 @@ def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
 
 
 @router.post("/trips/{trip_id}/arrival")
-def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_current_warehouse)):
+def trip_arrival(
+    trip_id: str,
+    payload: TripArrivalPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_warehouse),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "trip_arrival", response={"message": TRIP_STATUS_UNLOADING}
+        )
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         direction = str(doc_row["direction"])
         outbound = direction == TRIP_DIRECTION_OUTBOUND
@@ -637,13 +651,23 @@ def trip_arrival(trip_id: str, payload: TripArrivalPayload, user=Depends(get_cur
 
 
 @router.post("/trips/{trip_id}/unload")
-def trip_unload(trip_id: str, payload: TripUnloadPayload, user=Depends(get_current_warehouse)):
+def trip_unload(
+    trip_id: str,
+    payload: TripUnloadPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_warehouse),
+):
     uid = str(user["id"])
     if not payload.load_factor:
         raise HTTPException(status_code=400, detail="Укажите загруженность машины")
     if payload.load_factor not in (TRIP_LOAD_FULL, TRIP_LOAD_PARTIAL):
         raise HTTPException(status_code=400, detail="Недопустимое значение загруженности")
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "trip_unload", response={"message": TRIP_STATUS_COSTING}
+        )
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         direction = str(doc_row["direction"])
         outbound = direction == TRIP_DIRECTION_OUTBOUND

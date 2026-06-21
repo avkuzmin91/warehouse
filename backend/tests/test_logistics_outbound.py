@@ -264,7 +264,7 @@ def test_outbound_handoff_missing_fields_use_outbound_labels(admin_client, clien
     assert bad.status_code == 400, bad.text
     detail = bad.json()["detail"]
     assert "Куда" in detail
-    assert "Плановое отправление" in detail
+    assert "Плановое прибытие" in detail
 
 
 def test_shipment_can_be_linked_to_multiple_trips(admin_client, client_id):
