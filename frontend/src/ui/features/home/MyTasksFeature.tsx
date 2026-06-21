@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getMyTasks, taskLink } from '../../../api/tasksApi'
 import type { TaskItem, TaskKind } from '../../../api/tasksApi'
 import { isOutbound } from '../../../api/tripsApi'
+import { fmtDateTime } from '../logistics/tripDetail/format'
 import { shipmentPriorityLabel, shipmentPriorityTone } from '../../../api/shipmentsApi'
 import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
@@ -174,8 +175,20 @@ export function MyTasksFeature() {
                         <Badge tone={shipmentPriorityTone(t.priority_rank)}>{shipmentPriorityLabel(t.priority_rank)}</Badge>
                       )}
                     </div>
-                    <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1 }}>
-                      {taskSub(t)}
+                    <div className="t-sub" style={{ fontSize: 12.5, marginTop: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span>{taskSub(t)}</span>
+                      {t.doc_type === 'trip' && t.eta && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: t.kind === 'trip_cost' ? 'var(--c-text-subtle)' : 'var(--c-accent)', fontWeight: t.kind === 'trip_cost' ? 400 : 500 }}>
+                          <Icon name="clock" size={12} />
+                          Прибытие {fmtDateTime(t.eta)}
+                        </span>
+                      )}
+                      {t.doc_type === 'trip' && t.vehicle_number && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Icon name="truckIn" size={12} style={{ color: 'var(--c-text-faint)' }} />
+                          <span className="mono">{t.vehicle_number}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                   <span style={{

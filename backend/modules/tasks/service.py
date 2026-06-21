@@ -65,7 +65,7 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     tasks: list[dict] = []
 
     trip_rows = connection.execute(
-        "SELECT id, trip_number, status, direction, updated_at, created_at FROM trip_docs "
+        "SELECT id, trip_number, status, direction, eta, vehicle_number, updated_at, created_at FROM trip_docs "
         "WHERE is_deleted = 0 AND status IN (?,?,?)",
         (TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING, TRIP_STATUS_COSTING),
     ).fetchall()
@@ -84,6 +84,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             "status": str(r["status"]),
             "role": task_role,
             "direction": direction or None,
+            "eta": r["eta"],
+            "vehicle_number": r["vehicle_number"],
             "since": r["updated_at"] or r["created_at"],
         })
 

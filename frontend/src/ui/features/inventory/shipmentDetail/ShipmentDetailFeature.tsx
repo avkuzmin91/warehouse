@@ -42,7 +42,9 @@ import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShi
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
+import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
 import { ReadOnlyField } from '../../inventory/shared/ReadOnlyField'
+import { updateProduct } from '../../../../api/adminApi'
 import { OpEntry } from './components/OpEntry'
 import { lineAvailable } from './shared/opLabels'
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
@@ -77,6 +79,7 @@ export function ShipmentDetailFeature() {
   const [showBlockReasons, setShowBlockReasons] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [skuLine, setSkuLine] = useState<ShipmentLine | null>(null)
   const [filePreview, setFilePreview] = useState<LineFilePreview | null>(null)
   const [balances, setBalances] = useState<BalanceItem[]>([])
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
@@ -365,6 +368,8 @@ export function ShipmentDetailFeature() {
   // Перевод в план — всё-или-ничего: каждая позиция должна быть покрыта остатком на
   // складе. Бэкенд проверяет авторитетно при advance; здесь — для готовности/блокировок.
   const allLinesOnStock = (doc?.lines ?? []).every((line) => getDraft(line).qty <= lineOnHand(line))
+  // Планировать отгрузку с товаром без артикула нельзя — SKU нужен для упаковки и счетов.
+  const allLinesHaveSku = (doc?.lines ?? []).every((line) => !line.sku_pending)
 
   // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
   // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
@@ -386,6 +391,13 @@ export function ShipmentDetailFeature() {
               ok: allLinesOnStock,
               label: 'Весь товар на остатках',
               error: 'Часть товара ещё в пути — дождитесь прихода на склад и повторите',
+            }]
+          : []),
+        ...(isDraft
+          ? [{
+              ok: allLinesHaveSku,
+              label: 'У всех товаров указан SKU',
+              error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)',
             }]
           : []),
         ...(isDraft && !isDefectCargo
@@ -447,6 +459,14 @@ export function ShipmentDetailFeature() {
       await refreshAfterLineChange()
       setShowPicker(false)
     })
+  }
+
+  async function handleAssignSku(line: ShipmentLine, skuBase: string) {
+    // SKU присваивается товару и всем вариантам; строки отгрузки хранят снимок sku,
+    // поэтому после дозаполнения перечитываем документ (sku_pending берётся из products).
+    await updateProduct(line.product_id, { sku_base: skuBase })
+    await load()
+    toast('SKU сохранён', 'success')
   }
 
   async function handleSaveQty(line: ShipmentLine): Promise<boolean> {
@@ -958,6 +978,7 @@ export function ShipmentDetailFeature() {
                 onUploadFile={handleUploadFile}
                 onReplaceFile={handleReplaceFile}
                 onDeleteFile={handleDeleteFile}
+                onAssignSku={setSkuLine}
               />
             )}
           </PhaseBlock>
@@ -1209,6 +1230,16 @@ export function ShipmentDetailFeature() {
           cargoType={doc.cargo_type as ShipmentCargoType}
           onAdd={(item, qty, zoneId, zoneName) => { void handleAddLine(item, qty, zoneId, zoneName) }}
           onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      {skuLine && (
+        <AssignSkuDrawer
+          productName={skuLine.product_name}
+          variantLabel={[skuLine.color_name, skuLine.size_name].filter(Boolean).join(' · ') || null}
+          currentSku={skuLine.sku_pending ? null : skuLine.product_sku}
+          onSubmit={(skuBase) => handleAssignSku(skuLine, skuBase)}
+          onClose={() => setSkuLine(null)}
         />
       )}
 

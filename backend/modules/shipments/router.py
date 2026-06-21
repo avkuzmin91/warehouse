@@ -5,8 +5,9 @@ from uuid import uuid4
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     INV_Q_GOOD,
     MAX_UPLOAD_BYTES,
@@ -551,8 +552,16 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             "ORDER BY t.trip_number",
             (doc_id,),
         ).fetchall()
+        # На строке показывается базовый SKU товара из карточки (SKU варианта вычисляется
+        # автоматически и хранится только в карточке). SKU «принадлежит» товару, поэтому
+        # берём актуальный `products.sku` — тогда присвоение/изменение SKU сразу видно, а
+        # снимок `l.product_sku` остаётся запасным (если товар вдруг отсутствует).
         lines_rows = conn.execute(
-            "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
+            "SELECT l.*, COALESCE(p.sku_pending, 0) AS sku_pending, "
+            "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS effective_sku "
+            "FROM shipment_lines l "
+            "LEFT JOIN products p ON p.id = l.product_id "
+            "WHERE l.doc_id = ? AND l.is_deleted = 0 ORDER BY l.created_at, l.id",
             (doc_id,),
         ).fetchall()
         files_rows = conn.execute(
@@ -629,7 +638,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             id=str(l["id"]),
             product_id=str(l["product_id"]),
             product_name=str(l["product_name"]),
-            product_sku=str(l["product_sku"]),
+            product_sku=str(l["effective_sku"]),
+            sku_pending=bool(l["sku_pending"]),
             color_id=l["color_id"],
             color_name=l["color_name"],
             size_id=l["size_id"],
@@ -884,14 +894,26 @@ def reverse_line_packing(doc_id: str, line_id: str, entry_id: str, user=Depends(
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/move-to-packing")
-def move_to_packing(doc_id: str, line_id: str, body: ShipmentMoveToPackingPayload, user=Depends(_get_warehouse)):
+def move_to_packing(
+    doc_id: str,
+    line_id: str,
+    body: ShipmentMoveToPackingPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_warehouse),
+):
     uid = str(user["id"])
     allocations = body.to_allocations()
     if not allocations:
         raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_move_to_packing")
+        if not proceed:
+            return stored
         moved = move_line_to_packing(conn, doc_id, line_id, allocations, uid)
-    return {"message": "ok", "moved": moved}
+        result = {"message": "ok", "moved": moved}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/return-from-packing")
@@ -922,20 +944,41 @@ def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/shipments/{doc_id}/advance")
-def advance_shipment_status(doc_id: str, user=Depends(_get_viewer)):
+def advance_shipment_status(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_viewer),
+):
     uid = str(user["id"])
     role = str(user["role"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_advance")
+        if not proceed:
+            return stored
         next_status = advance_shipment(conn, doc_id, uid, role)
-    return {"message": next_status}
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/finish-relocation")
-def finish_shipment_relocation(doc_id: str, body: ShipmentFinishRelocationPayload, user=Depends(_get_warehouse)):
+def finish_shipment_relocation(
+    doc_id: str,
+    body: ShipmentFinishRelocationPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_warehouse),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_finish_relocation")
+        if not proceed:
+            return stored
         next_status = finish_relocation(conn, doc_id, body.lines, uid)
-    return {"message": next_status}
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/finish-defect-relocation")

@@ -268,6 +268,30 @@ def _check_duplicate_lines(connection, doc_id: str) -> None:
         )
 
 
+def _check_lines_have_sku(connection, doc_id: str) -> None:
+    """Гейт перевода в план: у каждого товара отгрузки должен быть присвоен SKU.
+
+    Товар «ожидает SKU» (sku_pending) планировать нельзя — артикул нужен для упаковки,
+    маркировки и счетов. Источник истины — `products.sku_pending`: копия `product_sku`
+    в строке отгрузки — снимок на момент добавления и не обновляется при дозаполнении.
+    """
+    rows = connection.execute(
+        """SELECT DISTINCT l.product_name
+           FROM shipment_lines l
+           JOIN products p ON p.id = l.product_id
+           WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0
+             AND COALESCE(p.sku_pending, 0) = 1
+           ORDER BY l.product_name""",
+        (doc_id,),
+    ).fetchall()
+    if rows:
+        names = ", ".join(f"«{r['product_name']}»" for r in rows)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Укажите SKU для товаров без артикула перед планированием: {names}",
+        )
+
+
 def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
     """Гейт перевода в план: каждая позиция должна быть покрыта свободным годным
     остатком «На хранении». Иначе товар ещё в пути — документ держим в черновике.
@@ -1379,11 +1403,13 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
 
     if is_defect_cargo and next_status == SHIPMENT_STATUS_RELOCATING:
         _check_duplicate_lines(connection, doc_id)
+        _check_lines_have_sku(connection, doc_id)
         _check_defect_lines_ready(connection, doc_id, row["client_id"])
     elif next_status == SHIPMENT_STATUS_PACKING:
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)
+        _check_lines_have_sku(connection, doc_id)
         _check_lines_covered_by_stock(connection, doc_id, row["client_id"])
     elif next_status == SHIPMENT_STATUS_ON_PACKING:
         if _doc_moved_to_packing_qty(connection, doc_id) <= 0:

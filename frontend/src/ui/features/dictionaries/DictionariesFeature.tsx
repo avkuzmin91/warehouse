@@ -46,7 +46,7 @@ export function DictionariesFeature() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [visitedPanels, setVisitedPanels] = useState({
     products: active === 'products',
-    clients: active === 'clients',
+    clients: true,
     simple: true,
   })
 
@@ -55,7 +55,7 @@ export function DictionariesFeature() {
   useEffect(() => {
     setVisitedPanels((prev) => ({
       products: prev.products || active === 'products',
-      clients: prev.clients || active === 'clients',
+      clients: true,
       simple: true,
     }))
   }, [active])

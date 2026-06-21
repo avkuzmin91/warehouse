@@ -12,6 +12,8 @@ class TaskItem(BaseModel):
     status: str
     role: str
     direction: str | None = None  # для рейсов: inbound | outbound
+    eta: str | None = None  # для рейсов: плановое прибытие транспорта
+    vehicle_number: str | None = None  # для рейсов: госномер машины
     since: str | None = None
     priority_rank: int | None = None  # только для отгрузок
 

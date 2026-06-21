@@ -13,7 +13,9 @@ import { DatePicker } from '../../primitives/DatePicker'
 import { Alert } from '../../primitives/Alert'
 import { EmptyState } from '../../primitives/EmptyState'
 import { BalancePicker } from './shared/BalancePicker'
+import { AssignSkuDrawer } from './shared/AssignSkuDrawer'
 import { NumberStep } from './shared/NumberStep'
+import { updateProduct } from '../../../api/adminApi'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
 import { ShipHeader } from './shipmentDetail/components/ShipHeader'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './shipmentDetail/components/processUI'
@@ -28,7 +30,7 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; files: File[] }
+type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; sku_pending: boolean; files: File[] }
 type DraftLineFilePreview = FilePreviewMeta & { file: File }
 
 export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
@@ -43,6 +45,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [filePreview, setFilePreview] = useState<DraftLineFilePreview | null>(null)
   const [showPicker, setShowPicker] = useState(false)
+  const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
@@ -86,6 +89,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : [{ ok: comment.trim() !== '', label: 'Техническое задание заполнено', error: 'Заполните техническое задание' }]),
     ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
+    { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
     { ok: allOnStock, label: 'Весь товар на остатках', error: 'Часть товара ещё в пути — сохраните черновик и запланируйте после прихода' },
   ]
@@ -151,12 +155,22 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       qty,
       onHand:            cargoType === 'defect' ? b.storage_defect : b.storage_good,
       inTransit:         cargoType === 'defect' ? 0 : b.in_transit,
+      sku_pending:       !!b.sku_pending,
       storage_zone_id:   zoneId,
       storage_zone_name: zoneName,
       store_id:          null,
       store_name:        null,
       files:             [],
     }])
+  }
+
+  async function handleAssignSku(line: DraftLine, skuBase: string) {
+    // SKU принадлежит товару; присваиваем/меняем базовый артикул и отражаем его во всех
+    // строках того же товара в черновике (черновик ещё не сохранён — обновляем локально).
+    await updateProduct(line.product_id, { sku_base: skuBase })
+    setLines((ls) => ls.map((l) => l.product_id === line.product_id
+      ? { ...l, sku_pending: false, product_sku: skuBase }
+      : l))
   }
 
   async function uploadDraftFiles(docId: string) {
@@ -339,7 +353,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ width: 180 }}>Магазин</th>
-                    <th style={{ textAlign: 'right', width: 160 }}>План отгрузки</th>
+                    <th style={{ textAlign: 'right', width: 176 }}>План отгрузки</th>
                     <th style={{ width: 124, textAlign: 'center' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
                         <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
@@ -362,6 +376,20 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                         <td>
                           <div style={{ fontWeight: 500, fontSize: 13 }}>{l.product_name}</div>
                           <div className="t-sub mono">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
+                          {l.sku_pending ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                              <span className="badge warning">Без SKU</span>
+                              <button className="btn ghost sm" onClick={() => setSkuLine(l)}>
+                                <Icon name="edit" size={12} />Указать SKU
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ marginTop: 4 }}>
+                              <button className="btn ghost sm" onClick={() => setSkuLine(l)}>
+                                <Icon name="edit" size={12} />Изменить SKU
+                              </button>
+                            </div>
+                          )}
                         </td>
                         <td>
                           <div className="store-cell-combobox">
@@ -383,7 +411,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                               <Icon name="clock" size={13} style={{ color: 'var(--c-text-subtle)' }} />
                             ) : null}
                           </div>
-                          <div className="t-sub" style={{ textAlign: 'right', marginTop: 2 }}>
+                          <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
                             на складе {l.onHand}{!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
                           </div>
                         </td>
@@ -480,6 +508,16 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
           cargoType={cargoType}
           onAdd={(b, qty, zoneId, zoneName) => { addFromBalance(b, qty, zoneId, zoneName); setShowPicker(false) }}
           onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      {skuLine && (
+        <AssignSkuDrawer
+          productName={skuLine.product_name}
+          variantLabel={[skuLine.color_name, skuLine.size_name].filter(Boolean).join(' · ') || null}
+          currentSku={skuLine.sku_pending ? null : skuLine.product_sku}
+          onSubmit={(skuBase) => handleAssignSku(skuLine, skuBase)}
+          onClose={() => setSkuLine(null)}
         />
       )}
 

@@ -5,13 +5,14 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import jwt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import (
     JWT_ALGORITHM,
     JWT_SECRET,
     TOKEN_TTL_MINUTES,
+    AUTH_CLIENT_MOBILE,
     AUTH_REPLAY_REVOKE_MIN_SECONDS,
     AUTH_REFRESH_TTL_DAYS,
 )
@@ -23,6 +24,7 @@ from .schemas import (
     ChangePasswordRequest,
     LoginRequest,
     MeResponse,
+    RefreshRequest,
     RegisterRequest,
     RegisterResponse,
 )
@@ -49,6 +51,10 @@ _auth_log = logging.getLogger("warehouse.auth")
 _now_str = lambda: datetime.now(UTC).isoformat()
 
 
+def _is_mobile_client(x_client: str | None) -> bool:
+    return bool(x_client) and str(x_client).strip().lower() == AUTH_CLIENT_MOBILE
+
+
 @router.post("/register", response_model=RegisterResponse)
 def register(payload: RegisterRequest):
     existing_user = get_user_by_email(payload.email)
@@ -69,7 +75,7 @@ def register(payload: RegisterRequest):
 
 
 @router.post("/login", response_model=AuthTokenResponse)
-def login(payload: LoginRequest, response: Response):
+def login(payload: LoginRequest, response: Response, x_client: str | None = Header(default=None)):
     user = get_user_by_email(payload.email)
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(
@@ -83,7 +89,12 @@ def login(payload: LoginRequest, response: Response):
     token = create_token(user_id, str(user["email"]).strip().lower(), str(user["role"]))
     set_refresh_cookie(response, raw_refresh)
     _auth_log.info("auth login ok user_id_prefix=%s", user_id[:8])
-    return AuthTokenResponse(access_token=token, token_type="Bearer", expires_in=TOKEN_TTL_MINUTES * 60)
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="Bearer",
+        expires_in=TOKEN_TTL_MINUTES * 60,
+        refresh_token=raw_refresh if _is_mobile_client(x_client) else None,
+    )
 
 
 @router.post("/change-password", response_model=AuthTokenResponse)
@@ -123,13 +134,24 @@ def change_password(payload: ChangePasswordRequest, response: Response, user=Dep
 
 
 @router.post("/refresh", response_model=AuthTokenResponse)
-def auth_refresh(response: Response, wms_rt: str | None = Cookie(None)):
-    if not wms_rt or not str(wms_rt).strip():
+def auth_refresh(
+    response: Response,
+    payload: RefreshRequest | None = Body(default=None),
+    wms_rt: str | None = Cookie(None),
+    x_client: str | None = Header(default=None),
+):
+    body_refresh = str(payload.refresh_token).strip() if payload and payload.refresh_token else ""
+    raw_in = body_refresh or (str(wms_rt).strip() if wms_rt else "")
+    if not raw_in:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Сессия истекла или отсутствует",
         )
-    raw_in = str(wms_rt).strip()
+    # Refresh в теле отдаём только явному мобильному клиенту (как и /login). Браузер
+    # держит refresh строго в HttpOnly cookie — иначе ротированный токен утёк бы в
+    # JS-читаемое тело и обошёл HttpOnly-модель. Тело refresh_token при этом всё равно
+    # принимаем (raw_in выше), но НЕ эхо-возвращаем без X-Client: mobile.
+    is_mobile = _is_mobile_client(x_client)
     h = _hash_refresh_token(raw_in)
     now_ts = _now_str()
     with get_connection() as connection:
@@ -242,11 +264,17 @@ def auth_refresh(response: Response, wms_rt: str | None = Cookie(None)):
 
     token = create_token(user_id, email, role)
     set_refresh_cookie(response, new_raw)
-    return AuthTokenResponse(access_token=token, token_type="Bearer", expires_in=TOKEN_TTL_MINUTES * 60)
+    return AuthTokenResponse(
+        access_token=token,
+        token_type="Bearer",
+        expires_in=TOKEN_TTL_MINUTES * 60,
+        refresh_token=new_raw if is_mobile else None,
+    )
 
 
 @router.post("/logout")
 def auth_logout(
+    payload: RefreshRequest | None = Body(default=None),
     wms_rt: str | None = Cookie(None),
     credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer),
 ):
@@ -259,8 +287,10 @@ def auth_logout(
                 jti_denylist_add(str(jti), float(exp))
         except jwt.PyJWTError:
             pass
-    if wms_rt and str(wms_rt).strip():
-        h = _hash_refresh_token(str(wms_rt).strip())
+    body_refresh = str(payload.refresh_token).strip() if payload and payload.refresh_token else ""
+    raw_refresh = body_refresh or (str(wms_rt).strip() if wms_rt else "")
+    if raw_refresh:
+        h = _hash_refresh_token(raw_refresh)
         with get_connection() as connection:
             connection.execute(
                 "UPDATE auth_sessions SET revoked_at = ? WHERE refresh_hash = ? AND revoked_at IS NULL",

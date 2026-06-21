@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom'
 import { Badge } from '../primitives/Badge'
 import { Card, CardBody, CardHead } from '../primitives/Card'
 import { Icon } from '../primitives/Icon'
@@ -7,8 +6,6 @@ import { MyTasksFeature } from '../features/home/MyTasksFeature'
 import { HomeKpiFeature } from '../features/home/HomeKpiFeature'
 import { OperationalPlanFeature } from '../features/home/OperationalPlanFeature'
 import { PacmanPlaceholder } from '../features/home/PacmanPlaceholder'
-import { useCurrentUser } from '../../hooks/useCurrentUser'
-import { canEditShipments } from '../../utils/access'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('ru-RU', {
@@ -20,10 +17,6 @@ function formatDate(): string {
 }
 
 export function HomePage() {
-  const navigate = useNavigate()
-  const { user } = useCurrentUser()
-  const canEdit = canEditShipments(user)
-
   return (
     <div className="page">
       <div className="page-header">
@@ -31,14 +24,6 @@ export function HomePage() {
           <div className="page-title">Сводка по складу MSK-01</div>
           <div className="page-subtitle">Сегодня · {formatDate()}</div>
         </div>
-        {canEdit && (
-          <div className="row gap-8">
-            <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
-              <Icon name="plus" size={14} />
-              Новое поступление
-            </button>
-          </div>
-        )}
       </div>
 
       <HomeKpiFeature />

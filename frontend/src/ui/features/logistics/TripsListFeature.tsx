@@ -363,6 +363,9 @@ export function TripsListFeature() {
                           {t.trip_number}
                           {direction === 'outbound' && t.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
                         </span>
+                        {t.vehicle_number && (
+                          <div className="t-sub" style={{ fontSize: 11.5, fontWeight: 400, marginTop: 2 }}>{t.vehicle_number}</div>
+                        )}
                       </Td>
                       <Td><TimeCell eta={t.eta} /></Td>
                       <Td>
