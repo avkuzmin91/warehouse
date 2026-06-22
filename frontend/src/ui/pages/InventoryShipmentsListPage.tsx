@@ -41,12 +41,11 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
 ]
 
 const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
-  { status: 'draft',         label: 'Создание',     tone: '' },
-  { status: 'packing',       label: 'В плане',      tone: 'info' },
-  { status: 'on_packing',    label: 'На упаковке',  tone: 'info' },
-  { status: 'relocating',    label: 'Перемещение',  tone: 'info' },
-  { status: 'awaiting_trip', label: 'Ожидает рейс', tone: 'warning' },
-  { status: 'shipped',       label: 'Завершён',     tone: 'success' },
+  { status: 'draft',      label: 'Создание',    tone: '' },
+  { status: 'packing',    label: 'В плане',     tone: 'info' },
+  { status: 'on_packing', label: 'На упаковке', tone: 'info' },
+  { status: 'relocating', label: 'Перемещение', tone: 'info' },
+  { status: 'packed',     label: 'Упаковано',   tone: 'success' },
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
@@ -170,7 +169,7 @@ export function InventoryShipmentsListPage() {
 
   if (initialLoading) {
     return (
-      <ListPage title="Отгрузки">
+      <ListPage title="Задачи упаковки">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
           <div style={{ width: 28, height: 28, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
         </div>
@@ -180,7 +179,7 @@ export function InventoryShipmentsListPage() {
 
   return (
     <ListPage
-      title="Отгрузки"
+      title="Задачи упаковки"
       subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
         <>
@@ -202,12 +201,12 @@ export function InventoryShipmentsListPage() {
             <Dropdown
               trigger={
                 <button className="btn primary">
-                  <Icon name="plus" size={14} />Новая отгрузка<Icon name="chevDown" size={12} />
+                  <Icon name="plus" size={14} />Новая задача<Icon name="chevDown" size={12} />
                 </button>
               }
               items={[
-                { label: 'Отгрузка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
-                { label: 'Отгрузка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/shipments/new?cargo=defect') },
+                { label: 'Упаковка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
+                { label: 'Упаковка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/shipments/new?cargo=defect') },
               ]}
             />
           )}
@@ -280,7 +279,7 @@ export function InventoryShipmentsListPage() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'overdue', label: 'Просрочка' },
-              ...([...SHIPMENT_STATUS_ORDER, 'partially_shipped', 'cancelled'] as ShipmentStatus[])
+              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}
@@ -347,8 +346,8 @@ export function InventoryShipmentsListPage() {
               ) : items.length === 0 ? (
                 <tr><td colSpan={9}>
                   <EmptyState
-                    title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
-                    sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
+                    title={isOverdueFilter ? 'Просроченных задач нет' : 'Задач упаковки нет'}
+                    sub={!statusFilter ? 'Создайте первую задачу' : undefined}
                   />
                 </td></tr>
               ) : (

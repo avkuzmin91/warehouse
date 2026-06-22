@@ -65,7 +65,7 @@ export function AwaitingView({ detail, loadFactor, onLoadFactor, busy, enrich, a
   const direction = (doc.direction as TripDirection) ?? 'inbound'
   const lex = tripLexicon(direction)
   const outbound = direction === 'outbound'
-  const docsCount = outbound ? detail.shipments.length : receipts.length
+  const docsCount = outbound ? detail.dispatches.length : receipts.length
   const unloading = doc.status === 'unloading'
   const unloadingStartedAt = doc.unload_started_at ?? doc.arrived_at
   const inWork = minutesSince(unloadingStartedAt)

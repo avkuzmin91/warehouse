@@ -6,23 +6,23 @@ import {
   getTrip,
   handoffTrip,
   linkTripReceipts,
-  linkTripShipments,
+  linkTripDispatches,
   tripArrival,
   tripCost,
   tripUnload,
   unlinkTripReceipt,
-  unlinkTripShipment,
+  unlinkTripDispatch,
   updateTripExecution,
   updateTrip,
   isOutbound,
   tripLexicon,
 } from '../../../api/tripsApi'
-import type { TripDetail, TripLoadFactor, TripShipmentLinkItem, TripReceiptLinkItem, TripUnloadReceiptLine } from '../../../api/tripsApi'
+import type { TripDetail, TripLoadFactor, TripDispatchLinkItem, TripReceiptLinkItem, TripUnloadReceiptLine } from '../../../api/tripsApi'
 import { UnloadReceiveTable } from './tripDetail/components/UnloadReceiveTable'
 import { getReceipts, createReceipt, advanceReceiptStatus, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
-import type { ShipmentListItem } from '../../../api/shipmentsApi'
+import { listDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../../api/dispatchApi'
+import type { DispatchListItem } from '../../../api/dispatchApi'
 import type { CreateReceiptFormValue } from './tripDetail/components/CreateReceiptForm'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Alert } from '../../primitives/Alert'
@@ -33,8 +33,8 @@ import { isDateTimeComplete, isDateTimeBefore } from './components/dateTimeValue
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
-import { ShipmentsBlock } from './tripDetail/ShipmentsBlock'
-import type { ShipmentLink, ShipmentEnrich } from './tripDetail/ShipmentsBlock'
+import { DispatchesBlock } from './tripDetail/DispatchesBlock'
+import type { DispatchLink, DispatchEnrich } from './tripDetail/DispatchesBlock'
 import type { Check } from './tripDetail/panels'
 import { PlanningView } from './tripDetail/views/PlanningView'
 import { AwaitingView } from './tripDetail/views/AwaitingView'
@@ -85,7 +85,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [acceptByLine, setAcceptByLine] = useState<Record<string, number>>({})
   const [zoneByLine, setZoneByLine] = useState<Record<string, string>>({})
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
-  const [availableShipments, setAvailableShipments] = useState<ShipmentListItem[]>([])
+  const [availableDispatches, setAvailableDispatches] = useState<DispatchListItem[]>([])
   const [showBlockReasons, setShowBlockReasons] = useState(false)
 
   const outbound = isOutbound(detail?.doc.direction)
@@ -139,8 +139,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
     const ctrl = new AbortController()
     if (isOutbound(detail.doc.direction)) {
-      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id, cargo_type: detail.doc.cargo_type }, ctrl.signal)
-        .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
+      listDispatches({ status: DISPATCH_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id, cargo_type: detail.doc.cargo_type }, ctrl.signal)
+        .then((res) => { if (!ctrl.signal.aborted) setAvailableDispatches(res.items) })
         .catch(() => {})
     } else {
       getReceipts({ status: RECEIPT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: detail.doc.id }, ctrl.signal)
@@ -207,7 +207,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     transport_ordered_at: !isDateTimeComplete(form.transport_ordered_at),
     eta: !isDateTimeComplete(form.eta) || etaBeforeOrder,
   }
-  const linkedDocsCount = outbound ? (detail?.shipments.length ?? 0) : (detail?.receipts.length ?? 0)
+  const linkedDocsCount = outbound ? (detail?.dispatches.length ?? 0) : (detail?.receipts.length ?? 0)
   const handoffBlockReasons: string[] = [
     ...(requiredErrors.origin_id ? [`Не указано «${lex.routeLabel}»`] : []),
     ...(requiredErrors.carrier_id ? ['Не выбран перевозчик'] : []),
@@ -308,18 +308,18 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       for (const id of removed) await unlinkTripReceipt(tripId, id)
     })
 
-  const handleLinkShipments = (items: TripShipmentLinkItem[]) =>
-    runThrowing(() => linkTripShipments(tripId, items))
+  const handleLinkDispatches = (items: TripDispatchLinkItem[]) =>
+    runThrowing(() => linkTripDispatches(tripId, items))
 
-  const handleSaveShipmentDistribution = (items: TripShipmentLinkItem[], removed: string[]) =>
+  const handleSaveDispatchDistribution = (items: TripDispatchLinkItem[], removed: string[]) =>
     runThrowing(async () => {
-      if (items.length) await linkTripShipments(tripId, items)
-      for (const id of removed) await unlinkTripShipment(tripId, id)
+      if (items.length) await linkTripDispatches(tripId, items)
+      for (const id of removed) await unlinkTripDispatch(tripId, id)
     })
-  const handleUnlinkShipment = async (shipmentDocId: string) => {
+  const handleUnlinkDispatch = async (dispatchDocId: string) => {
     // В погрузке открепление необратимо: привязать отгрузку обратно к этому рейсу уже нельзя.
     if (detail?.doc.status === 'unloading') {
-      const num = detail.shipments.find((s) => s.shipment_doc_id === shipmentDocId)?.shipment_number
+      const num = detail.dispatches.find((d) => d.dispatch_doc_id === dispatchDocId)?.dispatch_number
       const ok = await confirm({
         title: 'Открепить отгрузку от рейса?',
         body: `Отгрузка ${num ?? ''} не уедет этим рейсом. Привязать её обратно к рейсу будет нельзя.`,
@@ -328,7 +328,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       })
       if (!ok) return
     }
-    await run(() => unlinkTripShipment(tripId, shipmentDocId))
+    await run(() => unlinkTripDispatch(tripId, dispatchDocId))
   }
 
   if (loading) {
@@ -338,11 +338,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     return <div className="page"><div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--c-danger)' }}>{error || 'Рейс не найден'}</div></div>
   }
 
-  const { doc, receipts, shipments } = detail
+  const { doc, receipts, dispatches } = detail
   const status = doc.status
   const onBack = () => navigate('/logistics/trips')
   const onOpenReceipt = (id: string) => navigate(`/inventory/receipts/${id}`)
-  const onOpenShipment = (id: string) => navigate(`/inventory/shipments/${id}`)
+  const onOpenDispatch = (id: string) => navigate(`/inventory/dispatches/${id}`)
 
   const linkedIds = new Set(receipts.map((r) => r.receipt_doc_id))
   const link: ReceiptLink = {
@@ -362,29 +362,29 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const enrich: ReceiptEnrich = {}
   for (const a of available) enrich[a.id] = { sku: a.sku_count, qty: a.total_planned, eta: fmtDay(a.arrival_date) }
 
-  const linkedShipmentIds = new Set(shipments.map((s) => s.shipment_doc_id))
-  const shipmentLink: ShipmentLink = {
-    options: availableShipments.filter((s) => !linkedShipmentIds.has(s.id)),
+  const linkedDispatchIds = new Set(dispatches.map((d) => d.dispatch_doc_id))
+  const dispatchLink: DispatchLink = {
+    options: availableDispatches.filter((d) => !linkedDispatchIds.has(d.id)),
     tripNumber: doc.trip_number,
     tripDestination: doc.origin_name,
-    onLink: handleLinkShipments,
-    onUnlink: handleUnlinkShipment,
-    onSaveDistribution: handleSaveShipmentDistribution,
+    onLink: handleLinkDispatches,
+    onUnlink: handleUnlinkDispatch,
+    onSaveDistribution: handleSaveDispatchDistribution,
     presetsLinked: true,
     busy,
   }
-  const shipmentEnrich: ShipmentEnrich = {}
-  for (const s of availableShipments) shipmentEnrich[s.id] = { sku: s.sku_count, qty: s.total_qty }
+  const dispatchEnrich: DispatchEnrich = {}
+  for (const d of availableDispatches) dispatchEnrich[d.id] = { sku: d.sku_count, qty: d.total_qty }
 
   /** Блок документов рейса по направлению; передаётся во view как docsNode. */
   const docsNode = outbound ? (
-    <ShipmentsBlock
+    <DispatchesBlock
       title={lex.docsTitle}
-      shipments={shipments}
-      enrich={shipmentEnrich}
-      onOpen={onOpenShipment}
-      link={CAN_LINK.has(status) ? shipmentLink : undefined}
-      onUnlink={status === 'unloading' && canEditTransportPlanning ? handleUnlinkShipment : undefined}
+      dispatches={dispatches}
+      enrich={dispatchEnrich}
+      onOpen={onOpenDispatch}
+      link={CAN_LINK.has(status) ? dispatchLink : undefined}
+      onUnlink={status === 'unloading' && canEditTransportPlanning ? handleUnlinkDispatch : undefined}
       expandable
       resetKey={doc.id}
     />
@@ -423,7 +423,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     { ok: !requiredErrors.transport_ordered_at, label: 'Транспорт заказан' },
     { ok: isDateTimeComplete(form.eta), label: `${lex.etaLabel} указано` },
     ...(etaBeforeOrder ? [{ ok: false, label: `${lex.arrivalLabel} не раньше заказа транспорта` }] : []),
-    { ok: linkedDocsCount > 0, label: outbound ? `Отгрузок: ${shipments.length}` : `Поступлений: ${receipts.length}` },
+    { ok: linkedDocsCount > 0, label: outbound ? `Отгрузок: ${dispatches.length}` : `Поступлений: ${receipts.length}` },
   ]
 
   const dirtyFields =

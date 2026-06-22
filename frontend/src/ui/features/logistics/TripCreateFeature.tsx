@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripShipments, linkTripReceipts } from '../../../api/tripsApi'
-import type { TripReceiptItem, TripReceiptLinkItem, TripShipmentItem, TripShipmentLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
+import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripDispatches, linkTripReceipts } from '../../../api/tripsApi'
+import type { TripReceiptItem, TripReceiptLinkItem, TripDispatchItem, TripDispatchLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
 import { getReceipts, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { listShipments, SHIPMENT_TRIP_SELECTABLE_STATUSES } from '../../../api/shipmentsApi'
-import type { ShipmentListItem } from '../../../api/shipmentsApi'
+import { listDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../../api/dispatchApi'
+import type { DispatchListItem } from '../../../api/dispatchApi'
 import { Icon } from '../../primitives/Icon'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
@@ -18,8 +18,8 @@ import { ProcessPanel, ReadyChecklist } from './tripDetail/panels'
 import type { Check } from './tripDetail/panels'
 import { ReceiptsBlock } from './tripDetail/ReceiptsBlock'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
-import { ShipmentsBlock } from './tripDetail/ShipmentsBlock'
-import type { ShipmentLink, ShipmentEnrich } from './tripDetail/ShipmentsBlock'
+import { DispatchesBlock } from './tripDetail/DispatchesBlock'
+import type { DispatchLink, DispatchEnrich } from './tripDetail/DispatchesBlock'
 
 const EMPTY_FORM: PlanningFormValue = {
   origin_id: '', carrier_id: '', vehicle_type_id: '',
@@ -45,10 +45,10 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
 
   const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [shipDist, setShipDist] = useState<TripShipmentLinkItem[]>([])
+  const [shipDist, setShipDist] = useState<TripDispatchLinkItem[]>([])
   const [recvDist, setRecvDist] = useState<TripReceiptLinkItem[]>([])
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
-  const [availableShipments, setAvailableShipments] = useState<ShipmentListItem[]>([])
+  const [availableDispatches, setAvailableDispatches] = useState<DispatchListItem[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
@@ -59,8 +59,8 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       // 'new' — несуществующий рейс: available_for_trip_id исключает только привязки
       // к ЭТОМУ рейсу (которого ещё нет) → в кандидаты попадают и документы, уже
       // распределённые по другим рейсам (дробление). cargo_type ограничивает типом груза.
-      listShipments({ status: SHIPMENT_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType }, ctrl.signal)
-        .then((res) => { if (!ctrl.signal.aborted) setAvailableShipments(res.items) })
+      listDispatches({ status: DISPATCH_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType }, ctrl.signal)
+        .then((res) => { if (!ctrl.signal.aborted) setAvailableDispatches(res.items) })
         .catch(() => {})
     } else {
       // Зеркально отгрузкам: «В плане» + «Частично принято» (остаток можно довезти
@@ -122,7 +122,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   const recvDistQty = (id: string): number | undefined =>
     recvDist.find((it) => it.receipt_doc_id === id)?.allocations.reduce((s, a) => s + a.qty, 0)
   const shipDistQty = (id: string): number | undefined =>
-    shipDist.find((it) => it.shipment_doc_id === id)?.allocations.reduce((s, a) => s + a.qty, 0)
+    shipDist.find((it) => it.dispatch_doc_id === id)?.allocations.reduce((s, a) => s + a.qty, 0)
   const selectedReceipts: TripReceiptItem[] = available
     .filter((r) => selected.has(r.id))
     .map((r) => ({
@@ -137,13 +137,13 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
         storage_zone_id: null, storage_zone_name: null,
       })),
     }))
-  const selectedShipments: TripShipmentItem[] = availableShipments
+  const selectedDispatches: TripDispatchItem[] = availableDispatches
     .filter((s) => selected.has(s.id))
     .map((s) => ({
-      line_id: s.id, shipment_doc_id: s.id, shipment_number: s.doc_number,
-      shipment_status: s.status, client_id: s.client_id, client_name: s.client_name,
+      line_id: s.id, dispatch_doc_id: s.id, dispatch_number: s.doc_number,
+      dispatch_status: s.status, client_id: s.client_id, client_name: s.client_name,
       allocated_qty: shipDistQty(s.id) ?? s.total_qty,
-      allocations: (shipDist.find((it) => it.shipment_doc_id === s.id)?.allocations ?? []).map((a) => ({
+      allocations: (shipDist.find((it) => it.dispatch_doc_id === s.id)?.allocations ?? []).map((a) => ({
         line_id: a.line_id, product_sku: null, product_name: null, variant: null,
         qty: a.qty, line_qty: 0, shipped_qty: 0,
       })),
@@ -151,14 +151,14 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
 
   const enrich: ReceiptEnrich = {}
   for (const r of available) enrich[r.id] = { sku: r.sku_count, qty: r.total_planned, eta: fmtDay(r.arrival_date) }
-  const shipmentEnrich: ShipmentEnrich = {}
-  for (const s of availableShipments) shipmentEnrich[s.id] = { sku: s.sku_count, qty: s.total_qty }
+  const dispatchEnrich: DispatchEnrich = {}
+  for (const s of availableDispatches) dispatchEnrich[s.id] = { sku: s.sku_count, qty: s.total_qty }
 
   // Модал распределения отдаёт строки с количествами; рейс ещё не создан, поэтому
   // распределение копим локально и применяем при создании (linkTrip* после createTrip).
-  const saveShipDist = async (items: TripShipmentLinkItem[]) => {
+  const saveShipDist = async (items: TripDispatchLinkItem[]) => {
     setShipDist(items)
-    setSelected(new Set(items.map((it) => it.shipment_doc_id)))
+    setSelected(new Set(items.map((it) => it.dispatch_doc_id)))
   }
   const saveRecvDist = async (items: TripReceiptLinkItem[]) => {
     setRecvDist(items)
@@ -175,8 +175,8 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
     presetsLinked: false,
     busy: false,
   }
-  const shipmentLink: ShipmentLink = {
-    options: availableShipments.filter((s) => !selected.has(s.id)),
+  const dispatchLink: DispatchLink = {
+    options: availableDispatches.filter((s) => !selected.has(s.id)),
     tripNumber: '— новый —',
     tripDestination: warehouses.find((w) => w.id === form.origin_id)?.name ?? null,
     onLink: saveShipDist,
@@ -204,7 +204,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       eta: form.eta || null,
       ...(showCosts ? { cost_estimate: form.cost_estimate.trim() ? Number(form.cost_estimate) : null } : {}),
       comment: form.comment.trim() || null,
-      ...(outbound ? { shipment_doc_ids: [...selected] } : { receipt_doc_ids: [...selected] }),
+      ...(outbound ? { dispatch_doc_ids: [...selected] } : { receipt_doc_ids: [...selected] }),
     }
   }
 
@@ -214,7 +214,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
     try {
       const res = await createTrip(tripPayload())
       // Применяем распределение по строкам поверх созданного рейса (link заменяет привязку целиком).
-      if (outbound && shipDist.length) await linkTripShipments(res.message, shipDist)
+      if (outbound && shipDist.length) await linkTripDispatches(res.message, shipDist)
       if (!outbound && recvDist.length) await linkTripReceipts(res.message, recvDist)
       if (handoff) await handoffTrip(res.message)
       navigate(`/logistics/trips/${res.message}`)
@@ -280,7 +280,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
           <PlanningForm value={form} onChange={onField} state="active" showCosts={showCosts}
             invalid={showBlockReasons ? requiredErrors : undefined} routeLabel={lex.routeLabel} etaLabel={lex.etaLabel} />
           {outbound ? (
-            <ShipmentsBlock title={lex.docsTitle} shipments={selectedShipments} enrich={shipmentEnrich} link={shipmentLink} />
+            <DispatchesBlock title={lex.docsTitle} dispatches={selectedDispatches} enrich={dispatchEnrich} link={dispatchLink} />
           ) : (
             <ReceiptsBlock receipts={selectedReceipts} enrich={enrich} link={link} />
           )}

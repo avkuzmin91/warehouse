@@ -76,7 +76,7 @@ export type TripReceiptLinkItem = {
   allocations: { line_id: string; qty: number }[]
 }
 
-export type TripShipmentAlloc = {
+export type TripDispatchAlloc = {
   line_id: string
   product_sku: string | null
   product_name: string | null
@@ -86,19 +86,19 @@ export type TripShipmentAlloc = {
   shipped_qty: number  // отгружено всего (по всем рейсам)
 }
 
-export type TripShipmentItem = {
+export type TripDispatchItem = {
   line_id: string
-  shipment_doc_id: string
-  shipment_number: string | null
-  shipment_status: string | null
+  dispatch_doc_id: string
+  dispatch_number: string | null
+  dispatch_status: string | null
   client_id: string | null
   client_name: string | null
   allocated_qty: number
-  allocations: TripShipmentAlloc[]
+  allocations: TripDispatchAlloc[]
 }
 
-export type TripShipmentLinkItem = {
-  shipment_doc_id: string
+export type TripDispatchLinkItem = {
+  dispatch_doc_id: string
   allocations: { line_id: string; qty: number }[]
 }
 
@@ -115,7 +115,7 @@ export type TripOp = {
 export type TripDetail = {
   doc: TripDoc
   receipts: TripReceiptItem[]
-  shipments: TripShipmentItem[]
+  dispatches: TripDispatchItem[]
   ops: TripOp[]
 }
 
@@ -161,7 +161,7 @@ export type TripCreatePayload = {
   cost_estimate?: number | null
   comment?: string | null
   receipt_doc_ids?: string[]
-  shipment_doc_ids?: string[]
+  dispatch_doc_ids?: string[]
 }
 
 export type TripUpdatePayload = Omit<TripCreatePayload, 'receipt_doc_ids'>
@@ -239,15 +239,15 @@ export function unlinkTripReceipt(tripId: string, receiptDocId: string) {
   })
 }
 
-export function linkTripShipments(tripId: string, items: TripShipmentLinkItem[]) {
-  return request<{ message: string }>(`/trips/${tripId}/shipments`, {
+export function linkTripDispatches(tripId: string, items: TripDispatchLinkItem[]) {
+  return request<{ message: string }>(`/trips/${tripId}/dispatches`, {
     method: 'POST',
     body: JSON.stringify({ items }),
   })
 }
 
-export function unlinkTripShipment(tripId: string, shipmentDocId: string) {
-  return request<{ message: string }>(`/trips/${tripId}/shipments/${shipmentDocId}`, {
+export function unlinkTripDispatch(tripId: string, dispatchDocId: string) {
+  return request<{ message: string }>(`/trips/${tripId}/dispatches/${dispatchDocId}`, {
     method: 'DELETE',
   })
 }

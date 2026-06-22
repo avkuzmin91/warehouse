@@ -14,6 +14,8 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   packing:       { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на упаковку' },
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
+  packed:        { role: null,         icon: 'check',    sub: 'товар упакован и разложен' },
+  // Легаси-статусы (исторические документы): в новом маршруте упаковки не используются.
   awaiting_trip: { role: 'manager',    icon: 'clock',    sub: 'привязка и отправка рейса' },
   partially_shipped: { role: 'manager', icon: 'truckOut', sub: 'часть уехала, остаток ждёт рейс' },
   shipped:       { role: null,         icon: 'truckOut', sub: 'списан при отправке рейса' },
@@ -31,9 +33,9 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
   const ts: Partial<Record<ShipmentStatus, string>> = {}
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
-    // Раскладка/подготовка («relocate») переводит документ в «Ожидает рейс»,
+    // Раскладка/подготовка («relocate») переводит документ в «Упаковано»,
     // но это не 'advance'-операция — фиксируем отметку отдельно.
-    if (op.op_type === 'relocate' && !ts.awaiting_trip) ts.awaiting_trip = op.created_at
+    if (op.op_type === 'relocate' && !ts.packed) ts.packed = op.created_at
     if (op.op_type !== 'advance') continue
     const comment = op.comment ?? ''
     for (const s of SHIPMENT_STATUS_ORDER) {
@@ -53,22 +55,23 @@ function fmt(s: string): string {
 }
 
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.
-const DEFECT_STATUS_ORDER: ShipmentStatus[] = ['draft', 'relocating', 'awaiting_trip', 'shipped']
+const DEFECT_STATUS_ORDER: ShipmentStatus[] = ['draft', 'relocating', 'packed']
 const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
   draft:         { role: 'manager',   icon: 'edit',     sub: 'состав и план брака' },
-  relocating:    { role: 'warehouse', icon: 'archive',  sub: 'подготовка брака в зону отгрузки', doneTitle: 'Подготовлен к рейсу' },
-  awaiting_trip: { role: 'manager',   icon: 'clock',    sub: 'привязка и отправка рейса' },
-  shipped:       { role: null,        icon: 'truckOut', sub: 'списан при отправке рейса' },
+  relocating:    { role: 'warehouse', icon: 'archive',  sub: 'подготовка брака в зону отгрузки', doneTitle: 'Подготовлен' },
+  packed:        { role: null,        icon: 'check',    sub: 'брак подготовлен' },
 }
 
 /** Шаги маршрута отгрузки для ProcessRail. */
 export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], cargoType: ShipmentCargoType = 'good'): ProcessStep[] {
   const order = cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
-  // «Завершено без отгрузки» (весь товар брак) — терминал «Завершён»: маршрут пройден целиком.
+  // «Завершено без отгрузки» (весь товар брак) — терминал: маршрут пройден целиком.
+  // Легаси-статусы рейса (shipped/partially/awaiting_trip) для исторических документов
+  // считаем пройденным маршрутом — задача упаковки в них уже завершена.
   const isShipped = status === 'shipped' || status === 'completed_no_goods'
+    || status === 'partially_shipped' || status === 'awaiting_trip'
   const isCancelled = status === 'cancelled'
-  // «Частично отгружено» нет в линейном маршруте: показываем как активную финальную отправку.
-  const railStatus: ShipmentStatus = status === 'partially_shipped' ? 'shipped' : status
+  const railStatus: ShipmentStatus = status
   const curIdx = order.indexOf(railStatus)
   const ts = getStepTimestamps(ops)
   // У аннулированного «текущего» шага нет: отмену можно сделать с разных этапов
