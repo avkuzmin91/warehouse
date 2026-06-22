@@ -243,7 +243,11 @@ def get_plannable_items(
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
                              - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS storage_good,
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
-                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS storage_defect
+                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS storage_defect,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS ready_good,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS ready_defect
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
         ),
@@ -272,6 +276,8 @@ def get_plannable_items(
                COALESCE(s.client_name,  i.client_name)  AS client_name,
                COALESCE(s.storage_good, 0)   AS storage_good,
                COALESCE(s.storage_defect, 0) AS storage_defect,
+               COALESCE(s.ready_good, 0)     AS ready_good,
+               COALESCE(s.ready_defect, 0)   AS ready_defect,
                COALESCE(i.in_transit, 0)     AS in_transit
         FROM keys k
         LEFT JOIN stock s
@@ -295,7 +301,10 @@ def get_plannable_items(
         s = like_substring_param(search)
         conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ?)")
         params += [s, s]
-    conds.append("p.storage_defect > 0" if is_defect else "(p.storage_good > 0 OR p.in_transit > 0)")
+    conds.append(
+        "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
+        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.in_transit > 0)"
+    )
     where = "WHERE " + " AND ".join(conds)
 
     rows = connection.execute(
@@ -322,6 +331,8 @@ def get_plannable_items(
             color_name=r["color_name"],
             size_id=r["size_id"],
             size_name=r["size_name"],
+            ready_good=int(r["ready_good"] or 0),
+            ready_defect=int(r["ready_defect"] or 0),
             storage_good=int(r["storage_good"] or 0),
             storage_defect=int(r["storage_defect"] or 0),
             in_transit=0 if is_defect else int(r["in_transit"] or 0),

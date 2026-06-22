@@ -50,6 +50,8 @@ class PlannableItem(BaseModel):
     color_name: str | None
     size_id: str | None
     size_name: str | None
+    ready_good: int = 0
+    ready_defect: int = 0
     storage_good: int
     storage_defect: int
     in_transit: int
