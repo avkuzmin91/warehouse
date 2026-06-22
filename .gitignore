@@ -27,3 +27,6 @@ backend/uploads/
 
 # Временные файлы разработки
 tmp/
+
+# Claude Code: локальный список разрешений (личный, машинно-зависимый)
+.claude/settings.local.json
