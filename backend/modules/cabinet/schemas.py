@@ -99,7 +99,6 @@ class CabinetShipmentListItem(BaseModel):
     status: str
     sku_count: int = 0
     total_qty: int = 0
-    total_packed_qty: int = 0
     total_shipped_qty: int = 0
     created_at: str
 
@@ -123,6 +122,7 @@ class CabinetShipmentLineItem(BaseModel):
     size_name: str | None = None
     qty: int
     shipped_qty: int = 0
+    site_url: str | None = None
     store_name: str | None = None
 
 
@@ -131,11 +131,6 @@ class CabinetShipmentLinesResponse(BaseModel):
     total: int
     page: int
     limit: int
-
-
-class CabinetLineFile(BaseModel):
-    filename: str
-    url: str
 
 
 class CabinetShipmentDoc(BaseModel):
@@ -156,16 +151,20 @@ class CabinetShipmentLine(BaseModel):
     size_name: str | None = None
     qty: int
     shipped_qty: int = 0
-    packed_good: int = 0
-    packed_defect: int = 0
+    site_url: str | None = None
     store_name: str | None = None
-    files: list[CabinetLineFile] = []
+
+
+class CabinetShipmentTrip(BaseModel):
+    id: str
+    number: str
 
 
 class CabinetShipmentDetailResponse(BaseModel):
     doc: CabinetShipmentDoc
     lines: list[CabinetShipmentLine]
     ops: list[CabinetOpItem]
+    trips: list[CabinetShipmentTrip] = []
 
 
 # --- Списания ---

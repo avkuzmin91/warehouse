@@ -5,7 +5,7 @@ import type { BalanceListResponse, BalanceSummary } from './balancesApi'
 // --- Types ---
 
 export type CabinetReceiptStatus = 'planned' | 'on_intake' | 'partially_received' | 'on_review' | 'done' | 'cancelled'
-export type CabinetShipmentStatus = 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
+export type CabinetShipmentStatus = 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 export type CabinetCargoType = 'good' | 'defect'
 
 export type CabinetOpItem = {
@@ -87,7 +87,6 @@ export type CabinetShipmentListItem = {
   status: CabinetShipmentStatus
   sku_count: number
   total_qty: number
-  total_packed_qty: number
   total_shipped_qty: number
   created_at: string
 }
@@ -111,6 +110,7 @@ export type CabinetShipmentLineItem = {
   size_name: string | null
   qty: number
   shipped_qty: number
+  site_url: string | null
   store_name: string | null
 }
 
@@ -139,12 +139,11 @@ export type CabinetShipmentDetail = {
     size_name: string | null
     qty: number
     shipped_qty: number
-    packed_good: number
-    packed_defect: number
+    site_url: string | null
     store_name: string | null
-    files: { filename: string; url: string }[]
   }[]
   ops: CabinetOpItem[]
+  trips: { id: string; number: string }[]
 }
 
 export type CabinetSummary = {
@@ -377,28 +376,20 @@ export function cabinetReceiptStatusTone(status: CabinetReceiptStatus): string {
 }
 
 export const CABINET_SHIPMENT_STATUS_ORDER: CabinetShipmentStatus[] = [
-  'packing', 'on_packing', 'relocating', 'awaiting_trip', 'partially_shipped', 'shipped', 'completed_no_goods', 'cancelled',
+  'awaiting_trip', 'partially_shipped', 'shipped', 'cancelled',
 ]
 
 export const CABINET_SHIPMENT_STATUS_LABELS: Record<CabinetShipmentStatus, string> = {
-  packing: 'Принят в работу',
-  on_packing: 'Упаковка',
-  relocating: 'Готовится к отправке',
   awaiting_trip: 'Готовится к отправке',
   partially_shipped: 'Частично отгружено',
   shipped: 'Отгружено',
-  completed_no_goods: 'Завершено',
   cancelled: 'Аннулировано',
 }
 
 export const CABINET_DEFECT_SHIPMENT_STATUS_LABELS: Record<CabinetShipmentStatus, string> = {
-  packing: 'Принят в работу',
-  on_packing: 'Упаковка',
-  relocating: 'Подготовка возврата',
   awaiting_trip: 'Готов к возврату',
   partially_shipped: 'Частично возвращено',
   shipped: 'Возвращено',
-  completed_no_goods: 'Завершено',
   cancelled: 'Аннулировано',
 }
 
@@ -409,13 +400,9 @@ export function cabinetShipmentStatusLabel(status: CabinetShipmentStatus, cargoT
 
 export function cabinetShipmentStatusTone(status: CabinetShipmentStatus): string {
   const map: Record<CabinetShipmentStatus, string> = {
-    packing: '',
-    on_packing: 'info',
-    relocating: 'accent',
     awaiting_trip: 'accent',
     partially_shipped: 'accent',
     shipped: 'success',
-    completed_no_goods: 'success',
     cancelled: 'danger',
   }
   return map[status] ?? ''

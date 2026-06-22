@@ -5,10 +5,10 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from config import (
+    CABINET_DISPATCH_VISIBLE_STATUSES,
     CABINET_RECEIPT_VISIBLE_STATUSES,
-    CABINET_SHIPMENT_VISIBLE_STATUSES,
-    SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
+    DISPATCH_CARGO_DEFECT,
+    DISPATCH_CARGO_GOOD,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
@@ -73,7 +73,7 @@ def _validate_cargo_type(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
     s = value.strip()
-    if s not in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+    if s not in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
         raise HTTPException(status_code=400, detail="Недопустимый тип груза")
     return s
 
@@ -195,7 +195,7 @@ def list_client_shipments(
     date_to: str | None = Query(None),
     client_id: str = Depends(_get_current_client_id),
 ):
-    status_value = _validate_status(status_filter, CABINET_SHIPMENT_VISIBLE_STATUSES)
+    status_value = _validate_status(status_filter, CABINET_DISPATCH_VISIBLE_STATUSES)
     cargo_value = _validate_cargo_type(cargo_type)
     with get_connection() as conn:
         return list_cabinet_shipments(
@@ -222,7 +222,7 @@ def list_client_shipment_lines(
     date_to: str | None = Query(None),
     client_id: str = Depends(_get_current_client_id),
 ):
-    status_value = _validate_status(status_filter, CABINET_SHIPMENT_VISIBLE_STATUSES)
+    status_value = _validate_status(status_filter, CABINET_DISPATCH_VISIBLE_STATUSES)
     cargo_value = _validate_cargo_type(cargo_type)
     with get_connection() as conn:
         return list_cabinet_shipment_lines(

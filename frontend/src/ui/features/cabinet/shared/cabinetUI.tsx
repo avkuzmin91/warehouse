@@ -24,27 +24,21 @@ export function cabinetReceiptTrack(status: CabinetReceiptStatus): TrackState | 
 }
 
 export function cabinetShipmentTrack(status: CabinetShipmentStatus, cargoType: CabinetCargoType): TrackState | null {
-  if (status === 'cancelled' || status === 'completed_no_goods') return null
+  if (status === 'cancelled') return null
   if (cargoType === 'defect') {
-    const steps = ['Принят в работу', 'Подготовка возврата', 'Готов к возврату', 'Возвращено']
-    const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled' | 'completed_no_goods'>, number> = {
-      packing: 0,
-      on_packing: 0,
-      relocating: 1,
-      awaiting_trip: 2,
-      partially_shipped: 3,
-      shipped: 3,
+    const steps = ['Готов к возврату', 'Частично возвращено', 'Возвращено']
+    const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled'>, number> = {
+      awaiting_trip: 0,
+      partially_shipped: 1,
+      shipped: 2,
     }
     return { steps, activeIdx: idx[status] }
   }
-  const steps = ['Принят в работу', 'Упаковка', 'Готовится к отправке', 'Отгружено']
-  const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled' | 'completed_no_goods'>, number> = {
-    packing: 0,
-    on_packing: 1,
-    relocating: 2,
-    awaiting_trip: 2,
-    partially_shipped: 3,
-    shipped: 3,
+  const steps = ['Готовится к отправке', 'Частично отгружено', 'Отгружено']
+  const idx: Record<Exclude<CabinetShipmentStatus, 'cancelled'>, number> = {
+    awaiting_trip: 0,
+    partially_shipped: 1,
+    shipped: 2,
   }
   return { steps, activeIdx: idx[status] }
 }

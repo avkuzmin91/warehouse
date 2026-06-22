@@ -464,10 +464,6 @@ export function finishShipmentDefectRelocation(id: string, lines: ShipmentDefect
   })
 }
 
-export function revertShipment(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/revert`, { method: 'POST' })
-}
-
 export function cancelShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/cancel`, { method: 'POST' })
 }

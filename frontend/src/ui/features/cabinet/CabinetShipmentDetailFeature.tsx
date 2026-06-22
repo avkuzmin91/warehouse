@@ -1,9 +1,6 @@
-import { useState } from 'react'
 import { getCabinetShipment, cabinetShipmentStatusLabel, cabinetShipmentStatusTone } from '../../../api/cabinetApi'
-import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
 import { Table, Td } from '../../data/Table'
-import { Lightbox, type LightboxImage } from '../../feedback/Lightbox'
 import { DetailPage } from '../../layouts/DetailPage'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
@@ -19,7 +16,6 @@ interface Props {
 
 export function CabinetShipmentDetailFeature({ docId }: Props) {
   const { data, loading, error } = useApi((signal) => getCabinetShipment(docId, signal), [docId])
-  const [viewer, setViewer] = useState<{ images: LightboxImage[]; index: number } | null>(null)
 
   if (error) {
     return (
@@ -34,7 +30,6 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
   const isDefect = doc?.cargo_type === 'defect'
   const storeNames = [...new Set(lines.map((l) => l.store_name).filter(Boolean))] as string[]
   const totalQty = lines.reduce((sum, l) => sum + l.qty, 0)
-  const totalPacked = lines.reduce((sum, l) => sum + l.packed_good + l.packed_defect, 0)
   const totalShipped = lines.reduce((sum, l) => sum + l.shipped_qty, 0)
   const track = doc ? cabinetShipmentTrack(doc.status, doc.cargo_type) : null
 
@@ -72,24 +67,25 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
             <div style={{ fontWeight: 600, fontSize: 15 }}>{totalQty.toLocaleString('ru-RU')}</div>
           </div>
           <div>
-            {doc?.status === 'shipped' ? (
-              <>
-                <div className="t-sub">Отгружено, шт</div>
-                <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--c-success)' }}>{totalShipped.toLocaleString('ru-RU')}</div>
-              </>
-            ) : (
-              <>
-                <div className="t-sub">Упаковано, шт</div>
-                <div className="row gap-8">
-                  <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--c-info)' }}>{totalPacked.toLocaleString('ru-RU')}</span>
-                  <div className="prog" style={{ width: 70 }}>
-                    <i className="prog-fill" style={{ width: `${totalQty > 0 ? Math.min(100, (totalPacked / totalQty) * 100) : 0}%`, background: 'var(--c-info)', display: 'block' }} />
-                  </div>
-                </div>
-              </>
-            )}
+            <div className="t-sub">Отгружено, шт</div>
+            <div className="row gap-8">
+              <span style={{ fontWeight: 600, fontSize: 15, color: totalShipped >= totalQty && totalQty > 0 ? 'var(--c-success)' : 'var(--c-accent)' }}>
+                {totalShipped.toLocaleString('ru-RU')}
+              </span>
+              <div className="prog" style={{ width: 70 }}>
+                <i className="prog-fill" style={{ width: `${totalQty > 0 ? Math.min(100, (totalShipped / totalQty) * 100) : 0}%`, background: 'var(--c-accent)', display: 'block' }} />
+              </div>
+            </div>
           </div>
         </div>
+        {(data?.trips ?? []).length > 0 && (
+          <div className="row gap-8" style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--c-border)', flexWrap: 'wrap' }}>
+            <span className="t-sub">Рейсы:</span>
+            {(data?.trips ?? []).map((t) => (
+              <Badge key={t.id} tone="info">{t.number}</Badge>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="split-360" style={{ gridTemplateColumns: '1fr 340px' }}>
@@ -100,15 +96,14 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
                 <th>Товар</th>
                 <th style={{ width: 140 }}>Магазин</th>
                 <th style={{ width: 80, textAlign: 'right' }}>План</th>
-                <th style={{ width: 180, textAlign: 'right' }}>Упаковано</th>
-                <th style={{ width: 95, textAlign: 'right' }}>Отгружено</th>
+                <th style={{ width: 180, textAlign: 'right' }}>Отгружено</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={4} cols={5} />
+                <SkeletonRows rows={4} cols={4} />
               ) : lines.length === 0 ? (
-                <tr><Td colSpan={5}><EmptyState title="Строк нет" /></Td></tr>
+                <tr><Td colSpan={4}><EmptyState title="Строк нет" /></Td></tr>
               ) : (
                 lines.map((l) => (
                   <tr key={l.id}>
@@ -117,27 +112,18 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
                       <div className="t-sub mono">
                         {[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}
                       </div>
-                      {l.files.length > 0 && (
-                        <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                          {l.files.map((f, index) => (
-                            <button
-                              key={index}
-                              type="button"
-                              className="att"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setViewer({
-                                  images: l.files.map((file) => ({
-                                    src: resolvePublicUploadSrc(file.url),
-                                    caption: `${l.product_name} — ${file.filename}`,
-                                  })),
-                                  index,
-                                })
-                              }}
-                            >
-                              <Icon name="fileImg" size={11} />{f.filename}
-                            </button>
-                          ))}
+                      {l.site_url && (
+                        <div style={{ marginTop: 4 }}>
+                          <a
+                            href={l.site_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="row gap-8"
+                            style={{ fontSize: 11.5, color: 'var(--c-accent)', textDecoration: 'none' }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Icon name="cart" size={11} />Страница на сайте
+                          </a>
                         </div>
                       )}
                     </Td>
@@ -145,26 +131,15 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
                     <Td className="num">{l.qty.toLocaleString('ru-RU')}</Td>
                     <Td className="num">
                       <div className="cellprog">
-                        <span>
-                          <b>{l.packed_good.toLocaleString('ru-RU')}</b>
-                          {l.packed_defect > 0 && (
-                            <span style={{ color: 'var(--c-warning)', fontSize: 11.5 }}> +{l.packed_defect.toLocaleString('ru-RU')} брак</span>
-                          )}
-                        </span>
-                        <CellProg value={l.packed_good + l.packed_defect} max={l.qty} color="var(--c-info)" />
+                        <span><b>{l.shipped_qty.toLocaleString('ru-RU')}</b></span>
+                        <CellProg value={l.shipped_qty} max={l.qty} color="var(--c-accent)" />
                       </div>
-                    </Td>
-                    <Td className="num">
-                      {l.shipped_qty > 0 ? l.shipped_qty.toLocaleString('ru-RU') : <span className="dash">0</span>}
                     </Td>
                   </tr>
                 ))
               )}
             </tbody>
           </Table>
-          {!loading && lines.length > 0 && (
-            <div className="t-sub mt-8" style={{ textAlign: 'right' }}>фото упаковки прикладывает склад</div>
-          )}
         </section>
 
         <section className="card" style={{ padding: '12px 16px' }}>
@@ -187,10 +162,6 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
           )}
         </section>
       </div>
-
-      {viewer && (
-        <Lightbox images={viewer.images} initialIndex={viewer.index} onClose={() => setViewer(null)} />
-      )}
     </DetailPage>
   )
 }

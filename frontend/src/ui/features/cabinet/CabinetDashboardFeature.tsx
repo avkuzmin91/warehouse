@@ -79,7 +79,7 @@ function ReceiptCard({ item, onOpen }: { item: CabinetReceiptListItem; onOpen: (
 
 function ShipmentCard({ item, onOpen }: { item: CabinetShipmentListItem; onOpen: () => void }) {
   const isDefect = item.cargo_type === 'defect'
-  const packedFull = item.total_packed_qty >= item.total_qty
+  const shippedFull = item.total_qty > 0 && item.total_shipped_qty >= item.total_qty
   return (
     <div className="doc-card" onClick={onOpen}>
       <div className="doc-card-top">
@@ -102,9 +102,9 @@ function ShipmentCard({ item, onOpen }: { item: CabinetShipmentListItem; onOpen:
       </div>
       <div className="row" style={{ gap: 10, paddingLeft: 36 }}>
         <div className="prog" style={{ width: 160 }}>
-          <i className="prog-fill" style={{ width: `${item.total_qty > 0 ? Math.min(100, (item.total_packed_qty / item.total_qty) * 100) : 0}%`, background: packedFull ? 'var(--c-success)' : 'var(--c-accent)', display: 'block' }} />
+          <i className="prog-fill" style={{ width: `${item.total_qty > 0 ? Math.min(100, (item.total_shipped_qty / item.total_qty) * 100) : 0}%`, background: shippedFull ? 'var(--c-success)' : 'var(--c-accent)', display: 'block' }} />
         </div>
-        <span className="t-sub">упаковано {fmt(item.total_packed_qty)} из {fmt(item.total_qty)} шт</span>
+        <span className="t-sub">отгружено {fmt(item.total_shipped_qty)} из {fmt(item.total_qty)} шт</span>
       </div>
     </div>
   )

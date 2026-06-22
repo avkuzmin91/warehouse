@@ -750,6 +750,21 @@ CABINET_SHIPMENT_OPS_VISIBLE: frozenset[str] = frozenset({
     "cancel",
 })
 
+# Клиентская отгрузка = домен dispatch. Клиент видит её с момента передачи в
+# рейс-ожидание (черновик внутренний). Журнал — только человекочитаемые события
+# (отгружено / аннулировано); служебный advance с внутренними кодами скрыт.
+CABINET_DISPATCH_VISIBLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+})
+
+CABINET_DISPATCH_OPS_VISIBLE: frozenset[str] = frozenset({
+    DISPATCH_OP_SHIP,
+    DISPATCH_OP_CANCEL,
+})
+
 # ---------------------------------------------------------------------------
 # Сортировка — словари допустимых колонок (для SQL ORDER BY)
 # ---------------------------------------------------------------------------

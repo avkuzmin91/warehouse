@@ -19,7 +19,6 @@ from tests.conftest import (  # noqa: F401
     admin_client,
     cleanup_client,
     make_client_id,
-    seed_storage_good,
 )
 
 CABINET_GET_PATHS = [
@@ -138,13 +137,17 @@ def _accept_receipt(admin_client, doc_id: str) -> None:
 
 
 def _create_shipment(admin_client, client_id: str, *, advance: bool = False) -> str:
+    """Клиентская отгрузка = домен dispatch. Кабинет показывает отгрузку с момента
+    передачи в рейс-ожидание, поэтому `advance` ставит статус напрямую (минуя гейт
+    готового остатка — он к проверкам кабинета отношения не имеет)."""
     line = {
         "product_id": str(uuid.uuid4()),
         "product_name": "Тестовый товар",
         "product_sku": f"SKU-{uuid.uuid4().hex[:8]}",
         "qty": 7,
+        "store_name": "Магазин Тест",
     }
-    r = admin_client.post("/shipments", json={
+    r = admin_client.post("/dispatches", json={
         "cargo_type": "good",
         "client_id": client_id,
         "destination": "Магазин Тест",
@@ -157,13 +160,18 @@ def _create_shipment(admin_client, client_id: str, *, advance: bool = False) -> 
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
     if advance:
-        # Гейт перевода в план требует наличия товара на остатках.
-        seed_storage_good(
-            client_id, product_id=line["product_id"], product_name=line["product_name"],
-            product_sku=line["product_sku"], qty=line["qty"],
-        )
-        adv = admin_client.post(f"/shipments/{doc_id}/advance")
-        assert adv.status_code == 200, adv.text
+        from config import DISPATCH_OP_SHIP, DISPATCH_STATUS_AWAITING_TRIP
+        with get_connection() as c:
+            c.execute(
+                "UPDATE dispatch_docs SET status = ? WHERE id = ?",
+                (DISPATCH_STATUS_AWAITING_TRIP, doc_id),
+            )
+            # Видимое клиенту бизнес-событие в журнале (служебные advance/doc_create скрыты).
+            c.execute(
+                "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at) VALUES (?,?,?,?,NOW())",
+                (str(uuid.uuid4()), doc_id, DISPATCH_OP_SHIP, "Отгружено: 7 шт."),
+            )
+            c.commit()
     return doc_id
 
 
@@ -275,7 +283,7 @@ def test_shipments_isolation_and_projection(admin_client, cabinet_client, own_cl
             assert hidden not in line, f"в строке утёк ключ {hidden}"
 
     op_types = {o["op_type"] for o in data["ops"]}
-    assert op_types <= {"pack", "pack_correction", "cancel"}, f"в журнал утекли операции: {op_types}"
+    assert op_types <= {"ship", "cancel"}, f"в журнал утекли операции: {op_types}"
 
 
 def test_shipments_status_filter_validation(cabinet_client):
