@@ -127,6 +127,12 @@ SHIPMENT_STATUS_DRAFT             = "draft"
 SHIPMENT_STATUS_PACKING           = "packing"
 SHIPMENT_STATUS_ON_PACKING        = "on_packing"
 SHIPMENT_STATUS_RELOCATING        = "relocating"
+# Терминальный исход «Задачи упаковки»: после раскладки по местам товар упакован
+# и готов к отгрузке. Дальше его возит отдельный домен dispatch (привязка к рейсу
+# и списание — там), задача упаковки на этом завершается.
+SHIPMENT_STATUS_PACKED            = "packed"
+# Легаси-статусы: документы в них больше не переводятся (их роль перешла к dispatch),
+# но константы нужны cabinet и исторической миграции данных.
 SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
 SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
 SHIPMENT_STATUS_SHIPPED           = "shipped"
@@ -141,6 +147,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
@@ -150,6 +157,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
@@ -160,6 +168,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_PACKING:           "В плане",
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
+    SHIPMENT_STATUS_PACKED:            "Упаковано",
     SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
     SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
     SHIPMENT_STATUS_SHIPPED:           "Завершён",
@@ -167,9 +176,9 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
 
-# Плановые переходы через /advance. relocating → awaiting_trip не здесь: его делает
-# отдельный эндпоинт «Готово к рейсу» (перемещение по местам). awaiting_trip → shipped —
-# при отправке привязанного рейса (логистика), тоже вне /advance.
+# Плановые переходы через /advance. relocating → packed не здесь: его делает
+# отдельный эндпоинт «Готово к рейсу» (раскладка по местам). packed — терминальный
+# исход задачи упаковки; отгрузку к рейсу далее возит домен dispatch.
 SHIPMENT_TRANSITIONS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING:    SHIPMENT_STATUS_ON_PACKING,
@@ -716,6 +725,7 @@ CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,

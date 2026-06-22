@@ -3,11 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from config import (
-    INV_Q_GOOD,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -17,7 +14,6 @@ from config import (
     TRIP_STATUS_UNLOADING,
 )
 from modules.receipts.service import list_shortage_receipts
-from modules.shipments.service import doc_ready_total
 
 ROLE_WAREHOUSE = "warehouse_manager"
 ROLE_MANAGER = "manager"
@@ -130,30 +126,6 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             })
 
     if see_manager:
-        # Товарная отгрузка после упаковки оказалась полностью браком (0 годного):
-        # рейса не будет (везти нечего), брак вернулся на хранение — цикл фактически
-        # отработан, менеджер завершает отгрузку без рейса. Признак — awaiting_trip
-        # товарной отгрузки с нулём готового годного.
-        all_defect_rows = connection.execute(
-            "SELECT id, doc_number, priority_rank, updated_at, created_at FROM shipment_docs "
-            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ? AND COALESCE(cargo_type, ?) = ?",
-            (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_GOOD),
-        ).fetchall()
-        for r in all_defect_rows:
-            if doc_ready_total(connection, str(r["id"]), INV_Q_GOOD) > 0:
-                continue
-            tasks.append({
-                "kind": "shipment_complete_no_goods",
-                "title": f"Завершить {r['doc_number']} — весь товар брак",
-                "doc_type": "shipment",
-                "doc_id": str(r["id"]),
-                "doc_number": str(r["doc_number"]),
-                "status": SHIPMENT_STATUS_AWAITING_TRIP,
-                "role": ROLE_MANAGER,
-                "since": r["updated_at"] or r["created_at"],
-                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
-            })
-
         # Поступление приняли рейсами с недопоставкой (рейсы кончились, план не закрыт) —
         # менеджер решает: закрыть с недопоставкой или довезти следующим рейсом.
         for r in list_shortage_receipts(connection):

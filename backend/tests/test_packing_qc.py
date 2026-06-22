@@ -321,7 +321,7 @@ def test_leftover_pool_returns_to_review_on_finish_relocation(api, client_id):
     fin = _finish_relocation(api, doc_id, [
         {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 6}], "defect": []},
     ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
 
     # 6 годных переехали в место хранения (остаются в остатках), 4 из пула вернулись в on_review.
     assert _balance(client_id, pos) == (6, 0, 4, 0)
@@ -572,7 +572,7 @@ def test_relocate_good_after_packing(api, client_id):
     fin = _finish_relocation(api, doc_id, [
         {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
     ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
 
     # Не списано: 10 годных остаются в остатках, но уже в выбранном месте, не в зоне упаковки.
     assert _balance(client_id, pos) == (10, 0, 0, 0)
@@ -628,7 +628,7 @@ def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
     fin = _finish_relocation(api, doc_id, [
         {"line_id": line1_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 5}], "defect": []},
     ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
     assert _zone_qty(client_id, pos1, good_zone, "good") == 5
     assert _balance(client_id, pos1) == (5, 0, 0, 0)
     assert _balance(client_id, pos2) == (0, 0, 7, 0)
@@ -707,169 +707,3 @@ def test_cancel_in_plan_returns_packing_pool_to_storage(api, client_id):
     # Пул с упаковки вернулся в исходную зону, на упаковке пусто.
     assert _balance(client_id, pos) == (0, 0, 20, 0)
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 20
-
-
-def test_all_defect_shipment_manager_complete(api, client_id):
-    """Товарная отгрузка, где после упаковки весь товар оказался браком (0 годного):
-    зависает в awaiting_trip, менеджеру падает задача «Завершить», завершение даёт
-    терминальный статус completed_no_goods (не shipped → не идёт в счета)."""
-    from modules.tasks.service import list_my_tasks
-
-    pos = _position()
-    intake_zone = str(uuid.uuid4())
-    defect_zone = str(uuid.uuid4())
-    _receive(api, client_id, pos, 10, intake_zone)
-    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
-    _as(_WH)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
-    _advance(api, doc_id, _WH)      # packing → on_packing
-    _as(_SHIFT)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"defect_delta": 10, "packed_date": _TODAY})
-    _advance(api, doc_id, _SHIFT)   # on_packing → relocating
-
-    fin = _finish_relocation(api, doc_id, [
-        {"line_id": line_id, "good": [], "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 10}]},
-    ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
-    # Готового годного к отгрузке нет; брак вернулся на хранение.
-    assert _balance(client_id, pos) == (0, 10, 0, 0)
-
-    # Менеджеру падает задача завершить; кладовщик такой задачи не видит.
-    with get_connection() as conn:
-        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
-        wh_tasks = list_my_tasks(conn, user={"role": "warehouse_manager"})
-    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks), mgr_tasks
-    assert not any(t["kind"] == "shipment_complete_no_goods" for t in wh_tasks)
-
-    # Менеджер завершает зависшую отгрузку без рейса.
-    _as(_ADMIN)
-    completed = api.post(f"/shipments/{doc_id}/complete-no-goods")
-    assert completed.status_code == 200, completed.text
-    assert completed.json()["message"] == "completed_no_goods"
-    assert api.get(f"/shipments/{doc_id}").json()["status"] == "completed_no_goods"
-
-    # После завершения задача исчезает (статус не awaiting_trip).
-    with get_connection() as conn:
-        mgr_tasks2 = list_my_tasks(conn, user={"role": "manager"})
-    assert not any(t["doc_id"] == doc_id for t in mgr_tasks2)
-
-
-def test_return_to_packing_reverts_relocation(api, client_id):
-    """Менеджер возвращает «Ожидает рейс» → «На упаковке»: годный снова «Готов к отгрузке»
-    в зоне упаковки, брак — на упаковочном столе; задача упаковки снова у начальника смены,
-    из «На упаковке» отгрузка снова доходит до «Ожидает рейс» (стоки на месте)."""
-    from modules.tasks.service import list_my_tasks
-
-    pos = _position()
-    intake_zone = str(uuid.uuid4())
-    good_zone = str(uuid.uuid4())
-    defect_zone = str(uuid.uuid4())
-    with get_connection() as c:
-        packing_id, _ = get_packing_zone(c)
-
-    _receive(api, client_id, pos, 10, intake_zone)
-    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
-    _as(_WH)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
-    _advance(api, doc_id, _WH)      # packing → on_packing
-    _as(_SHIFT)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack",
-             json={"good_delta": 7, "defect_delta": 3, "packed_date": _TODAY})
-    _advance(api, doc_id, _SHIFT)   # on_packing → relocating
-    fin = _finish_relocation(api, doc_id, [
-        {"line_id": line_id,
-         "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 7}],
-         "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 3}]},
-    ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
-    assert _zone_qty(client_id, pos, good_zone, "good") == 7
-    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 3
-
-    # Начальник смены вернуть на упаковку не вправе.
-    _as(_SHIFT)
-    forbidden = api.post(f"/shipments/{doc_id}/return-to-packing")
-    assert forbidden.status_code == 403, forbidden.text
-
-    # Менеджер возвращает на упаковку.
-    _as(_ADMIN)
-    ret = api.post(f"/shipments/{doc_id}/return-to-packing")
-    assert ret.status_code == 200 and ret.json()["message"] == "on_packing", ret.text
-    assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
-
-    # Годный снова «Готов к отгрузке» в зоне упаковки; брак снова на столе упаковки.
-    assert _balance(client_id, pos) == (7, 3, 0, 0)
-    assert _zone_qty(client_id, pos, packing_id, "good") == 7
-    assert _zone_qty(client_id, pos, good_zone, "good") == 0
-    assert _zone_qty(client_id, pos, packing_id, "defect") == 3
-    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 0
-    det_line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    assert det_line["packed_good"] == 7 and det_line["packed_defect"] == 3
-
-    # Задача упаковки снова у начальника смены.
-    with get_connection() as conn:
-        shift_tasks = list_my_tasks(conn, user={"role": "shift_supervisor"})
-    assert any(t["doc_id"] == doc_id and t["kind"] == "shipment_pack" for t in shift_tasks)
-
-    # Из «На упаковке» снова доходим до «Ожидает рейс» — стоки на месте, повторная раскладка проходит.
-    _as(_SHIFT)
-    adv = _advance(api, doc_id, _SHIFT)  # on_packing → relocating
-    assert adv.status_code == 200 and adv.json()["message"] == "relocating", adv.text
-    fin2 = _finish_relocation(api, doc_id, [
-        {"line_id": line_id,
-         "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 7}],
-         "defect": [{"zone_id": defect_zone, "zone_name": "Брак-1", "qty": 3}]},
-    ])
-    assert fin2.status_code == 200 and fin2.json()["message"] == "awaiting_trip", fin2.text
-    assert _zone_qty(client_id, pos, good_zone, "good") == 7
-    assert _zone_qty(client_id, pos, defect_zone, "storage_defect") == 3
-
-
-def test_return_to_packing_rejects_defect_and_wrong_status(api, client_id):
-    """Возврат на упаковку доступен только товарной отгрузке из «Ожидает рейс»."""
-    pos = _position()
-    intake_zone = str(uuid.uuid4())
-    _receive(api, client_id, pos, 10, intake_zone)
-    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
-
-    # «В плане» — ещё рано возвращать.
-    _as(_ADMIN)
-    early = api.post(f"/shipments/{doc_id}/return-to-packing")
-    assert early.status_code == 400, early.text
-
-    _as(_WH)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
-    _advance(api, doc_id, _WH)  # packing → on_packing
-    # «На упаковке» — возвращать тоже нечего (статус неподходящий).
-    _as(_ADMIN)
-    mid = api.post(f"/shipments/{doc_id}/return-to-packing")
-    assert mid.status_code == 400, mid.text
-
-
-def test_normal_awaiting_trip_not_completable_and_no_defect_task(api, client_id):
-    """Обычная товарная отгрузка с готовым годным в awaiting_trip: задачи «Завершить» нет,
-    через complete-no-goods её не закрыть — она ждёт реальный рейс."""
-    from modules.tasks.service import list_my_tasks
-
-    pos = _position()
-    intake_zone = str(uuid.uuid4())
-    good_zone = str(uuid.uuid4())
-    _receive(api, client_id, pos, 10, intake_zone)
-    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
-    _as(_WH)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
-    _advance(api, doc_id, _WH)
-    _as(_SHIFT)
-    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
-    _advance(api, doc_id, _SHIFT)
-    fin = _finish_relocation(api, doc_id, [
-        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
-    ])
-    assert fin.status_code == 200 and fin.json()["message"] == "awaiting_trip", fin.text
-
-    with get_connection() as conn:
-        mgr_tasks = list_my_tasks(conn, user={"role": "manager"})
-    assert not any(t["doc_id"] == doc_id and t["kind"] == "shipment_complete_no_goods" for t in mgr_tasks)
-
-    _as(_ADMIN)
-    blocked = api.post(f"/shipments/{doc_id}/complete-no-goods")
-    assert blocked.status_code == 400, blocked.text
