@@ -20,6 +20,7 @@ const OPS_NAV: NavItem[] = [
   { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/inventory/shipments', icon: 'forklift', label: 'Отгрузки' },
+  { to: '/inventory/dispatches', icon: 'truckOut', label: 'Отгрузки (DSP)' },
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]

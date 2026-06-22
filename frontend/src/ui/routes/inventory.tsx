@@ -28,6 +28,15 @@ const InventoryShipmentDetailPage = lazy(() =>
 const InventoryPackingPage = lazy(() =>
   import('../pages/InventoryPackingPage').then((m) => ({ default: m.InventoryPackingPage })),
 )
+const InventoryDispatchesListPage = lazy(() =>
+  import('../pages/InventoryDispatchesListPage').then((m) => ({ default: m.InventoryDispatchesListPage })),
+)
+const InventoryDispatchCreatePage = lazy(() =>
+  import('../pages/InventoryDispatchCreatePage').then((m) => ({ default: m.InventoryDispatchCreatePage })),
+)
+const InventoryDispatchDetailPage = lazy(() =>
+  import('../pages/InventoryDispatchDetailPage').then((m) => ({ default: m.InventoryDispatchDetailPage })),
+)
 export const inventoryRoutes = [
   <Route key="inventory-home" path="/inventory" element={<InventoryHomePage />} />,
   <Route key="inventory-balances" path="/inventory/balances" element={<InventoryBalancesPage />} />,
@@ -39,6 +48,10 @@ export const inventoryRoutes = [
   <Route key="inventory-shipments" path="/inventory/shipments" element={<InventoryShipmentsListPage />} />,
   <Route key="inventory-shipments-new" path="/inventory/shipments/new" element={<InventoryShipmentCreatePage />} />,
   <Route key="inventory-shipments-id" path="/inventory/shipments/:docId" element={<InventoryShipmentDetailPage />} />,
+
+  <Route key="inventory-dispatches" path="/inventory/dispatches" element={<InventoryDispatchesListPage />} />,
+  <Route key="inventory-dispatches-new" path="/inventory/dispatches/new" element={<InventoryDispatchCreatePage />} />,
+  <Route key="inventory-dispatches-id" path="/inventory/dispatches/:docId" element={<InventoryDispatchDetailPage />} />,
 
   <Route key="inventory-packing" path="/inventory/packing" element={<InventoryPackingPage />} />,
 ]
