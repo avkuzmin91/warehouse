@@ -33,15 +33,15 @@ def _cleanup_invoices_and_shipments(client_id: str) -> None:
             conn.execute("DELETE FROM invoice_ops WHERE invoice_id = ?", (iid,))
             conn.execute("DELETE FROM invoice_files WHERE invoice_id = ?", (iid,))
         conn.execute("DELETE FROM invoice_docs WHERE client_id = ?", (client_id,))
-        ship_ids = [
+        disp_ids = [
             r["id"] for r in conn.execute(
-                "SELECT id FROM shipment_docs WHERE client_id = ?", (client_id,)
+                "SELECT id FROM dispatch_docs WHERE client_id = ?", (client_id,)
             ).fetchall()
         ]
-        for sid in ship_ids:
-            conn.execute("DELETE FROM shipment_ops WHERE doc_id = ?", (sid,))
-            conn.execute("DELETE FROM shipment_lines WHERE doc_id = ?", (sid,))
-        conn.execute("DELETE FROM shipment_docs WHERE client_id = ?", (client_id,))
+        for sid in disp_ids:
+            conn.execute("DELETE FROM dispatch_ops WHERE doc_id = ?", (sid,))
+            conn.execute("DELETE FROM dispatch_lines WHERE doc_id = ?", (sid,))
+        conn.execute("DELETE FROM dispatch_docs WHERE client_id = ?", (client_id,))
         conn.commit()
 
 
@@ -54,15 +54,18 @@ def client_id():
 
 
 def _shipped_shipment(admin_client, client_id: str, ship_date: str = "2026-06-10") -> str:
-    """Завершённая отгрузка клиента — кандидат на включение в счёт."""
-    r = admin_client.post("/shipments", json={
+    """Завершённая отгрузка (dispatch) клиента — кандидат на включение в счёт.
+
+    Счёт строится из отгрузок домена dispatch в статусе shipped; ставим статус
+    напрямую (полный путь через рейс покрыт в test_logistics_outbound)."""
+    r = admin_client.post("/dispatches", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
         "destination": "Москва", "ship_date": ship_date, "lines": [],
     })
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
     with get_connection() as conn:
-        conn.execute("UPDATE shipment_docs SET status = 'shipped' WHERE id = ?", (doc_id,))
+        conn.execute("UPDATE dispatch_docs SET status = 'shipped' WHERE id = ?", (doc_id,))
         conn.commit()
     return doc_id
 
@@ -228,7 +231,7 @@ def test_detach_frees_shipment_for_new_invoice(admin_client, client_id):
 
 def test_only_shipped_shipments_allowed(admin_client, client_id):
     # Отгрузка остаётся в черновике (не завершена) — в счёт нельзя.
-    r = admin_client.post("/shipments", json={
+    r = admin_client.post("/dispatches", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "Test Client", "lines": [],
     })
     draft_ship = r.json()["message"]
@@ -465,18 +468,17 @@ def test_amount_correction_rejected_on_draft(admin_client, client_id):
 
 
 def _add_shipment_lines(ship: str, rows: list[tuple[str, int]]) -> None:
-    """Строки отгрузки напрямую в БД (без зависимости от справочника товаров)."""
+    """Строки отгрузки (dispatch) напрямую в БД (без зависимости от справочника товаров)."""
     now = "2026-06-10T00:00:00+00:00"
     with get_connection() as conn:
         for i, (pid, qty) in enumerate(rows):
             conn.execute(
-                "INSERT INTO shipment_lines "
+                "INSERT INTO dispatch_lines "
                 "(id,doc_id,product_id,product_name,product_sku,color_id,color_name,"
-                "size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,"
-                "store_id,store_name,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "size_id,size_name,qty,shipped_qty,site_url,store_id,store_name,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (f"{ship}-l{i}", ship, pid, f"Товар {pid}", pid.upper(),
-                 None, None, None, None, qty, qty, None, None, None, None, now),
+                 None, None, None, None, qty, qty, None, None, None, now),
             )
         conn.commit()
 

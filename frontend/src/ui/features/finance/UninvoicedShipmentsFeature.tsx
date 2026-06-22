@@ -164,7 +164,7 @@ export function UninvoicedShipmentsFeature() {
                 </thead>
                 <tbody>
                   {g.rows.map((r) => (
-                    <tr key={r.id} onClick={() => navigate(`/inventory/shipments/${r.id}`)}>
+                    <tr key={r.id} onClick={() => navigate(`/inventory/dispatches/${r.id}`)}>
                       <td><span className="mono" style={{ fontWeight: 500 }}>{r.doc_number}</span></td>
                       <td><CargoTag cargoType={r.cargo_type} /></td>
                       <td><span style={{ color: 'var(--c-text-subtle)' }}>{r.destination ?? '—'}</span></td>

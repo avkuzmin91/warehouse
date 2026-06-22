@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from config import (
+    DISPATCH_STATUS_LABELS,
     INVOICE_ACTIVE_STATUSES,
     INVOICE_MUTABLE_STATUSES,
     INVOICE_OP_AMOUNT_CHANGE,
@@ -25,7 +26,6 @@ from config import (
     INVOICE_STATUS_LABELS,
     INVOICE_STATUS_PARTIALLY_PAID,
     MAX_UPLOAD_BYTES,
-    SHIPMENT_STATUS_LABELS,
     UPLOADS_DIR,
 )
 from dbconn import get_connection
@@ -110,12 +110,12 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
         """
         SELECT s.shipment_doc_id, d.doc_number, d.cargo_type, d.status,
                d.ship_date, d.destination,
-               (SELECT COUNT(DISTINCT sl.product_id) FROM shipment_lines sl
+               (SELECT COUNT(DISTINCT sl.product_id) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS sku_count,
-               (SELECT COALESCE(SUM(sl.qty), 0) FROM shipment_lines sl
+               (SELECT COALESCE(SUM(sl.qty), 0) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS total_qty
         FROM invoice_shipments s
-        JOIN shipment_docs d ON d.id = s.shipment_doc_id
+        JOIN dispatch_docs d ON d.id = s.shipment_doc_id
         WHERE s.invoice_id = ? AND COALESCE(s.is_deleted, 0) = 0
         ORDER BY d.doc_number
         """,
@@ -127,7 +127,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             doc_number=str(r["doc_number"]),
             cargo_type=str(r["cargo_type"]),
             status=str(r["status"]),
-            status_label=SHIPMENT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+            status_label=DISPATCH_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
             ship_date=r["ship_date"],
             destination=r["destination"],
             sku_count=int(r["sku_count"]),
@@ -372,7 +372,7 @@ def detach_invoice_shipment(invoice_id: str, shipment_doc_id: str, user=Depends(
         _require_mutable(doc)
         link = conn.execute(
             "SELECT s.id, d.doc_number FROM invoice_shipments s "
-            "JOIN shipment_docs d ON d.id = s.shipment_doc_id "
+            "JOIN dispatch_docs d ON d.id = s.shipment_doc_id "
             "WHERE s.invoice_id = ? AND s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0",
             (invoice_id, shipment_doc_id),
         ).fetchone()
