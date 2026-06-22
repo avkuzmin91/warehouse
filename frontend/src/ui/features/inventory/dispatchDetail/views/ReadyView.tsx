@@ -1,7 +1,6 @@
 import type { DispatchDetail } from '../../../../../api/dispatchApi'
 import { Icon } from '../../../../primitives/Icon'
 import { Alert } from '../../../../primitives/Alert'
-import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { Panel, ReadRow, RailPanel } from '../components/processUI'
 import { LinesTable } from '../components/LinesTable'
 import { fmtDateLong } from '../../../../../utils/format'
@@ -36,7 +35,7 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <PhaseBlock icon="file" title="Основная информация" role="manager" state="done">
+          <Panel icon="file" title="Основная информация">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <ReadField label="Клиент" value={doc.client_name ?? '—'} />
               <ReadField label="Дата отгрузки (план)" value={fmtDateLong(doc.ship_date)} />
@@ -44,11 +43,11 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
                 <ReadField label="Стоимость логистики, ₽" value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : '—'} mono />
               )}
             </div>
-          </PhaseBlock>
+          </Panel>
 
-          <PhaseBlock icon="boxes" title="Состав отгрузки" role="manager" state="done">
+          <Panel icon="boxes" title="Состав отгрузки">
             <LinesTable lines={doc.lines} />
-          </PhaseBlock>
+          </Panel>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
