@@ -299,6 +299,90 @@ SHIPMENT_OP_RELOCATE        = "relocate"
 SHIPMENT_OP_SHIP            = "ship"
 
 # ---------------------------------------------------------------------------
+# Отгрузки клиенту (dispatch_*) — коммерческо-логистическая сущность
+# ---------------------------------------------------------------------------
+# Отделена от «Задачи упаковки» (shipment_*, склад): менеджер набирает клиенту
+# товар из готового к отгрузке (ready) и в пути, логист дробит её по рейсам.
+# Связь со складом — только через журнальный остаток `ready` (по варианту×клиенту):
+# задача упаковки его производит, отгрузка — потребляет (списание ready→shipped
+# при выезде рейса). Документы друг на друга не ссылаются.
+
+DISPATCH_STATUS_DRAFT             = "draft"
+DISPATCH_STATUS_AWAITING_TRIP     = "awaiting_trip"
+DISPATCH_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
+DISPATCH_STATUS_SHIPPED           = "shipped"
+DISPATCH_STATUS_CANCELLED         = "cancelled"
+
+DISPATCH_STATUSES_ALL: list[str] = [
+    DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+]
+
+# Терминальные статусы (документ завершён, дальше не двигается).
+DISPATCH_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+})
+
+DISPATCH_STATUS_LABELS: dict[str, str] = {
+    DISPATCH_STATUS_DRAFT:             "Создание",
+    DISPATCH_STATUS_AWAITING_TRIP:     "Ожидает рейс",
+    DISPATCH_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
+    DISPATCH_STATUS_SHIPPED:           "Отгружено",
+    DISPATCH_STATUS_CANCELLED:         "Аннулирована",
+}
+
+# Состав/поля документа правятся только до перевода в «Ожидает рейс».
+DISPATCH_EDITABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_DRAFT,
+})
+
+# Аннулировать можно, пока ничего не уехало (до первого рейса).
+DISPATCH_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_TRIP,
+})
+
+# Статусы, в которых отгрузка — кандидат на привязку к рейсу (есть готовый остаток).
+DISPATCH_TRIP_SELECTABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+})
+
+DISPATCH_CARGO_GOOD   = "good"
+DISPATCH_CARGO_DEFECT = "defect"
+
+# Перевод draft → awaiting_trip («Ожидает рейс») делает менеджер; гейт — весь товар
+# покрыт свободным остатком `ready`. awaiting_trip → (partially_shipped/shipped) —
+# при выезде привязанного рейса (логистика), вне ручных переходов.
+DISPATCH_TRANSITION_ROLES: dict[str, frozenset[str]] = {
+    DISPATCH_STATUS_AWAITING_TRIP: frozenset({"manager", "admin"}),
+}
+
+# Приоритет — как у задачи упаковки (меньше = срочнее), NULL = обычный.
+DISPATCH_PRIORITY_URGENT = 1
+DISPATCH_PRIORITY_HIGH   = 2
+DISPATCH_PRIORITY_LABELS: dict[int | None, str] = {
+    DISPATCH_PRIORITY_URGENT: "Срочно",
+    DISPATCH_PRIORITY_HIGH:   "Повышенный",
+    None:                     "Обычный",
+}
+
+# Типы операций журнала отгрузок клиенту (append-only)
+DISPATCH_OP_DOC_CREATE      = "doc_create"
+DISPATCH_OP_DOC_UPDATE      = "doc_update"
+DISPATCH_OP_PRIORITY_UPDATE = "priority_update"
+DISPATCH_OP_LINE_ADD        = "line_add"
+DISPATCH_OP_LINE_UPDATE     = "line_update"
+DISPATCH_OP_LINE_DELETE     = "line_delete"
+DISPATCH_OP_ADVANCE         = "advance"
+DISPATCH_OP_SHIP            = "ship"
+DISPATCH_OP_CANCEL          = "cancel"
+
+# ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
 # ---------------------------------------------------------------------------
 
