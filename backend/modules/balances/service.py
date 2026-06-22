@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from config import (
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
     INV_OP_INTAKE,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -668,6 +670,98 @@ def get_available_total(
         return int(row["s"]) if row else 0
 
     return max(0, _move_sum("to") - _move_sum("from"))
+
+
+def ready_zones_for_variant(
+    connection,
+    *,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+    client_id: str | None,
+    quality: str,
+) -> list[dict]:
+    """Готовый к отгрузке остаток (`ready`-нетто) варианта×клиента×качества по местам.
+
+    Seam между «Задачей упаковки» (производит ready) и «Отгрузкой» (потребляет):
+    остаток считается ПО ВАРИАНТУ (product/color/size×client×quality), а не по строке —
+    отгрузка не знает, какая задача упаковки его подготовила. Возвращает [{zone_id,
+    zone_name, net}] с net>0 по убыванию (для FIFO-списания при выезде рейса).
+    """
+    rows = connection.execute(
+        """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+               SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+               FROM zone_relocations
+               WHERE product_id = ?
+                 AND color_id  IS NOT DISTINCT FROM ?
+                 AND size_id   IS NOT DISTINCT FROM ?
+                 AND client_id IS NOT DISTINCT FROM ?
+                 AND to_op = ? AND to_quality = ?
+               UNION ALL
+               SELECT from_zone_id, from_zone_name, -qty
+               FROM zone_relocations
+               WHERE product_id = ?
+                 AND color_id  IS NOT DISTINCT FROM ?
+                 AND size_id   IS NOT DISTINCT FROM ?
+                 AND client_id IS NOT DISTINCT FROM ?
+                 AND from_op = ? AND from_quality = ?
+           ) t
+           GROUP BY zone_id HAVING SUM(net) > 0
+           ORDER BY SUM(net) DESC""",
+        (product_id, color_id, size_id, client_id, INV_OP_READY, quality,
+         product_id, color_id, size_id, client_id, INV_OP_READY, quality),
+    ).fetchall()
+    return [{"zone_id": r["zone_id"], "zone_name": r["zone_name"], "net": int(r["net"])} for r in rows]
+
+
+def ready_available_for_dispatch(
+    connection,
+    *,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+    client_id: str | None,
+    quality: str,
+    exclude_doc_id: str | None = None,
+) -> int:
+    """Свободный остаток `ready` варианта под отгрузку: готов минус уже зарезервированное
+    другими незакрытыми отгрузками.
+
+    ready-нетто (вариант×клиент×качество) − Σ(незавершённый объём ЗАФИКСИРОВАННЫХ
+    отгрузок того же варианта: qty − shipped_qty, статусы awaiting_trip/partially_shipped).
+    Черновики резерв НЕ держат — это лишь намерение; иначе два черновика взаимно
+    заблокировали бы перевод в «Ожидает рейс». Резерв возникает при фиксации (advance):
+    кто первый перевёл — тот и занял остаток, второй не пройдёт гейт. `exclude_doc_id`
+    исключает саму проверяемую отгрузку (её спрос — это то, что мы и проверяем).
+    """
+    ready = get_available_total(
+        connection, product_id=product_id, color_id=color_id, size_id=size_id,
+        client_id=client_id, op=INV_OP_READY, quality=quality,
+    )
+    cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
+    conds = [
+        "dl.product_id = ?",
+        "dl.color_id IS NOT DISTINCT FROM ?",
+        "dl.size_id  IS NOT DISTINCT FROM ?",
+        "dd.client_id IS NOT DISTINCT FROM ?",
+        "dd.cargo_type = ?",
+        "COALESCE(dl.is_deleted, 0) = 0",
+        "COALESCE(dd.is_deleted, 0) = 0",
+        f"dd.status IN ('{DISPATCH_STATUS_AWAITING_TRIP}', '{DISPATCH_STATUS_PARTIALLY_SHIPPED}')",
+    ]
+    params: list = [product_id, color_id, size_id, client_id, cargo]
+    if exclude_doc_id:
+        conds.append("dd.id <> ?")
+        params.append(exclude_doc_id)
+    row = connection.execute(
+        f"""SELECT COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) AS reserved
+            FROM dispatch_lines dl
+            JOIN dispatch_docs dd ON dd.id = dl.doc_id
+            WHERE {' AND '.join(conds)}""",
+        params,
+    ).fetchone()
+    reserved = int(row["reserved"] or 0)
+    return max(0, ready - reserved)
 
 
 def create_zone_relocation(connection, payload, user_id: str) -> None:
