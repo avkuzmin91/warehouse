@@ -112,6 +112,34 @@ class DispatchListResponse(BaseModel):
     limit: int
 
 
+class DispatchLinesListItem(BaseModel):
+    line_id:      str
+    doc_id:       str
+    doc_number:   str
+    cargo_type:   str
+    client_id:    str | None
+    client_name:  str | None
+    destination:  str | None
+    ship_date:    str | None
+    status:       str
+    status_label: str
+    product_id:   str
+    product_name: str
+    product_sku:  str
+    color_name:   str | None
+    size_name:    str | None
+    qty:          int
+    shipped_qty:  int
+    store_name:   str | None
+
+
+class DispatchLinesResponse(BaseModel):
+    items: list[DispatchLinesListItem]
+    total: int
+    page:  int
+    limit: int
+
+
 class DispatchOpItem(BaseModel):
     id:               str
     op_type:          str

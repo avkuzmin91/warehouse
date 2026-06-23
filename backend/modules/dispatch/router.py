@@ -35,6 +35,8 @@ from modules.dispatch.schemas import (
     DispatchDocUpdate,
     DispatchFinishPreparationPayload,
     DispatchLineIn,
+    DispatchLinesListItem,
+    DispatchLinesResponse,
     DispatchLineUpdate,
     DispatchListItem,
     DispatchListResponse,
@@ -172,6 +174,99 @@ def dispatches_summary(
         "awaiting":  sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_TRIP),
         "shipped":   sum(1 for r in rows if r["status"] in DISPATCH_TERMINAL_STATUSES),
     }
+
+
+@router.get("/dispatches/lines", response_model=DispatchLinesResponse)
+def list_dispatch_lines(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    status:    str | None = Query(None),
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    sku:       str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    cargo_type: str | None = Query(None),
+    user=Depends(_get_manager),
+):
+    with get_connection() as conn:
+        conds = ["d.is_deleted = 0", "COALESCE(l.is_deleted, 0) = 0"]
+        params: list = []
+        if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+        if status:
+            requested = [s.strip() for s in status.split(",") if s.strip()]
+            allowed = [s for s in requested if s in DISPATCH_STATUSES_ALL]
+            if len(allowed) == 1:
+                conds.append("d.status = ?"); params.append(allowed[0])
+            elif len(allowed) > 1:
+                placeholders = ",".join("?" for _ in allowed)
+                conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
+        if client_id:
+            conds.append("d.client_id = ?"); params.append(client_id.strip())
+        if search:
+            s = like_substring_param(search)
+            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            params += [s, s, s]
+        if sku:
+            s = like_substring_param(sku)
+            conds.append("(COALESCE(NULLIF(p.sku, ''), l.product_sku) LIKE ? OR l.product_name LIKE ?)")
+            params += [s, s]
+        if date_from:
+            conds.append("d.ship_date >= ?"); params.append(date_from)
+        if date_to:
+            conds.append("d.ship_date <= ?"); params.append(date_to)
+        where = " AND ".join(conds)
+        total = int(conn.execute(
+            f"""SELECT COUNT(*) AS cnt
+                FROM dispatch_lines l
+                JOIN dispatch_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
+                WHERE {where}""",
+            params,
+        ).fetchone()["cnt"])
+        offset = (page - 1) * limit
+        rows = conn.execute(
+            f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
+                    l.product_id, l.product_name,
+                    COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
+                    l.color_name, l.size_name, l.qty,
+                    COALESCE(l.shipped_qty, 0) AS shipped_qty, l.store_name,
+                    d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
+                    d.ship_date, d.status
+                FROM dispatch_lines l
+                JOIN dispatch_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
+                WHERE {where}
+                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
+                LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+
+    items = [
+        DispatchLinesListItem(
+            line_id=str(r["line_id"]),
+            doc_id=str(r["doc_id"]),
+            doc_number=str(r["doc_number"]),
+            cargo_type=normalize_cargo_type(r.get("cargo_type")),
+            client_id=r["client_id"],
+            client_name=r["client_name"],
+            destination=r["destination"],
+            ship_date=r["ship_date"],
+            status=str(r["status"]),
+            status_label=DISPATCH_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+            product_id=str(r["product_id"]),
+            product_name=str(r["product_name"]),
+            product_sku=str(r["product_sku"]),
+            color_name=r["color_name"],
+            size_name=r["size_name"],
+            qty=int(r["qty"] or 0),
+            shipped_qty=int(r["shipped_qty"] or 0),
+            store_name=r["store_name"],
+        )
+        for r in rows
+    ]
+    return DispatchLinesResponse(items=items, total=total, page=page, limit=limit)
 
 
 @router.get("/dispatches/{doc_id}/trip-alloc-remaining")

@@ -133,6 +133,34 @@ export type DispatchListResponse = {
   limit: number
 }
 
+export type DispatchLinesListItem = {
+  line_id:      string
+  doc_id:       string
+  doc_number:   string
+  cargo_type:   DispatchCargoType
+  client_id:    string | null
+  client_name:  string | null
+  destination:  string | null
+  ship_date:    string | null
+  status:       DispatchStatus
+  status_label: string
+  product_id:   string
+  product_name: string
+  product_sku:  string
+  color_name:   string | null
+  size_name:    string | null
+  qty:          number
+  shipped_qty:  number
+  store_name:   string | null
+}
+
+export type DispatchLinesResponse = {
+  items: DispatchLinesListItem[]
+  total: number
+  page:  number
+  limit: number
+}
+
 export type DispatchListParams = {
   page?:       number
   limit?:      number
@@ -219,6 +247,10 @@ function buildListQuery(params: DispatchListParams): string {
 
 export function listDispatches(params: DispatchListParams = {}, signal?: AbortSignal) {
   return request<DispatchListResponse>(`/dispatches${buildListQuery(params)}`, { signal })
+}
+
+export function listDispatchLines(params: DispatchListParams = {}, signal?: AbortSignal) {
+  return request<DispatchLinesResponse>(`/dispatches/lines${buildListQuery(params)}`, { signal })
 }
 
 export function getDispatchesSummary(

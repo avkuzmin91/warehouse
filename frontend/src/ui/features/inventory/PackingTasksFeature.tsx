@@ -18,11 +18,9 @@ import { FiltersBar, FilterSelect, FilterCombobox } from '../../data/FiltersBar'
 import { DateRange } from '../../data/DateRange'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
-import { Dropdown } from '../../primitives/Dropdown'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
-import { Modal } from '../../feedback/Modal'
 import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
@@ -96,7 +94,6 @@ export function PackingTasksFeature() {
   const [initialLoading, setInitialLoading] = useState(true)
   const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
-  const [defectWipOpen, setDefectWipOpen] = useState(false)
 
   const { clients } = useLookups()
 
@@ -184,17 +181,9 @@ export function PackingTasksFeature() {
             <Icon name="chart" size={14} />Производительность
           </button>
           {canCreate && (
-            <Dropdown
-              trigger={
-                <button className="btn primary">
-                  <Icon name="plus" size={14} />Новая задача<Icon name="chevDown" size={12} />
-                </button>
-              }
-              items={[
-                { label: 'Упаковка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
-                { label: 'Упаковка брака', icon: <Icon name="alert" size={14} />, onClick: () => setDefectWipOpen(true) },
-              ]}
-            />
+            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
+              <Icon name="plus" size={14} />Новая задача
+            </button>
           )}
         </>
       }
@@ -443,41 +432,6 @@ export function PackingTasksFeature() {
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
       )}
-
-      <Modal
-        open={defectWipOpen}
-        onClose={() => setDefectWipOpen(false)}
-        width={420}
-        footer={
-          <button className="btn primary" onClick={() => setDefectWipOpen(false)}>
-            Понятно
-          </button>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '8px 4px 4px' }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: 'var(--r-xl)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'color-mix(in oklab, var(--c-warning) 14%, transparent)',
-            color: 'var(--c-warning)', marginBottom: 14,
-          }}>
-            <Icon name="sparkles" size={26} />
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', marginBottom: 8 }}>
-            Упаковка брака скоро появится
-          </div>
-          <p style={{ margin: 0, fontSize: 13.5, color: 'var(--c-text-muted)', lineHeight: 1.6, maxWidth: 320 }}>
-            Этот раздел ещё в разработке — мы дорабатываем процесс упаковки брака.
-            Пока оформляйте задачи через «Упаковку товара».
-          </p>
-          <span className="row gap-4" style={{
-            marginTop: 14, fontSize: 12, fontWeight: 600, color: 'var(--c-text-subtle)',
-            background: 'var(--c-bg-sunken)', padding: '5px 11px', borderRadius: 999,
-          }}>
-            <Icon name="timer" size={13} />Скоро в работе
-          </span>
-        </div>
-      </Modal>
     </ListPage>
   )
 }

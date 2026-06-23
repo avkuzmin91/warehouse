@@ -9,6 +9,7 @@ import {
 } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchListItem, DispatchStatus } from '../../../api/dispatchApi'
 import { DispatchPriorityControl } from './DispatchPriorityControl'
+import { DispatchLinesView } from './DispatchLinesView'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { Pagination } from '../../data/Pagination'
@@ -28,6 +29,13 @@ import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../h
 import { canCreateDocuments, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
+
+type ModeId = 'docs' | 'items'
+
+const MODE_TABS: { id: ModeId; label: string }[] = [
+  { id: 'docs',  label: 'По документам' },
+  { id: 'items', label: 'По товарам' },
+]
 
 function dispatchProgress(item: DispatchListItem) {
   const total = item.total_qty || 0
@@ -54,6 +62,7 @@ export function DispatchesListFeature() {
   const canEdit = canEditShipments(user)
   const canCreate = canCreateDocuments(user)
 
+  const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
   const [skuFilter, setSkuFilter] = useFilterParam('sku', '')
   const [clientId, setClientId] = useFilterParam('client', '')
@@ -77,17 +86,19 @@ export function DispatchesListFeature() {
     cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
 
   const { data, loading } = useApi(
-    (signal) => listDispatches({
-      page, limit: PAGE_SIZE,
-      search: search.trim() || undefined,
-      sku: skuFilter.trim() || undefined,
-      client_id: clientId || undefined,
-      status: statusParam,
-      cargo_type: cargoParam,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, signal),
-    [page, search, skuFilter, clientId, statusParam, cargoParam, dateFrom, dateTo, reloadTick],
+    (signal) => mode !== 'docs'
+      ? Promise.resolve({ items: [], total: 0, page, limit: PAGE_SIZE })
+      : listDispatches({
+          page, limit: PAGE_SIZE,
+          search: search.trim() || undefined,
+          sku: skuFilter.trim() || undefined,
+          client_id: clientId || undefined,
+          status: statusParam,
+          cargo_type: cargoParam,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+        }, signal),
+    [mode, page, search, skuFilter, clientId, statusParam, cargoParam, dateFrom, dateTo, reloadTick],
   )
 
   const items = data?.items ?? []
@@ -107,7 +118,7 @@ export function DispatchesListFeature() {
   return (
     <ListPage
       title="Отгрузки"
-      subtitle={`Всего: ${total}`}
+      subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
         canCreate ? (
           <Dropdown
@@ -209,6 +220,32 @@ export function DispatchesListFeature() {
         </FiltersBar>
       }
     >
+      <div className="tabs" style={{ marginBottom: 14 }}>
+        {MODE_TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`tab${mode === t.id ? ' active' : ''}`}
+            onClick={() => setMode(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'items' ? (
+        <DispatchLinesView
+          search={search}
+          sku={skuFilter}
+          clientId={clientId}
+          status={statusParam}
+          cargoType={cargoParam}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          page={page}
+          onPage={setPage}
+        />
+      ) : (
+        <>
       <Table>
         <thead>
           <tr>
@@ -317,6 +354,8 @@ export function DispatchesListFeature() {
         </tbody>
       </Table>
       <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
+        </>
+      )}
     </ListPage>
   )
 }
