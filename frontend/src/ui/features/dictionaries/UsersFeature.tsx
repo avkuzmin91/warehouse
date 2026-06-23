@@ -12,6 +12,7 @@ import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { canManageUsers } from '../../../utils/access'
+import { fmtDate } from '../../../utils/format'
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
@@ -473,7 +474,7 @@ export function UsersFeature() {
                       />
                     </td>
                     <td className="td" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>
-                      {item.created_at ? new Date(item.created_at).toLocaleDateString('ru-RU') : '—'}
+                      {fmtDate(item.created_at ?? null)}
                     </td>
                   </tr>
                 ))}

@@ -4,6 +4,7 @@ import { TimePicker } from '../../data/TimePicker'
 import { useToast } from '../../feedback/Toast'
 import { EmpAvatar, fmtHours, calcDayHours } from './shared'
 import { getEntry, upsertEntry, type EntryDetail } from '../../../api/timesheetApi'
+import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 
 const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 function fmtDateRu(iso: string): string {
@@ -258,7 +259,7 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{l.comment}</div>
                       <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 1 }}>
-                        {(l.created_by_email ?? '—')} · {new Date(l.created_at).toLocaleString('ru-RU')}
+                        {(l.created_by_email ?? '—')} · {parseMoscow(l.created_at).toLocaleString('ru-RU', { timeZone: MOSCOW_TZ })}
                       </div>
                     </div>
                   </div>

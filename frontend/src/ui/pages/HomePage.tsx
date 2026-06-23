@@ -6,6 +6,7 @@ import { MyTasksFeature } from '../features/home/MyTasksFeature'
 import { HomeKpiFeature } from '../features/home/HomeKpiFeature'
 import { OperationalPlanFeature } from '../features/home/OperationalPlanFeature'
 import { PacmanPlaceholder } from '../features/home/PacmanPlaceholder'
+import { MOSCOW_TZ } from '../../utils/format'
 
 function formatDate(): string {
   return new Date().toLocaleDateString('ru-RU', {
@@ -13,6 +14,7 @@ function formatDate(): string {
     month: 'long',
     year: 'numeric',
     weekday: 'long',
+    timeZone: MOSCOW_TZ,
   })
 }
 

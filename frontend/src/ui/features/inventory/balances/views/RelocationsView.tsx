@@ -11,6 +11,7 @@ import type { BadgeTone } from '../../../../primitives/Badge'
 import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
+import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 
 const PAGE_SIZE = 50
 
@@ -36,8 +37,8 @@ function moveLabel(item: ZoneRelocationItem): string {
 }
 
 function fmtDateTime(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  const d = parseMoscow(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: MOSCOW_TZ })
 }
 
 export function RelocationsView() {

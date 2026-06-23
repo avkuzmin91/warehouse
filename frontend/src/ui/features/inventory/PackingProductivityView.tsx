@@ -12,19 +12,19 @@ import { fmtYmdAsDmy } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
+import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => moscowTodayYmd()
 
 const weekAgo = () => {
-  const d = new Date()
-  d.setDate(d.getDate() - 6)
-  return d.toISOString().slice(0, 10)
+  const [y, m, d] = moscowTodayYmd().split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d - 6)).toISOString().slice(0, 10)
 }
 
 function weekdayShort(ymd: string): string {
-  const d = new Date(`${ymd}T00:00:00`)
+  const d = parseMoscow(ymd)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString('ru-RU', { weekday: 'short' })
+  return d.toLocaleDateString('ru-RU', { weekday: 'short', timeZone: MOSCOW_TZ })
 }
 
 export function PackingProductivityView() {

@@ -4,6 +4,7 @@ import type { ProcessRole } from '../../shared/process/RoleChip'
 import type { IconName } from '../../../primitives/Icon'
 import { isOutbound } from '../../../../api/tripsApi'
 import type { TripOp, TripStatus } from '../../../../api/tripsApi'
+import { MOSCOW_TZ, parseMoscow } from '../../../../utils/format'
 
 /** Вертикальный таймлайн фаз рейса. Заменяет горизонтальный TripStepper. */
 
@@ -36,9 +37,9 @@ function getTimestamps(ops: TripOp[]): Partial<Record<TripStatus, string>> {
 }
 
 function fmt(s: string): string {
-  const d = new Date(s)
+  const d = parseMoscow(s)
   if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 export function ProcessRail({ status, ops = [], direction }: { status: TripStatus; ops?: TripOp[]; direction?: string | null }) {

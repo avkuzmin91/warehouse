@@ -1,4 +1,5 @@
 import { request } from './http'
+import { moscowTodayYmd } from '../utils/format'
 
 // --- Types ---
 
@@ -442,6 +443,5 @@ export function receiptQcStatus(item: ReceiptListItem): { label: string; tone: s
 export function isReceiptOverdue(item: ReceiptListItem): boolean {
   if (item.status === 'done' || item.status === 'cancelled') return false
   if (!item.arrival_date) return false
-  const today = new Date().toISOString().slice(0, 10)
-  return item.arrival_date < today
+  return item.arrival_date < moscowTodayYmd()
 }

@@ -14,6 +14,7 @@ import {
   type ShipmentStatus,
 } from '../../../api/shipmentsApi'
 import { useApi } from '../../../hooks/useApi'
+import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
 import { Badge, type BadgeTone } from '../../primitives/Badge'
 import { Card, CardBody, CardHead } from '../../primitives/Card'
 import { Icon } from '../../primitives/Icon'
@@ -22,20 +23,19 @@ import type { IconName } from '../../primitives/Icon'
 const PLAN_PREVIEW_LIMIT = 3
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return moscowTodayYmd()
 }
 
 function addDaysIso(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() + days)
-  return d.toISOString().slice(0, 10)
+  const [y, m, d] = moscowTodayYmd().split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
 }
 
 function fmtDate(value: string | null): string {
   if (!value) return 'без даты'
   if (value === todayIso()) return 'сегодня'
   if (value === addDaysIso(1)) return 'завтра'
-  return new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+  return parseMoscow(value).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', timeZone: MOSCOW_TZ })
 }
 
 function itemPath(item: OperationalPlanItem): string {

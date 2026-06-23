@@ -10,6 +10,7 @@ import { ListPage } from '../../layouts/ListPage'
 import { Card, CardHead } from '../../primitives/Card'
 import { Badge } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
+import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 import { Icon } from '../../primitives/Icon'
 import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
@@ -212,7 +213,7 @@ export function CabinetBalancesFeature() {
                   {writeOffs.map((w) => (
                     <tr key={w.id}>
                       <Td className="t-sub mono" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                        {new Date(w.created_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
+                        {parseMoscow(w.created_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: MOSCOW_TZ })}
                       </Td>
                       <Td>
                         <div style={{ fontWeight: 500 }}>{w.product_name ?? '—'}</div>

@@ -20,6 +20,7 @@ import {
 import type { TripDetail, TripLoadFactor, TripDispatchLinkItem, TripReceiptLinkItem, TripUnloadReceiptLine } from '../../../api/tripsApi'
 import { UnloadReceiveTable } from './tripDetail/components/UnloadReceiveTable'
 import type { ReceivePlacement } from './tripDetail/components/UnloadReceiveTable'
+import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 import { getReceipts, createReceipt, advanceReceiptStatus, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
 import { listDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../../api/dispatchApi'
@@ -47,9 +48,9 @@ const CAN_LINK = new Set(['draft', 'awaiting_arrival'])
 
 function fmtDay(d: string | null): string | undefined {
   if (!d) return undefined
-  const dt = new Date(d)
+  const dt = parseMoscow(d)
   if (Number.isNaN(dt.getTime())) return d
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', timeZone: MOSCOW_TZ })
 }
 
 const EMPTY_FORM: PlanningFormValue = {

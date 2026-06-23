@@ -6,6 +6,7 @@ import {
 import type { ShipmentCargoType, ShipmentOp, ShipmentStatus } from '../../../../../api/shipmentsApi'
 import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/RoleChip'
+import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 import type { IconName } from '../../../../primitives/Icon'
 
 /** Маршрут отгрузки: владелец, иконка и подсказка для каждого статуса. */
@@ -50,9 +51,9 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
 }
 
 function fmt(s: string): string {
-  const d = new Date(s)
+  const d = parseMoscow(s)
   if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.

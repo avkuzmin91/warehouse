@@ -352,6 +352,9 @@ button {
 .pill.good svg { color: var(--c-success); }
 .pill.defect { color: var(--c-danger); border-color: color-mix(in srgb, var(--c-danger) 32%, var(--c-border)); }
 .pill.defect svg { color: var(--c-danger); }
+.pill.accent  { color: var(--c-accent);  border-color: color-mix(in srgb, var(--c-accent) 32%, var(--c-border)); }
+.pill.info    { color: var(--c-info);     border-color: color-mix(in srgb, var(--c-info) 32%, var(--c-border)); }
+.pill.success { color: var(--c-success);  border-color: color-mix(in srgb, var(--c-success) 32%, var(--c-border)); }
 
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }

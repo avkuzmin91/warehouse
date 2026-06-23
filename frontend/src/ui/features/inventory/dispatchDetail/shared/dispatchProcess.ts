@@ -5,6 +5,7 @@ import type { DispatchOp, DispatchStatus } from '../../../../../api/dispatchApi'
 import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/RoleChip'
 import type { IconName } from '../../../../primitives/Icon'
+import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 
 /** Маршрут отгрузки (DSP): владелец, иконка и подсказка для каждого статуса. */
 const DSP_META: Record<DispatchStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle: string }> = {
@@ -41,9 +42,9 @@ function getStepTimestamps(ops: DispatchOp[]): Partial<Record<DispatchStatus, st
 }
 
 function fmt(s: string): string {
-  const d = new Date(s)
+  const d = parseMoscow(s)
   if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 /** Шаги маршрута отгрузки (DSP) для ProcessRail. */

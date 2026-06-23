@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 import {
   fetchSimpleDictionaryPage,
   fetchProductTypesPage,
@@ -32,8 +33,8 @@ interface SimpleDictProps {
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—'
-  const d = new Date(iso)
-  return d.toLocaleDateString('ru', { day: 'numeric', month: 'short' })
+  const d = parseMoscow(iso)
+  return d.toLocaleDateString('ru', { day: 'numeric', month: 'short', timeZone: MOSCOW_TZ })
 }
 
 function itemRentKopecks(item: AnyDictItem): number | null {

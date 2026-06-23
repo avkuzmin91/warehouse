@@ -104,6 +104,15 @@ export const OP_STATUS_LABELS: Record<InvOpStatus, string> = {
   ready: 'Готов к отгрузке',
 }
 
+// Цвет пилюли операционного статуса — как в вебе (ByZoneView OP_TONE):
+// хранение — акцент, упаковка — инфо, готов — успех.
+export const OP_STATUS_TONE: Record<InvOpStatus, string> = {
+  storage: 'accent',
+  packing: 'info',
+  packed: 'info',
+  ready: 'success',
+}
+
 export const QUALITY_LABELS: Record<InvQuality, string> = {
   good: 'Годный',
   defect: 'Брак',

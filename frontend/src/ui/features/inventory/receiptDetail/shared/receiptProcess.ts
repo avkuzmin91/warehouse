@@ -6,6 +6,7 @@ import {
 import type { ReceiptOp, ReceiptStatus } from '../../../../../api/receiptsApi'
 import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/roles'
+import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 import type { IconName } from '../../../../primitives/Icon'
 
 /** Маршрут поступления: владелец, иконка и подсказка для каждого статуса.
@@ -41,9 +42,9 @@ function getStepTimestamps(ops: ReceiptOp[]): Partial<Record<ReceiptStatus, stri
 }
 
 function fmt(s: string): string {
-  const d = new Date(s)
+  const d = parseMoscow(s)
   if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 /** Шаги маршрута поступления для ProcessRail. При привязке к рейсу шаг

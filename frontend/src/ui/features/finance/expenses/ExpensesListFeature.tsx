@@ -11,6 +11,7 @@ import {
 import type { ExpenseKind, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
 import { getEmployees } from '../../../../api/timesheetApi'
 import { fetchSimpleDictionaryPage } from '../../../../api/adminApi'
+import { moscowTodayYmd } from '../../../../utils/format'
 import { ListPage } from '../../../layouts/ListPage'
 import { Table, Td } from '../../../data/Table'
 import { Pagination } from '../../../data/Pagination'
@@ -38,9 +39,8 @@ const PAGE_SIZE = 25
  *  Рабочий день — любой день, кроме воскресенья (в неделе 6 рабочих дней),
  *  поэтому делитель меняется по месяцам (июнь 2026 — 26, июль 2026 — 27). */
 function currentMonthMeta() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
+  const [y, m1] = moscowTodayYmd().split('-').map(Number)
+  const m = m1 - 1
   const pad = (n: number) => String(n).padStart(2, '0')
   const lastDay = new Date(y, m + 1, 0).getDate()
   let workingDays = 0
@@ -51,7 +51,7 @@ function currentMonthMeta() {
     start: `${y}-${pad(m + 1)}-01`,
     end: `${y}-${pad(m + 1)}-${pad(lastDay)}`,
     workingDays,
-    monthLabel: now.toLocaleString('ru-RU', { month: 'long' }),
+    monthLabel: new Date(y, m, 1).toLocaleString('ru-RU', { month: 'long' }),
   }
 }
 

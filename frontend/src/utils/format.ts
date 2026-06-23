@@ -1,24 +1,43 @@
+/** Склад работает по Москве — все даты/время показываем в этой зоне, не в зоне устройства. */
+export const MOSCOW_TZ = 'Europe/Moscow'
+
+/**
+ * ISO-строка → абсолютный момент. Строки без явной зоны ("наивные", напр. ETA
+ * рейса `2026-06-23T14:30`) трактуем как стенные часы Москвы (UTC+3, без перехода
+ * на летнее время с 2014), иначе устройство в другом поясе сдвинуло бы их.
+ */
+export function parseMoscow(s: string): Date {
+  const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(s)
+  if (hasTz) return new Date(s)
+  return new Date(s.includes('T') ? `${s}+03:00` : `${s}T00:00:00+03:00`)
+}
+
+/** Сегодняшняя календарная дата по Москве в формате YYYY-MM-DD. */
+export function moscowTodayYmd(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: MOSCOW_TZ })
+}
+
 /** YYYY-MM-DD → локализованная короткая дата (DD.MM.YYYY). */
 export function fmtDate(s: string | null): string {
   if (!s) return '—'
-  return new Date(s).toLocaleDateString('ru-RU')
+  return parseMoscow(s).toLocaleDateString('ru-RU', { timeZone: MOSCOW_TZ })
 }
 
 /** YYYY-MM-DD → длинная дата с месяцем словом ("5 марта 2026"). */
 export function fmtDateLong(s: string | null): string {
   if (!s) return '—'
-  return new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+  return parseMoscow(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', timeZone: MOSCOW_TZ })
 }
 
 /** YYYY-MM-DD → компактная "5 мар" (без года). */
 export function fmtDateShort(s: string | null): string {
   if (!s) return '—'
-  return new Date(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+  return parseMoscow(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: MOSCOW_TZ })
 }
 
-/** ISO datetime → "05 мар 14:30". */
+/** ISO datetime → "05 мар 14:30" (по Москве). */
 export function fmtDateTime(s: string): string {
-  return new Date(s).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return parseMoscow(s).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 /** YYYY-MM-DD → DD-MM-YYYY (без локали, фиксированный формат). */

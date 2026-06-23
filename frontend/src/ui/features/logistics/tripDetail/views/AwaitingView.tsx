@@ -5,6 +5,7 @@ import type { IconName } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
 import { TRIP_LOAD_LABELS, tripLexicon, tripStatusLabel } from '../../../../../api/tripsApi'
 import type { TripDetail, TripDirection, TripLoadFactor } from '../../../../../api/tripsApi'
+import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptEnrich } from '../ReceiptsBlock'
 import { DateTimeField, FieldLabel, segmentToneColors } from '../../components/fields'
@@ -23,9 +24,9 @@ function Chip({ icon, children }: { icon: IconName; children: React.ReactNode })
 
 function fmtTime(v: string | null): string {
   if (!v) return '—'
-  const d = new Date(v)
+  const d = parseMoscow(v)
   if (Number.isNaN(d.getTime())) return v
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 function minutesSince(v: string | null): number | null {

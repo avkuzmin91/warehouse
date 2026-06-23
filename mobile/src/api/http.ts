@@ -94,6 +94,8 @@ function buildHeaders(path: string, init: RequestOptions | undefined, json: bool
   return headers
 }
 
+const NETWORK_ERROR = 'Сервер недоступен. Проверьте подключение и повторите попытку.'
+
 async function doFetch(path: string, init: RequestOptions | undefined, headers: Record<string, string>): Promise<Response> {
   try {
     return await fetch(`${API_BASE_URL}${path}`, {
@@ -103,7 +105,21 @@ async function doFetch(path: string, init: RequestOptions | undefined, headers: 
     })
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error('Сервер недоступен. Проверьте подключение и повторите попытку.', { cause: error })
+      throw new Error(NETWORK_ERROR, { cause: error })
+    }
+    throw error
+  }
+}
+
+// Чтение тела ответа может оборваться на мобильной сети уже ПОСЛЕ получения
+// заголовков (блип соединения во время стрима тела). fetch.json() бросает тогда
+// «TypeError: Failed to fetch» — без этой обёртки сырой текст всплывал в UI.
+async function readJsonBody<T>(response: Response): Promise<T> {
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(NETWORK_ERROR, { cause: error })
     }
     throw error
   }
@@ -155,7 +171,7 @@ export async function request<T>(path: string, init?: RequestOptions): Promise<T
     throw new Error(formatApiErrorDetail(body, response.status))
   }
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return readJsonBody<T>(response)
 }
 
 /** Как request, но тело — FormData (multipart): Content-Type не задаём, его ставит браузер с boundary. */
@@ -182,5 +198,5 @@ export async function requestForm<T>(path: string, init: RequestOptions): Promis
     throw new Error(formatApiErrorDetail(body, response.status))
   }
   if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return readJsonBody<T>(response)
 }

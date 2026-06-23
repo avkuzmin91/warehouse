@@ -8,6 +8,7 @@ import { getUsers } from '../../../api/adminApi'
 import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
 import { addPayment, addEmployeeRate, createEmployee, updateEmployee, type CompType, type EmployeeDetail } from '../../../api/timesheetApi'
+import { moscowTodayYmd } from '../../../utils/format'
 
 /** Загружает учётки для связи сотрудника с учётной записью (только для админа). */
 function useManageableUsers(enabled: boolean): UserListItem[] {
@@ -22,7 +23,7 @@ function useManageableUsers(enabled: boolean): UserListItem[] {
 }
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return moscowTodayYmd()
 }
 
 const input: React.CSSProperties = { width: '100%', height: 34 }

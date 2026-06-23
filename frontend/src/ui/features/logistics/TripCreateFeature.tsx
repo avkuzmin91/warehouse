@@ -4,6 +4,7 @@ import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripDispatches, l
 import type { TripReceiptItem, TripReceiptLinkItem, TripDispatchItem, TripDispatchLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
 import { getReceipts, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
+import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 import { listDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../../api/dispatchApi'
 import type { DispatchListItem } from '../../../api/dispatchApi'
 import { Icon } from '../../primitives/Icon'
@@ -28,9 +29,9 @@ const EMPTY_FORM: PlanningFormValue = {
 
 function fmtDay(d: string | null): string | undefined {
   if (!d) return undefined
-  const dt = new Date(d)
+  const dt = parseMoscow(d)
   if (Number.isNaN(dt.getTime())) return d
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', timeZone: MOSCOW_TZ })
 }
 
 export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }: { direction?: TripDirection; cargoType?: TripCargoType }) {

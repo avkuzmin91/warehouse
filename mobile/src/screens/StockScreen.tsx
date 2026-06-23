@@ -4,6 +4,7 @@ import {
   createRelocation,
   getBalancesByZone,
   OP_STATUS_LABELS,
+  OP_STATUS_TONE,
   QUALITY_LABELS,
   type ZoneBalance,
 } from '../api/balancesApi'
@@ -147,7 +148,7 @@ export function StockScreen() {
       />
 
       <PullToRefresh className="scroll pad-nav" onRefresh={refresh}>
-        {error && (
+        {error && items.length === 0 && (
           <div className="alert">
             <Icon name="alert" size={15} />
             {error}
@@ -273,7 +274,7 @@ function RowCard({ row, onMove }: { row: ZoneBalance; onMove: () => void }) {
           <div className="line-name">{primary}</div>
           <div className="line-sub mono">{row.product_sku}</div>
           <div className="pills">
-            <span className="pill">{OP_STATUS_LABELS[row.op_status]}</span>
+            <span className={`pill ${OP_STATUS_TONE[row.op_status]}`}>{OP_STATUS_LABELS[row.op_status]}</span>
             <span className={`pill ${row.quality}`}>{QUALITY_LABELS[row.quality]}</span>
           </div>
         </div>

@@ -14,13 +14,14 @@ import type { BadgeTone } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
-import { fmtDate } from '../../../utils/format'
+import { fmtDate, MOSCOW_TZ } from '../../../utils/format'
 import { CabinetTimeline, cabinetOpTone } from './shared/cabinetUI'
 
 const fmt = (n: number) => n.toLocaleString('ru-RU')
 
 function greeting(): string {
-  const hour = new Date().getHours()
+  const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: MOSCOW_TZ }).formatToParts(new Date())
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0')
   if (hour >= 5 && hour < 12) return 'Доброе утро 👋'
   if (hour >= 12 && hour < 18) return 'Добрый день 👋'
   return 'Добрый вечер 👋'

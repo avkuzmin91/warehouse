@@ -2,7 +2,6 @@ import { useMemo, useState, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDispatches,
-  advanceDispatch,
   DISPATCH_STATUS_LABELS,
   DISPATCH_STATUS_ORDER,
   DISPATCH_STATUS_TONES,
@@ -73,7 +72,6 @@ export function DispatchesListFeature() {
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
-  const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
   const { clients } = useLookups()
@@ -308,21 +306,9 @@ export function DispatchesListFeature() {
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
                       <Td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Badge tone={DISPATCH_STATUS_TONES[item.status] as BadgeTone} dot>
-                            {item.status_label}
-                          </Badge>
-                          {canEdit && item.status === 'draft' && (
-                            <button
-                              className="btn ghost sm"
-                              disabled={advancingId === item.id}
-                              onClick={(e) => handleAdvance(e, item)}
-                              title="Передать в подготовку"
-                            >
-                              <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
-                            </button>
-                          )}
-                        </div>
+                        <Badge tone={DISPATCH_STATUS_TONES[item.status] as BadgeTone} dot>
+                          {item.status_label}
+                        </Badge>
                       </Td>
                       <Td>
                         {showProgress ? (

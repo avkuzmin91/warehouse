@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { fmtDateLong } from '../../../utils/format'
 import {
   createClientStore,
   createDictionaryItem,
@@ -275,9 +276,9 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
           <div className="text-xs subtle" style={{ marginBottom: 6 }}>МЕТА</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, fontSize: 12.5 }}>
             <span className="muted">Создано</span>
-            <span>{initial.created_at ? new Date(initial.created_at).toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</span>
+            <span>{fmtDateLong(initial.created_at ?? null)}</span>
             <span className="muted">Изменено</span>
-            <span>{initial.updated_at ? new Date(initial.updated_at).toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</span>
+            <span>{fmtDateLong(initial.updated_at ?? null)}</span>
           </div>
         </div>
       )}

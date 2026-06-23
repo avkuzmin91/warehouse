@@ -18,6 +18,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
+import { MOSCOW_TZ, parseMoscow, moscowTodayYmd } from '../../../utils/format'
 import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 
 const PAGE_SIZE = 25
@@ -44,9 +45,9 @@ function fmtMoney(v: number | null | undefined): string {
 
 function TimeCell({ eta }: { eta: string | null }) {
   if (!eta) return <span className="t-sub">—</span>
-  const d = new Date(eta)
+  const d = parseMoscow(eta)
   if (Number.isNaN(d.getTime())) return <span className="mono">{eta}</span>
-  return <span className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
+  return <span className="mono" style={{ fontSize: 12.5 }}>{d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })}</span>
 }
 
 /** Клиенты рейса: первый + пилюля «+N» при нескольких; полный список — карточкой-списком при наведении.
@@ -148,37 +149,42 @@ type TripDayGroup = {
   rows: TripListItem[]
 }
 
-function startOfDayMs(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+/** eta — наивная стенная дата Москвы; день берём из литеральных YYYY-MM-DD, без сдвига по поясу. */
+function etaYmd(eta: string | null): string | null {
+  if (!eta) return null
+  const ymd = eta.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : null
+}
+
+function ymdUtcMs(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return Date.UTC(y, m - 1, d)
 }
 
 function dayKeyOf(eta: string | null): string {
-  if (!eta) return 'no-date'
-  const d = new Date(eta)
-  if (Number.isNaN(d.getTime())) return 'no-date'
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  return etaYmd(eta) ?? 'no-date'
 }
 
-function dayLabelOf(eta: string | null, today: number): string {
-  if (!eta) return 'Без плановой даты'
-  const d = new Date(eta)
-  if (Number.isNaN(d.getTime())) return 'Без плановой даты'
-  const diffDays = Math.round((startOfDayMs(d) - today) / 86_400_000)
+function dayLabelOf(eta: string | null, todayYmd: string): string {
+  const ymd = etaYmd(eta)
+  if (!ymd) return 'Без плановой даты'
+  const diffDays = Math.round((ymdUtcMs(ymd) - ymdUtcMs(todayYmd)) / 86_400_000)
   const rel = diffDays === 0 ? 'Сегодня' : diffDays === 1 ? 'Завтра' : diffDays === -1 ? 'Вчера' : null
-  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })
-  const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long' })
+  const d = parseMoscow(eta!)
+  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', timeZone: MOSCOW_TZ })
+  const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long', timeZone: MOSCOW_TZ })
   return rel ? `${rel} · ${date} · ${weekday}` : `${date} · ${weekday}`
 }
 
 /** Группировка рейсов по плановому дню; внутри дня — сначала отгрузки, затем поступления.
  *  Порядок дней наследуется из выдачи backend (eta DESC, no-date в конце). */
-function groupTripsByDay(trips: TripListItem[], today: number): TripDayGroup[] {
+function groupTripsByDay(trips: TripListItem[], todayYmd: string): TripDayGroup[] {
   const map = new Map<string, TripDayGroup>()
   for (const t of trips) {
     const key = dayKeyOf(t.eta)
     let g = map.get(key)
     if (!g) {
-      g = { key, label: dayLabelOf(t.eta, today), outCount: 0, inCount: 0, rows: [] }
+      g = { key, label: dayLabelOf(t.eta, todayYmd), outCount: 0, inCount: 0, rows: [] }
       map.set(key, g)
     }
     if (tripDirection(t.direction) === 'outbound') g.outCount += 1
@@ -230,7 +236,7 @@ export function TripsListFeature() {
   const trips: TripListItem[] = data?.items ?? []
   const total = data?.total ?? 0
   const colCount = showCosts ? 10 : 8
-  const dayGroups = useMemo(() => groupTripsByDay(trips, startOfDayMs(new Date())), [trips])
+  const dayGroups = useMemo(() => groupTripsByDay(trips, moscowTodayYmd()), [trips])
 
   return (
     <ListPage

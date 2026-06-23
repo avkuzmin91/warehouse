@@ -1,4 +1,5 @@
 import { request, requestForm } from './http'
+import { moscowTodayYmd } from '../utils/format'
 
 export type ShipmentStatus = 'draft' | 'assigned' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
@@ -220,7 +221,7 @@ export type ShipmentsSummary = {
 export function isShipmentOverdue(item: ShipmentListItem): boolean {
   if (!item.ship_date) return false
   if (item.status !== 'packing') return false
-  return item.ship_date < new Date().toISOString().slice(0, 10)
+  return item.ship_date < moscowTodayYmd()
 }
 
 export type ShipmentLineIn = {

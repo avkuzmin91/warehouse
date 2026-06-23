@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
   // DEV live-reload: эмулятор грузит UI с Vite dev-сервера на хосте (10.0.2.2 = loopback
   // хоста из Android-эмулятора). API идёт по относительному /api → Vite-прокси → backend:8000.
   // ВЕРНУТЬ обратно (закомментировать) перед сборкой test/prod APK!
-  server: { url: 'http://10.0.2.2:5174', cleartext: true },
+  // server: { url: 'http://10.0.2.2:5174', cleartext: true },
 }
 
 export default config
