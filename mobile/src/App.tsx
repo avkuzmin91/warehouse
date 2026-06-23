@@ -13,10 +13,13 @@ import { TripDetailScreen } from './screens/TripDetailScreen'
 import { ShipmentDetailScreen } from './screens/ShipmentDetailScreen'
 import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
 import { ReceiptFormScreen } from './screens/manager/ReceiptFormScreen'
+import { ReceiptDetailScreen } from './screens/manager/ReceiptDetailScreen'
 import { PackingListScreen } from './screens/manager/PackingListScreen'
 import { ShipmentFormScreen } from './screens/manager/ShipmentFormScreen'
+import { PackingDetailScreen } from './screens/manager/PackingDetailScreen'
 import { DispatchListScreen } from './screens/manager/DispatchListScreen'
 import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
+import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
 
 function Main() {
   // Таб-бар — только на «корневых» вкладках (isTab). На детальных экранах есть своя
@@ -29,10 +32,13 @@ function Main() {
     case 'shipments': screen = <ShipmentsListScreen />; break
     case 'mReceipts': screen = <ReceiptsListScreen />; break
     case 'receiptNew': screen = <ReceiptFormScreen />; break
+    case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break
     case 'mPacking':  screen = <PackingListScreen />; break
     case 'shipmentNew': screen = <ShipmentFormScreen />; break
+    case 'mPackingDoc': screen = <PackingDetailScreen docId={route.id} />; break
     case 'mDispatch': screen = <DispatchListScreen />; break
     case 'dispatchNew': screen = <DispatchFormScreen />; break
+    case 'mDispatchDoc': screen = <DispatchDetailScreen docId={route.id} />; break
     case 'profile':   screen = <ProfileScreen />; break
     case 'scan':      screen = <ScanScreen />; break
     case 'scanProduct': screen = <ScanProductScreen match={route.match} />; break

@@ -50,6 +50,37 @@ export function getReceiptLines(docId: string, signal?: AbortSignal): Promise<Re
   return request<ReceiptDetailResponse>(`/receipts/${docId}`, { signal }).then((d) => d.lines)
 }
 
+// Полная деталка поступления (для менеджерского просмотра).
+export type ReceiptDocFull = {
+  id: string
+  doc_number: string
+  client_name: string | null
+  status: ReceiptStatus
+  arrival_date: string | null
+  actual_arrival_date: string | null
+  comment: string | null
+  logistics_cost: number | null
+}
+
+export type ReceiptOp = {
+  id: string
+  op_type: string
+  comment: string | null
+  created_at: string
+  created_by_email: string | null
+}
+
+export type ReceiptDetailFull = {
+  doc: ReceiptDocFull
+  lines: ReceiptLine[]
+  ops: ReceiptOp[]
+  can_close_short: boolean
+}
+
+export function getReceiptDetail(docId: string, signal?: AbortSignal): Promise<ReceiptDetailFull> {
+  return request<ReceiptDetailFull>(`/receipts/${docId}`, { signal })
+}
+
 export type ReceiptLineInput = {
   product_id: string
   product_name: string

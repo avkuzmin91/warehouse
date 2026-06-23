@@ -77,7 +77,7 @@ export function ReceiptsListScreen() {
               const tone = receiptStatusTone(r.status)
               const eta = fmtDate(r.arrival_date)
               return (
-                <div key={r.id} className="tile">
+                <button key={r.id} className="tile" onClick={() => openReceiptDoc(r.id)}>
                   <div className="tile-ico">
                     <Icon name="truckIn" size={21} />
                   </div>
@@ -97,7 +97,8 @@ export function ReceiptsListScreen() {
                       {RECEIPT_STATUS_LABELS[r.status]}
                     </span>
                   )}
-                </div>
+                  <span className="tile-chev"><Icon name="chev" size={18} /></span>
+                </button>
               )
             })}
           </>

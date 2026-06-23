@@ -149,9 +149,18 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
                    {net_cols}
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
+        ),
+        variant_sku AS (
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(NULLIF(TRIM(sku), '')) AS sku
+            FROM product_variants
+            WHERE COALESCE(is_deleted, 0) = 0
+            GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT
-            a.product_id, a.product_sku, a.client_id, a.color_id, a.size_id,
+            a.product_id,
+            COALESCE(vs.sku, a.product_sku) AS product_sku,
+            a.client_id, a.color_id, a.size_id,
             a.product_name, a.client_name, a.color_name, a.size_name,
             {bucket_selects},
             a.docs_count
@@ -161,6 +170,11 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
            AND c.client_id  IS NOT DISTINCT FROM a.client_id
            AND c.color_id   IS NOT DISTINCT FROM a.color_id
            AND c.size_id    IS NOT DISTINCT FROM a.size_id
+        LEFT JOIN variant_sku vs
+            ON vs.product_id = a.product_id
+           AND vs.client_id  IS NOT DISTINCT FROM a.client_id
+           AND vs.color_id   IS NOT DISTINCT FROM a.color_id
+           AND vs.size_id    IS NOT DISTINCT FROM a.size_id
     """
     return agg_query, line_params
 
@@ -314,9 +328,21 @@ def get_plannable_items(
 
     rows = connection.execute(
         f"""
-        SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending
+        SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending,
+               COALESCE(vs.sku, p.product_sku) AS live_sku
         FROM ({query}) p
         LEFT JOIN products prod ON prod.id = p.product_id
+        LEFT JOIN (
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(NULLIF(TRIM(sku), '')) AS sku
+            FROM product_variants
+            WHERE COALESCE(is_deleted, 0) = 0
+            GROUP BY product_id, client_id, color_id, size_id
+        ) vs
+            ON vs.product_id = p.product_id
+           AND vs.client_id  IS NOT DISTINCT FROM p.client_id
+           AND vs.color_id   IS NOT DISTINCT FROM p.color_id
+           AND vs.size_id    IS NOT DISTINCT FROM p.size_id
         {where}
         ORDER BY p.product_name, p.color_name, p.size_name
         LIMIT ?
@@ -328,7 +354,7 @@ def get_plannable_items(
         PlannableItem(
             product_id=str(r["product_id"]),
             product_name=str(r["product_name"]),
-            product_sku=str(r["product_sku"]),
+            product_sku=str(r["live_sku"] or r["product_sku"]),
             sku_pending=bool(r["sku_pending"]),
             client_id=r["client_id"],
             client_name=r["client_name"],
@@ -475,13 +501,27 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM gain
             UNION
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM lose
+        ),
+        variant_sku AS (
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(NULLIF(TRIM(sku), '')) AS sku
+            FROM product_variants
+            WHERE COALESCE(is_deleted, 0) = 0
+            GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT x.loc_id AS location_id, x.op AS op_status, x.quality,
-               pm.product_id, pm.product_sku, pm.client_id, pm.color_id, pm.size_id,
+               pm.product_id,
+               COALESCE(vs.sku, pm.product_sku) AS product_sku,
+               pm.client_id, pm.color_id, pm.size_id,
                pm.product_name, pm.client_name, pm.color_name, pm.size_name,
                GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}
+        LEFT JOIN variant_sku vs
+            ON vs.product_id = x.product_id
+           AND vs.client_id  IS NOT DISTINCT FROM x.client_id
+           AND vs.color_id   IS NOT DISTINCT FROM x.color_id
+           AND vs.size_id    IS NOT DISTINCT FROM x.size_id
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.op = x.op AND gi.quality = x.quality
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
     """

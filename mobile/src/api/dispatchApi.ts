@@ -60,6 +60,48 @@ export type DispatchDocCreate = {
   lines?: DispatchLineIn[]
 }
 
+export type DispatchLine = {
+  id: string
+  product_name: string
+  product_sku: string
+  color_name: string | null
+  size_name: string | null
+  qty: number
+  shipped_qty: number
+  store_name: string | null
+  remaining: number
+}
+
+export type DispatchOp = {
+  id: string
+  op_type: string
+  comment: string | null
+  created_at: string
+  created_by_email: string | null
+}
+
+export type DispatchDetail = {
+  id: string
+  doc_number: string
+  cargo_type: DispatchCargoType
+  client_name: string | null
+  logistics_cost: number | null
+  ship_date: string | null
+  actual_ship_date: string | null
+  comment: string | null
+  status: DispatchStatus
+  status_label: string
+  priority_rank: number | null
+  trips: { id: string; number: string }[]
+  lines: DispatchLine[]
+  ops: DispatchOp[]
+  total_qty: number
+}
+
+export function getDispatch(id: string, signal?: AbortSignal): Promise<DispatchDetail> {
+  return request<DispatchDetail>(`/dispatches/${id}`, { signal })
+}
+
 export function createDispatch(body: DispatchDocCreate): Promise<{ message: string }> {
   return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body) })
 }

@@ -21,6 +21,9 @@ export type Route =
   | { name: 'receiptNew' }
   | { name: 'shipmentNew' }
   | { name: 'dispatchNew' }
+  | { name: 'mReceiptDoc'; id: string }
+  | { name: 'mPackingDoc'; id: string }
+  | { name: 'mDispatchDoc'; id: string }
 
 type NavState = {
   route: Route
@@ -37,6 +40,9 @@ type NavState = {
   openReceiptNew: () => void
   openShipmentNew: () => void
   openDispatchNew: () => void
+  openReceiptDoc: (id: string) => void
+  openPackingDoc: (id: string) => void
+  openDispatchDoc: (id: string) => void
   back: () => void
 }
 
@@ -71,6 +77,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openReceiptNew: () => setStack((s) => [...s, { name: 'receiptNew' }]),
     openShipmentNew: () => setStack((s) => [...s, { name: 'shipmentNew' }]),
     openDispatchNew: () => setStack((s) => [...s, { name: 'dispatchNew' }]),
+    openReceiptDoc: (id) => setStack((s) => [...s, { name: 'mReceiptDoc', id }]),
+    openPackingDoc: (id) => setStack((s) => [...s, { name: 'mPackingDoc', id }]),
+    openDispatchDoc: (id) => setStack((s) => [...s, { name: 'mDispatchDoc', id }]),
     back: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
   }
   return <NavCtx.Provider value={value}>{children}</NavCtx.Provider>

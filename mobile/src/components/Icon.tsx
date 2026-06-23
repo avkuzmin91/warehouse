@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react'
 // Тонкие inline-иконки (Lucide-style, сетка 24×24) — единый язык с вебом и
 // мобильным редизайном. Портировано из дизайн-системы redesign-mobile/icons.jsx.
 export type IconName =
-  | 'home' | 'book' | 'truckIn' | 'truckOut' | 'box' | 'boxes' | 'alert'
+  | 'home' | 'book' | 'truck' | 'truckIn' | 'truckOut' | 'box' | 'boxes' | 'alert'
   | 'users' | 'user' | 'shield' | 'chart' | 'pulse' | 'search' | 'plus'
   | 'filter' | 'download' | 'upload' | 'check' | 'x' | 'chev' | 'chevDown'
   | 'chevUp' | 'arrowLeft' | 'arrowRight' | 'arrowUp' | 'arrowDown' | 'more'
@@ -15,6 +15,7 @@ export type IconName =
 const PATHS: Record<IconName, ReactNode> = {
   home: <path d="M3 10l9-7 9 7v10a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2V10z" />,
   book: <><path d="M4 4a2 2 0 0 1 2-2h12v18H6a2 2 0 0 0-2 2V4z" /><path d="M4 20a2 2 0 0 0 2 2h12" /></>,
+  truck: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /></>,
   truckIn: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /><path d="M9 4l3 3-3 3" /></>,
   truckOut: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /><path d="M9 4l-3 3 3 3" /></>,
   box: <><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></>,
