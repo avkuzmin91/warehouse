@@ -102,17 +102,6 @@ export function DispatchesListFeature() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
 
-  async function handleAdvance(e: React.MouseEvent, item: DispatchListItem) {
-    e.stopPropagation()
-    setAdvancingId(item.id)
-    try {
-      await advanceDispatch(item.id)
-      setReloadTick((t) => t + 1)
-    } finally {
-      setAdvancingId(null)
-    }
-  }
-
   return (
     <ListPage
       title="Отгрузки"
