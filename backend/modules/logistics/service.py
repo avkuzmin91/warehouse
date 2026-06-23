@@ -385,19 +385,20 @@ def sync_actual_ship_date(connection, trip_id: str, arrived_at: str | None) -> N
 
 def receive_receipts_for_trip(
     connection, trip_id: str, trip_number: str, uid: str, *,
-    accepted_by_line: dict[str, int], zone_by_line: dict[str, dict],
+    placements_by_line: dict[str, list[dict]],
 ) -> int:
     """При завершении разгрузки inbound-рейса: проводим приёмку привезённого этим рейсом.
 
     Кладовщик в шаге разгрузки посчитал фактически принятое по строкам аллокации
-    рейса (accepted_by_line: receipt_line_id → шт.; по умолчанию — вся аллокация).
+    рейса и разложил его по ячейкам (placements_by_line: receipt_line_id → список
+    {id, name, qty}; одна ячейка — частный случай). Принятое по строке = сумма ячеек.
     Привезти больше, чем планировалось на рейс, можно (нормальная ситуация): излишек
     поднимает аллокацию рейса до факта, accepted_qty может превысить план поступления →
-    документ закрывается в done. На принятое
-    пишем движение intake→storage@место (штамп trip_id+receipt_line_id), наращиваем
-    receipt_lines.accepted_qty и пересчитываем статус поступления (partially_received
-    /done). Счёт ручной — это не авто-приход по плану. Идёт в одной транзакции со
-    сменой статуса рейса. Зеркало cascade_shipments_to_shipped.
+    документ закрывается в done. На каждую ячейку пишем движение intake→storage@место
+    (штамп trip_id+receipt_line_id), наращиваем receipt_lines.accepted_qty и
+    пересчитываем статус поступления (partially_received/done). Счёт ручной — это не
+    авто-приход по плану. Идёт в одной транзакции со сменой статуса рейса. Зеркало
+    cascade_shipments_to_shipped.
     """
     from modules.balances.service import insert_inventory_move
     from modules.receipts.service import recompute_trip_receipt_status
@@ -432,26 +433,41 @@ def receive_receipts_for_trip(
         for a in alloc_rows:
             lid = str(a["receipt_line_id"])
             alloc_qty = int(a["qty"] or 0)
-            received = int(accepted_by_line.get(lid, alloc_qty))
-            if received < 0:
-                received = 0
             attrs = " / ".join(x for x in [a["color_name"], a["size_name"]] if x)
             label = f"{a['product_sku']}" + (f" ({attrs})" if attrs else "")
+            # Раскладка по ячейкам: по умолчанию (строки не было в payload) — вся
+            # аллокация в место строки. Оставляем только ячейки с qty > 0.
+            raw_placements = placements_by_line.get(lid)
+            if raw_placements is None:
+                raw_placements = [
+                    {"id": a["storage_zone_id"], "name": a["storage_zone_name"], "qty": alloc_qty}
+                ]
+            placements = [
+                {"id": p.get("id"), "name": p.get("name"), "qty": int(p["qty"])}
+                for p in raw_placements if int(p.get("qty") or 0) > 0
+            ]
+            received = sum(p["qty"] for p in placements)
             surplus = max(received - alloc_qty, 0)
-            zone = zone_by_line.get(lid)
-            zone_id = (zone.get("id") if zone else None) or a["storage_zone_id"]
-            zone_name = (zone.get("name") if zone else None) or a["storage_zone_name"]
-            if received > 0 and not str(zone_id or "").strip():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Укажите место хранения ({label})",
-                )
-            # Зону строки фиксируем (пригодится журналу и следующим рейсам по строке).
-            if zone and (zone_id != a["storage_zone_id"] or zone_name != a["storage_zone_name"]):
-                connection.execute(
-                    "UPDATE receipt_lines SET storage_zone_id = ?, storage_zone_name = ? WHERE id = ?",
-                    (zone_id, zone_name, lid),
-                )
+            for p in placements:
+                # Место не указано в ячейке — падаем на плановую зону строки (так
+                # принимали раньше, когда место не переопределяли при разгрузке).
+                if not str(p["id"] or "").strip():
+                    p["id"] = a["storage_zone_id"]
+                    p["name"] = a["storage_zone_name"]
+                if not str(p["id"] or "").strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Укажите место хранения ({label})",
+                    )
+            # Денормализованную зону строки фиксируем по первой ячейке (пригодится
+            # следующим рейсам по строке и спискам; истина о раскладке — в журнале).
+            if placements:
+                first = placements[0]
+                if first.get("id") != a["storage_zone_id"] or first.get("name") != a["storage_zone_name"]:
+                    connection.execute(
+                        "UPDATE receipt_lines SET storage_zone_id = ?, storage_zone_name = ? WHERE id = ?",
+                        (first.get("id"), first.get("name"), lid),
+                    )
             if received <= 0:
                 continue
             # Привезли больше, чем планировалось на рейс — нормальная ситуация. Поднимаем
@@ -467,24 +483,29 @@ def receive_receipts_for_trip(
                 "UPDATE receipt_lines SET accepted_qty = ? WHERE id = ?", (new_accepted, lid),
             )
             surplus_note = f", из них сверх плана рейса +{surplus}" if surplus > 0 else ""
+            cells_note = (
+                " · " + ", ".join(f"{p['name'] or '—'}: {int(p['qty'])}" for p in placements)
+                if len(placements) > 1 else ""
+            )
             connection.execute(
                 "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (str(uuid4()), rid, lid, RECEIPT_OP_ARRIVAL_ACCEPT, received,
-                 f"Принято рейсом {trip_number}: +{received} шт.{surplus_note} (итого {new_accepted}) ({label})", now, uid),
+                 f"Принято рейсом {trip_number}: +{received} шт.{surplus_note} (итого {new_accepted}) ({label}){cells_note}", now, uid),
             )
-            insert_inventory_move(
-                connection,
-                product_id=str(a["product_id"]), product_name=a["product_name"], product_sku=a["product_sku"],
-                color_id=a["color_id"], color_name=a["color_name"],
-                size_id=a["size_id"], size_name=a["size_name"],
-                client_id=rec["client_id"], client_name=rec["client_name"],
-                from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
-                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-                from_zone_id=zone_id, from_zone_name=zone_name,
-                to_zone_id=zone_id, to_zone_name=zone_name,
-                qty=received, user_id=uid, receipt_line_id=lid, trip_id=trip_id,
-                comment=f"Приёмка по рейсу {trip_number}: {received} шт.",
-            )
+            for p in placements:
+                insert_inventory_move(
+                    connection,
+                    product_id=str(a["product_id"]), product_name=a["product_name"], product_sku=a["product_sku"],
+                    color_id=a["color_id"], color_name=a["color_name"],
+                    size_id=a["size_id"], size_name=a["size_name"],
+                    client_id=rec["client_id"], client_name=rec["client_name"],
+                    from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE,
+                    from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                    from_zone_id=p.get("id"), from_zone_name=p.get("name"),
+                    to_zone_id=p.get("id"), to_zone_name=p.get("name"),
+                    qty=int(p["qty"]), user_id=uid, receipt_line_id=lid, trip_id=trip_id,
+                    comment=f"Приёмка по рейсу {trip_number}: {int(p['qty'])} шт. → {p.get('name') or '—'}",
+                )
         if rid not in affected:
             affected.append(rid)
     for rid in affected:

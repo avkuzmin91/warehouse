@@ -263,12 +263,21 @@ export function tripArrival(tripId: string, arrivedAt?: string) {
   })
 }
 
+/** Одна ячейка раскладки принятого: сколько штук строки легло в это место. */
+export type TripUnloadPlacement = {
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
+  qty: number
+}
+
 /** Приёмка inbound-рейса по строкам аллокации (фиксируется при завершении разгрузки). */
 export type TripUnloadReceiptLine = {
   line_id: string
   accepted_qty: number
   storage_zone_id?: string | null
   storage_zone_name?: string | null
+  // Раскладка по нескольким ячейкам; accepted_qty = сумме qty. Пусто → одна ячейка.
+  placements?: TripUnloadPlacement[]
 }
 
 export function tripUnload(tripId: string, payload: { unload_started_at?: string | null; unload_finished_at?: string | null; load_factor?: TripLoadFactor | null; receipt_lines?: TripUnloadReceiptLine[] }) {

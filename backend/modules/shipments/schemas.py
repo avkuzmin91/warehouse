@@ -157,6 +157,11 @@ class ShipmentPriorityUpdate(BaseModel):
     priority_rank: int | None = Field(default=None, ge=1, le=2)
 
 
+class ShipmentRejectPayload(BaseModel):
+    # Причина отклонения задачи начальником склада (фиксируется в журнале).
+    reason: str = Field(min_length=1)
+
+
 class ShipmentLineFile(BaseModel):
     id:         str
     filename:   str

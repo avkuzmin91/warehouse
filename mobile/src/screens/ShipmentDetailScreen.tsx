@@ -18,7 +18,7 @@ import {
 } from '../api/shipmentsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
-import { Combobox } from '../components/Combobox'
+import { ZoneField } from '../components/ZoneField'
 
 type Row = { zoneId: string; qty: number }
 type MoveZoneOption = { id: string; name: string; available: number }
@@ -257,7 +257,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
       />
 
       <div className="scroll">
-        {error && (
+        {error && !doc && (
           <div className="alert">
             <Icon name="alert" size={15} />
             {error}
@@ -354,7 +354,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                             <div key={i} className="line-row">
                               <input
                                 className="input num"
-                                type="number"
+                                type="text"
                                 inputMode="numeric"
                                 min={0}
                                 value={row.qty || ''}
@@ -367,7 +367,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                                   }))
                                 }
                               />
-                              <Combobox
+                              <ZoneField
                                 value={row.zoneId}
                                 options={opts.map((o) => ({
                                   value: o.id,
@@ -375,6 +375,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                                 }))}
                                 placeholder="Место-источник…"
                                 title="Откуда передать"
+                                onError={setError}
                                 onChange={(v) =>
                                   setMoveRows((p) => ({
                                     ...p,
@@ -413,6 +414,12 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                   )
                 })}
                 <div className="actionbar">
+                  {error && (
+                    <div className="alert">
+                      <Icon name="alert" size={15} />
+                      {error}
+                    </div>
+                  )}
                   <button className="btn" disabled={saving || savingLine !== null} onClick={handleAdvance}>
                     {saving ? '…' : <><Icon name="check" size={18} /> Готово — на упаковку</>}
                   </button>
@@ -437,6 +444,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                             rows={goodRows[l.id] ?? []}
                             zones={zones}
                             showErrors={showErrors}
+                            onError={setError}
                             onChange={(rows) => setGoodRows((p) => ({ ...p, [l.id]: rows }))}
                           />
                         )}
@@ -448,6 +456,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                             rows={defectRows[l.id] ?? []}
                             zones={zones}
                             showErrors={showErrors}
+                            onError={setError}
                             onChange={(rows) => setDefectRows((p) => ({ ...p, [l.id]: rows }))}
                           />
                         )}
@@ -527,6 +536,7 @@ function KindRows({
   rows,
   zones,
   showErrors,
+  onError,
   onChange,
 }: {
   title: string
@@ -535,6 +545,7 @@ function KindRows({
   rows: Row[]
   zones: Zone[]
   showErrors: boolean
+  onError: (msg: string) => void
   onChange: (rows: Row[]) => void
 }) {
   const left = target - sumRows(rows)
@@ -553,7 +564,7 @@ function KindRows({
         <div key={i} className="line-row" style={{ marginTop: i === 0 ? 0 : 10 }}>
           <input
             className="input num"
-            type="number"
+            type="text"
             inputMode="numeric"
             min={0}
             value={row.qty || ''}
@@ -561,12 +572,14 @@ function KindRows({
               onChange(rows.map((r, idx) => (idx === i ? { ...r, qty: Math.max(0, Math.floor(Number(e.target.value) || 0)) } : r)))
             }
           />
-          <Combobox
+          <ZoneField
             value={row.zoneId}
             options={zones.map((z) => ({ value: z.id, label: z.name }))}
             placeholder="Место…"
             title="Место хранения"
             invalid={showErrors && row.qty > 0 && !row.zoneId}
+            onError={onError}
+            allowUnlisted
             onChange={(v) => onChange(rows.map((r, idx) => (idx === i ? { ...r, zoneId: v } : r)))}
           />
           {rows.length > 1 && (

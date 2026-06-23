@@ -14,6 +14,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { Modal } from '../../feedback/Modal'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
+import { useLookups } from '../../../hooks/useLookups'
 import { SimpleDictSheet } from './SimpleDictSheet'
 
 // Место хранения = строка unloading_zones; редактирование (имя/архив/роли зон)
@@ -82,6 +83,7 @@ const EMPTY: LocationItem[] = []
 export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps) {
   const toast = useToast()
   const confirm = useConfirm()
+  const { reload: reloadLookups } = useLookups()
   const [items, setItems] = useState<LocationItem[]>(EMPTY)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -136,6 +138,7 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
       await deleteLocation(loc.id)
       toast('Место удалено', 'success')
       void load()
+      reloadLookups()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось удалить', 'error')
     }
@@ -259,14 +262,14 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
       <GenerateCellsModal
         open={genOpen}
         onClose={() => setGenOpen(false)}
-        onDone={() => { setGenOpen(false); void load() }}
+        onDone={() => { setGenOpen(false); void load(); reloadLookups() }}
       />
 
       {sheet && (
         <SimpleDictSheet
           open
           onClose={() => setSheet(null)}
-          onSaved={() => void load()}
+          onSaved={() => { void load(); reloadLookups() }}
           isNew={sheet.isNew}
           kind="Место хранения"
           apiType="unloading-zones"

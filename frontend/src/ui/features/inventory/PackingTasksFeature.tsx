@@ -27,7 +27,7 @@ import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../ut
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
-import { canCreateDocuments, canEditShipments } from '../../../utils/access'
+import { canAcceptPackingTask, canCreateDocuments, canEditShipmentPlanning, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -39,7 +39,8 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
-  draft:   'В план',
+  draft:    'Поставить задачу',
+  assigned: 'Принять в работу',
 }
 
 function shipmentProgress(item: ShipmentListItem) {
@@ -71,6 +72,12 @@ export function PackingTasksFeature() {
   const { user } = useCurrentUser()
   const canEdit = canEditShipments(user)
   const canCreate = canCreateDocuments(user)
+  const canPlanShipment = canEditShipmentPlanning(user)
+  const canAcceptTask = canAcceptPackingTask(user)
+  // Инлайн-переход из списка: постановку (draft) делает менеджер, приёмку (assigned) —
+  // начальник склада/менеджер. Прочие статусы продвигаются из деталки.
+  const canAdvanceRow = (s: ShipmentStatus) =>
+    (s === 'draft' && canPlanShipment) || (s === 'assigned' && canAcceptTask)
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
@@ -388,7 +395,7 @@ export function PackingTasksFeature() {
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
                             {item.status_label}
                           </Badge>
-                          {canEdit && ADVANCE_LABELS[item.status] && (
+                          {canAdvanceRow(item.status) && ADVANCE_LABELS[item.status] && (
                             <button
                               className="btn ghost sm"
                               disabled={advancingId === item.id}

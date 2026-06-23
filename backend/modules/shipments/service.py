@@ -20,6 +20,7 @@ from config import (
     SHIPMENT_OP_PACK_CORRECTION,
     SHIPMENT_OP_RELOCATE,
     SHIPMENT_OP_RETURN_TO_PACKING,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
@@ -1290,7 +1291,10 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         _check_duplicate_lines(connection, doc_id)
         _check_lines_have_sku(connection, doc_id)
         _check_defect_lines_ready(connection, doc_id, row["client_id"])
-    elif next_status == SHIPMENT_STATUS_PACKING:
+    elif next_status in (SHIPMENT_STATUS_ASSIGNED, SHIPMENT_STATUS_PACKING):
+        # Постановка задачи (draft → assigned) и приёмка её в работу начальником склада
+        # (assigned → packing) проверяются одинаково: товар мог уйти со склада за время
+        # ожидания приёмки, поэтому покрытие остатком перепроверяется и на приёмке.
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)

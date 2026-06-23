@@ -10,7 +10,7 @@ export type InvQuality = 'good' | 'defect'
 export const INV_OP_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
-  packed:  'Упаковано',
+  packed:  'Упакован',
   ready:   'Готов к отгрузке',
 }
 

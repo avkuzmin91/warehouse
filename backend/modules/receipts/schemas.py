@@ -118,6 +118,12 @@ class ReceiptDocResponse(BaseModel):
     updated_at: str | None = None
 
 
+class ReceiptLinePlacement(BaseModel):
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+    qty: int
+
+
 class ReceiptLineResponse(BaseModel):
     id: str
     doc_id: str
@@ -133,6 +139,8 @@ class ReceiptLineResponse(BaseModel):
     planned_qty: int
     accepted_qty: int | None = None
     arrived_qty: int = 0
+    # Фактическая раскладка принятого по ячейкам (из журнала). Пусто, пока не принято.
+    placements: list[ReceiptLinePlacement] = Field(default_factory=list)
     created_at: str
 
 

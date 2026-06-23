@@ -145,7 +145,8 @@ def _packing_shipment(api, client_id, pos, qty):
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
         "ship_date": "2000-01-01", "comment": "ТЗ", "lines": [line],
     }).json()["message"]
-    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
+    api.post(f"/shipments/{doc_id}/advance")  # assigned → packing (приёмка нач. склада)
     line_id = api.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
     return doc_id, line_id
 
@@ -529,7 +530,8 @@ def _packing_shipment_dated(api, client_id, pos, qty, ship_date):
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
         "ship_date": ship_date, "comment": "ТЗ", "lines": [line],
     }).json()["message"]
-    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
+    api.post(f"/shipments/{doc_id}/advance")  # assigned → packing
     return doc_id
 
 
@@ -615,7 +617,8 @@ def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
         "ship_date": "2000-01-01", "comment": "ТЗ", "lines": lines,
     }).json()["message"]
-    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
+    api.post(f"/shipments/{doc_id}/advance")  # assigned → packing
     line1_id = next(
         l["id"] for l in api.get(f"/shipments/{doc_id}").json()["lines"]
         if l["product_sku"] == "SKU-1"

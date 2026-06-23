@@ -11,10 +11,8 @@ import { newRequestId } from '../api/http'
 import { balanceKey } from '../utils/balanceKey'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
-import { Combobox } from '../components/Combobox'
+import { ZoneField } from '../components/ZoneField'
 import { PullToRefresh } from '../components/PullToRefresh'
-import { scanSource } from '../scan/ScanSource'
-import { getLocationByCode } from '../api/locationsApi'
 
 // Место = физическая зона хранения; ∅ — товар без привязки к месту.
 type Place = {
@@ -309,46 +307,12 @@ function MoveSheet({
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [scanAvailable, setScanAvailable] = useState(false)
-  // Ячейка, отсканированная в назначение, но отсутствующая в списке зон (напр. её
-  // ещё не подтянул lookup) — подмешиваем опцией, чтобы Combobox показал её код.
-  const [scannedTarget, setScannedTarget] = useState<{ id: string; name: string } | null>(null)
   // Один логический перенос на эту шторку — стабильный id переживает повтор при обрыве сети.
   const [requestId] = useState(newRequestId)
-
-  useEffect(() => {
-    let live = true
-    scanSource.isAvailable().then((v) => live && setScanAvailable(v))
-    return () => { live = false }
-  }, [])
-
-  async function scanTo() {
-    setError('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const res = await getLocationByCode(code)
-      if (!res.found || !res.location) {
-        setError(`Место по коду «${code}» не найдено`)
-        return
-      }
-      if (res.location.id === from.location_id) {
-        setError('Это исходное место — выберите другое')
-        return
-      }
-      setScannedTarget({ id: res.location.id, name: res.location.code })
-      setToZoneId(res.location.id)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
-    }
-  }
 
   const targetOptions = zones
     .filter((z) => z.id !== from.location_id)
     .map((z) => ({ value: z.id, label: z.name }))
-  if (scannedTarget && !targetOptions.some((o) => o.value === scannedTarget.id)) {
-    targetOptions.unshift({ value: scannedTarget.id, label: scannedTarget.name })
-  }
   const variant = variantLabel(from)
 
   async function submit() {
@@ -398,13 +362,6 @@ function MoveSheet({
           <span className={from.quality === 'defect' ? 'delta under' : ''}>{QUALITY_LABELS[from.quality]}</span>
         </div>
 
-        {error && (
-          <div className="alert">
-            <Icon name="alert" size={15} />
-            {error}
-          </div>
-        )}
-
         <div className="summary" style={{ marginBottom: 16 }}>
           <div className="kv">
             <span className="k">Откуда</span>
@@ -421,20 +378,18 @@ function MoveSheet({
             Куда <span className="req">*</span>
           </div>
           <div className="line-row" style={{ marginTop: 0 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <Combobox
-                value={toZoneId}
-                options={targetOptions}
-                placeholder="Место назначения…"
-                title="Куда переместить"
-                onChange={(v) => { setToZoneId(v); if (scannedTarget && v !== scannedTarget.id) setScannedTarget(null) }}
-              />
-            </div>
-            {scanAvailable && (
-              <button className="btn ghost auto" onClick={() => void scanTo()} aria-label="Сканировать ячейку" title="Сканировать ячейку">
-                <Icon name="search" size={16} />
-              </button>
-            )}
+            <ZoneField
+              value={toZoneId}
+              options={targetOptions}
+              placeholder="Место назначения…"
+              title="Куда переместить"
+              onError={setError}
+              allowUnlisted
+              validateScan={(loc) =>
+                loc.id === from.location_id ? 'Это исходное место — выберите другое' : null
+              }
+              onChange={setToZoneId}
+            />
           </div>
         </div>
 
@@ -443,7 +398,7 @@ function MoveSheet({
           <div className="line-row" style={{ marginTop: 0 }}>
             <input
               className="input num"
-              type="number"
+              type="text"
               inputMode="numeric"
               min={1}
               max={from.qty}
@@ -466,6 +421,13 @@ function MoveSheet({
             placeholder="Причина перемещения"
           />
         </div>
+
+        {error && (
+          <div className="alert" style={{ marginTop: 4 }}>
+            <Icon name="alert" size={15} />
+            {error}
+          </div>
+        )}
 
         <div className="line-row" style={{ marginTop: 4 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>

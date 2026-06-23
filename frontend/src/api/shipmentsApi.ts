@@ -1,9 +1,10 @@
 import { request, requestForm } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'assigned' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
+  assigned:          'Ожидает принятия',
   packing:           'В плане',
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
@@ -17,6 +18,7 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Создан',
+  assigned:          'Принята',
   packing:           'Передан на упаковку',
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
@@ -30,6 +32,7 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   draft:             '',
+  assigned:          'warning',
   packing:           'info',
   on_packing:        'info',
   relocating:        'info',
@@ -42,7 +45,7 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'on_packing', 'relocating', 'packed',
+  'draft', 'assigned', 'packing', 'on_packing', 'relocating', 'packed',
 ]
 
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
@@ -68,7 +71,7 @@ export type ShipmentCargoType = 'good' | 'defect'
 
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
-  | 'pack' | 'pack_correction' | 'move_return' | 'relocate'
+  | 'pack' | 'pack_correction' | 'move_return' | 'relocate' | 'return_to_packing' | 'reject'
 
 export type ShipmentOp = {
   id:               string
@@ -435,6 +438,14 @@ export function returnShipmentLineFromPacking(docId: string, lineId: string, qty
 
 export function advanceShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, { method: 'POST' })
+}
+
+// Отклонить задачу упаковки на приёмке (assigned → draft) с причиной — возврат менеджеру.
+export function rejectShipment(id: string, reason: string) {
+  return request<{ message: string }>(`/shipments/${id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
 }
 
 // Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или

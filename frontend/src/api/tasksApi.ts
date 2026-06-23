@@ -7,6 +7,7 @@ export type TaskKind =
   | 'receipt_intake'
   | 'receipt_review'
   | 'receipt_close_short'
+  | 'shipment_accept'
   | 'shipment_move_in'
   | 'shipment_pack'
   | 'shipment_relocate'

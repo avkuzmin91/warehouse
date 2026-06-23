@@ -67,11 +67,20 @@ class TripArrivalPayload(BaseModel):
     arrived_at: str | None = None
 
 
-class TripUnloadReceiptLine(BaseModel):
-    line_id: str                       # receipt_line_id
-    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке
+class TripUnloadPlacement(BaseModel):
     storage_zone_id: str | None = None
     storage_zone_name: str | None = None
+    qty: int = Field(ge=0)
+
+
+class TripUnloadReceiptLine(BaseModel):
+    line_id: str                       # receipt_line_id
+    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке (= сумме placements)
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+    # Раскладка принятого по нескольким ячейкам. Пусто → одна ячейка (accepted_qty в
+    # storage_zone_id), как было исторически.
+    placements: list[TripUnloadPlacement] = Field(default_factory=list)
 
 
 class TripUnloadPayload(BaseModel):

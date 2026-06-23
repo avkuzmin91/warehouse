@@ -6,6 +6,7 @@ from config import (
     DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -49,6 +50,9 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     see_warehouse = role in (ROLE_WAREHOUSE, ROLE_WAREHOUSE_HEAD, "admin")
     see_manager = role in (ROLE_MANAGER, "admin")
     see_shift = role in (ROLE_SHIFT, ROLE_WAREHOUSE_HEAD, "admin")
+    # Приёмку задачи упаковки в работу делает начальник склада (менеджерский состав —
+    # как подстраховка через деталку); в очередь-карточек кладём её начальнику склада.
+    see_head = role in (ROLE_WAREHOUSE_HEAD, "admin")
     visible_roles = set()
     if see_warehouse:
         visible_roles.add(ROLE_WAREHOUSE)
@@ -56,6 +60,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         visible_roles.add(ROLE_MANAGER)
     if see_shift:
         visible_roles.add(ROLE_SHIFT)
+    if see_head:
+        visible_roles.add(ROLE_WAREHOUSE_HEAD)
     if not visible_roles:
         return []
 
@@ -123,6 +129,24 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_type": "shipment", "doc_id": str(r["id"]),
                 "doc_number": str(r["doc_number"]), "status": status,
                 "role": task_role, "since": r["updated_at"] or r["created_at"],
+                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if ROLE_WAREHOUSE_HEAD in visible_roles:
+        # «Ожидает принятия» — менеджер поставил задачу упаковки, начальник склада
+        # принимает её в работу (или отклоняет). Брак-отгрузка этот шаг минует.
+        assigned_rows = connection.execute(
+            "SELECT id, doc_number, status, priority_rank, updated_at, created_at FROM shipment_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ?",
+            (SHIPMENT_STATUS_ASSIGNED,),
+        ).fetchall()
+        for r in assigned_rows:
+            tasks.append({
+                "kind": "shipment_accept",
+                "title": f"Принять в работу {r['doc_number']}",
+                "doc_type": "shipment", "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]), "status": SHIPMENT_STATUS_ASSIGNED,
+                "role": ROLE_WAREHOUSE_HEAD, "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 

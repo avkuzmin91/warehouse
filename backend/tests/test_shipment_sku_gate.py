@@ -105,8 +105,10 @@ def test_plan_passes_after_sku_assigned(admin_client, pending_product):
     assert detail["lines"][0]["sku_pending"] is False
     assert sku_base.upper() in detail["lines"][0]["product_sku"].upper()
 
-    adv = admin_client.post(f"/shipments/{doc_id}/advance")
-    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned (гейт SKU здесь)
+    assert adv.status_code == 200 and adv.json()["message"] == "assigned", adv.text
+    adv2 = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    assert adv2.status_code == 200 and adv2.json()["message"] == "packing", adv2.text
 
 
 def test_change_existing_sku_reflected_on_line(admin_client, pending_product):

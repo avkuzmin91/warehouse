@@ -700,17 +700,28 @@ def trip_unload(
             cascade_dispatches_to_shipped(conn, trip_id, str(doc_row["trip_number"]), uid)
             sync_actual_ship_date(conn, trip_id, doc_row["arrived_at"])
         else:
-            accepted_by_line = {x.line_id: x.accepted_qty for x in payload.receipt_lines}
-            zone_by_line = {
-                x.line_id: {
-                    "id": (x.storage_zone_id or "").strip() or None,
-                    "name": (x.storage_zone_name or "").strip() or None,
-                }
-                for x in payload.receipt_lines
-            }
+            placements_by_line: dict[str, list[dict]] = {}
+            for x in payload.receipt_lines:
+                if x.placements:
+                    placements_by_line[x.line_id] = [
+                        {
+                            "id": (p.storage_zone_id or "").strip() or None,
+                            "name": (p.storage_zone_name or "").strip() or None,
+                            "qty": int(p.qty or 0),
+                        }
+                        for p in x.placements
+                    ]
+                else:
+                    placements_by_line[x.line_id] = [
+                        {
+                            "id": (x.storage_zone_id or "").strip() or None,
+                            "name": (x.storage_zone_name or "").strip() or None,
+                            "qty": int(x.accepted_qty or 0),
+                        }
+                    ]
             receive_receipts_for_trip(
                 conn, trip_id, str(doc_row["trip_number"]), uid,
-                accepted_by_line=accepted_by_line, zone_by_line=zone_by_line,
+                placements_by_line=placements_by_line,
             )
             sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
         conn.commit()

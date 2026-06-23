@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
     MAX_UPLOAD_BYTES,
+    SHIPMENT_ACCEPT_ROLES,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
@@ -17,8 +18,10 @@ from config import (
     SHIPMENT_CANCELLABLE_STATUSES_DEFECT,
     SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_OP_REJECT,
     SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REVERT_TRANSITIONS,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
@@ -57,6 +60,7 @@ from modules.shipments.schemas import (
     ShipmentPackingProductivityResponse,
     ShipmentPackingResponse,
     ShipmentPriorityUpdate,
+    ShipmentRejectPayload,
     ShipmentReturnFromPackingPayload,
 )
 from modules.shipments.service import (
@@ -106,7 +110,11 @@ def _priority_label(rank: int | None) -> str:
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
-    if str(user["role"]) not in _FILE_EDIT_ROLES:
+    role = str(user["role"])
+    # Начальник склада правит файлы только на шаге приёмки задачи («Ожидает принятия»):
+    # вместе с правом поправить ТЗ это позволяет ему подготовить задачу к принятию.
+    allowed = role in _FILE_EDIT_ROLES or (role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED)
+    if not allowed:
         raise HTTPException(status_code=403, detail="Менять файлы может только менеджер")
     if status in _FILE_FINAL_STATUSES:
         raise HTTPException(status_code=400, detail="Нельзя менять файлы в финальном статусе документа")
@@ -672,18 +680,26 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
 def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_manager)):
     now = _now()
     uid = str(user["id"])
+    role = str(user["role"])
     fields = body.model_dump(exclude_unset=True)
-    if fields:
-        ensure_shipment_planning_access(user)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, actual_ship_date, priority_rank, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, actual_ship_date, priority_rank, client_id, comment FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         status = str(row["status"])
         if status not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
+        # Планирование (состав, реквизиты) ведёт менеджерский состав. Начальник склада
+        # на шаге приёмки задачи («Ожидает принятия») может поправить только ТЗ.
+        wh_head_review = role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED
+        if fields:
+            if wh_head_review:
+                if set(fields) - {"comment"}:
+                    raise HTTPException(status_code=403, detail="Начальник склада может править только техническое задание")
+            else:
+                ensure_shipment_planning_access(user)
         if "logistics_cost" in fields:
             ensure_cost_access(user)
         if "priority_rank" in fields:
@@ -717,6 +733,11 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                     (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
                      f"Дата отгрузки (факт): {_fmt_date(old_val)} → {_fmt_date(new_val)}", now, uid),
                 )
+        if "comment" in fields and (str(row["comment"] or "").strip()) != (fields["comment"] or ""):
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, "Техническое задание обновлено", now, uid),
+            )
         if "priority_rank" in fields:
             old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
             new_rank = fields["priority_rank"]
@@ -971,6 +992,40 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
         )
         conn.commit()
     return {"message": SHIPMENT_STATUS_CANCELLED}
+
+
+@router.post("/shipments/{doc_id}/reject")
+def reject_shipment(doc_id: str, body: ShipmentRejectPayload, user=Depends(_get_viewer)):
+    """Отклонить задачу упаковки на приёмке: возврат менеджеру (assigned → draft).
+
+    Доступно начальнику склада и менеджерскому составу (см. SHIPMENT_ACCEPT_ROLES).
+    Причина обязательна и фиксируется в журнале.
+    """
+    uid = str(user["id"])
+    now = _now()
+    if str(user["role"]) not in SHIPMENT_ACCEPT_ROLES:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    reason = body.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) != SHIPMENT_STATUS_ASSIGNED:
+            raise HTTPException(status_code=400, detail="Отклонить можно только задачу, ожидающую принятия")
+        conn.execute(
+            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
+            (SHIPMENT_STATUS_DRAFT, now, doc_id),
+        )
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_REJECT, f"Задача отклонена: {reason}", now, uid),
+        )
+        conn.commit()
+    return {"message": SHIPMENT_STATUS_DRAFT}
 
 
 @router.post("/shipments/{doc_id}/return-to-packing")

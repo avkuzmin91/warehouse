@@ -124,6 +124,10 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # ---------------------------------------------------------------------------
 
 SHIPMENT_STATUS_DRAFT             = "draft"
+# Менеджер поставил задачу, но склад ещё не взял её в работу: задача ждёт приёмки
+# начальником склада (он может принять, отклонить либо поправить ТЗ/файлы). Только
+# для годного груза — брак-отгрузка минует и упаковку, и этот шаг.
+SHIPMENT_STATUS_ASSIGNED          = "assigned"
 SHIPMENT_STATUS_PACKING           = "packing"
 SHIPMENT_STATUS_ON_PACKING        = "on_packing"
 SHIPMENT_STATUS_RELOCATING        = "relocating"
@@ -144,6 +148,7 @@ SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -165,6 +170,7 @@ SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:             "Создание",
+    SHIPMENT_STATUS_ASSIGNED:          "Ожидает принятия",
     SHIPMENT_STATUS_PACKING:           "В плане",
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
@@ -179,24 +185,35 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
 # Плановые переходы через /advance. relocating → packed не здесь: его делает
 # отдельный эндпоинт «Готово к рейсу» (раскладка по местам). packed — терминальный
 # исход задачи упаковки; отгрузку к рейсу далее возит домен dispatch.
+# draft → assigned: менеджер ставит задачу. assigned → packing: начальник склада
+# принимает её в работу (см. SHIPMENT_TRANSITION_ROLES) — только тогда склад начинает.
 SHIPMENT_TRANSITIONS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_ASSIGNED,
+    SHIPMENT_STATUS_ASSIGNED:   SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING:    SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_ON_PACKING: SHIPMENT_STATUS_RELOCATING,
 }
 
 # Роли, которым разрешён переход НА данный статус (целевой статус → роли).
-# В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
+# Ожидает принятия: менеджер ставит задачу. В плане (приёмка задачи): начальник склада
+# берёт в работу; менеджер тоже может — физически это делает второй менеджер, проверяя
+# первого. В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
 # начальник смены упаковал годный/брак и передаёт кладовщику.
 SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
-    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
+    SHIPMENT_STATUS_ASSIGNED:   frozenset({"manager", "admin"}),
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_head"}),
     SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
     SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor", "warehouse_head"}),
 }
 
+# Кто может принять/отклонить задачу упаковки на шаге «Ожидает принятия» — начальник
+# склада и менеджерский состав (см. примечание о роли в SHIPMENT_TRANSITION_ROLES).
+SHIPMENT_ACCEPT_ROLES: frozenset[str] = frozenset({"manager", "admin", "warehouse_head"})
+
 # Аннулировать можно только до передачи на упаковку включительно.
 SHIPMENT_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
 })
 
@@ -213,6 +230,7 @@ SHIPMENT_RETURN_TO_PACKING_STATUSES: frozenset[str] = frozenset({
 
 SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
 })
 
@@ -276,7 +294,7 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_INTAKE:      "На приёмке",
     INV_OP_STORAGE:     "На хранении",
     INV_OP_PACKING:     "На упаковке",
-    INV_OP_PACKED:      "Упаковано",
+    INV_OP_PACKED:      "Упакован",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",
     INV_OP_WRITTEN_OFF: "Списан",
@@ -328,6 +346,8 @@ SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
+# Начальник склада отклонил задачу: assigned → draft с причиной, возврат менеджеру.
+SHIPMENT_OP_REJECT          = "reject"
 SHIPMENT_OP_SHIP            = "ship"
 
 # ---------------------------------------------------------------------------
