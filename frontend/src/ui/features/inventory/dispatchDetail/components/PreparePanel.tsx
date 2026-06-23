@@ -7,10 +7,13 @@ import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
 import { NumberStep } from '../../shared/NumberStep'
 import { Icon } from '../../../../primitives/Icon'
+import { Badge } from '../../../../primitives/Badge'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
+import { Panel, ReadRow, RailPanel } from './processUI'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
+import { fmtDateLong } from '../../../../../utils/format'
 
 type Row = { zoneId: string; qty: number }
 type ZoneSource = { id: string; name: string; available: number }
@@ -140,36 +143,41 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
 
   const noun = isDefect ? 'брак' : 'товар'
 
+  const planTotal = lines.reduce((s, l) => s + l.qty, 0)
+  const pickedTotal = lines.reduce((s, l) => s + sumRows(allocs[l.id] ?? []), 0)
+  const linesReady = lines.filter((l) => sumRows(allocs[l.id] ?? []) === l.qty).length
+
   return (
-    <PhaseBlock
-      icon="archive"
-      title="Подготовка к отгрузке"
-      role="warehouse"
-      state="active"
-      hint={`Укажите, из каких ячеек берётся ${noun} по каждой строке — после «Отгрузка подготовлена» он перейдёт в «Готов к отгрузке» (зону отгрузки)`}
-      right={canEdit ? (
-        <button className="btn sm primary" disabled={saving} onClick={handlePrimary}>
-          <Icon name="check" size={12} />Отгрузка подготовлена
-        </button>
-      ) : undefined}
-    >
-      {lines.length === 0 ? (
-        <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
-          Нет позиций для подготовки.
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {showReasons && blockReasons.length > 0 && (
-            <div className="block-reasons" style={{ textAlign: 'left' }}>
-              {blockReasons.map((r, i) => (<div key={i}>· {r}</div>))}
-            </div>
-          )}
-          {!canEdit && (
-            <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-              Кладовщик указывает ячейки-источники, затем жмёт «Отгрузка подготовлена».
-            </div>
-          )}
-          {lines.map((line: DispatchLine) => {
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
+      <PhaseBlock
+        icon="archive"
+        title="Подготовка к отгрузке"
+        role="warehouse"
+        state="active"
+        hint={`Укажите, из каких ячеек берётся ${noun} по каждой строке — после «Отгрузка подготовлена» он перейдёт в «Готов к отгрузке» (зону отгрузки)`}
+        right={canEdit ? (
+          <button className="btn sm primary" disabled={saving} onClick={handlePrimary}>
+            <Icon name="check" size={12} />Отгрузка подготовлена
+          </button>
+        ) : undefined}
+      >
+        {lines.length === 0 ? (
+          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+            Нет позиций для подготовки.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {showReasons && blockReasons.length > 0 && (
+              <div className="block-reasons" style={{ textAlign: 'left' }}>
+                {blockReasons.map((r, i) => (<div key={i}>· {r}</div>))}
+              </div>
+            )}
+            {!canEdit && (
+              <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
+                Кладовщик указывает ячейки-источники, затем жмёт «Отгрузка подготовлена».
+              </div>
+            )}
+            {lines.map((line: DispatchLine) => {
             const rows = allocs[line.id] ?? []
             const sources = sourcesByLine.get(line.id) ?? []
             const options: ComboboxOption[] = sources.map((s) => ({ value: s.id, label: `${s.name} · ${s.available} шт` }))
@@ -233,8 +241,36 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
               </div>
             )
           })}
-        </div>
-      )}
-    </PhaseBlock>
+          </div>
+        )}
+      </PhaseBlock>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Panel icon="file" title="Основная информация">
+          <div style={{ padding: '0 2px' }}>
+            <ReadRow label="Клиент">{doc.client_name ?? '—'}</ReadRow>
+            <ReadRow label="Дата отгрузки (план)">{fmtDateLong(doc.ship_date)}</ReadRow>
+            <ReadRow label="Груз">
+              {isDefect ? <Badge tone="warning">Брак</Badge> : 'Товар'}
+            </ReadRow>
+          </div>
+        </Panel>
+
+        <RailPanel status={doc.status} ops={doc.ops} />
+
+        <Panel icon="chart" title="Готовность">
+          <div style={{ padding: '0 2px' }}>
+            <ReadRow label="Позиций" mono>{linesReady} / {lines.length}</ReadRow>
+            <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+            <ReadRow label="Набрано" mono>
+              <span style={{ color: pickedTotal === planTotal ? 'var(--c-success)' : 'var(--c-warning)' }}>{pickedTotal} шт</span>
+            </ReadRow>
+            <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+              <ReadRow label="Осталось набрать" mono strong>{Math.max(0, planTotal - pickedTotal)} шт</ReadRow>
+            </div>
+          </div>
+        </Panel>
+      </div>
+    </div>
   )
 }
