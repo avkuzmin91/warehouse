@@ -8,7 +8,10 @@ from fastapi import HTTPException
 from config import (
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
+    DISPATCH_OP_PREPARE,
+    DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_LABELS,
+    DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
     DISPATCH_TRIP_SELECTABLE_STATUSES,
@@ -60,15 +63,24 @@ def _doc_quality(connection, doc_id: str) -> str:
 
 
 def _source_ops(quality: str) -> list[str]:
-    """Корзины-источники отгрузки, в порядке приоритета списания.
+    """Корзины-источники для ГЕЙТА доступности (можно ли вообще подготовить отгрузку).
 
-    Годный проходит упаковку (packed → ready) и отгружается прежде всего из «Готов к
-    отгрузке» (`ready`), но раскладка в зону отгрузки — НЕ обязательна: если готового
-    остатка не хватает, отгрузка добирает прямо «На хранении» (`storage`). Поэтому
-    источник годного — `[ready, storage]` (сначала ready, затем storage).
-    Брак упаковку не проходит — он отгружается напрямую `storage`.
+    Проверяется на шаге «Передать в подготовку»: хватит ли товара там, где он сейчас
+    лежит. Годный после упаковки лежит «Готов к отгрузке» (`ready`), брак — «На
+    хранении» (`storage`). Совпадает с корзиной, из которой кладовщик заберёт товар
+    при подготовке (см. `_prep_source_op`).
     """
-    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_STORAGE]
+    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY]
+
+
+def _prep_source_op(quality: str) -> str:
+    """Корзина, ИЗ которой кладовщик забирает товар при подготовке к отгрузке.
+
+    Годный уже разложен «Готов к отгрузке» (`ready`) при упаковке — кладовщик берёт
+    его из ячеек хранения готового. Брак лежит «На хранении» (`storage`). В обоих
+    случаях подготовка переносит выбранное в `ready` в «Зону отгрузки».
+    """
+    return INV_OP_STORAGE if quality == INV_Q_DEFECT else INV_OP_READY
 
 
 def check_lines_have_sku(connection, doc_id: str) -> None:
@@ -109,6 +121,12 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
     source_ops = _source_ops(quality)
+    # Брак подготовка увозит из `storage` в `ready` (остаток физически уходит из
+    # источника), поэтому держат резерв на `storage` только ещё-не-подготовленные
+    # (preparing). Годный остаётся в `ready` до отгрузки — резерв держат все фиксации.
+    reserved_statuses = (
+        [DISPATCH_STATUS_PREPARING] if quality == INV_Q_DEFECT else None
+    )
 
     rows = connection.execute(
         """SELECT product_id, color_id, size_id,
@@ -131,6 +149,7 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
             client_id=client_id,
             quality=quality,
             ops=source_ops,
+            reserved_statuses=reserved_statuses,
             exclude_doc_id=doc_id,
         )
         demand = int(r["demand"] or 0)
@@ -160,7 +179,6 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     ).fetchone()
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
-    source_ops = _source_ops(quality)
 
     lines = connection.execute(
         "SELECT id, product_id, color_id, size_id "
@@ -174,19 +192,16 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
         key = (str(ln["product_id"]), ln["color_id"], ln["size_id"])
         if key in variant_ready_left:
             continue
-        total = 0
-        for op in source_ops:
-            zones = ready_zones_for_variant(
-                connection,
-                product_id=str(ln["product_id"]),
-                color_id=ln["color_id"],
-                size_id=ln["size_id"],
-                client_id=client_id,
-                quality=quality,
-                op=op,
-            )
-            total += sum(int(z["net"]) for z in zones)
-        variant_ready_left[key] = total
+        zones = ready_zones_for_variant(
+            connection,
+            product_id=str(ln["product_id"]),
+            color_id=ln["color_id"],
+            size_id=ln["size_id"],
+            client_id=client_id,
+            quality=quality,
+            op=INV_OP_READY,
+        )
+        variant_ready_left[key] = sum(int(z["net"]) for z in zones)
 
     result: dict[str, int] = {}
     for ln in lines:
@@ -243,6 +258,175 @@ def _insert_shipped_move(
     )
 
 
+def _insert_prep_move(
+    connection, *,
+    line, client_id: str | None, client_name: str | None, quality: str,
+    from_op: str, to_op: str,
+    from_zone_id: str | None, from_zone_name: str | None,
+    to_zone_id: str | None, to_zone_name: str | None,
+    qty: int, user_id: str | None, dispatch_line_id: str,
+    comment: str | None, reverses_id: str | None = None,
+) -> None:
+    """Журнальное движение подготовки к отгрузке (`from_op` → `to_op`) с атрибуцией к строке.
+
+    Прямой INSERT в zone_relocations (а не insert_inventory_move): движение нужно
+    привязать к dispatch_line_id, которого нет в сигнатуре balances.insert_inventory_move.
+    `line` — строка отгрузки или (при сторно) запись журнала: достаточно полей
+    product/color/size. Используется и для прямой подготовки (… → ready@зона отгрузки),
+    и для её сторно при аннулировании (ready@зона отгрузки → …).
+    """
+    connection.execute(
+        """INSERT INTO zone_relocations
+           (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
+            client_id,client_name,from_op,to_op,from_quality,to_quality,
+            from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
+            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id,dispatch_line_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (str(uuid4()), str(line["product_id"]), line["product_name"], line["product_sku"],
+         line["color_id"], line["color_name"], line["size_id"], line["size_name"],
+         client_id, client_name, from_op, to_op, quality, quality,
+         from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
+         _now(), user_id, None,
+         None, None, reverses_id, None, None, None, dispatch_line_id),
+    )
+
+
+def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
+    """«Отгрузка подготовлена»: кладовщик указывает ячейки-источники, товар → «Готов к отгрузке».
+
+    По каждой строке — источники (ячейка + кол-во, можно несколько); суммы должны
+    точно покрыть план строки. Выбранное переезжает в «Готов к отгрузке» (`ready`) в
+    «Зону отгрузки»: годный из ячеек готового (`ready`@ячейка), брак — «На хранении»
+    (`storage`@ячейка). Списания нет — отгрузку увозит рейс из зоны отгрузки. Переводит
+    preparing → awaiting_trip.
+    """
+    from modules.balances.service import get_available_in_zone, get_shipping_zone
+
+    doc = connection.execute(
+        "SELECT status, cargo_type, client_id, client_name FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if str(doc["status"]) != DISPATCH_STATUS_PREPARING:
+        raise HTTPException(status_code=400, detail="Отметить подготовку можно только в статусе «Подготовка отгрузки»")
+
+    quality = _doc_quality(connection, doc_id)
+    source_op = _prep_source_op(quality)
+    is_defect = quality == INV_Q_DEFECT
+    client_id = doc["client_id"]
+
+    lines = connection.execute(
+        "SELECT * FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchall()
+    if not lines:
+        raise HTTPException(status_code=400, detail="Добавьте товар")
+    inputs_by_id = {str(li.line_id): li for li in (line_inputs or [])}
+
+    shipping_id, shipping_name = get_shipping_zone(connection)
+
+    total_moved = 0
+    for line in lines:
+        line_id = str(line["id"])
+        qty = int(line["qty"] or 0)
+        li = inputs_by_id.get(line_id)
+        sources = list(li.sources) if li else []
+        if sum(int(s.qty or 0) for s in sources) != qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Укажите, из каких ячеек берётся весь товар для «{line['product_name']}» (нужно {qty} шт.)",
+            )
+        label = line["product_sku"] or line["product_name"]
+        for src in sources:
+            zone_id = (src.zone_id or "").strip()
+            src_qty = int(src.qty or 0)
+            if not zone_id:
+                raise HTTPException(status_code=400, detail="Выберите ячейку-источник для каждой строки")
+            if zone_id == shipping_id:
+                raise HTTPException(status_code=400, detail="Выберите ячейку хранения, а не зону отгрузки")
+            if src_qty <= 0:
+                raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+            available = get_available_in_zone(
+                connection,
+                product_id=str(line["product_id"]),
+                color_id=line["color_id"],
+                size_id=line["size_id"],
+                client_id=client_id,
+                zone_id=zone_id,
+                op=source_op,
+                quality=quality,
+            )
+            if available < src_qty:
+                zone_label = src.zone_name or "Без места"
+                avail_word = "брака" if is_defect else "товара"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Недостаточно {avail_word} в ячейке «{zone_label}» для «{line['product_name']}» "
+                        f"(нужно {src_qty}, доступно {available})"
+                    ),
+                )
+            _insert_prep_move(
+                connection,
+                line=line, client_id=client_id, client_name=doc["client_name"], quality=quality,
+                from_op=source_op, to_op=INV_OP_READY,
+                from_zone_id=zone_id, from_zone_name=src.zone_name,
+                to_zone_id=shipping_id, to_zone_name=shipping_name,
+                qty=src_qty, user_id=user_id, dispatch_line_id=line_id,
+                comment=f"Подготовка к отгрузке: {src_qty} шт → {shipping_name} — {label}",
+            )
+            total_moved += src_qty
+
+    if total_moved <= 0:
+        raise HTTPException(status_code=400, detail="Нет товара для подготовки к отгрузке")
+
+    now = _now()
+    connection.execute(
+        "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
+        (DISPATCH_STATUS_AWAITING_TRIP, now, doc_id),
+    )
+    connection.execute(
+        "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, DISPATCH_OP_PREPARE,
+         f"Подготовка отгрузки → Ожидает рейс: {total_moved} шт. в «{shipping_name}»", now, user_id),
+    )
+    return DISPATCH_STATUS_AWAITING_TRIP
+
+
+def return_prepared_stock(connection, doc_id: str, user_id: str) -> None:
+    """Возврат подготовленного товара из «Зоны отгрузки» обратно по исходным ячейкам.
+
+    Вызывается при аннулировании подготовленной отгрузки (awaiting_trip): каждое
+    движение подготовки (… → ready@зона отгрузки) сторнируется обратной записью
+    ready@зона отгрузки → исходная корзина/ячейка. Без commit — коммитит вызывающий.
+    Списанное рейсом не трогаем (аннулировать можно только до отправки).
+    """
+    moves = connection.execute(
+        """SELECT * FROM zone_relocations
+           WHERE dispatch_line_id IN (SELECT id FROM dispatch_lines WHERE doc_id = ?)
+             AND to_op = ? AND reverses_id IS NULL""",
+        (doc_id, INV_OP_READY),
+    ).fetchall()
+    for mv in moves:
+        already = connection.execute(
+            "SELECT 1 FROM zone_relocations WHERE reverses_id = ?", (str(mv["id"]),)
+        ).fetchone()
+        if already:
+            continue
+        _insert_prep_move(
+            connection,
+            line=mv, client_id=mv["client_id"], client_name=mv["client_name"],
+            quality=str(mv["to_quality"]),
+            from_op=INV_OP_READY, to_op=str(mv["from_op"]),
+            from_zone_id=mv["to_zone_id"], from_zone_name=mv["to_zone_name"],
+            to_zone_id=mv["from_zone_id"], to_zone_name=mv["from_zone_name"],
+            qty=int(mv["qty"]), user_id=user_id, dispatch_line_id=str(mv["dispatch_line_id"]),
+            comment=f"Возврат подготовки при аннулировании: {int(mv['qty'])} шт.",
+            reverses_id=str(mv["id"]),
+        )
+
+
 def consume_stock_for_dispatch(
     connection, doc_id: str, user_id: str,
     *, alloc: dict[str, int] | None = None, trip_id: str | None = None,
@@ -265,9 +449,7 @@ def consume_stock_for_dispatch(
     client_id = doc_row["client_id"] if doc_row else None
     client_name = doc_row["client_name"] if doc_row else None
     quality = INV_Q_DEFECT if cargo_type == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
-    source_ops = _source_ops(quality)
     comment_prefix = "Отгрузка брака" if cargo_type == DISPATCH_CARGO_DEFECT else "Отгрузка"
-    avail_word = "брака на хранении" if cargo_type == DISPATCH_CARGO_DEFECT else "товара (готового и на хранении)"
 
     from modules.balances.service import ready_zones_for_variant
 
@@ -278,20 +460,17 @@ def consume_stock_for_dispatch(
 
     for line in lines:
         line_id = str(line["id"])
-        # Корзины-источники в порядке приоритета (ready раньше storage для годного),
-        # каждая помечена своим `op` — он пишется во `from_op` журнальной записи.
-        zones: list[dict] = []
-        for op in source_ops:
-            for z in ready_zones_for_variant(
-                connection,
-                product_id=str(line["product_id"]),
-                color_id=line["color_id"],
-                size_id=line["size_id"],
-                client_id=client_id,
-                quality=quality,
-                op=op,
-            ):
-                zones.append({**z, "op": op})
+        # Списываем из «Готов к отгрузке» (`ready`): подготовка свезла туда выбранные
+        # кладовщиком ячейки (годный и брак) в «Зону отгрузки».
+        zones = ready_zones_for_variant(
+            connection,
+            product_id=str(line["product_id"]),
+            color_id=line["color_id"],
+            size_id=line["size_id"],
+            client_id=client_id,
+            quality=quality,
+            op=INV_OP_READY,
+        )
         available = sum(int(z["net"]) for z in zones)
         target = int(alloc.get(line_id, 0)) if alloc is not None else available
         if target <= 0:
@@ -299,7 +478,7 @@ def consume_stock_for_dispatch(
         if target > available:
             raise HTTPException(
                 status_code=400,
-                detail=f"Недостаточно {avail_word} для отгрузки: нужно {target}, есть {available}",
+                detail=f"Недостаточно товара в «Готов к отгрузке» для отгрузки: нужно {target}, есть {available}",
             )
 
         shipped_total = 0
@@ -311,7 +490,7 @@ def consume_stock_for_dispatch(
             _insert_shipped_move(
                 connection,
                 line=line, client_id=client_id, client_name=client_name, quality=quality,
-                from_op=src["op"],
+                from_op=INV_OP_READY,
                 from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
                 qty=take, user_id=user_id, dispatch_line_id=line_id, trip_id=trip_id,
                 comment=f"{comment_prefix}: {take} шт.",

@@ -53,6 +53,21 @@ class DispatchPriorityUpdate(BaseModel):
     priority_rank: int | None = Field(default=None, ge=1, le=2)
 
 
+class DispatchPrepareSource(BaseModel):
+    zone_id:   str
+    zone_name: str | None = None
+    qty:       int = Field(ge=1)
+
+
+class DispatchPrepareLine(BaseModel):
+    line_id: str
+    sources: list[DispatchPrepareSource] = []
+
+
+class DispatchFinishPreparationPayload(BaseModel):
+    lines: list[DispatchPrepareLine] = []
+
+
 class DispatchLineItem(BaseModel):
     id:           str
     product_id:   str

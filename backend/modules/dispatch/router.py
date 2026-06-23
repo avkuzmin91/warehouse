@@ -17,7 +17,6 @@ from config import (
     DISPATCH_OP_LINE_ADD,
     DISPATCH_OP_LINE_DELETE,
     DISPATCH_OP_LINE_UPDATE,
-    DISPATCH_OP_PREPARE,
     DISPATCH_OP_PRIORITY_UPDATE,
     DISPATCH_PRIORITY_LABELS,
     DISPATCH_STATUS_AWAITING_TRIP,
@@ -34,6 +33,7 @@ from modules.dispatch.schemas import (
     DispatchDetailResponse,
     DispatchDocCreate,
     DispatchDocUpdate,
+    DispatchFinishPreparationPayload,
     DispatchLineIn,
     DispatchLineUpdate,
     DispatchListItem,
@@ -48,6 +48,8 @@ from modules.dispatch.service import (
     list_dispatches_aggregated,
     next_doc_number,
     normalize_cargo_type,
+    prepare_to_ready,
+    return_prepared_stock,
 )
 
 router = APIRouter(tags=["dispatch"])
@@ -411,33 +413,20 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/dispatches/{doc_id}/finish-preparation")
-def finish_dispatch_preparation(doc_id: str, user=Depends(_get_manager)):
+def finish_dispatch_preparation(doc_id: str, body: DispatchFinishPreparationPayload, user=Depends(_get_manager)):
     """Кладовщик закончил подготовку отгрузки (preparing → awaiting_trip).
 
-    Доступ — менеджерский состав + кладовщик/начальник склада (get_current_manager).
-    Идемпотентно невозможно: гейт по статусу. Если рейс уже увёз отгрузку (статус
-    проскочил в shipped/partially_shipped), кнопка недоступна — задача снята сама.
+    Кладовщик указывает ячейки-источники по каждой строке — выбранное переезжает в
+    «Готов к отгрузке» (зона отгрузки). Доступ — менеджерский состав + кладовщик/
+    начальник склада (get_current_manager). Идемпотентно невозможно: гейт по статусу.
+    Если рейс уже увёз отгрузку (статус проскочил в shipped/partially_shipped), кнопка
+    недоступна — задача снята сама.
     """
-    now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) != DISPATCH_STATUS_PREPARING:
-            raise HTTPException(status_code=400, detail="Отметить подготовку можно только в статусе «Подготовка отгрузки»")
-        conn.execute(
-            "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (DISPATCH_STATUS_AWAITING_TRIP, now, doc_id),
-        )
-        conn.execute(
-            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, DISPATCH_OP_PREPARE, "Подготовка отгрузки → Ожидает рейс", now, uid),
-        )
+        next_status = prepare_to_ready(conn, doc_id, body.lines, uid)
         conn.commit()
-    return {"message": DISPATCH_STATUS_AWAITING_TRIP}
+    return {"message": next_status}
 
 
 @router.post("/dispatches/{doc_id}/cancel")
@@ -452,6 +441,8 @@ def cancel_dispatch(doc_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in DISPATCH_CANCELLABLE_STATUSES:
             raise HTTPException(status_code=400, detail="Документ нельзя аннулировать в текущем статусе")
+        if str(row["status"]) == DISPATCH_STATUS_AWAITING_TRIP:
+            return_prepared_stock(conn, doc_id, uid)
         conn.execute(
             "UPDATE dispatch_docs SET status = ?, priority_rank = NULL, updated_at = ? WHERE id = ?",
             (DISPATCH_STATUS_CANCELLED, now, doc_id),

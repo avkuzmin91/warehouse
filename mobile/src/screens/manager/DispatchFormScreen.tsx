@@ -14,6 +14,7 @@ import { AssignSkuSheet } from './AssignSkuSheet'
 type DraftLine = DispatchLineIn & {
   _uid: string
   _key: string
+  ready: number
   onHand: number
   inTransit: number
   sku_pending: boolean
@@ -59,7 +60,7 @@ export function DispatchFormScreen() {
   }, [clientId])
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
-  const allOnStock = lines.every((l) => l.qty <= l.onHand)
+  const allOnStock = lines.every((l) => l.qty <= l.ready + l.onHand)
   const costNum = Number(logisticsCost)
   const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
 
@@ -96,6 +97,7 @@ export function DispatchFormScreen() {
         size_id: b.size_id,
         size_name: b.size_name,
         qty,
+        ready: cargoType === 'defect' ? 0 : b.ready_good,
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
         inTransit: cargoType === 'defect' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
@@ -213,8 +215,8 @@ export function DispatchFormScreen() {
           </div>
         ) : (
           lines.map((l) => {
-            const overCap = l.qty > l.onHand + l.inTransit
-            const waiting = !overCap && l.qty > l.onHand
+            const overCap = l.qty > l.ready + l.onHand + l.inTransit
+            const waiting = !overCap && l.qty > l.ready + l.onHand
             return (
               <div key={l._uid} style={{ padding: '10px 0', borderBottom: '1px solid var(--c-border)' }}>
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
@@ -222,7 +224,10 @@ export function DispatchFormScreen() {
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
                     <div className="tile-meta">{lineSub(l)}</div>
                     <div className="tile-meta">
-                      склад {l.onHand}{!isDefect && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
+                      {isDefect
+                        ? `брак ${l.onHand}`
+                        : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
+                      {!isDefect && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
                       {overCap ? ' · превышение' : waiting ? ' · ждёт прихода' : ''}
                     </div>
                   </div>
@@ -311,6 +316,7 @@ export function DispatchFormScreen() {
         <BalancePickerSheet
           clientId={clientId}
           cargoType={cargoType}
+          source="dispatch"
           existingKeys={lines.map((l) => l._key)}
           onAddMany={addMany}
           onClose={() => setShowPicker(false)}

@@ -9,6 +9,13 @@ import { NumberStep } from './NumberStep'
 type Props = {
   clientId: string | null
   cargoType: ShipmentCargoType
+  /**
+   * `pack` — выбор для «Задачи упаковки»: источник годного «На хранении» (`storage`),
+   * товар ещё предстоит упаковать. `dispatch` — выбор для «Отгрузки»: годный отдаётся
+   * прежде всего из «Упаковано» (`ready`), поэтому именно упакованное — главная цифра;
+   * «на складе»/«в пути» добираются и упаковываются при подготовке (бэкенд это допускает).
+   */
+  source?: 'pack' | 'dispatch'
   onAdd: (item: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) => void
   /**
    * Если задан — включается режим массового выбора: отметить несколько позиций
@@ -20,11 +27,13 @@ type Props = {
 
 // Годный груз планируется из свободного годного «На хранении» + товара в пути
 // (заявлен в поступлении, ещё не приехал). Брак планируется из суммарного брака
-// «На хранении» (в пути брак не считаем). Местоположение-источник годного выбирает
+// «На хранении» (в пути брак не считаем). Для отгрузки добавляется «Упаковано»
+// (ready) — приоритетный источник годного. Местоположение-источник годного выбирает
 // кладовщик при передаче на упаковку; брака — при подготовке.
 type PickRow = {
   item: PlannableItem
-  onHand: number
+  ready: number
+  storage: number
   inTransit: number
   cap: number
 }
@@ -33,7 +42,7 @@ function rowKey(item: PlannableItem): string {
   return `${item.product_id}|${item.color_id ?? ''}|${item.size_id ?? ''}`
 }
 
-export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }: Props) {
+export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onAddMany, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [rows, setRows] = useState<PickRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -42,6 +51,8 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
 
   const multi = !!onAddMany
   const isDefect = cargoType === 'defect'
+  // Упакованное как главная цифра — только для отгрузки годного: при упаковке брак не проходит.
+  const dispatchGood = source === 'dispatch' && !isDefect
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -55,9 +66,10 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
       .then((res) => {
         if (ctrl.signal.aborted) return
         const next = res.items.map((b): PickRow => {
-          const onHand = isDefect ? b.storage_defect : b.storage_good
+          const ready = dispatchGood ? b.ready_good : 0
+          const storage = isDefect ? b.storage_defect : b.storage_good
           const inTransit = isDefect ? 0 : b.in_transit
-          return { item: b, onHand, inTransit, cap: onHand + inTransit }
+          return { item: b, ready, storage, inTransit, cap: ready + storage + inTransit }
         })
         setRows(next)
       })
@@ -67,10 +79,25 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
         setLoading(false)
       })
     return () => ctrl.abort()
-  }, [search, clientId, cargoType, isDefect])
+  }, [search, clientId, cargoType, isDefect, dispatchGood])
+
+  // Главная цифра позиции: для отгрузки годного — упаковано, иначе — остаток на складе/брак.
+  function primaryQty(row: PickRow): number {
+    return dispatchGood ? row.ready : row.storage
+  }
+  const primaryLabel = dispatchGood ? 'упаковано' : isDefect ? 'брак' : 'на складе'
+
+  // Хвост подсказки под главной цифрой: что добирается к упакованному.
+  function secondaryText(row: PickRow): string {
+    const parts: string[] = []
+    if (dispatchGood && row.storage > 0) parts.push(`склад ${row.storage}`)
+    if (!isDefect && row.inTransit > 0) parts.push(`в пути ${row.inTransit}`)
+    return parts.join(' · ')
+  }
 
   function defaultQty(row: PickRow): number {
-    return row.onHand > 0 ? row.onHand : (row.cap > 0 ? row.cap : 1)
+    const p = primaryQty(row)
+    return p > 0 ? p : (row.cap > 0 ? row.cap : 1)
   }
 
   function toggle(row: PickRow) {
@@ -103,8 +130,9 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
   const selectedSum = selectedList.reduce((s, e) => s + e.qty, 0)
 
   const cap = pending ? pending.row.cap : 0
-  const onHand = pending ? pending.row.onHand : 0
-  const overStock = pending ? pending.qty > onHand : false
+  // Доступно к передаче в подготовку сразу (без ожидания прихода): упаковано + склад.
+  const onStock = pending ? pending.row.ready + pending.row.storage : 0
+  const overTransit = pending ? pending.qty > onStock : false
 
   return (
     <>
@@ -124,7 +152,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
             <div>
               <div style={{ fontWeight: 600, fontSize: 15 }}>Подобрать товар</div>
               <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-                {isDefect ? 'Брак на хранении' : 'Годный товар на хранении и в пути'}
+                {isDefect ? 'Брак на хранении' : dispatchGood ? 'Упакованный товар, на складе и в пути' : 'Годный товар на хранении и в пути'}
                 {clientId ? ' · по выбранному клиенту' : ''}
               </div>
             </div>
@@ -172,13 +200,21 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
                 )}
                 {[pending.row.item.product_sku, pending.row.item.color_name, pending.row.item.size_name].filter(Boolean).join(' · ')}
               </div>
-              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)', display: 'flex', gap: 16 }}>
+              <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>
-                  На складе:{' '}
+                  {dispatchGood ? 'Упаковано' : isDefect ? 'Брак' : 'На складе'}:{' '}
                   <span className="mono" style={{ fontWeight: 600, color: isDefect ? 'var(--c-warning)' : 'var(--c-success)' }}>
-                    {onHand}
+                    {primaryQty(pending.row)}
                   </span> шт
                 </span>
+                {dispatchGood && pending.row.storage > 0 && (
+                  <span>
+                    На складе:{' '}
+                    <span className="mono" style={{ fontWeight: 600, color: 'var(--c-text-subtle)' }}>
+                      {pending.row.storage}
+                    </span> шт
+                  </span>
+                )}
                 {!isDefect && pending.row.inTransit > 0 && (
                   <span>
                     В пути:{' '}
@@ -203,13 +239,17 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
                 />
                 {pending.qty > cap ? (
                   <div style={{ fontSize: 12, color: 'var(--c-warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Icon name="alert" size={12} />Превышает остаток и товар в пути ({cap} шт)
+                    <Icon name="alert" size={12} />Превышает доступное ({cap} шт)
                   </div>
-                ) : overStock && (
+                ) : overTransit ? (
                   <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Icon name="clock" size={12} />Часть из товара в пути — отгрузку можно запланировать после прихода
                   </div>
-                )}
+                ) : dispatchGood && pending.qty > pending.row.ready ? (
+                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="boxes" size={12} />Часть со склада — упакуют при подготовке
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -223,6 +263,7 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
               rows.map((row, i) => {
                 const k = rowKey(row.item)
                 const checked = !!selected[k]
+                const secondary = secondaryText(row)
                 return (
                   <div
                     key={`${k}__${i}`}
@@ -262,21 +303,21 @@ export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }
                           width={104}
                         />
                         <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
-                          {isDefect ? 'брак' : 'на складе'} {row.onHand}{!isDefect && row.inTransit > 0 ? ` · в пути ${row.inTransit}` : ''}
+                          {primaryLabel} {primaryQty(row)}{secondary ? ` · ${secondary}` : ''}
                         </div>
                       </div>
                     ) : (
                       <>
                         <div style={{ textAlign: 'right', flexShrink: 0 }}>
                           <div className="mono" style={{ color: isDefect ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
-                            {row.onHand}
+                            {primaryQty(row)}
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>
-                            {isDefect ? 'брак' : 'на складе'}
+                            {primaryLabel}
                           </div>
-                          {!isDefect && row.inTransit > 0 && (
+                          {secondary && (
                             <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 1 }}>
-                              +{row.inTransit} в пути
+                              {secondary}
                             </div>
                           )}
                         </div>

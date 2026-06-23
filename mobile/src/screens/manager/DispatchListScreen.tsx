@@ -18,7 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function DispatchListScreen() {
-  const { openDispatchNew, openDispatchDoc } = useNav()
+  const { openDispatchNew, openDispatchDoc, back } = useNav()
   const [items, setItems] = useState<DispatchListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -44,7 +44,7 @@ export function DispatchListScreen() {
 
   return (
     <div className="screen">
-      <AppBar title="Отгрузки" sub="Документы отгрузки" />
+      <AppBar title="Отгрузки" sub="Документы отгрузки" onBack={back} />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
         <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openDispatchNew}>
           <Icon name="plus" size={16} /> Новая отгрузка

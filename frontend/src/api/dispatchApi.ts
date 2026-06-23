@@ -287,8 +287,14 @@ export function advanceDispatch(id: string) {
   return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
 }
 
-export function finishDispatchPreparation(id: string) {
-  return request<{ message: string }>(`/dispatches/${id}/finish-preparation`, { method: 'POST' })
+export type DispatchPrepareSource = { zone_id: string; zone_name: string | null; qty: number }
+export type DispatchPrepareLine = { line_id: string; sources: DispatchPrepareSource[] }
+
+export function finishDispatchPreparation(id: string, lines: DispatchPrepareLine[]) {
+  return request<{ message: string }>(`/dispatches/${id}/finish-preparation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+  })
 }
 
 export function cancelDispatch(id: string) {

@@ -25,7 +25,7 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = DispatchLineIn & { _uid: string; onHand: number; inTransit: number; sku_pending: boolean }
+type DraftLine = DispatchLineIn & { _uid: string; ready: number; onHand: number; inTransit: number; sku_pending: boolean }
 
 export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoType }) {
   const navigate = useNavigate()
@@ -65,11 +65,13 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
 
   const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
-  // Сверх остатка готового, но в пределах «склад + в пути» — товар ещё не на готовом:
-  // черновик сохранить можно, передать в ожидание рейса — только когда покрыт остаток.
-  const hasInTransit = lines.some((l) => l.qty > l.onHand && l.qty <= l.onHand + l.inTransit)
-  const hasOverCap = lines.some((l) => l.qty > l.onHand + l.inTransit)
-  const allOnStock = lines.every((l) => l.qty <= l.onHand)
+  // Доступно к передаче в подготовку сразу — «упаковано + склад» (ready + storage):
+  // бэкенд отгружает годный прежде всего из упакованного, добирая со склада. Сверх этого,
+  // но в пределах «+ в пути» — черновик сохранить можно, передать в подготовку — только
+  // когда товар придёт.
+  const hasInTransit = lines.some((l) => l.qty > l.ready + l.onHand && l.qty <= l.ready + l.onHand + l.inTransit)
+  const hasOverCap = lines.some((l) => l.qty > l.ready + l.onHand + l.inTransit)
+  const allOnStock = lines.every((l) => l.qty <= l.ready + l.onHand)
   const logisticsCostNumber = Number(logisticsCost)
   const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
@@ -119,6 +121,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       size_id:      b.size_id,
       size_name:    b.size_name,
       qty,
+      ready:        isDefectCargo ? 0 : b.ready_good,
       onHand:       isDefectCargo ? b.storage_defect : b.storage_good,
       inTransit:    isDefectCargo ? 0 : b.in_transit,
       sku_pending:  !!b.sku_pending,
@@ -298,8 +301,8 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                 </thead>
                 <tbody>
                   {lines.map((l) => {
-                    const overCap = l.qty > l.onHand + l.inTransit
-                    const waiting = !overCap && l.qty > l.onHand
+                    const overCap = l.qty > l.ready + l.onHand + l.inTransit
+                    const waiting = !overCap && l.qty > l.ready + l.onHand
                     return (
                       <tr key={l._uid} style={overCap ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td>
@@ -355,7 +358,10 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                             ) : null}
                           </div>
                           <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
-                            на складе {l.onHand}{!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
+                            {isDefectCargo
+                              ? `брак ${l.onHand}`
+                              : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
+                            {!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
                           </div>
                         </td>
                         <td>
@@ -407,6 +413,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         <BalancePicker
           clientId={clientId}
           cargoType={cargoType}
+          source="dispatch"
           onAdd={(b, qty) => { addFromBalance(b, qty); setShowPicker(false) }}
           onAddMany={addManyFromBalance}
           onClose={() => setShowPicker(false)}

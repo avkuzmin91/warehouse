@@ -37,7 +37,7 @@ def _seed_ready(client_id: str, *, product_id: str, sku: str, qty: int,
     from modules.balances.service import insert_inventory_move
 
     if quality == "defect":
-        from_op, to_op, to_zone_id, to_zone_name = "intake", "storage", None, None
+        from_op, to_op, to_zone_id, to_zone_name = "intake", "storage", "zone-store-def", "Хранение брак"
     else:
         from_op, to_op, to_zone_id, to_zone_name = "packing", "ready", "zone-ready", "Готов"
     with get_connection() as conn:
@@ -81,11 +81,27 @@ def _create_dispatch(admin_client, client_id: str, *, qty: int, cargo: str = "go
     return doc_id, line_id, pid
 
 
+def _finish_prep(admin_client, doc_id: str, cargo: str = "good"):
+    """POST finish-preparation: кладовщик берёт всю каждую строку из засеянной ячейки.
+
+    Источник зависит от груза: годный — ячейка готового (`zone-ready`), брак — ячейка
+    хранения брака (`zone-store-def`).
+    """
+    cell = ("zone-store-def", "Хранение брак") if cargo == "defect" else ("zone-ready", "Готов")
+    lines = admin_client.get(f"/dispatches/{doc_id}").json()["lines"]
+    body = {"lines": [
+        {"line_id": l["id"], "sources": [{"zone_id": cell[0], "zone_name": cell[1], "qty": l["qty"]}]}
+        for l in lines
+    ]}
+    return admin_client.post(f"/dispatches/{doc_id}/finish-preparation", json=body)
+
+
 def _awaiting_dispatch(admin_client, client_id: str, *, qty: int = 10, ready: int | None = None,
                        cargo: str = "good", sku: str = "SKU-D") -> tuple[str, str, str]:
-    """Отгрузка в статусе «Ожидает рейс»: сеет ready по варианту, создаёт и продвигает.
+    """Отгрузка в статусе «Ожидает рейс»: сеет остаток по варианту, создаёт и подготавливает.
 
-    Гейт перевода требует ready ≥ полного плана строки, поэтому ready по умолчанию = qty.
+    Гейт перевода требует остаток ≥ полного плана строки, поэтому остаток по умолчанию = qty.
+    Кладовщик указывает ячейку-источник, товар переезжает в «Готов к отгрузке».
     """
     ready = qty if ready is None else ready
     quality = "defect" if cargo == "defect" else "good"
@@ -96,7 +112,7 @@ def _awaiting_dispatch(admin_client, client_id: str, *, qty: int = 10, ready: in
     adv = admin_client.post(f"/dispatches/{doc_id}/advance")
     assert adv.status_code == 200, adv.text
     assert adv.json()["message"] == "preparing"
-    fin = admin_client.post(f"/dispatches/{doc_id}/finish-preparation")
+    fin = _finish_prep(admin_client, doc_id, cargo)
     assert fin.status_code == 200, fin.text
     assert fin.json()["message"] == "awaiting_trip"
     return doc_id, line_id, pid
@@ -191,16 +207,20 @@ def test_outbound_unload_blocked_for_draft_dispatch(admin_client, client_id):
 
     blocked = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
     assert blocked.status_code == 400, blocked.text
-    assert "не готовы к рейсу" in blocked.json()["detail"]
+    assert "не подготовлены к отгрузке" in blocked.json()["detail"]
     assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
 
-    # Передаём кладовщику в подготовку — рейс уже можно грузить, не дожидаясь его отметки.
+    # Передаём кладовщику в подготовку — рейс всё ещё нельзя грузить, пока товар не подготовлен.
     assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "preparing"
+    still_blocked = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
+    assert still_blocked.status_code == 400, still_blocked.text
+
+    # Кладовщик указал ячейки и подготовил отгрузку → рейс можно грузить.
+    assert _finish_prep(admin_client, doc_id).status_code == 200
     ok = admin_client.post(f"/trips/{trip_id}/unload", json={
         "load_factor": "full", "unload_started_at": "2026-06-10T07:35", "unload_finished_at": "2026-06-10T08:10",
     })
     assert ok.status_code == 200, ok.text
-    # Рейс уехал прямо из подготовки — задача снята с кладовщика, отгрузка проскочила в «Отгружено».
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "shipped"
 
 

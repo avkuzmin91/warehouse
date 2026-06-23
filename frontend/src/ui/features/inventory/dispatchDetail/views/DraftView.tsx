@@ -339,6 +339,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
         <BalancePicker
           clientId={doc.client_id}
           cargoType={isDefectCargo ? 'defect' : 'good'}
+          source="dispatch"
           onAdd={(item, qty) => { void onAddLine(item, qty); setShowPicker(false) }}
           onClose={() => setShowPicker(false)}
         />

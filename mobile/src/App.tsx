@@ -20,6 +20,8 @@ import { PackingDetailScreen } from './screens/manager/PackingDetailScreen'
 import { DispatchListScreen } from './screens/manager/DispatchListScreen'
 import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
 import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
+import { WarehouseHubScreen } from './screens/manager/WarehouseHubScreen'
+import { ManagerTripsScreen } from './screens/manager/ManagerTripsScreen'
 
 function Main() {
   // Таб-бар — только на «корневых» вкладках (isTab). На детальных экранах есть своя
@@ -30,6 +32,8 @@ function Main() {
     case 'tasks':     screen = <TasksScreen />; break
     case 'trips':     screen = <TripsListScreen />; break
     case 'shipments': screen = <ShipmentsListScreen />; break
+    case 'mTrips':    screen = <ManagerTripsScreen />; break
+    case 'mWarehouse': screen = <WarehouseHubScreen />; break
     case 'mReceipts': screen = <ReceiptsListScreen />; break
     case 'receiptNew': screen = <ReceiptFormScreen />; break
     case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break

@@ -10,6 +10,8 @@ export type Route =
   | { name: 'trips' }
   | { name: 'shipments' }
   | { name: 'stock' }
+  | { name: 'mTrips' }
+  | { name: 'mWarehouse' }
   | { name: 'mReceipts' }
   | { name: 'mPacking' }
   | { name: 'mDispatch' }
@@ -37,6 +39,9 @@ type NavState = {
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
   openProfile: () => void
+  openReceiptsList: () => void
+  openPackingList: () => void
+  openDispatchList: () => void
   openReceiptNew: () => void
   openShipmentNew: () => void
   openDispatchNew: () => void
@@ -74,6 +79,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
     openProfile: () => setStack((s) => [...s, { name: 'profile' }]),
+    openReceiptsList: () => setStack((s) => [...s, { name: 'mReceipts' }]),
+    openPackingList: () => setStack((s) => [...s, { name: 'mPacking' }]),
+    openDispatchList: () => setStack((s) => [...s, { name: 'mDispatch' }]),
     openReceiptNew: () => setStack((s) => [...s, { name: 'receiptNew' }]),
     openShipmentNew: () => setStack((s) => [...s, { name: 'shipmentNew' }]),
     openDispatchNew: () => setStack((s) => [...s, { name: 'dispatchNew' }]),

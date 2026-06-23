@@ -805,21 +805,29 @@ def ready_available_for_dispatch(
     client_id: str | None,
     quality: str,
     ops: Sequence[str] = (INV_OP_READY,),
+    reserved_statuses: Sequence[str] | None = None,
     exclude_doc_id: str | None = None,
 ) -> int:
     """Свободный остаток-источник варианта под отгрузку: доступно минус уже
     зарезервированное другими незакрытыми отгрузками.
 
     Σ-по-корзинам нетто (вариант×клиент×качество) − Σ(незавершённый объём
-    ЗАФИКСИРОВАННЫХ отгрузок того же варианта: qty − shipped_qty, статусы preparing/
-    awaiting_trip/partially_shipped). Черновики резерв НЕ держат — это лишь намерение;
-    иначе два черновика взаимно заблокировали бы передачу в подготовку. Резерв
-    возникает при фиксации (advance, draft → preparing): кто первый передал — тот и
-    занял остаток, второй не пройдёт гейт. `ops` — корзины-источники (годный из
-    `ready`+`storage`: раскладка в зону отгрузки необязательна; брак из `storage`).
-    `exclude_doc_id` исключает саму проверяемую отгрузку (её спрос — это то, что мы и
-    проверяем).
+    ЗАФИКСИРОВАННЫХ отгрузок того же варианта: qty − shipped_qty). Черновики резерв
+    НЕ держат — это лишь намерение; иначе два черновика взаимно заблокировали бы
+    передачу в подготовку. Резерв возникает при фиксации (advance, draft → preparing):
+    кто первый передал — тот и занял остаток, второй не пройдёт гейт. `ops` —
+    корзины-источники гейта (годный из `ready`, брак из `storage`).
+
+    `reserved_statuses` — статусы отгрузок, чей спрос ещё «висит» на этой корзине-
+    источнике (по умолчанию preparing/awaiting_trip/partially_shipped). Для брака
+    передаётся ТОЛЬКО `preparing`: подготовка увозит брак из `storage` в `ready`, т.е.
+    остаток уже физически ушёл из `storage` (учтён в нетто) — повторно его вычитать
+    через резерв нельзя, иначе двойной счёт ложно блокирует следующую брак-отгрузку.
+    `exclude_doc_id` исключает саму проверяемую отгрузку.
     """
+    statuses = list(reserved_statuses) if reserved_statuses is not None else [
+        DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    ]
     ready = sum(
         get_available_total(
             connection, product_id=product_id, color_id=color_id, size_id=size_id,
@@ -828,6 +836,7 @@ def ready_available_for_dispatch(
         for op in ops
     )
     cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
+    status_ph = ",".join("?" for _ in statuses)
     conds = [
         "dl.product_id = ?",
         "dl.color_id IS NOT DISTINCT FROM ?",
@@ -836,9 +845,9 @@ def ready_available_for_dispatch(
         "dd.cargo_type = ?",
         "COALESCE(dl.is_deleted, 0) = 0",
         "COALESCE(dd.is_deleted, 0) = 0",
-        f"dd.status IN ('{DISPATCH_STATUS_PREPARING}', '{DISPATCH_STATUS_AWAITING_TRIP}', '{DISPATCH_STATUS_PARTIALLY_SHIPPED}')",
+        f"dd.status IN ({status_ph})",
     ]
-    params: list = [product_id, color_id, size_id, client_id, cargo]
+    params: list = [product_id, color_id, size_id, client_id, cargo, *statuses]
     if exclude_doc_id:
         conds.append("dd.id <> ?")
         params.append(exclude_doc_id)

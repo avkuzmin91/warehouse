@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import {
   getDispatch,
   advanceDispatch,
-  finishDispatchPreparation,
   cancelDispatch,
   updateDispatch,
   addDispatchLine,
@@ -24,6 +23,7 @@ import { OpEntry } from './components/OpEntry'
 import { DraftView } from './views/DraftView'
 import { ReadyView } from './views/ReadyView'
 import { FinalView } from './views/FinalView'
+import { PreparePanel } from './components/PreparePanel'
 import { canEditShipmentPlanning, canEditShipmentPriority, canPrepareDispatch } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 
@@ -77,19 +77,6 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       await load()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Передать в подготовку не удалось', 'error')
-    } finally {
-      setActing(false)
-    }
-  }
-
-  async function handleFinishPreparation() {
-    setActing(true)
-    setError('')
-    try {
-      await finishDispatchPreparation(docId)
-      await load()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Отметить подготовку не удалось', 'error')
     } finally {
       setActing(false)
     }
@@ -208,15 +195,6 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onClick={() => void handleAdvance()}
         />
       )}
-      {canPrepare && isPreparing && (
-        <PrimaryAction
-          icon="check"
-          label="Отгрузка подготовлена"
-          hint="перейдёт в очередь на рейс — статус «Ожидает рейс»"
-          disabled={acting}
-          onClick={() => void handleFinishPreparation()}
-        />
-      )}
     </>
   )
 
@@ -253,6 +231,8 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onUpdateDoc={handleUpdateDoc}
           onReload={load}
         />
+      ) : (isPreparing && canPrepare) ? (
+        <PreparePanel doc={doc} canEdit={canPrepare} onDone={load} />
       ) : (isPreparing || isAwaiting || isPartially) ? (
         <ReadyView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />
       ) : (

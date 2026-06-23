@@ -19,12 +19,15 @@ function variantLabel(b: PlannableItem): string {
 export function BalancePickerSheet({
   clientId,
   cargoType,
+  source = 'pack',
   existingKeys = [],
   onAddMany,
   onClose,
 }: {
   clientId: string
   cargoType: InvQuality
+  // `dispatch` — для «Отгрузки»: главная цифра — упакованное (ready), склад/в пути добираются.
+  source?: 'pack' | 'dispatch'
   existingKeys?: string[]
   onAddMany: (rows: { item: PlannableItem; qty: number }[]) => void
   onClose: () => void
@@ -54,11 +57,24 @@ export function BalancePickerSheet({
     return base.filter((b) => fold(`${b.product_name} ${variantLabel(b)}`).includes(needle))
   }, [items, search, existing])
 
-  function onHand(b: PlannableItem): number {
+  const dispatchGood = source === 'dispatch' && cargoType !== 'defect'
+  function ready(b: PlannableItem): number {
+    return dispatchGood ? b.ready_good : 0
+  }
+  function storage(b: PlannableItem): number {
     return cargoType === 'defect' ? b.storage_defect : b.storage_good
   }
+  function transitOf(b: PlannableItem): number {
+    return cargoType === 'defect' ? 0 : b.in_transit
+  }
   function cap(b: PlannableItem): number {
-    return onHand(b) + (cargoType === 'defect' ? 0 : b.in_transit)
+    return ready(b) + storage(b) + transitOf(b)
+  }
+  function hint(b: PlannableItem): string {
+    const t = transitOf(b)
+    const tail = t > 0 ? ` · в пути ${t}` : ''
+    if (dispatchGood) return `упаковано ${ready(b)}${storage(b) > 0 ? ` · склад ${storage(b)}` : ''}${tail}`
+    return `${cargoType === 'defect' ? 'брак' : 'склад'} ${storage(b)}${tail}`
   }
 
   function setQ(b: PlannableItem, n: number) {
@@ -120,14 +136,12 @@ export function BalancePickerSheet({
             {filtered.map((b) => {
               const k = balanceKey(b)
               const n = qty[k] ?? 0
-              const available = onHand(b)
-              const transit = cargoType === 'defect' ? 0 : b.in_transit
               return (
                 <div key={k} className="line-row" style={{ alignItems: 'center', marginTop: 0, padding: '7px 0' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="tile-title" style={{ fontSize: 14 }}>{b.product_name}</div>
                     <div className="tile-meta">
-                      {variantLabel(b)} · склад {available}{transit > 0 ? ` · в пути ${transit}` : ''}
+                      {variantLabel(b)} · {hint(b)}
                     </div>
                   </div>
                   <div className="line-row" style={{ marginTop: 0, gap: 6, width: 'auto' }}>

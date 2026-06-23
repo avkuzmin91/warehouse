@@ -25,7 +25,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function PackingListScreen() {
-  const { openShipmentNew, openPackingDoc } = useNav()
+  const { openShipmentNew, openPackingDoc, back } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -51,7 +51,7 @@ export function PackingListScreen() {
 
   return (
     <div className="screen">
-      <AppBar title="Упаковка" sub="Задачи упаковки" />
+      <AppBar title="Упаковка" sub="Задачи упаковки" onBack={back} />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
         <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openShipmentNew}>
           <Icon name="plus" size={16} /> Новая задача упаковки

@@ -37,6 +37,8 @@ export type PlannableItem = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  ready_good: number
+  ready_defect: number
   storage_good: number
   storage_defect: number
   in_transit: number

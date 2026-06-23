@@ -18,7 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function ReceiptsListScreen() {
-  const { openReceiptNew, openReceiptDoc } = useNav()
+  const { openReceiptNew, openReceiptDoc, back } = useNav()
   const [items, setItems] = useState<ReceiptListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -44,7 +44,7 @@ export function ReceiptsListScreen() {
 
   return (
     <div className="screen">
-      <AppBar title="Поступления" sub="Документы приёмки" />
+      <AppBar title="Поступления" sub="Документы приёмки" onBack={back} />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
         <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openReceiptNew}>
           <Icon name="plus" size={16} /> Новое поступление

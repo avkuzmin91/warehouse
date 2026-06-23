@@ -8,6 +8,8 @@ export type TabName =
   | 'shipments'
   | 'stock'
   // менеджер
+  | 'mTrips'
+  | 'mWarehouse'
   | 'mReceipts'
   | 'mPacking'
   | 'mDispatch'
@@ -21,10 +23,13 @@ const WAREHOUSE_TABS: TabDef[] = [
   { name: 'stock', label: 'Остатки', icon: 'layers' },
 ]
 
+// Менеджерский бар повторяет складскую раскладку (4 вкладки + скан-FAB по центру):
+// задачи и рейсы слева, склад-хаб и остатки справа. Документские потоки
+// (поступления/упаковка/отгрузки) спрятаны внутрь хаба «Склад».
 const MANAGER_TABS: TabDef[] = [
-  { name: 'mReceipts', label: 'Поступления', icon: 'dolly' },
-  { name: 'mPacking', label: 'Упаковка', icon: 'box' },
-  { name: 'mDispatch', label: 'Отгрузки', icon: 'forklift' },
+  { name: 'tasks', label: 'Задачи', icon: 'list' },
+  { name: 'mTrips', label: 'Рейсы', icon: 'truck' },
+  { name: 'mWarehouse', label: 'Склад', icon: 'boxes' },
   { name: 'stock', label: 'Остатки', icon: 'layers' },
 ]
 

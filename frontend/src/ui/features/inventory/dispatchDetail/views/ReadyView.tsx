@@ -26,7 +26,7 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
     <>
       {isPreparing ? (
         <Alert tone="info" style={{ marginBottom: 16 }}>
-          Кладовщик готовит отгрузку. Можно уже привязать к рейсу — товар спишется при его отправке.
+          Кладовщик готовит отгрузку — указывает ячейки и переводит товар в «Готов к отгрузке». Привязать к рейсу можно уже сейчас, но увезти — только после подготовки.
         </Alert>
       ) : isPartially ? (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
