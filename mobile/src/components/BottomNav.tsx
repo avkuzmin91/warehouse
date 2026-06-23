@@ -1,12 +1,6 @@
-import { useNav, type TabName } from '../nav/NavContext'
-import { Icon, type IconName } from './Icon'
-
-const TABS: { name: TabName; label: string; icon: IconName }[] = [
-  { name: 'tasks', label: 'Задачи', icon: 'list' },
-  { name: 'trips', label: 'Рейсы', icon: 'truckIn' },
-  { name: 'shipments', label: 'Отгрузки', icon: 'box' },
-  { name: 'stock', label: 'Остатки', icon: 'layers' },
-]
+import { useNav } from '../nav/NavContext'
+import type { TabDef } from '../nav/tabs'
+import { Icon } from './Icon'
 
 function ScanGlyph({ size = 24 }: { size?: number }) {
   return (
@@ -20,10 +14,24 @@ function ScanGlyph({ size = 24 }: { size?: number }) {
 }
 
 export function BottomNav() {
-  const { rootTab, goTab, openScan } = useNav()
+  const { rootTab, goTab, openScan, tabs, showScan } = useNav()
+
+  if (!showScan) {
+    // Менеджер: ровный ряд вкладок без скан-FAB.
+    return (
+      <nav className="bottomnav">
+        {tabs.map((t) => (
+          <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
+        ))}
+      </nav>
+    )
+  }
+
+  // Складские роли: вкладки делятся пополам, скан-FAB по центру.
+  const half = Math.floor(tabs.length / 2)
   return (
     <nav className="bottomnav">
-      {TABS.slice(0, 2).map((t) => (
+      {tabs.slice(0, half).map((t) => (
         <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
       ))}
 
@@ -34,7 +42,7 @@ export function BottomNav() {
         <span className="navlabel">Скан</span>
       </button>
 
-      {TABS.slice(2).map((t) => (
+      {tabs.slice(half).map((t) => (
         <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
       ))}
     </nav>
@@ -46,7 +54,7 @@ function NavButton({
   active,
   onClick,
 }: {
-  tab: { name: TabName; label: string; icon: IconName }
+  tab: TabDef
   active: boolean
   onClick: () => void
 }) {

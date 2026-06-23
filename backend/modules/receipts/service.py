@@ -390,6 +390,40 @@ def arrived_qty_by_line(connection, doc_id: str, *, exclude_trip_id: str | None 
     return out
 
 
+def received_placements_by_line(connection, doc_id: str) -> dict[str, list[dict]]:
+    """Раскладка принятого по ячейкам на строку поступления — из журнала приёмки.
+
+    Истина о размещении живёт в zone_relocations: приёмка пишет intake→storage@место
+    (по одной записи на ячейку), отмена рейса — обратное storage→intake. Нетто-сумму по
+    каждому месту считаем здесь, чтобы карточка показывала фактическую раскладку, а не
+    единственную денормализованную зону строки. Возвращаем только места с qty > 0.
+    """
+    rows = connection.execute(
+        """SELECT zr.receipt_line_id AS lid,
+                  CASE WHEN zr.from_op = ? THEN zr.to_zone_id   ELSE zr.from_zone_id   END AS zone_id,
+                  CASE WHEN zr.from_op = ? THEN zr.to_zone_name ELSE zr.from_zone_name END AS zone_name,
+                  SUM(CASE WHEN zr.from_op = ? THEN zr.qty ELSE -zr.qty END) AS qty
+             FROM zone_relocations zr
+             JOIN receipt_lines rl ON rl.id = zr.receipt_line_id
+            WHERE rl.doc_id = ?
+              AND ((zr.from_op = ? AND zr.to_op = ?) OR (zr.from_op = ? AND zr.to_op = ?))
+            GROUP BY lid, zone_id, zone_name""",
+        (INV_OP_INTAKE, INV_OP_INTAKE, INV_OP_INTAKE, doc_id,
+         INV_OP_INTAKE, INV_OP_STORAGE, INV_OP_STORAGE, INV_OP_INTAKE),
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        qty = int(r["qty"] or 0)
+        if qty <= 0:
+            continue
+        out.setdefault(str(r["lid"]), []).append({
+            "storage_zone_id": r["zone_id"],
+            "storage_zone_name": r["zone_name"],
+            "qty": qty,
+        })
+    return out
+
+
 def receipt_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     """Остаток к распределению по строкам поступления: planned − активные trip_alloc.
 

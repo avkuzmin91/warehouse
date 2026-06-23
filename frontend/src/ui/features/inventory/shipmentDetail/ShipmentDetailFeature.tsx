@@ -3,9 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getShipment,
   advanceShipment,
+  rejectShipment,
   deleteShipment,
   cancelShipment,
-  completeShipmentNoGoods,
   addShipmentLine,
   updateShipmentLine,
   updateShipment,
@@ -38,7 +38,7 @@ import { DatePicker } from '../../../primitives/DatePicker'
 import { AutoGrowTextarea, Field, Input } from '../../../primitives/Input'
 import { fmtDateLong } from '../../../../utils/format'
 import { balanceKey } from '../../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
+import { canAcceptPackingTask, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
@@ -67,7 +67,6 @@ export function ShipmentDetailFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const { unloadingZones } = useLookups()
-  const showCosts = canViewCosts(user)
   const canEdit = canEditShipments(user)
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
@@ -77,6 +76,8 @@ export function ShipmentDetailFeature() {
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<ShipmentLine | null>(null)
@@ -97,7 +98,6 @@ export function ShipmentDetailFeature() {
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
   const [infoActualShipDate, setInfoActualShipDate] = useState('')
-  const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
   const [infoComment, setInfoComment] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
@@ -109,7 +109,6 @@ export function ShipmentDetailFeature() {
     setInfoClientName(doc.client_name ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoActualShipDate(doc.actual_ship_date ?? '')
-    setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
   }, [doc])
@@ -131,23 +130,23 @@ export function ShipmentDetailFeature() {
   async function handleInfoSave() {
     if (!docId) return false
     setInfoSaving(true)
-    setError('')
     try {
-      await updateShipment(docId, {
-        client_id:      infoClientId,
-        client_name:    infoClientName,
-        ship_date:      infoShipDate || null,
-        ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
-        ...(showCosts ? { logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null } : {}),
-        comment:        infoComment.trim() || null,
-      })
+      await updateShipment(docId, canEditTechTaskOnly
+        ? { comment: infoComment.trim() || null }
+        : {
+            client_id:      infoClientId,
+            client_name:    infoClientName,
+            ship_date:      infoShipDate || null,
+            ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
+            comment:        infoComment.trim() || null,
+          })
       await load()
       setInfoDirty(false)
       setInfoSaved(true)
       setTimeout(() => setInfoSaved(false), 2000)
       return true
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      toast(e instanceof Error ? e.message : 'Ошибка сохранения', 'error')
       return false
     } finally {
       setInfoSaving(false)
@@ -157,19 +156,25 @@ export function ShipmentDetailFeature() {
   const status = doc?.status as ShipmentStatus | undefined
   const isDefectCargo = doc?.cargo_type === 'defect'
   const isDraft = status === 'draft'
+  const isAssigned = status === 'assigned'
   const isPacking = status === 'packing'
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
-  const isAwaitingTrip = status === 'awaiting_trip'
-  const isPartiallyShipped = status === 'partially_shipped'
-  const isCompletedNoGoods = status === 'completed_no_goods'
-  // Состав и план редактируются до передачи на упаковку (черновик и «В плане»).
-  const editableComposition = isDraft || isPacking
+  const isPacked = status === 'packed'
+  // Легаси-статусы рейса (исторические документы) — только read-only вид.
+  const isLegacyTerminal = status === 'awaiting_trip' || status === 'partially_shipped'
+    || status === 'shipped' || status === 'completed_no_goods'
+  // Состав и план менеджер правит до передачи на упаковку (черновик, «Ожидает принятия», «В плане»).
+  const editableComposition = isDraft || isAssigned || isPacking
   const canDelete = canEditPlanning && editableComposition
   const canEditPlan = canEditPlanning && editableComposition
   const canEditInfo = canEditPlanning && editableComposition
-  const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при отправке рейса
-  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && status !== 'shipped' && !isCompletedNoGoods
+  // Начальник склада на приёмке задачи правит ТОЛЬКО ТЗ (и файлы) — состав и реквизиты нет.
+  const canEditTechTaskOnly = !canEditInfo && isAssigned && canAcceptPackingTask(user) && user?.role === 'warehouse_head'
+  // Приёмка/отклонение задачи (assigned → packing / draft).
+  const canAccept = isAssigned && canAcceptPackingTask(user)
+  const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
+  const canAttachFiles = (canEditShipmentFiles(user) || canEditTechTaskOnly) && status !== 'cancelled' && !isPacked && !isLegacyTerminal
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
@@ -180,10 +185,11 @@ export function ShipmentDetailFeature() {
   // Главное действие шага: метка/иконка/право зависят от статуса. «Готово к рейсу»
   // (relocating) не здесь — у него своя кнопка в панели раскладки/подготовки.
   // Брак-отгрузка минует упаковку: из черновика сразу к кладовщику на подготовку.
-  const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut' | 'check'; hint: string; show: boolean } | null =
+  const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut' | 'check' | 'inbox'; hint: string; show: boolean } | null =
     isDraft && isDefectCargo
       ? { label: 'Запланировать', icon: 'arrowRight', hint: 'уйдёт кладовщику на подготовку — статус «Перемещение»', show: canEdit }
-      : isDraft     ? { label: 'Запланировать',       icon: 'arrowRight', hint: 'уйдёт кладовщику — статус «В плане»',          show: canEdit }
+      : isDraft     ? { label: 'Поставить задачу',     icon: 'arrowRight', hint: 'уйдёт начальнику склада — статус «Ожидает принятия»', show: canEditPlanning }
+      : isAssigned  ? { label: 'Принять в работу',     icon: 'inbox',      hint: 'склад берёт задачу — статус «В плане»',         show: canAccept }
       : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   hint: 'уйдёт начальнику смены — статус «На упаковке»', show: canEdit }
       : isOnPacking ? { label: 'Завершить упаковку',    icon: 'check',      hint: 'уйдёт кладовщику — статус «Перемещение»',       show: canPack }
       : null
@@ -195,12 +201,14 @@ export function ShipmentDetailFeature() {
   // и подвозе (on_packing); полный список остатков (BalancePicker) — только при
   // редактировании состава.
   const loadBalances = useCallback(async () => {
-    if (!shipmentClientId || !(canDelete || canMovePacking || isOnPacking)) {
+    if (!shipmentClientId || !(canDelete || isAssigned || canMovePacking || isOnPacking)) {
       setBalances([])
       setReviewZoneBalances([])
       return
     }
-    if (canDelete) {
+    // На приёмке задачи (assigned) начальнику склада тоже нужен остаток — чек-лист
+    // «Весь товар на остатках» считается на клиенте, а править состав он не может.
+    if (canDelete || isAssigned) {
       const res = await getBalances({
         limit: 200,
         only_positive: true,
@@ -216,7 +224,7 @@ export function ShipmentDetailFeature() {
       only_positive: true,
     })
     setReviewZoneBalances(zonesRes.items.filter((item) => item.op_status === 'storage' && item.quality === 'good'))
-  }, [shipmentClientId, shipmentCargoType, canDelete, canMovePacking, isOnPacking])
+  }, [shipmentClientId, shipmentCargoType, canDelete, isAssigned, canMovePacking, isOnPacking])
 
   useEffect(() => {
     loadBalances().catch(() => {})
@@ -254,13 +262,12 @@ export function ShipmentDetailFeature() {
 
   async function act(fn: () => Promise<unknown>, redirectAfter?: string) {
     setActing(true)
-    setError('')
     try {
       await fn()
       if (redirectAfter) navigate(redirectAfter)
       else await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка')
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
     } finally {
       setActing(false)
     }
@@ -349,9 +356,6 @@ export function ShipmentDetailFeature() {
 
   const hasUnsavedLineChanges = editableLines.some(linePlanDirty)
 
-  const infoLogisticsNumber = Number(infoLogisticsCost)
-  const infoLogisticsFilled = infoLogisticsCost.trim() !== '' && Number.isFinite(infoLogisticsNumber) && infoLogisticsNumber >= 0
-
   // Передача на упаковку выполняется по строке через шторку (немедленно), поэтому к моменту
   // перехода «Передать на упаковку» достаточно, что хоть что-то уже на столе (пул или упаковано).
   const someMovedToPacking = (doc?.lines ?? []).some(
@@ -374,7 +378,10 @@ export function ShipmentDetailFeature() {
   // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
   // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
   // Брак-отгрузка: ТЗ не требуется, места-источники выберет кладовщик при подготовке.
-  const advanceChecks: ReadinessCheck[] = (isDraft || isPacking)
+  // Постановка задачи (draft) и её приёмка начальником склада (assigned) проверяют одно
+  // и то же: товар на остатках, SKU, ТЗ. Бэкенд проверяет это авторитетно при advance.
+  const isPlanning = isDraft || isAssigned
+  const advanceChecks: ReadinessCheck[] = (isPlanning || isPacking)
     ? [
         {
           ok: (doc?.lines.length ?? 0) > 0,
@@ -386,21 +393,21 @@ export function ShipmentDetailFeature() {
           label: 'План заполнен',
           error: 'Проверьте количество: в каждой строке должно быть не меньше 1 шт',
         },
-        ...(isDraft
+        ...(isPlanning
           ? [{
               ok: allLinesOnStock,
               label: 'Весь товар на остатках',
               error: 'Часть товара ещё в пути — дождитесь прихода на склад и повторите',
             }]
           : []),
-        ...(isDraft
+        ...(isPlanning
           ? [{
               ok: allLinesHaveSku,
               label: 'У всех товаров указан SKU',
               error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)',
             }]
           : []),
-        ...(isDraft && !isDefectCargo
+        ...(isPlanning && !isDefectCargo
           ? [{
               ok: infoComment.trim() !== '',
               label: 'Техническое задание заполнено',
@@ -411,16 +418,9 @@ export function ShipmentDetailFeature() {
           ? [
               {
                 ok: !!infoShipDate,
-                label: 'Дата отгрузки (план) указана',
-                error: 'Укажите дату отгрузки (план)',
+                label: 'Дата упаковки (план) указана',
+                error: 'Укажите дату упаковки (план)',
               },
-              ...(showCosts
-                ? [{
-                    ok: infoLogisticsFilled,
-                    label: 'Стоимость логистики указана',
-                    error: 'Укажите стоимость логистики',
-                  }]
-                : []),
               {
                 ok: someMovedToPacking,
                 label: 'Товар передан на упаковку',
@@ -430,7 +430,7 @@ export function ShipmentDetailFeature() {
           : []),
       ]
     : []
-  const showReadiness = isDraft || isPacking
+  const showReadiness = isPlanning || isPacking
   const advanceBlockReasons = showReadiness
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
@@ -492,7 +492,7 @@ export function ShipmentDetailFeature() {
       await refreshAfterLineChange()
       return true
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка')
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
       return false
     } finally {
       setSaving((prev) => ({ ...prev, [line.id]: false }))
@@ -611,12 +611,41 @@ export function ShipmentDetailFeature() {
     })
   }
 
+  // Менеджерский возврат «на упаковку» из «Перемещение» / «Упаковано» — для товарной
+  // задачи упаковки. Из «Упаковано» откатывается раскладка по местам, поэтому подтверждаем.
+  const canReturnToPacking = canEdit && !isDefectCargo && (isRelocating || isPacked)
+
+  async function handleReturnToPacking() {
+    const ok = await confirm({
+      title: 'Вернуть на упаковку?',
+      body: isPacked
+        ? 'Задача вернётся на этап «На упаковке», а раскладка упакованного товара по местам будет отменена. Товар, уже отгружённый или закреплённый за рейсом, вернуть нельзя — сначала отмените рейс.'
+        : 'Задача вернётся на этап «На упаковке» — упаковщик сможет продолжить или исправить упаковку.',
+      danger: true,
+      confirmLabel: 'Вернуть на упаковку',
+    })
+    if (!ok) return
+    await act(async () => {
+      await returnShipmentToPacking(docId!)
+      await refreshAfterLineChange()
+    })
+  }
+
+  async function handleReject() {
+    const reason = rejectReason.trim()
+    if (!reason) { toast('Укажите причину отклонения', 'error'); return }
+    await act(async () => {
+      await rejectShipment(docId!, reason)
+      setRejectOpen(false)
+      setRejectReason('')
+      await load()
+    })
+  }
+
   async function handleCancel() {
     const ok = await confirm({
       title: 'Аннулировать отгрузку?',
-      body: allDefectStuck
-        ? 'Весь товар оказался браком, годного к отгрузке нет. Отгрузка будет аннулирована (брак уже на хранении). Это действие нельзя отменить.'
-        : isDefectCargo && isAwaitingTrip
+      body: isDefectCargo && isRelocating
         ? 'Отгрузка будет аннулирована, подготовленный брак вернётся на исходные места. Это действие нельзя отменить.'
         : 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
       danger: true,
@@ -624,26 +653,6 @@ export function ShipmentDetailFeature() {
     })
     if (!ok) return
     await act(() => cancelShipment(docId!), '/inventory/shipments')
-  }
-
-  async function handleReturnToPacking() {
-    const ok = await confirm({
-      title: 'Вернуть на упаковку?',
-      body: 'Отгрузка вернётся в статус «На упаковке», задача снова появится у начальника смены. Готовый товар вернётся в зону упаковки, брак — на упаковочный стол. Действие можно повторить заново.',
-      confirmLabel: 'Вернуть на упаковку',
-    })
-    if (!ok) return
-    await act(() => returnShipmentToPacking(docId!))
-  }
-
-  async function handleCompleteNoGoods() {
-    const ok = await confirm({
-      title: 'Завершить отгрузку без рейса?',
-      body: 'После упаковки годного товара нет — весь товар оказался браком (он уже вернулся на хранение). Везти рейсом нечего, поэтому отгрузка завершается без отгрузки. Это действие нельзя отменить.',
-      confirmLabel: 'Завершить',
-    })
-    if (!ok) return
-    await act(() => completeShipmentNoGoods(docId!), '/inventory/shipments')
   }
 
   if (loading) {
@@ -672,7 +681,7 @@ export function ShipmentDetailFeature() {
     : undefined
 
   // Фаза «Упаковка»: передача (Кладовщик, packing) → годный/брак (Нач. смены, on_packing) → результат (done).
-  const packPhase = isDraft
+  const packPhase = (isDraft || isAssigned)
     ? { state: 'locked' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: null,
         hint: 'Передачу и упаковку заполнят кладовщик и начальник смены' }
     : isPacking
@@ -690,9 +699,6 @@ export function ShipmentDetailFeature() {
   const poolTotal = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
   const packedGood = doc.lines.reduce((s, l) => s + l.packed_good, 0)
   const packedDefect = doc.lines.reduce((s, l) => s + l.packed_defect, 0)
-  // Товарная отгрузка после раскладки оказалась полностью браком (0 годного):
-  // рейса не будет, брак уже вернулся на хранение — менеджер подтверждает отмену.
-  const allDefectStuck = isAwaitingTrip && !isDefectCargo && packedGood === 0
   const storeAgg = (() => {
     const m = new Map<string, number>()
     for (const l of doc.lines) {
@@ -708,7 +714,7 @@ export function ShipmentDetailFeature() {
         status={status!}
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
-        subtitle={`${isDefectCargo ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         onBack={() => navigate('/inventory/shipments')}
         blockReasons={showBlockReasons ? advanceBlockReasons : []}
         priority={
@@ -729,35 +735,26 @@ export function ShipmentDetailFeature() {
                 <Icon name="trash" size={14} />Удалить
               </button>
             )}
-            {canEdit && (isPacking || (isDefectCargo && (isRelocating || isAwaitingTrip))) && (
-              <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
-                <Icon name="x" size={14} />Аннулировать
-              </button>
-            )}
-            {canEditPlanning && isAwaitingTrip && !isDefectCargo && (
+            {canReturnToPacking && (
               <button className="btn ghost" disabled={acting} onClick={handleReturnToPacking}>
                 <Icon name="arrowLeft" size={14} />Вернуть на упаковку
               </button>
             )}
-            {canEditPlanning && allDefectStuck && (
-              <PrimaryAction
-                icon="check"
-                label="Завершить"
-                hint="рейс не нужен — весь товар брак, статус «Завершён»"
-                disabled={acting}
-                onClick={handleCompleteNoGoods}
-              />
+            {canAccept && (
+              <button className="btn ghost danger" disabled={acting} onClick={() => setRejectOpen(true)}>
+                <Icon name="arrowLeft" size={14} />Отклонить
+              </button>
             )}
-            {canEditPlan && (infoDirty || hasUnsavedLineChanges) && (
+            {canEdit && (isPacking || (isDefectCargo && isRelocating)) && (
+              <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
+                <Icon name="x" size={14} />Аннулировать
+              </button>
+            )}
+            {(canEditPlan || canEditTechTaskOnly) && (infoDirty || hasUnsavedLineChanges) && (
               <button className="btn" disabled={acting || infoSaving} onClick={() => { void handleSaveChanges() }}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
             )}
-            {(isAwaitingTrip || status === 'shipped') && doc.trips.map((t) => (
-              <button key={t.id} className="btn" onClick={() => navigate(`/logistics/trips/${t.id}`)}>
-                <Icon name="truckOut" size={14} />Открыть рейс {t.number}
-              </button>
-            ))}
             {primary?.show && (
               <PrimaryAction
                 icon={primary.icon}
@@ -771,33 +768,17 @@ export function ShipmentDetailFeature() {
         }
       />
 
-      {error && (
-        <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
-      )}
-
-      {isCompletedNoGoods && (
-        <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Отгрузка завершена без отгрузки: после упаковки годного товара не оказалось (весь товар — брак),
-          он возвращён на хранение. Рейс не потребовался. При необходимости создайте новую отгрузку на замену.
-        </Alert>
-      )}
-
-      {allDefectStuck ? (
-        <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Весь товар оказался браком — годного к отгрузке нет, товарный рейс не нужен. Брак возвращён на хранение.
-          Цикл отработан полностью; менеджер завершает отгрузку кнопкой «Завершить» (статус «Завершён»).
-        </Alert>
-      ) : isAwaitingTrip && (
-        <Alert tone="warning" style={{ marginBottom: 16 }}>
+      {isPacked && (
+        <Alert tone="success" style={{ marginBottom: 16 }}>
           {isDefectCargo
-            ? 'Брак перемещён в зону отгрузки со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'
-            : 'Товар разложен по местоположениям со статусом «Готов к отгрузке». Отгрузка ожидает отправки рейса — спишется при отправке привязанного рейса.'}
+            ? 'Брак подготовлен и перемещён в зону отгрузки со статусом «Готов к отгрузке». Задача упаковки завершена.'
+            : 'Товар упакован и разложен по местоположениям со статусом «Готов к отгрузке». Задача упаковки завершена.'}
         </Alert>
       )}
 
-      {isPartiallyShipped && (
+      {isLegacyTerminal && (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Часть отгрузки уже уехала. Остаток лежит «Готов к отгрузке» и ожидает следующих рейсов — спишется при их отправке.
+          Документ из прежней схемы движения. Задача упаковки по нему завершена; доступен только просмотр.
         </Alert>
       )}
 
@@ -809,8 +790,10 @@ export function ShipmentDetailFeature() {
             title="Основная информация"
             role="manager"
             state={isDraft ? 'active' : 'done'}
-            hint={canEditInfo ? 'План можно править до передачи на упаковку' : undefined}
-            right={canEditInfo && infoSaved ? (
+            hint={canEditInfo ? 'План можно править до передачи на упаковку'
+              : canEditTechTaskOnly ? 'Можно поправить техническое задание перед принятием задачи'
+              : undefined}
+            right={(canEditInfo || canEditTechTaskOnly) && infoSaved ? (
               <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <Icon name="check" size={12} />Сохранено
               </span>
@@ -843,50 +826,35 @@ export function ShipmentDetailFeature() {
                       </div>
                     </div>
                   </Field>
-                  <Field label={doc.trips.length > 1 ? 'Рейсы' : 'Рейс'} style={{ marginBottom: 0 }}>
-                    {doc.trips.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {doc.trips.map((t) => (
-                          <button
-                            key={t.id}
-                            className="btn ghost sm"
-                            onClick={() => navigate(`/logistics/trips/${t.id}`)}
-                            style={{ width: '100%', justifyContent: 'flex-start' }}
-                          >
-                            <Icon name="truckIn" size={13} />{t.number}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <Input value="—" readOnly style={{ cursor: 'default' }} />
-                    )}
-                  </Field>
-                  <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
+                  <Field label="Дата упаковки (план)" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
                   {canEditActualShipDate ? (
-                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
                       <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
                     </Field>
                   ) : (
-                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
                       <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
                     </Field>
                   )}
-                  {showCosts && (
-                    <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                      <input
-                        className="input"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={infoLogisticsCost}
-                        onChange={(e) => { setInfoLogisticsCost(e.target.value); setInfoDirty(true) }}
-                        placeholder="0.00"
-                      />
-                    </Field>
-                  )}
                   <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <AutoGrowTextarea
+                      minRows={3}
+                      placeholder="Опишите задачу для команды склада"
+                      value={infoComment}
+                      onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
+                      style={{ resize: 'vertical', minHeight: 76 }}
+                    />
+                  </Field>
+                </div>
+              </>
+            ) : canEditTechTaskOnly ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <ReadOnlyField label="Клиент" value={doc.client_name} />
+                  <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
+                  <Field label="Техническое задание" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                     <AutoGrowTextarea
                       minRows={3}
                       placeholder="Опишите задачу для команды склада"
@@ -901,36 +869,8 @@ export function ShipmentDetailFeature() {
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <div>
-                    <div className="field-label"><span>{doc.trips.length > 1 ? 'Рейсы' : 'Рейс'}</span></div>
-                    {doc.trips.length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {doc.trips.map((t) => (
-                          <button
-                            key={t.id}
-                            className="btn ghost sm"
-                            onClick={() => navigate(`/logistics/trips/${t.id}`)}
-                            style={{ width: '100%', justifyContent: 'flex-start' }}
-                          >
-                            <Icon name="truckIn" size={13} />{t.number}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 13, fontWeight: 500, minHeight: 30, display: 'flex', alignItems: 'center' }}>—</div>
-                    )}
-                  </div>
-                  <ReadOnlyField label="Дата отгрузки (план)" value={fmtDateLong(doc.ship_date)} />
-                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
-                  {showCosts && (
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <ReadOnlyField
-                        label="Стоимость логистики для клиента, ₽"
-                        value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
-                        mono
-                      />
-                    </div>
-                  )}
+                  <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
+                  <ReadOnlyField label="Дата упаковки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
                   <div style={{ gridColumn: '1 / -1' }}>
                     <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
                   </div>
@@ -1014,17 +954,17 @@ export function ShipmentDetailFeature() {
             </PhaseBlock>
           )}
 
-          {!isDefectCargo && (isDraft || isPacking || isOnPacking) && (
-            <PhaseBlock icon="archive" title="Раскладка и рейс" role="warehouse" state="locked"
-              hint="Местоположения и готовность к рейсу — после упаковки">
-              <LockedGrid labels={['Местоположения', 'Готово к рейсу']} />
+          {!isDefectCargo && (isDraft || isAssigned || isPacking || isOnPacking) && (
+            <PhaseBlock icon="archive" title="Раскладка" role="warehouse" state="locked"
+              hint="Местоположения и упаковка — после передачи на упаковку">
+              <LockedGrid labels={['Местоположения', 'Упаковано']} />
             </PhaseBlock>
           )}
 
           {isDefectCargo && isDraft && (
             <PhaseBlock icon="archive" title="Подготовка к отгрузке" role="warehouse" state="locked"
               hint="Кладовщик выберет места-источники и перенесёт брак в зону отгрузки">
-              <LockedGrid labels={['Места-источники', 'Готово к рейсу']} />
+              <LockedGrid labels={['Места-источники', 'Упаковано']} />
             </PhaseBlock>
           )}
 
@@ -1048,7 +988,7 @@ export function ShipmentDetailFeature() {
             />
           )}
 
-          {(isAwaitingTrip || isPartiallyShipped || isCompletedNoGoods || status === 'shipped') && (
+          {(isPacked || isLegacyTerminal) && (
             <RelocationPanel
               docId={docId!}
               lines={doc.lines}
@@ -1068,14 +1008,11 @@ export function ShipmentDetailFeature() {
             <ChecklistPanel items={advanceChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
           )}
 
-          {(isDraft || (isDefectCargo && isRelocating)) && (
+          {(isDraft || isAssigned || (isDefectCargo && isRelocating)) && (
             <Panel icon="chart" title="Итого">
               <div style={{ padding: '0 2px' }}>
                 <ReadRow label="SKU" mono>{skuCount}</ReadRow>
                 <ReadRow label="Кол-во" mono strong>{planTotal} шт</ReadRow>
-                {showCosts && (
-                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-                )}
               </div>
             </Panel>
           )}
@@ -1114,89 +1051,66 @@ export function ShipmentDetailFeature() {
             </Panel>
           )}
 
-          {(isAwaitingTrip || status === 'shipped') && doc.trips.length > 0 && (
-            <Panel icon="truckOut" title={doc.trips.length > 1 ? 'Рейсы отгрузки' : 'Рейс отгрузки'}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {doc.trips.map((t) => (
-                  <button
-                    key={t.id}
-                    className="btn ghost sm"
-                    onClick={() => navigate(`/logistics/trips/${t.id}`)}
-                    style={{ width: '100%', justifyContent: 'flex-start' }}
-                  >
-                    <Icon name="truckOut" size={13} />{t.number}
-                  </button>
-                ))}
-              </div>
-              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', lineHeight: 1.5 }}>
-                Дата отгрузки (факт) и списание остатков проставляются при отправке рейса.
+          {isPacked && (
+            <Panel icon="chart" title={isDefectCargo ? 'Итог подготовки' : 'Итог упаковки'}>
+              <div style={{ padding: '0 2px' }}>
+                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
+                <ReadRow label={isDefectCargo ? 'Брак' : 'Годный'} mono>
+                  <span style={{ color: isDefectCargo ? 'var(--c-warning)' : 'var(--c-success)' }}>{isDefectCargo ? packedDefect : packedGood} шт</span>
+                </ReadRow>
+                {!isDefectCargo && (
+                  <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
+                )}
+                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
+                  <ReadRow label="Итог" mono strong>Готово к отгрузке</ReadRow>
+                </div>
               </div>
             </Panel>
           )}
 
-          {isPartiallyShipped && (
-            <Panel icon="chart" title="Отгрузка по рейсам">
+          {isLegacyTerminal && (
+            <Panel icon="chart" title="Итог">
               <div style={{ padding: '0 2px' }}>
                 <ReadRow label="План" mono>{planTotal} шт</ReadRow>
                 <ReadRow label="Отгружено" mono>
                   <span style={{ color: 'var(--c-success)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
                 </ReadRow>
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Осталось увезти" mono strong>
-                    {Math.max(0, planTotal - doc.lines.reduce((s, l) => s + l.shipped_qty, 0))} шт
-                  </ReadRow>
-                </div>
-              </div>
-            </Panel>
-          )}
-
-          {status === 'shipped' && isDefectCargo && (
-            <Panel icon="chart" title="Итог отгрузки">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label="Отгружено брака" mono>
-                  <span style={{ color: 'var(--c-warning)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
-                </ReadRow>
-                {showCosts && (
-                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-                )}
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
-                </div>
-              </div>
-            </Panel>
-          )}
-
-          {status === 'shipped' && !isDefectCargo && (
-            <Panel icon="chart" title="Итог отгрузки">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label="Отгружено годного" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
-                <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
-                {showCosts && (
-                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-                )}
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Отгружено" mono strong>{fmtDateLong(doc.actual_ship_date) || '—'}</ReadRow>
-                </div>
-              </div>
-            </Panel>
-          )}
-
-          {isCompletedNoGoods && (
-            <Panel icon="chart" title="Итог">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label="Отгружено годного" mono><span style={{ color: 'var(--c-text-subtle)' }}>0 шт</span></ReadRow>
-                <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Итог" mono strong>Завершено без отгрузки</ReadRow>
-                </div>
               </div>
             </Panel>
           )}
         </div>
       </div>
+
+      <Drawer
+        open={rejectOpen}
+        onClose={() => { setRejectOpen(false); setRejectReason('') }}
+        title="Отклонить задачу"
+        subtitle={`Возврат менеджеру · ${doc.doc_number}`}
+        width={420}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn ghost" disabled={acting} onClick={() => { setRejectOpen(false); setRejectReason('') }}>
+              Отмена
+            </button>
+            <button className="btn primary danger" disabled={acting || !rejectReason.trim()} onClick={handleReject}>
+              <Icon name="arrowLeft" size={14} />Отклонить и вернуть
+            </button>
+          </div>
+        }
+      >
+        <p style={{ marginTop: 0, fontSize: 13, color: 'var(--c-text-subtle)' }}>
+          Задача вернётся менеджеру в статус «Черновик». Укажите причину — она сохранится в журнале.
+        </p>
+        <Field label="Причина отклонения" required style={{ marginBottom: 0 }}>
+          <AutoGrowTextarea
+            minRows={3}
+            placeholder="Например: товара нет на остатках, ошибка в составе, неверное ТЗ"
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            style={{ resize: 'vertical', minHeight: 90 }}
+          />
+        </Field>
+      </Drawer>
 
       <Drawer
         open={opsDrawerOpen}

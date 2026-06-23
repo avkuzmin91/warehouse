@@ -157,6 +157,11 @@ class ShipmentPriorityUpdate(BaseModel):
     priority_rank: int | None = Field(default=None, ge=1, le=2)
 
 
+class ShipmentRejectPayload(BaseModel):
+    # Причина отклонения задачи начальником склада (фиксируется в журнале).
+    reason: str = Field(min_length=1)
+
+
 class ShipmentLineFile(BaseModel):
     id:         str
     filename:   str
@@ -264,11 +269,6 @@ class ShipmentOpItem(BaseModel):
     created_by_email: str | None
 
 
-class TripRef(BaseModel):
-    id:     str
-    number: str
-
-
 class ShipmentDetailResponse(BaseModel):
     id:           str
     doc_number:   str
@@ -284,9 +284,6 @@ class ShipmentDetailResponse(BaseModel):
     comment:      str | None
     status:       str
     status_label: str
-    trip_id:      str | None = None
-    trip_number:  str | None = None
-    trips:        list[TripRef] = []
     created_at:   str
     created_by:   str | None
     updated_at:   str | None

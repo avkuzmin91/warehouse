@@ -1,12 +1,14 @@
 import { request, requestForm } from './http'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'assigned' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
-  draft:             'Создание',
+  draft:             'Черновик',
+  assigned:          'Ожидает принятия',
   packing:           'В плане',
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
+  packed:            'Упаковано',
   awaiting_trip:     'Ожидает рейс',
   partially_shipped: 'Частично отгружено',
   shipped:           'Завершён',
@@ -16,9 +18,11 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Создан',
+  assigned:          'Принята',
   packing:           'Передан на упаковку',
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
+  packed:            'Упаковано',
   awaiting_trip:     'Готов к рейсу',
   partially_shipped: 'Частично отгружено',
   shipped:           'Завершён',
@@ -28,9 +32,11 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   draft:             '',
+  assigned:          'warning',
   packing:           'info',
   on_packing:        'info',
   relocating:        'info',
+  packed:            'success',
   awaiting_trip:     'warning',
   partially_shipped: 'warning',
   shipped:           'success',
@@ -39,7 +45,7 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip', 'shipped',
+  'draft', 'assigned', 'packing', 'on_packing', 'relocating', 'packed',
 ]
 
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
@@ -61,20 +67,11 @@ export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' 
   return ''
 }
 
-/** Статусы отгрузок, доступные для привязки к рейсу: только готовые к рейсу.
- *  В рейс кладём то, что физически готово к отгрузке («Ожидает рейс» / «Частично
- *  отгружено»); количество ограничено фактическим готовым остатком (см. бэкенд
- *  shipment_alloc_remaining). Ещё не подготовленные отгрузки (draft/packing/…) в
- *  кандидаты не попадают — нельзя грузить машину тем, что склад не упаковал. */
-export const SHIPMENT_TRIP_SELECTABLE_STATUSES: ShipmentStatus[] = [
-  'awaiting_trip', 'partially_shipped',
-]
-
 export type ShipmentCargoType = 'good' | 'defect'
 
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
-  | 'pack' | 'pack_correction' | 'move_return' | 'relocate'
+  | 'pack' | 'pack_correction' | 'move_return' | 'relocate' | 'return_to_packing' | 'reject'
 
 export type ShipmentOp = {
   id:               string
@@ -153,9 +150,9 @@ export type ShipmentListItem = {
 export type ShipmentDetail = ShipmentListItem & {
   comment:          string | null
   actual_ship_date: string | null
-  trip_id:          string | null
-  trip_number:      string | null
-  trips:            { id: string; number: string }[]
+  trip_id?:         string | null
+  trip_number?:     string | null
+  trips?:           { id: string; number: string }[]
   created_by:       string | null
   updated_at:       string | null
   lines:            ShipmentLine[]
@@ -211,8 +208,6 @@ export type ShipmentListParams = {
   date_to?:   string
   overdue?:   boolean
   cargo_type?: ShipmentCargoType
-  /** Кандидаты на привязку к рейсу: исключает отгрузки, привязанные к другому активному рейсу. */
-  available_for_trip_id?: string
 }
 
 export type ShipmentsSummary = {
@@ -286,7 +281,6 @@ export function listShipments(params: ShipmentListParams = {}, signal?: AbortSig
   if (params.date_to)   sp.set('date_to', params.date_to)
   if (params.overdue)   sp.set('overdue', 'true')
   if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
-  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
 }
@@ -311,23 +305,6 @@ export function listShipmentLines(params: ShipmentListParams = {}, signal?: Abor
 
 export function getShipment(id: string) {
   return request<ShipmentDetail>(`/shipments/${id}`)
-}
-
-export type ShipmentTripRemainingLine = {
-  line_id: string
-  product_sku: string | null
-  product_name: string | null
-  color: string | null
-  variant: string | null
-  qty: number
-  shipped_qty: number
-  remaining: number
-  store_name: string | null
-}
-
-/** Остаток к распределению по строкам отгрузки для привязки к рейсу. */
-export function getShipmentTripRemaining(id: string, signal?: AbortSignal) {
-  return request<{ lines: ShipmentTripRemainingLine[] }>(`/shipments/${id}/trip-alloc-remaining`, { signal })
 }
 
 export function createShipment(body: ShipmentDocCreate) {
@@ -463,6 +440,20 @@ export function advanceShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, { method: 'POST' })
 }
 
+// Отклонить задачу упаковки на приёмке (assigned → draft) с причиной — возврат менеджеру.
+export function rejectShipment(id: string, reason: string) {
+  return request<{ message: string }>(`/shipments/${id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+// Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
+// «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
+export function returnShipmentToPacking(id: string) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
+}
+
 export type ShipmentRelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }
 export type ShipmentRelocateLine = {
   line_id: string
@@ -490,22 +481,8 @@ export function finishShipmentDefectRelocation(id: string, lines: ShipmentDefect
   })
 }
 
-export function revertShipment(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/revert`, { method: 'POST' })
-}
-
-// Менеджер возвращает отгрузку «Ожидает рейс» → «На упаковке» (задача снова у начальника смены).
-export function returnShipmentToPacking(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
-}
-
 export function cancelShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/cancel`, { method: 'POST' })
-}
-
-// Завершить товарную отгрузку без отгрузки: после упаковки годного 0 (весь товар брак).
-export function completeShipmentNoGoods(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/complete-no-goods`, { method: 'POST' })
 }
 
 export function deleteShipment(id: string) {

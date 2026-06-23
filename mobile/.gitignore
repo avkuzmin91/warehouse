@@ -3,6 +3,5 @@ dist
 *.local
 .DS_Store
 
-# Capacitor native projects (генерируются на Mac / с Android SDK)
-/ios
+# Capacitor native project (генерируется с Android SDK)
 /android

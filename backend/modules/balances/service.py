@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from config import (
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     INV_OP_INTAKE,
+    INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
     INV_OP_SINKS,
@@ -36,7 +42,8 @@ _IN_TRANSIT_STATUS_SQL = ", ".join(f"'{s}'" for s in _IN_TRANSIT_STATUSES)
 
 # Модель остатков на двух осях — чистый replay журнала zone_relocations:
 #   операционный статус: storage «На хранении» | packing «На упаковке» |
-#                        ready «Готов к отгрузке» | shipped «Отгружен» (терминальный)
+#                        packed «Упаковано» | ready «Готов к отгрузке» |
+#                        shipped «Отгружен» (терминальный)
 #   качество:            good «Годный» | defect «Брак»
 #
 # Баланс позиции в корзине (op, quality) = Σ движений в корзину − Σ движений из корзины.
@@ -55,6 +62,8 @@ _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_STORAGE, INV_Q_DEFECT),
     (INV_OP_PACKING, INV_Q_GOOD),
     (INV_OP_PACKING, INV_Q_DEFECT),
+    (INV_OP_PACKED, INV_Q_GOOD),
+    (INV_OP_PACKED, INV_Q_DEFECT),
     (INV_OP_READY, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_DEFECT),
 ]
@@ -144,7 +153,9 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT
-            a.product_id, a.product_sku, a.client_id, a.color_id, a.size_id,
+            a.product_id,
+            COALESCE(NULLIF(TRIM(prod.sku), ''), a.product_sku) AS product_sku,
+            a.client_id, a.color_id, a.size_id,
             a.product_name, a.client_name, a.color_name, a.size_name,
             {bucket_selects},
             a.docs_count
@@ -154,6 +165,7 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
            AND c.client_id  IS NOT DISTINCT FROM a.client_id
            AND c.color_id   IS NOT DISTINCT FROM a.color_id
            AND c.size_id    IS NOT DISTINCT FROM a.size_id
+        LEFT JOIN products prod ON prod.id = a.product_id
     """
     return agg_query, line_params
 
@@ -241,7 +253,11 @@ def get_plannable_items(
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
                              - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS storage_good,
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_STORAGE}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
-                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS storage_defect
+                             - SUM(CASE WHEN from_op='{INV_OP_STORAGE}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS storage_defect,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS ready_good,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS ready_defect
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
         ),
@@ -270,6 +286,8 @@ def get_plannable_items(
                COALESCE(s.client_name,  i.client_name)  AS client_name,
                COALESCE(s.storage_good, 0)   AS storage_good,
                COALESCE(s.storage_defect, 0) AS storage_defect,
+               COALESCE(s.ready_good, 0)     AS ready_good,
+               COALESCE(s.ready_defect, 0)   AS ready_defect,
                COALESCE(i.in_transit, 0)     AS in_transit
         FROM keys k
         LEFT JOIN stock s
@@ -293,12 +311,16 @@ def get_plannable_items(
         s = like_substring_param(search)
         conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ?)")
         params += [s, s]
-    conds.append("p.storage_defect > 0" if is_defect else "(p.storage_good > 0 OR p.in_transit > 0)")
+    conds.append(
+        "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
+        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.in_transit > 0)"
+    )
     where = "WHERE " + " AND ".join(conds)
 
     rows = connection.execute(
         f"""
-        SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending
+        SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending,
+               COALESCE(NULLIF(TRIM(prod.sku), ''), p.product_sku) AS live_sku
         FROM ({query}) p
         LEFT JOIN products prod ON prod.id = p.product_id
         {where}
@@ -312,7 +334,7 @@ def get_plannable_items(
         PlannableItem(
             product_id=str(r["product_id"]),
             product_name=str(r["product_name"]),
-            product_sku=str(r["product_sku"]),
+            product_sku=str(r["live_sku"] or r["product_sku"]),
             sku_pending=bool(r["sku_pending"]),
             client_id=r["client_id"],
             client_name=r["client_name"],
@@ -320,6 +342,8 @@ def get_plannable_items(
             color_name=r["color_name"],
             size_id=r["size_id"],
             size_name=r["size_name"],
+            ready_good=int(r["ready_good"] or 0),
+            ready_defect=int(r["ready_defect"] or 0),
             storage_good=int(r["storage_good"] or 0),
             storage_defect=int(r["storage_defect"] or 0),
             in_transit=0 if is_defect else int(r["in_transit"] or 0),
@@ -354,12 +378,36 @@ def get_balances_summary(
     return BalanceSummaryResponse(**totals, total=sum(totals.values()))
 
 
+def _zone_item(row) -> BalanceZoneItem:
+    return BalanceZoneItem(
+        location_id=row["location_id"],
+        location_name=row["actual_location_name"],
+        op_status=str(row["op_status"]),
+        quality=str(row["quality"]),
+        product_id=str(row["product_id"]),
+        product_name=str(row["product_name"]),
+        product_sku=str(row["product_sku"]),
+        client_id=row["client_id"],
+        client_name=row["client_name"],
+        color_id=row["color_id"],
+        color_name=row["color_name"],
+        size_id=row["size_id"],
+        size_name=row["size_name"],
+        qty=int(row["qty"] or 0),
+    )
+
+
 def get_balances_by_zone(
     connection,
     *,
     client_id: str | None,
     search: str | None,
     only_positive: bool,
+    location: str | None = None,
+    op_status: str | None = None,
+    quality: str | None = None,
+    page: int | None = None,
+    limit: int | None = None,
 ) -> BalanceZonesResponse:
     """Остатки в разрезе местоположения, длинный формат: одна строка на
     (местоположение, позиция, операционный статус, качество).
@@ -435,63 +483,96 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM lose
         )
         SELECT x.loc_id AS location_id, x.op AS op_status, x.quality,
-               pm.product_id, pm.product_sku, pm.client_id, pm.color_id, pm.size_id,
+               pm.product_id,
+               COALESCE(NULLIF(TRIM(prod.sku), ''), pm.product_sku) AS product_sku,
+               pm.client_id, pm.color_id, pm.size_id,
                pm.product_name, pm.client_name, pm.color_name, pm.size_name,
                GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}
+        LEFT JOIN products prod ON prod.id = x.product_id
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.op = x.op AND gi.quality = x.quality
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
     """
 
-    rows = connection.execute(
-        f"""
-        SELECT *
+    # Доп. фильтры поверх агрегата: местоположение (часть кода адреса, напр. «1-А»),
+    # операционный статус и качество. Применяются в обоих режимах (с пагинацией и без).
+    extra = ""
+    extra_params: list = []
+    if location and location.strip():
+        extra += " AND b.actual_location_name ILIKE ?"
+        extra_params.append(like_substring_param(location))
+    if op_status and str(op_status).strip():
+        extra += " AND b.op_status = ?"
+        extra_params.append(str(op_status).strip())
+    if quality and str(quality).strip():
+        extra += " AND b.quality = ?"
+        extra_params.append(str(quality).strip())
+
+    base_subquery = f"""
+        SELECT b.*
         FROM (
-            SELECT
-                a.*,
-                COALESCE(uz.name, NULL) AS actual_location_name
+            SELECT a.*, uz.name AS actual_location_name
             FROM ({agg_query}) a
             LEFT JOIN unloading_zones uz ON uz.id = a.location_id
         ) b
-        WHERE b.qty > 0
+        WHERE b.qty > 0 {extra}
+    """
+
+    # Режим пагинации (web присылает limit): страница = N местоположений со всеми
+    # их строками. Мобильный экран без limit идёт по легаси-пути (потолок + truncated).
+    if limit is not None and limit > 0:
+        page_n = page if (page and page > 0) else 1
+        offset = (page_n - 1) * limit
+        rows = connection.execute(
+            f"""
+            WITH joined AS ({base_subquery}),
+            locs AS (
+                SELECT location_id,
+                       ROW_NUMBER() OVER (
+                           ORDER BY MAX(actual_location_name) IS NULL, MAX(actual_location_name)
+                       ) AS rn,
+                       COUNT(*) OVER () AS total_locs
+                FROM joined
+                GROUP BY location_id
+            )
+            SELECT j.*, l.total_locs
+            FROM joined j
+            JOIN locs l ON l.location_id IS NOT DISTINCT FROM j.location_id
+            WHERE l.rn > ? AND l.rn <= ?
+            ORDER BY l.rn, j.qty DESC, j.op_status, j.quality, j.product_name, j.color_name, j.size_name
+            """,
+            [*line_params, *extra_params, offset, offset + limit],
+        ).fetchall()
+        total = int(rows[0]["total_locs"]) if rows else 0
+        return BalanceZonesResponse(
+            items=[_zone_item(r) for r in rows],
+            truncated=False,
+            total=total,
+            page=page_n,
+            limit=limit,
+        )
+
+    rows = connection.execute(
+        f"""
+        SELECT * FROM ({base_subquery}) b2
         ORDER BY
-            b.actual_location_name IS NULL,
-            b.actual_location_name,
-            b.qty DESC,
-            b.op_status,
-            b.quality,
-            b.product_name,
-            b.color_name,
-            b.size_name
+            b2.actual_location_name IS NULL,
+            b2.actual_location_name,
+            b2.qty DESC,
+            b2.op_status,
+            b2.quality,
+            b2.product_name,
+            b2.color_name,
+            b2.size_name
         LIMIT {ZONE_ROWS_LIMIT + 1}
         """,
-        line_params,
+        [*line_params, *extra_params],
     ).fetchall()
 
     truncated = len(rows) > ZONE_ROWS_LIMIT
     rows = rows[:ZONE_ROWS_LIMIT]
-
-    items = [
-        BalanceZoneItem(
-            location_id=row["location_id"],
-            location_name=row["actual_location_name"],
-            op_status=str(row["op_status"]),
-            quality=str(row["quality"]),
-            product_id=str(row["product_id"]),
-            product_name=str(row["product_name"]),
-            product_sku=str(row["product_sku"]),
-            client_id=row["client_id"],
-            client_name=row["client_name"],
-            color_id=row["color_id"],
-            color_name=row["color_name"],
-            size_id=row["size_id"],
-            size_name=row["size_name"],
-            qty=int(row["qty"] or 0),
-        )
-        for row in rows
-    ]
-    return BalanceZonesResponse(items=items, truncated=truncated)
+    return BalanceZonesResponse(items=[_zone_item(r) for r in rows], truncated=truncated)
 
 
 def _eq_or_null(col: str, val) -> tuple[str, list]:
@@ -542,9 +623,10 @@ def insert_inventory_move(
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
     Покрывает приход приёмки (intake→storage), перемещение (оси не меняются),
-    передачу на упаковку (storage→packing), QC-упаковку (packing→ready /
-    packing,good→packing,defect), раскладку к рейсу, смену качества, списание
-    при отправке рейса (…→shipped) и ручное списание (…→written_off).
+    передачу на упаковку (storage→packing), упаковку (packing→packed годного и
+    брака), раскладку «Готово к рейсу» (packed→ready годного / packed→storage
+    брака), смену качества, списание при отправке рейса (…→shipped) и ручное
+    списание (…→written_off).
     packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки;
     receipt_line_id — только для прихода приёмки; reason — только для списания.
     """
@@ -668,6 +750,116 @@ def get_available_total(
         return int(row["s"]) if row else 0
 
     return max(0, _move_sum("to") - _move_sum("from"))
+
+
+def ready_zones_for_variant(
+    connection,
+    *,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+    client_id: str | None,
+    quality: str,
+    op: str = INV_OP_READY,
+) -> list[dict]:
+    """Остаток-источник отгрузки (`op`-нетто) варианта×клиента×качества по местам.
+
+    Seam между «Задачей упаковки» (производит ready) и «Отгрузкой» (потребляет):
+    остаток считается ПО ВАРИАНТУ (product/color/size×client×quality), а не по строке —
+    отгрузка не знает, какая задача упаковки его подготовила. Возвращает [{zone_id,
+    zone_name, net}] с net>0 по убыванию (для FIFO-списания при выезде рейса).
+    `op` — корзина-источник: годный отгружается из `ready`, брак — прямо из `storage`.
+    """
+    rows = connection.execute(
+        """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+               SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+               FROM zone_relocations
+               WHERE product_id = ?
+                 AND color_id  IS NOT DISTINCT FROM ?
+                 AND size_id   IS NOT DISTINCT FROM ?
+                 AND client_id IS NOT DISTINCT FROM ?
+                 AND to_op = ? AND to_quality = ?
+               UNION ALL
+               SELECT from_zone_id, from_zone_name, -qty
+               FROM zone_relocations
+               WHERE product_id = ?
+                 AND color_id  IS NOT DISTINCT FROM ?
+                 AND size_id   IS NOT DISTINCT FROM ?
+                 AND client_id IS NOT DISTINCT FROM ?
+                 AND from_op = ? AND from_quality = ?
+           ) t
+           GROUP BY zone_id HAVING SUM(net) > 0
+           ORDER BY SUM(net) DESC""",
+        (product_id, color_id, size_id, client_id, op, quality,
+         product_id, color_id, size_id, client_id, op, quality),
+    ).fetchall()
+    return [{"zone_id": r["zone_id"], "zone_name": r["zone_name"], "net": int(r["net"])} for r in rows]
+
+
+def ready_available_for_dispatch(
+    connection,
+    *,
+    product_id: str,
+    color_id: str | None,
+    size_id: str | None,
+    client_id: str | None,
+    quality: str,
+    ops: Sequence[str] = (INV_OP_READY,),
+    reserved_statuses: Sequence[str] | None = None,
+    exclude_doc_id: str | None = None,
+) -> int:
+    """Свободный остаток-источник варианта под отгрузку: доступно минус уже
+    зарезервированное другими незакрытыми отгрузками.
+
+    Σ-по-корзинам нетто (вариант×клиент×качество) − Σ(незавершённый объём
+    ЗАФИКСИРОВАННЫХ отгрузок того же варианта: qty − shipped_qty). Черновики резерв
+    НЕ держат — это лишь намерение; иначе два черновика взаимно заблокировали бы
+    передачу в подготовку. Резерв возникает при фиксации (advance, draft → preparing):
+    кто первый передал — тот и занял остаток, второй не пройдёт гейт. `ops` —
+    корзины-источники гейта (годный из `ready`, брак из `storage`).
+
+    `reserved_statuses` — статусы отгрузок, чей спрос ещё «висит» на этой корзине-
+    источнике (по умолчанию preparing/awaiting_trip/partially_shipped). Для брака
+    передаётся ТОЛЬКО `preparing`: подготовка увозит брак из `storage` в `ready`, т.е.
+    остаток уже физически ушёл из `storage` (учтён в нетто) — повторно его вычитать
+    через резерв нельзя, иначе двойной счёт ложно блокирует следующую брак-отгрузку.
+    `exclude_doc_id` исключает саму проверяемую отгрузку.
+    """
+    statuses = list(reserved_statuses) if reserved_statuses is not None else [
+        DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    ]
+    ready = sum(
+        get_available_total(
+            connection, product_id=product_id, color_id=color_id, size_id=size_id,
+            client_id=client_id, op=op, quality=quality,
+        )
+        for op in ops
+    )
+    cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
+    status_ph = ",".join("?" for _ in statuses)
+    conds = [
+        "dl.product_id = ?",
+        "dl.color_id IS NOT DISTINCT FROM ?",
+        "dl.size_id  IS NOT DISTINCT FROM ?",
+        "dd.client_id IS NOT DISTINCT FROM ?",
+        "dd.cargo_type = ?",
+        "COALESCE(dl.is_deleted, 0) = 0",
+        "COALESCE(dd.is_deleted, 0) = 0",
+        f"dd.status IN ({status_ph})",
+    ]
+    params: list = [product_id, color_id, size_id, client_id, cargo, *statuses]
+    if exclude_doc_id:
+        conds.append("dd.id <> ?")
+        params.append(exclude_doc_id)
+    row = connection.execute(
+        f"""SELECT COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) AS reserved
+            FROM dispatch_lines dl
+            JOIN dispatch_docs dd ON dd.id = dl.doc_id
+            WHERE {' AND '.join(conds)}""",
+        params,
+    ).fetchone()
+    reserved = int(row["reserved"] or 0)
+    return max(0, ready - reserved)
 
 
 def create_zone_relocation(connection, payload, user_id: str) -> None:

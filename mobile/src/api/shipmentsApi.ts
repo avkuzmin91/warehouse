@@ -1,4 +1,4 @@
-import { request, requestIdHeaders } from './http'
+import { request, requestForm, requestIdHeaders } from './http'
 
 // --- Types --- (зеркало backend/modules/shipments/schemas.py)
 export type ShipmentStatus =
@@ -28,6 +28,7 @@ export type ShipmentLine = {
   packed_good: number
   packed_defect: number
   available_for_pack: number
+  store_id: string | null
   store_name: string | null
   placements: ShipmentPlacement[]
 }
@@ -72,6 +73,62 @@ export function getShipments(status: string, limit = 50, signal?: AbortSignal): 
 
 export function getShipment(id: string, signal?: AbortSignal): Promise<ShipmentDetail> {
   return request<ShipmentDetail>(`/shipments/${id}`, { signal })
+}
+
+export type ShipmentListParams = {
+  page?: number
+  limit?: number
+  status?: string
+  client_id?: string
+  search?: string
+  cargo_type?: 'good' | 'defect'
+}
+
+export type ShipmentLineIn = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  color_id?: string | null
+  color_name?: string | null
+  size_id?: string | null
+  size_name?: string | null
+  qty: number
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
+  store_id?: string | null
+  store_name?: string | null
+}
+
+export type ShipmentDocCreate = {
+  cargo_type?: 'good' | 'defect'
+  client_id?: string | null
+  client_name?: string | null
+  ship_date?: string | null
+  comment?: string | null
+  lines?: ShipmentLineIn[]
+}
+
+export function createShipment(body: ShipmentDocCreate): Promise<{ message: string }> {
+  return request<{ message: string }>('/shipments', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<{ message: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
+}
+
+// Менеджерский список «Задач упаковки»: пагинация + фильтры (status опционален → все статусы).
+export function listShipments(params: ShipmentListParams = {}, signal?: AbortSignal): Promise<ShipmentListResponse> {
+  const sp = new URLSearchParams()
+  if (params.page)       sp.set('page', String(params.page))
+  if (params.limit)      sp.set('limit', String(params.limit))
+  if (params.status)     sp.set('status', params.status)
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.search)     sp.set('search', params.search)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  const q = sp.toString()
+  return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
 }
 
 export type MoveAllocation = { from_zone_id: string | null; qty: number }

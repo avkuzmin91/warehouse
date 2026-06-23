@@ -1,0 +1,104 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useNav } from '../../nav/NavContext'
+import {
+  getReceiptDetail,
+  RECEIPT_STATUS_LABELS,
+  receiptStatusTone,
+  type ReceiptDetailFull,
+} from '../../api/receiptsApi'
+import { AppBar } from '../../components/AppBar'
+import { Icon } from '../../components/Icon'
+
+function fmtDate(d: string | null): string {
+  if (!d) return '—'
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return d
+  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+function fmtDateTime(d: string): string {
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return d
+  return dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+export function ReceiptDetailScreen({ docId }: { docId: string }) {
+  const { back } = useNav()
+  const [detail, setDetail] = useState<ReceiptDetailFull | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const load = useCallback((signal?: AbortSignal) => {
+    setLoading(true)
+    setError('')
+    getReceiptDetail(docId, signal)
+      .then((d) => { if (!signal?.aborted) setDetail(d) })
+      .catch((err) => { if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить документ') })
+      .finally(() => { if (!signal?.aborted) setLoading(false) })
+  }, [docId])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    load(ac.signal)
+    return () => ac.abort()
+  }, [load])
+
+  const doc = detail?.doc
+  const tone = doc ? receiptStatusTone(doc.status) : ''
+
+  return (
+    <div className="screen">
+      <AppBar title={doc ? doc.doc_number : 'Поступление'} sub={doc ? RECEIPT_STATUS_LABELS[doc.status] : ''} onBack={back} noProfile />
+      <div className="scroll pad-nav">
+        {error && (
+          <div className="alert"><Icon name="alert" size={15} />{error}</div>
+        )}
+        {loading || !doc ? (
+          !error && <div className="center" style={{ padding: '32px 0' }}><div className="spin" /></div>
+        ) : (
+          <>
+            <div className="summary" style={{ marginBottom: 16 }}>
+              <div className="kv"><span className="k">Статус</span>
+                <span className="v">{tone ? <span className={`badge ${tone}`}><span className="dot" />{RECEIPT_STATUS_LABELS[doc.status]}</span> : RECEIPT_STATUS_LABELS[doc.status]}</span>
+              </div>
+              <div className="kv"><span className="k">Клиент</span><span className="v">{doc.client_name ?? '—'}</span></div>
+              <div className="kv"><span className="k">Прибытие (план)</span><span className="v">{fmtDate(doc.arrival_date)}</span></div>
+              <div className="kv"><span className="k">Прибытие (факт)</span><span className="v">{fmtDate(doc.actual_arrival_date)}</span></div>
+              {doc.logistics_cost != null && (
+                <div className="kv"><span className="k">Логистика</span><span className="v mono">{doc.logistics_cost} ₽</span></div>
+              )}
+              {doc.comment && (
+                <div className="kv"><span className="k">Комментарий</span><span className="v">{doc.comment}</span></div>
+              )}
+            </div>
+
+            <div className="sec">Строки<span className="sec-count">{detail.lines.length}</span></div>
+            {detail.lines.map((l) => (
+              <div key={l.id} className="line-row" style={{ marginTop: 0, padding: '8px 0', borderBottom: '1px solid var(--c-border)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name ?? '—'}</div>
+                  <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
+                </div>
+                <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <div className="mono">план {l.planned_qty}</div>
+                  {l.accepted_qty != null && <div className="tile-meta mono">принято {l.accepted_qty}</div>}
+                </div>
+              </div>
+            ))}
+
+            {detail.ops.length > 0 && (
+              <>
+                <div className="sec" style={{ marginTop: 16 }}>История<span className="sec-count">{detail.ops.length}</span></div>
+                {detail.ops.map((op) => (
+                  <div key={op.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--c-border)' }}>
+                    <div style={{ fontSize: 13 }}>{op.comment ?? op.op_type}</div>
+                    <div className="tile-meta">{fmtDateTime(op.created_at)}{op.created_by_email ? ` · ${op.created_by_email}` : ''}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

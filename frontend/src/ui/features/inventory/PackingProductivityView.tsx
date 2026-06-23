@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getPackingProductivity } from '../../../api/shipmentsApi'
 import type { PackingProductivityDay } from '../../../api/shipmentsApi'
 import { ListPage } from '../../layouts/ListPage'
@@ -11,7 +12,6 @@ import { fmtYmdAsDmy } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
-import { PackingTabs } from './PackingTabs'
 
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -28,6 +28,7 @@ function weekdayShort(ymd: string): string {
 }
 
 export function PackingProductivityView() {
+  const navigate = useNavigate()
   const defFrom = weekAgo()
   const defTo = today()
 
@@ -57,10 +58,15 @@ export function PackingProductivityView() {
 
   return (
     <ListPage
-      title="Упаковка"
+      title="Производительность упаковки"
       subtitle={data
         ? `За период: ${data.total.toLocaleString('ru-RU')} шт (годный ${data.total_good.toLocaleString('ru-RU')} · брак ${data.total_defect.toLocaleString('ru-RU')})`
         : undefined}
+      actions={
+        <button className="btn ghost" onClick={() => navigate('/inventory/packing')}>
+          <Icon name="arrowLeft" size={14} />Задачи упаковки
+        </button>
+      }
       filters={
         <FiltersBar>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -104,8 +110,6 @@ export function PackingProductivityView() {
         </FiltersBar>
       }
     >
-      <PackingTabs active="productivity" />
-
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
           <div style={{ width: 24, height: 24, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />

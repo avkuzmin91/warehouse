@@ -488,6 +488,11 @@ button {
 }
 .combo .combo-ph { color: var(--c-text-faint); }
 .sheet-backdrop.combo-pop { z-index: 70; }
+
+/* Поле выбора места: Combobox + квадратная кнопка скана QR ячейки */
+.zone-field { display: flex; flex: 1; min-width: 0; gap: 8px; align-items: stretch; }
+.zone-field .selectish { flex: 1; }
+.zone-scan { flex: 0 0 50px; width: 50px; height: 50px; padding: 0; }
 .combo-list { display: flex; flex-direction: column; }
 .combo-opt {
   display: flex;

@@ -7,3 +7,45 @@ export type Zone = { id: string; name: string; is_active?: boolean; is_deleted?:
 export function getUnloadingZones(signal?: AbortSignal): Promise<Zone[]> {
   return request<Zone[]>('/inventory/lookups/unloading-zones', { signal })
 }
+
+// --- Справочники для менеджерских форм создания ---
+export type DictionaryItem = { id: string; name: string; is_active?: boolean; is_deleted?: boolean }
+
+export type ProductLookup = {
+  id: string
+  name: string
+  sku: string
+  sku_pending?: boolean
+  requires_color: boolean
+  requires_size: boolean
+}
+
+// Реально существующие варианты товара (product_variants) — сетка цвет × размер.
+export type ProductVariantPair = {
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
+}
+
+export type ClientStoreItem = { id: string; client_id: string; name: string; is_active: boolean; is_deleted?: boolean }
+
+export function getClients(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/clients', { signal })
+}
+
+export function getClientStores(clientId: string | null | undefined, signal?: AbortSignal): Promise<ClientStoreItem[]> {
+  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
+  return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q}`, { signal })
+}
+
+export function getProducts(clientId?: string | null, signal?: AbortSignal): Promise<ProductLookup[]> {
+  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
+  return request<ProductLookup[]>(`/inventory/lookups/products${q}`, { signal })
+}
+
+export function getProductVariants(productId: string, signal?: AbortSignal): Promise<ProductVariantPair[]> {
+  const sp = new URLSearchParams()
+  sp.set('product_id', productId)
+  return request<ProductVariantPair[]>(`/inventory/lookups/variants?${sp.toString()}`, { signal })
+}

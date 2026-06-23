@@ -18,10 +18,12 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   receipt_intake: 'inbox',
   receipt_review: 'check',
   receipt_close_short: 'alert',
+  shipment_accept: 'inbox',
   shipment_move_in: 'forklift',
   shipment_pack: 'boxOut',
   shipment_relocate: 'forklift',
   shipment_defect_prepare: 'forklift',
+  dispatch_prepare: 'forklift',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -31,10 +33,12 @@ const KIND_LABEL: Record<TaskKind, string> = {
   receipt_intake: 'Принять товары',
   receipt_review: 'Проверить поступление',
   receipt_close_short: 'Закрыть с недопоставкой',
+  shipment_accept: 'Принять в работу',
   shipment_move_in: 'Передать на упаковку',
   shipment_pack: 'Упаковать',
   shipment_relocate: 'Разложить по местам',
   shipment_defect_prepare: 'Подготовить к отгрузке',
+  dispatch_prepare: 'Подготовить отгрузку',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -43,10 +47,12 @@ const STATUS_SUB: Record<string, string> = {
   costing: 'Уточнение стоимости',
   on_intake: 'Принят',
   on_review: 'На проверке',
+  assigned: 'Ожидает принятия',
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   awaiting_trip: 'Ожидает рейс',
+  preparing: 'Подготовка отгрузки',
   partially_received: 'Недопоставка по рейсам',
 }
 
@@ -58,7 +64,8 @@ function taskTitle(t: TaskItem): string {
 const DOC_TYPE_SUB: Record<TaskItem['doc_type'], string> = {
   trip: 'Рейс',
   receipt: 'Поступление',
-  shipment: 'Отгрузка',
+  shipment: 'Задача упаковки',
+  dispatch: 'Отгрузка',
 }
 
 function taskSub(t: TaskItem): string {

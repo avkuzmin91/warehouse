@@ -116,3 +116,22 @@ def test_inventory_product_and_variant_lookups(manager_client, lookup_data):
     )
     assert sizes.status_code == 200, sizes.text
     assert [item["id"] for item in sizes.json()] == [lookup_data["size_id"]]
+
+
+def test_lookup_variants_returns_full_matrix(manager_client, lookup_data):
+    variants = manager_client.get(
+        f"/inventory/lookups/variants?product_id={lookup_data['product_id']}"
+    )
+    assert variants.status_code == 200, variants.text
+    pairs = variants.json()
+    assert {"color_id", "color_name", "size_id", "size_name"} <= set(pairs[0].keys())
+    assert any(
+        p["color_id"] == lookup_data["color_id"] and p["size_id"] == lookup_data["size_id"]
+        for p in pairs
+    )
+
+
+def test_lookup_variants_empty_without_product(manager_client):
+    response = manager_client.get("/inventory/lookups/variants")
+    assert response.status_code == 200, response.text
+    assert response.json() == []

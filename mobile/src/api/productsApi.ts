@@ -21,6 +21,14 @@ export function getProductByBarcode(code: string, signal?: AbortSignal): Promise
   return request<BarcodeLookupResponse>(`/products/by-barcode/${encodeURIComponent(code)}`, { signal })
 }
 
+// Присвоение/смена базового SKU товара (для строк «ожидает SKU»). Admin/manager-эндпоинт.
+export function assignProductSku(productId: string, skuBase: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/products/${productId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ sku_base: skuBase }),
+  })
+}
+
 // --- Helpers ---
 export function barcodeVariantLabel(m: BarcodeMatch): string {
   return [m.color_name, m.size_name].filter(Boolean).join(' · ')

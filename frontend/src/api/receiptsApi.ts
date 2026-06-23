@@ -72,7 +72,15 @@ export type ReceiptLine = {
   accepted_qty: number | null
   /** Сколько уже привезли разгруженные рейсы — потолок приёмки в карточке (ручное поступление = план). */
   arrived_qty: number
+  /** Фактическая раскладка принятого по ячейкам (из журнала). Пусто, пока не принято. */
+  placements: ReceiptLinePlacement[]
   created_at: string
+}
+
+export type ReceiptLinePlacement = {
+  storage_zone_id: string | null
+  storage_zone_name: string | null
+  qty: number
 }
 
 export type ReceiptOp = {

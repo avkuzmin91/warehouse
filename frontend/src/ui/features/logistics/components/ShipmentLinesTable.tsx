@@ -1,6 +1,15 @@
-import type { ShipmentLine } from '../../../../api/shipmentsApi'
 import { Icon } from '../../../primitives/Icon'
 import { EmptyState } from '../../../primitives/EmptyState'
+
+/** Минимальный набор полей строки для таблицы (общий для отгрузок и dispatch). */
+type LineRow = {
+  id: string
+  product_name: string
+  product_sku: string
+  color_name: string | null
+  size_name: string | null
+  qty: number
+}
 
 const COL_HEAD: React.CSSProperties = {
   textTransform: 'uppercase',
@@ -12,13 +21,13 @@ const COL_HEAD: React.CSSProperties = {
   padding: '0 0 6px',
 }
 
-function variantOf(line: ShipmentLine): string | null {
+function variantOf(line: LineRow): string | null {
   return [line.color_name, line.size_name].filter(Boolean).join(' · ') || null
 }
 
 /** Таблица строк отгрузки (раскрытие строки в карточке рейса). */
 export function ShipmentLinesTable({ lines, loading, error, onRetry }: {
-  lines: ShipmentLine[]
+  lines: LineRow[]
   loading?: boolean
   error?: boolean
   onRetry?: () => void

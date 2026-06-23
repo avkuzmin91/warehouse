@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
-    INV_Q_GOOD,
     MAX_UPLOAD_BYTES,
+    SHIPMENT_ACCEPT_ROLES,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
@@ -18,21 +18,17 @@ from config import (
     SHIPMENT_CANCELLABLE_STATUSES_DEFECT,
     SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_OP_PRIORITY_UPDATE,
+    SHIPMENT_OP_REJECT,
     SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REVERT_TRANSITIONS,
-    SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
-    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_TERMINAL_STATUSES,
     SHIPMENT_STATUSES_ALL,
-    SHIPMENT_TRANSITIONS,
-    TRIP_STATUS_AWAITING_ARRIVAL,
-    TRIP_STATUS_DRAFT,
-    TRIP_STATUS_UNLOADING,
     UPLOADS_DIR,
 )
 from dbconn import get_connection, like_substring_param
@@ -64,12 +60,12 @@ from modules.shipments.schemas import (
     ShipmentPackingProductivityResponse,
     ShipmentPackingResponse,
     ShipmentPriorityUpdate,
+    ShipmentRejectPayload,
     ShipmentReturnFromPackingPayload,
-    TripRef,
 )
 from modules.shipments.service import (
+    _check_lines_covered_by_stock,
     advance_shipment,
-    doc_ready_total,
     finish_defect_relocation,
     finish_relocation,
     line_on_packing_qty,
@@ -85,7 +81,6 @@ from modules.shipments.service import (
     return_packing_pool_to_storage,
     return_to_packing,
     reverse_packing_entry,
-    shipment_alloc_remaining,
 )
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
@@ -115,7 +110,11 @@ def _priority_label(rank: int | None) -> str:
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
-    if str(user["role"]) not in _FILE_EDIT_ROLES:
+    role = str(user["role"])
+    # Начальник склада правит файлы только на шаге приёмки задачи («Ожидает принятия»):
+    # вместе с правом поправить ТЗ это позволяет ему подготовить задачу к принятию.
+    allowed = role in _FILE_EDIT_ROLES or (role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED)
+    if not allowed:
         raise HTTPException(status_code=403, detail="Менять файлы может только менеджер")
     if status in _FILE_FINAL_STATUSES:
         raise HTTPException(status_code=400, detail="Нельзя менять файлы в финальном статусе документа")
@@ -250,7 +249,6 @@ def list_shipments(
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
     cargo_type: str | None = Query(None),
-    available_for_trip_id: str | None = Query(None),
     user=Depends(_get_viewer),
 ):
     show_costs = can_view_costs(user)
@@ -260,14 +258,6 @@ def list_shipments(
         use_priority_order = overdue
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
             conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
-        if available_for_trip_id and available_for_trip_id.strip():
-            # Отгрузка может ехать несколькими рейсами: исключаем только привязанные
-            # к ЭТОМУ рейсу; привязанные к другим рейсам остаются кандидатами (остаток).
-            conds.append(
-                "NOT EXISTS (SELECT 1 FROM trip_lines tl"
-                " WHERE tl.shipment_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0 AND tl.trip_id = ?)"
-            )
-            params.append(available_for_trip_id.strip())
         if status:
             # Поддерживаем как одно значение, так и CSV ("shipped,cancelled" — вкладка «Завершённые»).
             requested = [s.strip() for s in status.split(",") if s.strip()]
@@ -309,10 +299,6 @@ def list_shipments(
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
         order_by = _shipment_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
-        # Резерв в активные ещё-не-уехавшие рейсы (зеркало shipment_alloc_remaining).
-        active_trip_statuses = ", ".join(
-            f"'{s}'" for s in (TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING)
-        )
         rows = conn.execute(
             f"""SELECT d.*,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
@@ -320,8 +306,8 @@ def list_shipments(
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
                     COALESCE((
                         SELECT SUM(CASE
-                            WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
-                            WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
+                            WHEN zr.to_op='packed' AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                            WHEN zr.from_op='packed' AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
                             ELSE 0 END)
                         + SUM(CASE
                             WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
@@ -332,25 +318,17 @@ def list_shipments(
                         WHERE sl2.doc_id = d.id
                     ), 0) AS total_packed_qty,
                     COALESCE((
-                        SELECT SUM(GREATEST(pl.ready - pl.pending, 0))
+                        -- Готовый к отгрузке остаток (нетто `ready` нужного качества): вошло в
+                        -- ready − вышло из ready, стороны независимо, чтобы перекладка ready→ready
+                        -- (раскладка годного по местам) давала ноль. Привязку к рейсу и списание
+                        -- держит домен dispatch — здесь резерв в рейсы не вычитается.
+                        SELECT SUM(GREATEST(pl.ready, 0))
                         FROM (
                             SELECT sl3.id AS line_id,
-                                -- Нетто `ready` нужного качества: вошло в ready − вышло из ready,
-                                -- стороны считаем независимо, чтобы перекладка ready→ready (раскладка
-                                -- годного по местам) давала ноль, а не +qty (зеркало _line_ready_by_zone).
                                 COALESCE(SUM(CASE WHEN zr.to_op='ready'   AND zr.to_quality
                                          = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0)
                                 - COALESCE(SUM(CASE WHEN zr.from_op='ready' AND zr.from_quality
-                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0) AS ready,
-                                COALESCE((
-                                    SELECT SUM(ta.qty) FROM trip_alloc ta
-                                    JOIN trip_lines tl ON tl.id = ta.trip_line_id
-                                    JOIN trip_docs td ON td.id = tl.trip_id
-                                    WHERE ta.shipment_line_id = sl3.id
-                                      AND COALESCE(ta.is_deleted,0)=0
-                                      AND COALESCE(tl.is_deleted,0)=0
-                                      AND td.status IN ({active_trip_statuses})
-                                ), 0) AS pending
+                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0) AS ready
                             FROM shipment_lines sl3
                             LEFT JOIN zone_relocations zr ON zr.shipment_line_id = sl3.id
                             WHERE sl3.doc_id = d.id AND COALESCE(sl3.is_deleted,0)=0
@@ -442,7 +420,7 @@ def list_shipment_lines(
             params += [s, s, s]
         if sku:
             s = like_substring_param(sku)
-            conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
+            conds.append("(COALESCE(NULLIF(p.sku, ''), l.product_sku) LIKE ? OR l.product_name LIKE ?)")
             params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
@@ -453,19 +431,22 @@ def list_shipment_lines(
             f"""SELECT COUNT(*) AS cnt
                 FROM shipment_lines l
                 JOIN shipment_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
                 WHERE {where}""",
             params,
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
         rows = conn.execute(
             f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
-                    l.product_id, l.product_name, l.product_sku,
+                    l.product_id, l.product_name,
+                    COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
                     l.color_name, l.size_name, l.qty,
                     COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
                 FROM shipment_lines l
                 JOIN shipment_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
                 WHERE {where}
                 ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
                 LIMIT ? OFFSET ?""",
@@ -499,42 +480,6 @@ def list_shipment_lines(
     return ShipmentLinesResponse(items=items, total=total, page=page, limit=limit)
 
 
-@router.get("/shipments/{doc_id}/trip-alloc-remaining")
-def shipment_trip_alloc_remaining(doc_id: str, user=Depends(_get_viewer)):
-    """Остаток к распределению по строкам отгрузки для привязки к рейсу.
-
-    remaining = план − уже распределённое в активные рейсы. Шторка привязки к
-    рейсу берёт его как значение по умолчанию и верхнюю границу.
-    """
-    with get_connection() as conn:
-        doc = conn.execute(
-            "SELECT id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not doc:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        remaining = shipment_alloc_remaining(conn, doc_id)
-        lines = conn.execute(
-            "SELECT id, product_sku, product_name, color_name, size_name, qty, shipped_qty, store_name "
-            "FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
-            (doc_id,),
-        ).fetchall()
-    items = [
-        {
-            "line_id": str(ln["id"]),
-            "product_sku": ln["product_sku"],
-            "product_name": ln["product_name"],
-            "color": ln["color_name"],
-            "variant": " · ".join(x for x in [ln["color_name"], ln["size_name"]] if x) or None,
-            "qty": int(ln["qty"] or 0),
-            "shipped_qty": int(ln["shipped_qty"] or 0),
-            "remaining": int(remaining.get(str(ln["id"]), 0)),
-            "store_name": ln["store_name"],
-        }
-        for ln in lines
-    ]
-    return {"lines": items}
-
-
 @router.get("/shipments/{doc_id}", response_model=ShipmentDetailResponse)
 def get_shipment(doc_id: str, user=Depends(_get_viewer)):
     show_costs = can_view_costs(user)
@@ -544,14 +489,6 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        trip_rows = conn.execute(
-            "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
-            "FROM trip_lines tl "
-            "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
-            "WHERE tl.shipment_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
-            "ORDER BY t.trip_number",
-            (doc_id,),
-        ).fetchall()
         # На строке показывается базовый SKU товара из карточки (SKU варианта вычисляется
         # автоматически и хранится только в карточке). SKU «принадлежит» товару, поэтому
         # берём актуальный `products.sku` — тогда присвоение/изменение SKU сразу видно, а
@@ -576,8 +513,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op='ready'   AND COALESCE(from_op,'')<>'ready' THEN qty
-                                    WHEN from_op='ready' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
+                                    WHEN from_op='packed' AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
                   COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
                                     WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
                FROM zone_relocations
@@ -587,22 +524,38 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
 
-        # Раскладка по местам (годный: ready→ready из зоны упаковки; брак с упаковки:
-        # packing→storage; подготовка брак-отгрузки: storage→ready в зону отгрузки),
-        # чтобы показывать её после перемещения только для просмотра.
+        # Раскладка по местам = ЧИСТЫЙ остаток нужной корзины по месту (вошло − вышло),
+        # а не валовая сумма размещений: иначе возврат на упаковку (откат раскладки
+        # ready→ready / storage→packing) и повторная раскладка задвоили бы числа. Корзины:
+        # годный — ready/good (товар) по местам хранения; брак — storage/defect (товарная
+        # отгрузка) либо ready/defect (подготовка брак-отгрузки в зону отгрузки). Движения
+        # отгрузки (dispatch) не помечены shipment_line_id, поэтому в раскладку не попадают.
         placement_rows = conn.execute(
-            """SELECT shipment_line_id, from_quality AS kind, to_zone_id,
-                  MIN(to_zone_name) AS to_zone_name, COALESCE(SUM(qty), 0) AS qty
-               FROM zone_relocations
+            """SELECT shipment_line_id, kind, zone_id,
+                  MIN(zone_name) AS zone_name, SUM(net) AS qty
+               FROM (
+                   SELECT shipment_line_id, 'good' AS kind, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'good'
+                   UNION ALL
+                   SELECT shipment_line_id, 'good', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'good'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = 'storage' AND to_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'storage' AND from_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'defect'
+               ) t
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
-                 AND (
-                     (from_op = 'ready' AND to_op = 'ready')
-                     OR (from_op = 'packing' AND to_op = 'storage' AND from_quality = 'defect')
-                     OR (from_op = 'storage' AND to_op = 'ready' AND from_quality = 'defect')
-                 )
-               GROUP BY shipment_line_id, from_quality, to_zone_id
-               HAVING COALESCE(SUM(qty), 0) <> 0
-               ORDER BY MIN(to_zone_name)""",
+               GROUP BY shipment_line_id, kind, zone_id
+               HAVING SUM(net) > 0
+               ORDER BY MIN(zone_name)""",
             (doc_id,),
         ).fetchall()
         placements_by_line: dict[str, list[ShipmentLinePlacement]] = {}
@@ -610,8 +563,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             lid = str(r["shipment_line_id"])
             placements_by_line.setdefault(lid, []).append(ShipmentLinePlacement(
                 kind=str(r["kind"]),
-                zone_id=r["to_zone_id"],
-                zone_name=r["to_zone_name"],
+                zone_id=r["zone_id"],
+                zone_name=r["zone_name"],
                 qty=int(r["qty"] or 0),
             ))
 
@@ -684,9 +637,6 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         comment=row["comment"],
         status=str(row["status"]),
         status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
-        trip_id=str(trip_rows[0]["trip_id"]) if trip_rows else None,
-        trip_number=str(trip_rows[0]["trip_number"]) if trip_rows else None,
-        trips=[TripRef(id=str(tr["trip_id"]), number=str(tr["trip_number"])) for tr in trip_rows],
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
         updated_at=row["updated_at"],
@@ -733,18 +683,26 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
 def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_manager)):
     now = _now()
     uid = str(user["id"])
+    role = str(user["role"])
     fields = body.model_dump(exclude_unset=True)
-    if fields:
-        ensure_shipment_planning_access(user)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, actual_ship_date, priority_rank, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status, actual_ship_date, priority_rank, client_id, comment FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         status = str(row["status"])
         if status not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
+        # Планирование (состав, реквизиты) ведёт менеджерский состав. Начальник склада
+        # на шаге приёмки задачи («Ожидает принятия») может поправить только ТЗ.
+        wh_head_review = role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED
+        if fields:
+            if wh_head_review:
+                if set(fields) - {"comment"}:
+                    raise HTTPException(status_code=403, detail="Начальник склада может править только техническое задание")
+            else:
+                ensure_shipment_planning_access(user)
         if "logistics_cost" in fields:
             ensure_cost_access(user)
         if "priority_rank" in fields:
@@ -778,6 +736,11 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                     (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
                      f"Дата отгрузки (факт): {_fmt_date(old_val)} → {_fmt_date(new_val)}", now, uid),
                 )
+        if "comment" in fields and (str(row["comment"] or "").strip()) != (fields["comment"] or ""):
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, "Техническое задание обновлено", now, uid),
+            )
         if "priority_rank" in fields:
             old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
             new_rank = fields["priority_rank"]
@@ -814,6 +777,8 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name, now),
         )
+        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
+            _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
         conn.commit()
     return {"message": line_id}
 
@@ -840,6 +805,8 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name,
              line_id, doc_id),
         )
+        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
+            _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
         conn.commit()
     return {"message": "ok"}
 
@@ -989,14 +956,6 @@ def finish_shipment_defect_relocation(doc_id: str, body: ShipmentFinishDefectRel
     return {"message": next_status}
 
 
-@router.post("/shipments/{doc_id}/return-to-packing")
-def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
-    uid = str(user["id"])
-    with get_connection() as conn:
-        next_status = return_to_packing(conn, doc_id, uid)
-    return {"message": next_status}
-
-
 @router.post("/shipments/{doc_id}/cancel")
 def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
@@ -1038,44 +997,46 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
     return {"message": SHIPMENT_STATUS_CANCELLED}
 
 
-@router.post("/shipments/{doc_id}/complete-no-goods")
-def complete_shipment_no_goods(doc_id: str, user=Depends(_get_manager)):
-    """Завершить товарную отгрузку без отгрузки: после упаковки годного 0 (весь
-    товар оказался браком), рейс не нужен. Цикл фактически отработан — это исход,
-    а не аннулирование. Брак уже вернулся на хранение при раскладке, остатки не
-    трогаем. Терминальный статус completed_no_goods (вне `shipped` → не идёт в счета).
+@router.post("/shipments/{doc_id}/reject")
+def reject_shipment(doc_id: str, body: ShipmentRejectPayload, user=Depends(_get_viewer)):
+    """Отклонить задачу упаковки на приёмке: возврат менеджеру (assigned → draft).
+
+    Доступно начальнику склада и менеджерскому составу (см. SHIPMENT_ACCEPT_ROLES).
+    Причина обязательна и фиксируется в журнале.
     """
     uid = str(user["id"])
     now = _now()
+    if str(user["role"]) not in SHIPMENT_ACCEPT_ROLES:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    reason = body.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, cargo_type, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if normalize_cargo_type(row["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
-            raise HTTPException(status_code=400, detail="Брак-отгрузку так завершить нельзя")
-        if str(row["status"]) != SHIPMENT_STATUS_AWAITING_TRIP:
-            raise HTTPException(status_code=400, detail="Завершить без отгрузки можно только в статусе «Ожидает рейс»")
-        if doc_ready_total(conn, doc_id, INV_Q_GOOD) > 0:
-            raise HTTPException(status_code=400, detail="Есть годный товар к отгрузке — нужен рейс, завершить без отгрузки нельзя")
+        if str(row["status"]) != SHIPMENT_STATUS_ASSIGNED:
+            raise HTTPException(status_code=400, detail="Отклонить можно только задачу, ожидающую принятия")
         conn.execute(
-            "UPDATE shipment_docs SET status=?, priority_rank=NULL, updated_at=? WHERE id=?",
-            (SHIPMENT_STATUS_COMPLETED_NO_GOODS, now, doc_id),
+            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
+            (SHIPMENT_STATUS_DRAFT, now, doc_id),
         )
-        if row.get("priority_rank") is not None:
-            conn.execute(
-                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-                (str(uuid4()), doc_id, SHIPMENT_OP_PRIORITY_UPDATE,
-                 "Приоритет снят: отгрузка завершена без отгрузки", now, uid),
-            )
         conn.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, "complete",
-             "Завершено без отгрузки: весь товар оказался браком, годного к отгрузке нет.", now, uid),
+            (str(uuid4()), doc_id, SHIPMENT_OP_REJECT, f"Задача отклонена: {reason}", now, uid),
         )
         conn.commit()
-    return {"message": SHIPMENT_STATUS_COMPLETED_NO_GOODS}
+    return {"message": SHIPMENT_STATUS_DRAFT}
+
+
+@router.post("/shipments/{doc_id}/return-to-packing")
+def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        next_status = return_to_packing(conn, doc_id, uid)
+    return {"message": next_status}
 
 
 @router.post("/shipments/{doc_id}/revert")

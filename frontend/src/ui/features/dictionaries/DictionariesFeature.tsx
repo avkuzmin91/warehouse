@@ -8,6 +8,7 @@ import { DictionariesSidebar } from './DictionariesSidebar'
 import { ProductsDict } from './ProductsDict'
 import { SimpleDict } from './SimpleDict'
 import { ClientsDict } from './ClientsDict'
+import { LocationsDict } from './LocationsDict'
 import { SimpleDictSheet } from './SimpleDictSheet'
 import { ClientSheet } from './ClientSheet'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
@@ -15,10 +16,10 @@ import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { canManageOwnWarehouses } from '../../../utils/access'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
-type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'>
+type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'>
 
 type SheetState =
-  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'unloading-zones' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
+  | { type: 'simple'; apiType: 'colors' | 'sizes' | 'product-types' | 'suppliers' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'; kind: string; isNew: boolean; initial: AnyDictItem | null }
   | { type: 'client'; isNew: boolean; initial: DictionaryItem | null }
   | null
 
@@ -27,7 +28,6 @@ function isSimpleDictionaryType(id: DictionaryTypeId): id is SimpleDictionaryTyp
     || id === 'sizes'
     || id === 'colors'
     || id === 'suppliers'
-    || id === 'unloading-zones'
     || id === 'warehouses'
     || id === 'own-warehouses'
     || id === 'carriers'
@@ -73,8 +73,6 @@ export function DictionariesFeature() {
       setSheet({ type: 'simple', apiType: 'colors', kind: 'Цвет', isNew: true, initial: null })
     } else if (active === 'suppliers') {
       setSheet({ type: 'simple', apiType: 'suppliers', kind: 'Поставщик', isNew: true, initial: null })
-    } else if (active === 'unloading-zones') {
-      setSheet({ type: 'simple', apiType: 'unloading-zones', kind: 'Зона хранения', isNew: true, initial: null })
     } else if (active === 'warehouses') {
       setSheet({ type: 'simple', apiType: 'warehouses', kind: 'Точка логистики', isNew: true, initial: null })
     } else if (active === 'own-warehouses') {
@@ -95,7 +93,6 @@ export function DictionariesFeature() {
       active === 'product-types' ? 'product-types' :
       active === 'sizes' ? 'sizes' :
       active === 'suppliers' ? 'suppliers' :
-      active === 'unloading-zones' ? 'unloading-zones' :
       active === 'warehouses' ? 'warehouses' :
       active === 'own-warehouses' ? 'own-warehouses' :
       active === 'carriers' ? 'carriers' :
@@ -123,6 +120,7 @@ export function DictionariesFeature() {
     activeForbidden ? undefined :
     active === 'products' ? 'Новый товар' :
     active === 'clients' ? 'Новый клиент' :
+    active === 'locations' ? undefined : // у панели «Места хранения» собственные действия
     dictDef?.kind === 'empty' ? undefined :
     'Создать запись'
 
@@ -175,6 +173,10 @@ export function DictionariesFeature() {
             </div>
           )}
 
+          {active === 'locations' && (
+            <LocationsDict refreshKey={refreshKey} onTotalLoaded={handleTotalLoaded('locations')} />
+          )}
+
           {!activeForbidden && visitedPanels.simple && (
             (DICTIONARY_TYPES
               .filter((d): d is typeof d & { id: SimpleDictionaryTypeId } => isSimpleDictionaryType(d.id) && (!d.adminOnly || isAdmin))
@@ -191,7 +193,7 @@ export function DictionariesFeature() {
             ))
           )}
 
-          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && (
+          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && active !== 'locations' && (
             <div style={{ padding: 40 }}>
               <EmptyState
                 title="Данные появятся при подключении API"

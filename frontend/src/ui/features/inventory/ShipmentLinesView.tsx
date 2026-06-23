@@ -71,7 +71,7 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, carg
             <th>Товар</th>
             <th style={{ width: 150 }}>Магазин</th>
             <th style={{ width: 140 }}>Цвет / Размер</th>
-            <th style={{ width: 110 }}>Дата отгрузки</th>
+            <th style={{ width: 110 }}>Дата упаковки</th>
             <th style={{ textAlign: 'right', width: 80 }}>План</th>
             <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
             <th style={{ width: 140 }}>Место</th>

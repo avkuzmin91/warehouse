@@ -16,7 +16,7 @@ import {
 import { getReceiptLines, type ReceiptLine } from '../api/receiptsApi'
 import { getShipment, type ShipmentLine } from '../api/shipmentsApi'
 import { AppBar } from '../components/AppBar'
-import { Combobox } from '../components/Combobox'
+import { ZoneField } from '../components/ZoneField'
 import { DateTimeField } from '../components/DateTimeField'
 import { Icon } from '../components/Icon'
 
@@ -74,8 +74,8 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
 
-  const [acceptByLine, setAcceptByLine] = useState<Record<string, number>>({})
-  const [zoneByLine, setZoneByLine] = useState<Record<string, string>>({})
+  // Раскладка принятого по ячейкам (кол-во + место) на строку. По умолчанию одна ячейка.
+  const [placementsByLine, setPlacementsByLine] = useState<Record<string, ReceivePlacement[]>>({})
   const [loadFactor, setLoadFactor] = useState<'' | 'full' | 'partial'>('')
   const [arrival, setArrival] = useState('')
   const [unloadStart, setUnloadStart] = useState('')
@@ -92,16 +92,13 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
           setDetail(d)
           const doc = d.doc
           if (doc.direction === 'inbound' && doc.status === 'unloading') {
-            const acc: Record<string, number> = {}
-            const zon: Record<string, string> = {}
+            const placements: Record<string, ReceivePlacement[]> = {}
             for (const r of d.receipts) {
               for (const a of r.allocations) {
-                acc[a.line_id] = a.qty
-                zon[a.line_id] = a.storage_zone_id ?? ''
+                placements[a.line_id] = [{ qty: a.qty, zoneId: a.storage_zone_id ?? '' }]
               }
             }
-            setAcceptByLine(acc)
-            setZoneByLine(zon)
+            setPlacementsByLine(placements)
           }
           if (doc.load_factor) setLoadFactor(doc.load_factor)
           setArrival(isoToLocalInput(doc.arrived_at) || nowLocalInput())
@@ -179,13 +176,20 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
     const out: TripUnloadReceiptLine[] = []
     for (const r of detail?.receipts ?? []) {
       for (const a of r.allocations) {
-        const zoneId = zoneByLine[a.line_id] ?? ''
-        const zone = zones.find((z) => z.id === zoneId)
+        const rows = placementsByLine[a.line_id] ?? [{ qty: a.qty, zoneId: '' }]
+        const placements = rows
+          .filter((p) => p.qty > 0)
+          .map((p) => {
+            const zone = zones.find((z) => z.id === p.zoneId)
+            return { storage_zone_id: p.zoneId || null, storage_zone_name: zone?.name ?? null, qty: p.qty }
+          })
+        const total = placements.reduce((s, p) => s + p.qty, 0)
         out.push({
           line_id: a.line_id,
-          accepted_qty: acceptByLine[a.line_id] ?? a.qty,
-          storage_zone_id: zoneId || null,
-          storage_zone_name: zone?.name ?? a.storage_zone_name ?? null,
+          accepted_qty: total,
+          storage_zone_id: placements[0]?.storage_zone_id ?? null,
+          storage_zone_name: placements[0]?.storage_zone_name ?? null,
+          placements,
         })
       }
     }
@@ -201,7 +205,7 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
     if (!loadFactor) reasons.push('Выберите загруженность машины')
     if (inbound) {
       const missingZone = (detail?.receipts ?? []).some((r) =>
-        r.allocations.some((a) => (acceptByLine[a.line_id] ?? a.qty) > 0 && !(zoneByLine[a.line_id] ?? '')),
+        r.allocations.some((a) => (placementsByLine[a.line_id] ?? []).some((p) => p.qty > 0 && !p.zoneId)),
       )
       if (missingZone) reasons.push('Укажите место хранения для всех принятых позиций')
     }
@@ -246,12 +250,6 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
           <div className="alert">
             <Icon name="alert" size={15} />
             {error}
-          </div>
-        )}
-        {actionErr && (
-          <div className="alert">
-            <Icon name="alert" size={15} />
-            {actionErr}
           </div>
         )}
 
@@ -316,6 +314,12 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                 </div>
                 <Composition detail={detail!} outbound={outbound} title={lex.docsInVehicle} />
                 <div className="actionbar">
+                  {actionErr && (
+                    <div className="alert">
+                      <Icon name="alert" size={15} />
+                      {actionErr}
+                    </div>
+                  )}
                   <button className="btn" disabled={saving} onClick={handleArrival}>
                     {saving ? '…' : <><Icon name="check" size={18} /> {lex.arrivedAction}</>}
                   </button>
@@ -401,11 +405,10 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                           key={a.line_id}
                           a={a}
                           zones={zones}
-                          qty={acceptByLine[a.line_id] ?? a.qty}
-                          zoneId={zoneByLine[a.line_id] ?? ''}
+                          rows={placementsByLine[a.line_id] ?? [{ qty: a.qty, zoneId: '' }]}
                           invalid={showErrors}
-                          onQty={(v) => setAcceptByLine((p) => ({ ...p, [a.line_id]: v }))}
-                          onZone={(v) => setZoneByLine((p) => ({ ...p, [a.line_id]: v }))}
+                          onRows={(rows) => setPlacementsByLine((p) => ({ ...p, [a.line_id]: rows }))}
+                          onError={setActionErr}
                         />
                       ))}
                     </div>
@@ -415,6 +418,12 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                 )}
 
                 <div className="actionbar">
+                  {actionErr && (
+                    <div className="alert">
+                      <Icon name="alert" size={15} />
+                      {actionErr}
+                    </div>
+                  )}
                   <button className="btn" disabled={saving} onClick={() => handleFinish(!outbound)}>
                     {saving ? '…' : <><Icon name="check" size={18} /> {lex.finishAction}</>}
                   </button>
@@ -588,27 +597,29 @@ function ShipmentLinesFallback({ docId }: { docId: string }) {
 function ReceiveLine({
   a,
   zones,
-  qty,
-  zoneId,
+  rows,
   invalid,
-  onQty,
-  onZone,
+  onRows,
+  onError,
 }: {
   a: TripReceiptAlloc
   zones: Zone[]
-  qty: number
-  zoneId: string
+  rows: ReceivePlacement[]
   invalid: boolean
-  onQty: (v: number) => void
-  onZone: (v: string) => void
+  onRows: (rows: ReceivePlacement[]) => void
+  onError: (msg: string) => void
 }) {
-  const diff = qty - a.qty
-  const zoneMissing = invalid && qty > 0 && !zoneId
+  const total = rows.reduce((s, p) => s + (p.qty > 0 ? p.qty : 0), 0)
+  const diff = total - a.qty
+  const setRow = (idx: number, patch: Partial<ReceivePlacement>) =>
+    onRows(rows.map((p, i) => (i === idx ? { ...p, ...patch } : p)))
+  const addRow = () => onRows([...rows, { qty: 0, zoneId: '' }])
+  const removeRow = (idx: number) => onRows(rows.filter((_, i) => i !== idx))
   return (
     <div className="line">
       <div className="line-name">{lineTitle(a)}</div>
       <div className="line-sub">
-        План рейса: {a.qty} шт.
+        План рейса: {a.qty} шт. · принято: {total}
         {a.received_qty > 0 ? ` · уже принято: ${a.received_qty}` : ''}
         {diff !== 0 ? (
           diff > 0 ? (
@@ -618,24 +629,46 @@ function ReceiveLine({
           )
         ) : null}
       </div>
-      <div className="line-row">
-        <input
-          className="input num"
-          type="number"
-          inputMode="numeric"
-          min={0}
-          value={qty}
-          onChange={(e) => onQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
-        />
-        <Combobox
-          value={zoneId}
-          options={zones.map((z) => ({ value: z.id, label: z.name }))}
-          placeholder="Место хранения…"
-          title="Место хранения"
-          invalid={zoneMissing}
-          onChange={onZone}
-        />
-      </div>
+      {rows.map((p, idx) => {
+        const zoneMissing = invalid && p.qty > 0 && !p.zoneId
+        return (
+          <div className="line-row" key={idx} style={{ marginTop: idx === 0 ? 0 : 10 }}>
+            <input
+              className="input num"
+              type="text"
+              inputMode="numeric"
+              min={0}
+              value={p.qty || ''}
+              onChange={(e) => setRow(idx, { qty: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+            />
+            <ZoneField
+              value={p.zoneId}
+              options={zones.map((z) => ({ value: z.id, label: z.name }))}
+              placeholder="Место…"
+              title="Место хранения"
+              invalid={zoneMissing}
+              onChange={(v) => setRow(idx, { zoneId: v })}
+              onError={onError}
+              allowUnlisted
+            />
+            {rows.length > 1 && (
+              <button
+                className="appbar-back"
+                style={{ flex: '0 0 50px', height: 50 }}
+                aria-label="Убрать ячейку"
+                onClick={() => removeRow(idx)}
+              >
+                <Icon name="x" size={18} />
+              </button>
+            )}
+          </div>
+        )
+      })}
+      <button className="btn ghost sm auto" onClick={addRow} style={{ marginTop: 10 }}>
+        <Icon name="plus" size={16} /> Ещё ячейка
+      </button>
     </div>
   )
 }
+
+type ReceivePlacement = { qty: number; zoneId: string }

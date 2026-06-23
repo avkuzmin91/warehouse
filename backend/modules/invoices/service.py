@@ -7,11 +7,11 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
+    DISPATCH_STATUS_LABELS,
+    DISPATCH_STATUS_SHIPPED,
     INVOICE_ACTIVE_STATUSES,
     INVOICE_OP_SHIPMENT_LINK,
     INVOICE_STATUS_LABELS,
-    SHIPMENT_STATUS_LABELS,
-    SHIPMENT_STATUS_SHIPPED,
 )
 from dbconn import like_substring_param
 
@@ -95,7 +95,7 @@ def attach_shipments(
         seen.add(sid)
 
         ship = connection.execute(
-            "SELECT id, doc_number, status, client_id FROM shipment_docs "
+            "SELECT id, doc_number, status, client_id FROM dispatch_docs "
             "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (sid,),
         ).fetchone()
@@ -103,8 +103,8 @@ def attach_shipments(
             raise HTTPException(status_code=404, detail="Отгрузка не найдена")
 
         doc_number = str(ship["doc_number"])
-        if str(ship["status"]) != SHIPMENT_STATUS_SHIPPED:
-            label = SHIPMENT_STATUS_LABELS.get(str(ship["status"]), str(ship["status"]))
+        if str(ship["status"]) != DISPATCH_STATUS_SHIPPED:
+            label = DISPATCH_STATUS_LABELS.get(str(ship["status"]), str(ship["status"]))
             raise HTTPException(
                 status_code=400,
                 detail=f"Отгрузку {doc_number} нельзя включить в счёт: только завершённые (сейчас «{label}»)",
@@ -226,7 +226,7 @@ def list_uninvoiced_shipments(
         "NOT EXISTS (SELECT 1 FROM invoice_shipments s "
         "WHERE s.shipment_doc_id = d.id AND COALESCE(s.is_deleted, 0) = 0)",
     ]
-    params: list = [SHIPMENT_STATUS_SHIPPED]
+    params: list = [DISPATCH_STATUS_SHIPPED]
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
@@ -240,7 +240,7 @@ def list_uninvoiced_shipments(
     where = " AND ".join(conds)
 
     total = int(connection.execute(
-        f"SELECT COUNT(*) AS n FROM shipment_docs d WHERE {where}", params
+        f"SELECT COUNT(*) AS n FROM dispatch_docs d WHERE {where}", params
     ).fetchone()["n"])
 
     offset = (page - 1) * limit
@@ -248,11 +248,11 @@ def list_uninvoiced_shipments(
         f"""
         SELECT d.id, d.doc_number, d.cargo_type, d.client_id, d.client_name,
                d.destination, d.ship_date, d.created_at,
-               (SELECT COUNT(DISTINCT sl.product_id) FROM shipment_lines sl
+               (SELECT COUNT(DISTINCT sl.product_id) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS sku_count,
-               (SELECT COALESCE(SUM(sl.qty), 0) FROM shipment_lines sl
+               (SELECT COALESCE(SUM(sl.qty), 0) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS total_qty
-        FROM shipment_docs d
+        FROM dispatch_docs d
         WHERE {where}
         ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC
         LIMIT ? OFFSET ?
@@ -292,7 +292,7 @@ def _products_preview_map(connection, doc_ids: list[str], *, top_n: int) -> dict
     rows = connection.execute(
         f"""
         SELECT doc_id, product_id, MAX(product_name) AS name, SUM(qty) AS qty
-        FROM shipment_lines
+        FROM dispatch_lines
         WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
         GROUP BY doc_id, product_id
         ORDER BY doc_id, SUM(qty) DESC, MAX(product_name)
@@ -320,7 +320,7 @@ def aggregate_shipment_contents(connection, shipment_ids: list[str]) -> dict:
     rows = connection.execute(
         f"""
         SELECT product_id, MAX(product_name) AS name, MAX(product_sku) AS sku, SUM(qty) AS qty
-        FROM shipment_lines
+        FROM dispatch_lines
         WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
         GROUP BY product_id
         ORDER BY SUM(qty) DESC, MAX(product_name)

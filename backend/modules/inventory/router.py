@@ -35,6 +35,13 @@ class InventoryProductLookup(BaseModel):
     requires_size: bool
 
 
+class ProductVariantPair(BaseModel):
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+
+
 def _dict_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
     return DictionaryBaseItem(
         id=str(row["id"]),
@@ -339,3 +346,45 @@ def lookup_sizes_for_sku(
             (*match_params, color_t),
         ).fetchall()
     return [_dict_item(row) for row in rows]
+
+
+@router.get("/lookups/variants", response_model=list[ProductVariantPair])
+def lookup_variants(
+    product_id: str = Query(""),
+    user=Depends(get_current_manager),
+):
+    """Полная матрица складских вариантов товара (цвет × размер) одним запросом —
+    источник сетки для массового ввода. Возвращает реально существующие пары
+    (с учётом товаров без цвета/размера: соответствующие поля null)."""
+    _ = user
+    pid_t = product_id.strip()
+    if not pid_t:
+        return []
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT
+                   v.color_id, c.name AS color_name,
+                   v.size_id,  sz.name AS size_name
+            FROM product_variants v
+            LEFT JOIN colors c ON c.id = v.color_id
+                 AND c.is_active = 1 AND COALESCE(c.is_deleted, 0) = 0
+            LEFT JOIN sizes sz ON sz.id = v.size_id
+                 AND sz.is_active = 1 AND COALESCE(sz.is_deleted, 0) = 0
+            WHERE v.product_id = ?
+              AND v.is_active = 1 AND COALESCE(v.is_deleted, 0) = 0
+              AND (v.color_id IS NULL OR c.id IS NOT NULL)
+              AND (v.size_id IS NULL OR sz.id IS NOT NULL)
+            ORDER BY c.name ASC, sz.name ASC
+            """,
+            (pid_t,),
+        ).fetchall()
+    return [
+        ProductVariantPair(
+            color_id=str(row["color_id"]) if row["color_id"] else None,
+            color_name=str(row["color_name"]) if row["color_name"] else None,
+            size_id=str(row["size_id"]) if row["size_id"] else None,
+            size_name=str(row["size_name"]) if row["size_name"] else None,
+        )
+        for row in rows
+    ]

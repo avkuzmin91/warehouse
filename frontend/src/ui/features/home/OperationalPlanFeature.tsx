@@ -198,7 +198,7 @@ export function OperationalPlanFeature() {
               items={data?.shipments ?? []}
               total={data?.totals.shipments ?? 0}
               empty="Нет отгрузок на сегодня и ранее"
-              morePath="/inventory/shipments"
+              morePath="/inventory/packing"
             />
             <PlanColumn
               title="Поступления"

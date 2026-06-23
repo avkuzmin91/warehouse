@@ -9,7 +9,6 @@ import {
 } from '../../api/receiptsApi'
 import type { ReceiptListItem, ReceiptStatus } from '../../api/receiptsApi'
 import { ReceiptLinesView } from '../features/inventory/ReceiptLinesView'
-import { KanbanBoard } from '../features/inventory/shared/KanbanBoard'
 import { ListPage } from '../layouts/ListPage'
 import { Table, Td } from '../data/Table'
 import { Pagination } from '../data/Pagination'
@@ -33,12 +32,6 @@ type ModeId = 'docs' | 'items'
 const MODE_TABS: { id: ModeId; label: string }[] = [
   { id: 'docs',  label: 'По документам' },
   { id: 'items', label: 'По товарам' },
-]
-
-const KANBAN_COLS: { status: ReceiptStatus; label: string; tone: BadgeTone }[] = [
-  { status: 'planned',   label: 'В плане',      tone: 'info' },
-  { status: 'on_review', label: 'На проверке',  tone: 'warning' },
-  { status: 'done',      label: 'Завершён',      tone: 'success' },
 ]
 
 function receiptDayDate(item: ReceiptListItem): string | null {
@@ -69,7 +62,6 @@ export function InventoryReceiptsListPage() {
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [statusFilter, setStatusFilter] = useFilterParam('status', '')
-  const [view, setView] = useFilterParam('view', 'table')
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
@@ -88,7 +80,7 @@ export function InventoryReceiptsListPage() {
   const overdueParam = isOverdueFilter || undefined
 
   useEffect(() => {
-    if (mode !== 'docs' || view !== 'table') {
+    if (mode !== 'docs') {
       setInitialLoading(false)
       return
     }
@@ -127,7 +119,7 @@ export function InventoryReceiptsListPage() {
       ctrl.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [mode, view, page, search, skuFilter, clientId, statusParam, overdueParam, dateFrom, dateTo, retryTick, initialLoading])
+  }, [mode, page, search, skuFilter, clientId, statusParam, overdueParam, dateFrom, dateTo, retryTick, initialLoading])
 
   const STATUS_OPTIONS = [
     { value: '', label: 'Все статусы' },
@@ -152,27 +144,11 @@ export function InventoryReceiptsListPage() {
       title="Поступления"
       subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
-        <>
-          {mode === 'docs' && (
-            <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
-              <button
-                className="btn ghost sm"
-                style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
-                onClick={() => setView('table')}
-              ><Icon name="list" size={13} />Список</button>
-              <button
-                className="btn ghost sm"
-                style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
-                onClick={() => setView('kanban')}
-              ><Icon name="grid" size={13} />Канбан</button>
-            </div>
-          )}
-          {canCreate && (
-            <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
-              <Icon name="plus" size={14} />Новое поступление
-            </button>
-          )}
-        </>
+        canCreate && (
+          <button className="btn primary" onClick={() => navigate('/inventory/receipts/new')}>
+            <Icon name="plus" size={14} />Новое поступление
+          </button>
+        )
       }
       filters={
         <FiltersBar>
@@ -270,7 +246,7 @@ export function InventoryReceiptsListPage() {
           page={page}
           onPage={setPage}
         />
-      ) : view === 'table' ? (
+      ) : (
         <>
           <Table>
             <thead>
@@ -428,52 +404,7 @@ export function InventoryReceiptsListPage() {
           </Table>
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
-      ) : (
-        <KanbanBoard
-          columns={KANBAN_COLS}
-          gridCols={4}
-          fetchKey={`${search.trim()}|${skuFilter.trim()}|${clientId}|${dateFrom}|${dateTo}`}
-          fetchPage={(status, page, limit, signal) => getReceipts({
-            page,
-            limit,
-            status,
-            search: search.trim() || undefined,
-            sku: skuFilter.trim() || undefined,
-            client_id: clientId || undefined,
-            date_from: dateFrom || undefined,
-            date_to: dateTo || undefined,
-          }, signal)}
-          renderCard={(item) => <ReceiptKanbanCard item={item} />}
-          highlight={isReceiptOverdue}
-          onNavigate={(id) => navigate(`/inventory/receipts/${id}`)}
-        />
       )}
     </ListPage>
-  )
-}
-
-function ReceiptKanbanCard({ item }: { item: ReceiptListItem }) {
-  const overdue = isReceiptOverdue(item)
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-        {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-          {item.arrival_date ? new Date(item.arrival_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'}
-        </span>
-      </div>
-      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-      {item.supplier_name && (
-        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>{item.supplier_name}</div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>План: {item.total_planned}</span>
-        <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>Факт: {item.total_accepted_qty}</span>
-        <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-        <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-      </div>
-    </>
   )
 }

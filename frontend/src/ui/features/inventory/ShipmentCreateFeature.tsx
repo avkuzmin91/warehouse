@@ -26,7 +26,7 @@ import type { FilePreviewMeta } from './shipmentDetail/shared/types'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
 import { fmtYmdAsDmy } from '../../../utils/format'
 import { balanceKey } from '../../../utils/balanceKey'
-import { canCreateDocuments, canViewCosts } from '../../../utils/access'
+import { canCreateDocuments } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
@@ -38,7 +38,6 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
-  const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
   const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
@@ -53,7 +52,6 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
 
   const { clients } = useLookups()
   const { user } = useCurrentUser()
-  const showCosts = canViewCosts(user)
   const canCreate = canCreateDocuments(user)
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
@@ -78,16 +76,13 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const hasInTransit = lines.some((l) => l.qty > l.onHand && l.qty <= l.onHand + l.inTransit)
   const hasOverCap = lines.some((l) => l.qty > l.onHand + l.inTransit)
   const allOnStock = lines.every((l) => l.qty <= l.onHand)
-  const logisticsCostNumber = Number(logisticsCost)
-  const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
   // Брак-отгрузка минует упаковку: ТЗ не требуется, у строк должно быть местоположение.
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент выбран', error: 'Выберите клиента' },
-    { ok: !!shipDate, label: 'Дата отгрузки (план) указана', error: 'Укажите дату отгрузки' },
+    { ok: !!shipDate, label: 'Дата упаковки (план) указана', error: 'Укажите дату упаковки' },
     ...(isDefectCargo
       ? []
       : [{ ok: comment.trim() !== '', label: 'Техническое задание заполнено', error: 'Заполните техническое задание' }]),
-    ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
@@ -141,8 +136,8 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
-  function addFromBalance(b: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) {
-    setLines((ls) => [...ls, {
+  function makeDraftLine(b: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null): DraftLine {
+    return {
       _uid:              `line-${lineUidSeq.current++}`,
       _key:              balanceKey(b),
       product_id:        b.product_id,
@@ -161,7 +156,15 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       store_id:          null,
       store_name:        null,
       files:             [],
-    }])
+    }
+  }
+
+  function addFromBalance(b: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) {
+    setLines((ls) => [...ls, makeDraftLine(b, qty, zoneId, zoneName)])
+  }
+
+  function addManyFromBalance(rows: { item: PlannableItem; qty: number }[]) {
+    setLines((ls) => [...ls, ...rows.map(({ item, qty }) => makeDraftLine(item, qty, null, null))])
   }
 
   async function handleAssignSku(line: DraftLine, skuBase: string) {
@@ -199,7 +202,6 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         cargo_type:     cargoType,
         client_id:      clientId || null,
         client_name:    clientName || null,
-        ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
         ship_date:      shipDate || null,
         comment:        comment.trim() || null,
         lines:          lines.map((line) => ({
@@ -250,7 +252,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       <ShipHeader
         status="draft"
         cargoType={cargoType}
-        title={isDefectCargo ? 'Новая отгрузка брака' : 'Новая отгрузка'}
+        title={isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
         subtitle="номер присвоится при сохранении"
         onBack={() => navigate('/inventory/shipments')}
         blockReasons={showBlockReasons ? blockReasons : []}
@@ -267,7 +269,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
             </button>
             <PrimaryAction
               icon="check"
-              label="Запланировать отгрузку"
+              label="Запланировать упаковку"
               hint={isDefectCargo
                 ? 'уйдёт кладовщику на подготовку — статус «Перемещение»'
                 : 'уйдёт кладовщику — статус «В плане»'}
@@ -307,21 +309,9 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                     clearable
                   />
                 </Field>
-                <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
+                <Field label="Дата упаковки (план)" required style={{ marginBottom: 0 }}>
                   <DatePicker value={shipDate} onChange={setShipDate} />
                 </Field>
-                {showCosts && (
-                  <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0 }}>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={logisticsCost}
-                      onChange={(e) => setLogisticsCost(e.target.value)}
-                    />
-                  </Field>
-                )}
                 <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                   <AutoGrowTextarea
                     minRows={3}
@@ -493,9 +483,6 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
               <ReadRow label="SKU" mono>{lines.length}</ReadRow>
               <ReadRow label="Кол-во" mono strong>{totalQty} шт</ReadRow>
               <ReadRow label="Дата (план)" mono>{shipDate ? fmtYmdAsDmy(shipDate) : '—'}</ReadRow>
-              {showCosts && (
-                <ReadRow label="Логистика" mono>{logisticsCostFilled ? `${logisticsCostNumber.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-              )}
             </div>
           </Panel>
           <ChecklistPanel items={readyChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
@@ -507,6 +494,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
           clientId={clientId}
           cargoType={cargoType}
           onAdd={(b, qty, zoneId, zoneName) => { addFromBalance(b, qty, zoneId, zoneName); setShowPicker(false) }}
+          onAddMany={addManyFromBalance}
           onClose={() => setShowPicker(false)}
         />
       )}

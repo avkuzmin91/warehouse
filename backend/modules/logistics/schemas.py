@@ -18,7 +18,7 @@ class TripDocCreate(BaseModel):
     cost_estimate: float | None = None
     comment: str | None = None
     receipt_doc_ids: list[str] = []
-    shipment_doc_ids: list[str] = []
+    dispatch_doc_ids: list[str] = []
 
 
 class TripDocUpdate(BaseModel):
@@ -49,29 +49,38 @@ class TripLinkPayload(BaseModel):
     items: list[TripReceiptLinkItem] = Field(default_factory=list)
 
 
-class TripShipmentLineAlloc(BaseModel):
+class TripDispatchLineAlloc(BaseModel):
     line_id: str
     qty: int = Field(ge=1)
 
 
-class TripShipmentLinkItem(BaseModel):
-    shipment_doc_id: str
-    allocations: list[TripShipmentLineAlloc] = Field(default_factory=list)
+class TripDispatchLinkItem(BaseModel):
+    dispatch_doc_id: str
+    allocations: list[TripDispatchLineAlloc] = Field(default_factory=list)
 
 
-class TripShipmentLinkPayload(BaseModel):
-    items: list[TripShipmentLinkItem] = Field(default_factory=list)
+class TripDispatchLinkPayload(BaseModel):
+    items: list[TripDispatchLinkItem] = Field(default_factory=list)
 
 
 class TripArrivalPayload(BaseModel):
     arrived_at: str | None = None
 
 
-class TripUnloadReceiptLine(BaseModel):
-    line_id: str                       # receipt_line_id
-    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке
+class TripUnloadPlacement(BaseModel):
     storage_zone_id: str | None = None
     storage_zone_name: str | None = None
+    qty: int = Field(ge=0)
+
+
+class TripUnloadReceiptLine(BaseModel):
+    line_id: str                       # receipt_line_id
+    accepted_qty: int = Field(ge=0)    # принято этим рейсом по строке (= сумме placements)
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+    # Раскладка принятого по нескольким ячейкам. Пусто → одна ячейка (accepted_qty в
+    # storage_zone_id), как было исторически.
+    placements: list[TripUnloadPlacement] = Field(default_factory=list)
 
 
 class TripUnloadPayload(BaseModel):
@@ -151,7 +160,7 @@ class TripReceiptItem(BaseModel):
     allocations: list[TripReceiptAllocItem] = Field(default_factory=list)
 
 
-class TripShipmentAllocItem(BaseModel):
+class TripDispatchAllocItem(BaseModel):
     line_id: str
     product_sku: str | None = None
     product_name: str | None = None
@@ -161,15 +170,15 @@ class TripShipmentAllocItem(BaseModel):
     shipped_qty: int = 0  # отгружено всего (по всем рейсам)
 
 
-class TripShipmentItem(BaseModel):
+class TripDispatchItem(BaseModel):
     line_id: str
-    shipment_doc_id: str
-    shipment_number: str | None = None
-    shipment_status: str | None = None
+    dispatch_doc_id: str
+    dispatch_number: str | None = None
+    dispatch_status: str | None = None
     client_id: str | None = None
     client_name: str | None = None
     allocated_qty: int = 0
-    allocations: list[TripShipmentAllocItem] = Field(default_factory=list)
+    allocations: list[TripDispatchAllocItem] = Field(default_factory=list)
 
 
 class TripOpResponse(BaseModel):
@@ -185,7 +194,7 @@ class TripOpResponse(BaseModel):
 class TripDetailResponse(BaseModel):
     doc: TripDocResponse
     receipts: list[TripReceiptItem] = Field(default_factory=list)
-    shipments: list[TripShipmentItem] = Field(default_factory=list)
+    dispatches: list[TripDispatchItem] = Field(default_factory=list)
     ops: list[TripOpResponse]
 
 

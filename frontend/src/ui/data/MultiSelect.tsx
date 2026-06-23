@@ -44,7 +44,17 @@ export function MultiSelect({ value, onChange, options, placeholder = 'Выбр�
   function handleOpen() {
     const rect = containerRef.current?.getBoundingClientRect()
     if (rect) {
-      setDropdownStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width })
+      const GAP = 4
+      const MARGIN = 8
+      const spaceBelow = window.innerHeight - rect.bottom - MARGIN
+      const spaceAbove = rect.top - MARGIN
+      const openUp = spaceBelow < 220 && spaceAbove > spaceBelow
+      const maxHeight = Math.max(160, (openUp ? spaceAbove : spaceBelow) - GAP)
+      setDropdownStyle(
+        openUp
+          ? { position: 'fixed', bottom: window.innerHeight - rect.top + GAP, left: rect.left, width: rect.width, maxHeight }
+          : { position: 'fixed', top: rect.bottom + GAP, left: rect.left, width: rect.width, maxHeight },
+      )
     }
     setOpen((s) => !s)
     setQuery('')
@@ -95,7 +105,7 @@ export function MultiSelect({ value, onChange, options, placeholder = 'Выбр�
             border: '1px solid var(--c-border)',
             borderRadius: 'var(--r-lg)',
             boxShadow: 'var(--sh-2)',
-            maxHeight: 260, overflowY: 'auto',
+            overflowY: 'auto',
             zIndex: 9999, padding: 4,
           }}
         >

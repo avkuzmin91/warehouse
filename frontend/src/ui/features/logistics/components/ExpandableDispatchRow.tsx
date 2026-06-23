@@ -1,34 +1,34 @@
 import { useState } from 'react'
-import { getShipment } from '../../../../api/shipmentsApi'
-import type { ShipmentLine } from '../../../../api/shipmentsApi'
+import { getDispatch } from '../../../../api/dispatchApi'
+import type { DispatchLine } from '../../../../api/dispatchApi'
 import { useApi } from '../../../../hooks/useApi'
 import { Icon } from '../../../primitives/Icon'
 import { Badge } from '../../../primitives/Badge'
 import type { BadgeTone } from '../../../primitives/Badge'
 import { ShipmentLinesTable } from './ShipmentLinesTable'
-import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../api/shipmentsApi'
-import type { ShipmentStatus } from '../../../../api/shipmentsApi'
-import type { TripShipmentAlloc } from '../../../../api/tripsApi'
+import { DISPATCH_STATUS_LABELS, DISPATCH_STATUS_TONES } from '../../../../api/dispatchApi'
+import type { DispatchStatus } from '../../../../api/dispatchApi'
+import type { TripDispatchAlloc } from '../../../../api/tripsApi'
 
-export type ExpandableShipmentData = {
-  shipment_doc_id: string
-  shipment_number: string | null
+export type ExpandableDispatchData = {
+  dispatch_doc_id: string
+  dispatch_number: string | null
   client_name: string | null
-  shipment_status?: string | null
+  dispatch_status?: string | null
   allocated_qty?: number
-  allocations?: TripShipmentAlloc[]
+  allocations?: TripDispatchAlloc[]
 }
 
 function LinesBody({ docId }: { docId: string }) {
   const [retry, setRetry] = useState(0)
-  const { data, loading, error } = useApi(() => getShipment(docId), [docId, retry])
-  const lines: ShipmentLine[] = data?.lines ?? []
+  const { data, loading, error } = useApi(() => getDispatch(docId), [docId, retry])
+  const lines: DispatchLine[] = data?.lines ?? []
   return <ShipmentLinesTable lines={lines} loading={loading} error={!!error} onRetry={() => setRetry((n) => n + 1)} />
 }
 
 /** Раскрываемая строка-отгрузка в карточке рейса: шапка-тоггл + inline-состав + переход в карточку. */
-export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
-  r: ExpandableShipmentData
+export function ExpandableDispatchRow({ r, open, onToggle, onOpen, onRemove }: {
+  r: ExpandableDispatchData
   open: boolean
   onToggle: () => void
   onOpen: () => void
@@ -37,7 +37,7 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
   const [everOpened, setEverOpened] = useState(open)
   if (open && !everOpened) setEverOpened(true)
 
-  const status = (r.shipment_status ?? '') as ShipmentStatus
+  const status = (r.dispatch_status ?? '') as DispatchStatus
   const allocs = r.allocations ?? []
   const hasAllocs = allocs.length > 0
   const tripQty = allocs.reduce((s, a) => s + a.qty, 0)
@@ -73,7 +73,7 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
               <span style={{ fontWeight: 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {r.client_name ?? 'Без клиента'}
               </span>
-              {r.shipment_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{r.shipment_number}</span>}
+              {r.dispatch_number && <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>{r.dispatch_number}</span>}
               {(r.allocated_qty ?? 0) > 0 && (
                 <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', flexShrink: 0 }}>· {r.allocated_qty} шт в рейсе</span>
               )}
@@ -82,8 +82,8 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
         </button>
 
         {status && (
-          <Badge tone={(SHIPMENT_STATUS_TONES[status] ?? '') as BadgeTone} dot>
-            {SHIPMENT_STATUS_LABELS[status] ?? status}
+          <Badge tone={(DISPATCH_STATUS_TONES[status] ?? '') as BadgeTone} dot>
+            {DISPATCH_STATUS_LABELS[status] ?? status}
           </Badge>
         )}
         <button
@@ -137,7 +137,7 @@ export function ExpandableShipmentRow({ r, open, onToggle, onOpen, onRemove }: {
                 </div>
               </div>
             ) : (
-              everOpened && <LinesBody docId={r.shipment_doc_id} />
+              everOpened && <LinesBody docId={r.dispatch_doc_id} />
             )}
 
             <div style={{

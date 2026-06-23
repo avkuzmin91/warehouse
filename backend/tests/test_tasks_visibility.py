@@ -43,7 +43,7 @@ def _conn() -> _FakeConn:
     return _FakeConn(
         trips=[{
             "id": "t1", "trip_number": "TR-00001", "status": TRIP_STATUS_UNLOADING,
-            "direction": "inbound",
+            "direction": "inbound", "eta": None, "vehicle_number": None,
             "updated_at": "2026-06-10T00:00:00", "created_at": "2026-06-10T00:00:00",
         }],
         shipments=[{

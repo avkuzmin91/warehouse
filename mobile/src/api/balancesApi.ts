@@ -1,6 +1,6 @@
 import { request, requestIdHeaders } from './http'
 
-export type InvOpStatus = 'storage' | 'packing' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'ready'
 export type InvQuality = 'good' | 'defect'
 
 // Остаток по месту хранения: основа экрана «Остатки» (где лежит товар) и выбора
@@ -23,6 +23,38 @@ export type ZoneBalance = {
 }
 
 export type ZoneBalancesResponse = { items: ZoneBalance[]; truncated: boolean }
+
+// Планируемый к отгрузке остаток (склад + в пути) — источник для выбора позиций
+// при создании «Задачи упаковки» / «Отгрузки».
+export type PlannableItem = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  sku_pending?: boolean
+  client_id: string | null
+  client_name: string | null
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
+  ready_good: number
+  ready_defect: number
+  storage_good: number
+  storage_defect: number
+  in_transit: number
+}
+
+export type PlannableParams = { client_id?: string; search?: string; cargo_type?: InvQuality; limit?: number }
+
+export function getPlannableItems(params: PlannableParams = {}, signal?: AbortSignal): Promise<{ items: PlannableItem[] }> {
+  const sp = new URLSearchParams()
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.search)     sp.set('search', params.search)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  if (params.limit)      sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<{ items: PlannableItem[] }>(`/balances/plannable${q ? `?${q}` : ''}`, { signal })
+}
 
 export type ZoneBalanceParams = { clientId?: string; search?: string }
 
@@ -68,6 +100,7 @@ export function createRelocation(payload: RelocationPayload, requestId: string):
 export const OP_STATUS_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
+  packed: 'Упакован',
   ready: 'Готов к отгрузке',
 }
 

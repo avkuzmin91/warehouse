@@ -3,13 +3,14 @@ import { request } from './http'
 // --- Types ---
 
 /** Операционный статус запаса: что товар делает. */
-export type InvOpStatus = 'storage' | 'packing' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'ready'
 /** Качество запаса. «Не проверен» существует только внутри приёмки. */
 export type InvQuality = 'good' | 'defect'
 
 export const INV_OP_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
+  packed:  'Упакован',
   ready:   'Готов к отгрузке',
 }
 
@@ -43,6 +44,8 @@ export type BalanceItem = {
   storage_defect: number
   packing_good: number
   packing_defect: number
+  packed_good: number
+  packed_defect: number
   ready_good: number
   ready_defect: number
   total: number
@@ -66,6 +69,8 @@ export type PlannableItem = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  ready_good: number
+  ready_defect: number
   storage_good: number
   storage_defect: number
   in_transit: number
@@ -87,6 +92,8 @@ export type BalanceSummary = {
   storage_defect: number
   packing_good: number
   packing_defect: number
+  packed_good: number
+  packed_defect: number
   ready_good: number
   ready_defect: number
   total: number
@@ -134,13 +141,22 @@ export type BalanceZoneItem = {
 export type BalanceZonesParams = {
   client_id?:     string
   search?:        string
+  location?:      string
+  op_status?:     InvOpStatus
+  quality?:       InvQuality
+  page?:          number
+  limit?:         number
   only_positive?: boolean
 }
 
 export type BalanceZonesResponse = {
   items: BalanceZoneItem[]
-  /** Выборка обрезана серверным лимитом — список неполный. */
+  /** Выборка обрезана серверным лимитом — список неполный (режим без пагинации). */
   truncated: boolean
+  /** Число местоположений (страница = total/limit), заполняется при limit. */
+  total: number
+  page: number
+  limit: number
 }
 
 // --- API functions ---
@@ -180,6 +196,11 @@ export function getBalancesByZone(params: BalanceZonesParams = {}, signal?: Abor
   const sp = new URLSearchParams()
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search) sp.set('search', params.search)
+  if (params.location) sp.set('location', params.location)
+  if (params.op_status) sp.set('op_status', params.op_status)
+  if (params.quality) sp.set('quality', params.quality)
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
   if (params.only_positive === false) sp.set('only_positive', 'false')
   const q = sp.toString()
   return request<BalanceZonesResponse>(`/balances/zones${q ? `?${q}` : ''}`, { signal })

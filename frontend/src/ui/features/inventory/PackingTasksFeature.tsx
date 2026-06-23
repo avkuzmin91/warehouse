@@ -7,29 +7,25 @@ import {
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
   SHIPMENT_STATUS_ORDER,
-  shipmentPriorityLabel,
-  shipmentPriorityTone,
-} from '../../api/shipmentsApi'
-import type { ShipmentCargoType, ShipmentListItem, ShipmentStatus } from '../../api/shipmentsApi'
-import { ShipmentLinesView } from '../features/inventory/ShipmentLinesView'
-import { ShipmentPriorityControl } from '../features/inventory/ShipmentPriorityControl'
-import { KanbanBoard } from '../features/inventory/shared/KanbanBoard'
-import { ListPage } from '../layouts/ListPage'
-import { Table, Td } from '../data/Table'
-import { Pagination } from '../data/Pagination'
-import { FiltersBar, FilterSelect, FilterCombobox } from '../data/FiltersBar'
-import { DateRange } from '../data/DateRange'
-import { Badge } from '../primitives/Badge'
-import type { BadgeTone } from '../primitives/Badge'
-import { Dropdown } from '../primitives/Dropdown'
-import { Icon } from '../primitives/Icon'
-import { SkeletonRows } from '../primitives/Skeleton'
-import { EmptyState } from '../primitives/EmptyState'
-import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../utils/format'
-import { useLookups } from '../../hooks/useLookups'
-import { useCurrentUser } from '../../hooks/useCurrentUser'
-import { useFilterParam, useFilterParamsActions, usePageParam } from '../../hooks/useFilterParams'
-import { canCreateDocuments, canEditShipments } from '../../utils/access'
+} from '../../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentListItem, ShipmentStatus } from '../../../api/shipmentsApi'
+import { ShipmentLinesView } from './ShipmentLinesView'
+import { ShipmentPriorityControl } from './ShipmentPriorityControl'
+import { ListPage } from '../../layouts/ListPage'
+import { Table, Td } from '../../data/Table'
+import { Pagination } from '../../data/Pagination'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../../data/FiltersBar'
+import { DateRange } from '../../data/DateRange'
+import { Badge } from '../../primitives/Badge'
+import type { BadgeTone } from '../../primitives/Badge'
+import { Icon } from '../../primitives/Icon'
+import { SkeletonRows } from '../../primitives/Skeleton'
+import { EmptyState } from '../../primitives/EmptyState'
+import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../utils/format'
+import { useLookups } from '../../../hooks/useLookups'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
+import { canAcceptPackingTask, canCreateDocuments, canEditShipmentPlanning, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -40,17 +36,9 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
   { id: 'items', label: 'По товарам' },
 ]
 
-const KANBAN_COLS: { status: ShipmentStatus; label: string; tone: BadgeTone }[] = [
-  { status: 'draft',         label: 'Создание',     tone: '' },
-  { status: 'packing',       label: 'В плане',      tone: 'info' },
-  { status: 'on_packing',    label: 'На упаковке',  tone: 'info' },
-  { status: 'relocating',    label: 'Перемещение',  tone: 'info' },
-  { status: 'awaiting_trip', label: 'Ожидает рейс', tone: 'warning' },
-  { status: 'shipped',       label: 'Завершён',     tone: 'success' },
-]
-
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
-  draft:   'В план',
+  draft:    'Поставить задачу',
+  assigned: 'Принять в работу',
 }
 
 function shipmentProgress(item: ShipmentListItem) {
@@ -77,11 +65,17 @@ function groupShipmentsByDay(items: ShipmentListItem[]) {
   return groups
 }
 
-export function InventoryShipmentsListPage() {
+export function PackingTasksFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const canEdit = canEditShipments(user)
   const canCreate = canCreateDocuments(user)
+  const canPlanShipment = canEditShipmentPlanning(user)
+  const canAcceptTask = canAcceptPackingTask(user)
+  // Инлайн-переход из списка: постановку (draft) делает менеджер, приёмку (assigned) —
+  // начальник склада/менеджер. Прочие статусы продвигаются из деталки.
+  const canAdvanceRow = (s: ShipmentStatus) =>
+    (s === 'draft' && canPlanShipment) || (s === 'assigned' && canAcceptTask)
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
@@ -91,7 +85,6 @@ export function InventoryShipmentsListPage() {
   const [cargoFilter, setCargoFilter] = useFilterParam('cargo', '')
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
-  const [view, setView] = useFilterParam('view', 'table')
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
@@ -119,7 +112,7 @@ export function InventoryShipmentsListPage() {
     cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
 
   useEffect(() => {
-    if (mode !== 'docs' || view !== 'table') {
+    if (mode !== 'docs') {
       setInitialLoading(false)
       return
     }
@@ -148,7 +141,7 @@ export function InventoryShipmentsListPage() {
         setInitialLoading(false)
       })
     return () => ctrl.abort()
-  }, [mode, view, page, search, skuFilter, clientId, statusParam, overdueParam, cargoParam, dateFrom, dateTo, reloadTick])
+  }, [mode, page, search, skuFilter, clientId, statusParam, overdueParam, cargoParam, dateFrom, dateTo, reloadTick])
 
   async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
     e.stopPropagation()
@@ -170,7 +163,7 @@ export function InventoryShipmentsListPage() {
 
   if (initialLoading) {
     return (
-      <ListPage title="Отгрузки">
+      <ListPage title="Упаковка">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
           <div style={{ width: 28, height: 28, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
         </div>
@@ -180,36 +173,17 @@ export function InventoryShipmentsListPage() {
 
   return (
     <ListPage
-      title="Отгрузки"
+      title="Упаковка"
       subtitle={mode === 'docs' ? `Всего: ${total}` : undefined}
       actions={
         <>
-          {mode === 'docs' && (
-            <div style={{ display: 'flex', background: 'var(--c-bg-sunken)', padding: 3, borderRadius: 6, gap: 2 }}>
-              <button
-                className="btn ghost sm"
-                style={{ background: view === 'table' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'table' ? 'var(--sh-1)' : 'none' }}
-                onClick={() => setView('table')}
-              ><Icon name="list" size={13} />Список</button>
-              <button
-                className="btn ghost sm"
-                style={{ background: view === 'kanban' ? 'var(--c-bg-elev)' : 'transparent', boxShadow: view === 'kanban' ? 'var(--sh-1)' : 'none' }}
-                onClick={() => setView('kanban')}
-              ><Icon name="grid" size={13} />Канбан</button>
-            </div>
-          )}
+          <button className="btn ghost" onClick={() => navigate('/inventory/packing/productivity')}>
+            <Icon name="chart" size={14} />Производительность
+          </button>
           {canCreate && (
-            <Dropdown
-              trigger={
-                <button className="btn primary">
-                  <Icon name="plus" size={14} />Новая отгрузка<Icon name="chevDown" size={12} />
-                </button>
-              }
-              items={[
-                { label: 'Отгрузка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/shipments/new') },
-                { label: 'Отгрузка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/shipments/new?cargo=defect') },
-              ]}
-            />
+            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
+              <Icon name="plus" size={14} />Новая задача
+            </button>
           )}
         </>
       }
@@ -280,7 +254,7 @@ export function InventoryShipmentsListPage() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'overdue', label: 'Просрочка' },
-              ...([...SHIPMENT_STATUS_ORDER, 'partially_shipped', 'cancelled'] as ShipmentStatus[])
+              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}
@@ -325,7 +299,7 @@ export function InventoryShipmentsListPage() {
           page={page}
           onPage={setPage}
         />
-      ) : view === 'table' ? (
+      ) : (
         <>
           <Table>
             <thead>
@@ -334,7 +308,7 @@ export function InventoryShipmentsListPage() {
                 <th style={{ width: 120 }}>Номер</th>
                 <th style={{ width: 130 }}>Приор.</th>
                 <th>Клиент</th>
-                <th style={{ width: 110 }}>Дата отгрузки</th>
+                <th style={{ width: 110 }}>Дата упаковки</th>
                 <th style={{ textAlign: 'right', width: 80 }}>План</th>
                 <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
                 <th style={{ width: 130 }}>Статус</th>
@@ -347,8 +321,8 @@ export function InventoryShipmentsListPage() {
               ) : items.length === 0 ? (
                 <tr><td colSpan={9}>
                   <EmptyState
-                    title={isOverdueFilter ? 'Просроченных отгрузок нет' : 'Отгрузок нет'}
-                    sub={!statusFilter ? 'Создайте первую отгрузку' : undefined}
+                    title={isOverdueFilter ? 'Просроченных задач нет' : 'Задач упаковки нет'}
+                    sub={!statusFilter ? 'Создайте первую задачу' : undefined}
                   />
                 </td></tr>
               ) : (
@@ -410,7 +384,7 @@ export function InventoryShipmentsListPage() {
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
                             {item.status_label}
                           </Badge>
-                          {canEdit && ADVANCE_LABELS[item.status] && (
+                          {canAdvanceRow(item.status) && ADVANCE_LABELS[item.status] && (
                             <button
                               className="btn ghost sm"
                               disabled={advancingId === item.id}
@@ -457,53 +431,7 @@ export function InventoryShipmentsListPage() {
           </Table>
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </>
-      ) : (
-        <KanbanBoard
-          columns={KANBAN_COLS}
-          gridCols={3}
-          fetchKey={`${search.trim()}|${skuFilter.trim()}|${clientId}|${dateFrom}|${dateTo}|${cargoParam}|${reloadTick}`}
-          fetchPage={(status, page, limit, signal) => listShipments({
-            page,
-            limit,
-            status,
-            search: search.trim() || undefined,
-            sku: skuFilter.trim() || undefined,
-            client_id: clientId || undefined,
-            date_from: dateFrom || undefined,
-            date_to: dateTo || undefined,
-            cargo_type: cargoParam,
-          }, signal)}
-          renderCard={(item) => <ShipmentKanbanCard item={item} />}
-          highlight={isShipmentOverdue}
-          onNavigate={(id) => navigate(`/inventory/shipments/${id}`)}
-        />
       )}
     </ListPage>
-  )
-}
-
-function ShipmentKanbanCard({ item }: { item: ShipmentListItem }) {
-  const overdue = isShipmentOverdue(item)
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--c-text-muted)' }}>{item.doc_number}</span>
-        {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
-        {item.priority_rank && (
-          <Badge tone={shipmentPriorityTone(item.priority_rank)}>{shipmentPriorityLabel(item.priority_rank)}</Badge>
-        )}
-        {overdue && <Icon name="alert" size={12} style={{ color: 'var(--c-danger)' }} />}
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: overdue ? 'var(--c-danger)' : 'var(--c-text-faint)', fontWeight: overdue ? 500 : 400 }}>
-          {fmtDate(item.ship_date)}
-        </span>
-      </div>
-      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{item.client_name ?? '—'}</div>
-      <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 8 }}>{item.destination ?? '—'}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.total_qty} шт</span>
-        <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>·</span>
-        <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{item.sku_count} SKU</span>
-      </div>
-    </>
   )
 }

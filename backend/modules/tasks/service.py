@@ -3,11 +3,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from config import (
-    INV_Q_GOOD,
+    DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_AWAITING_TRIP,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -17,7 +16,6 @@ from config import (
     TRIP_STATUS_UNLOADING,
 )
 from modules.receipts.service import list_shortage_receipts
-from modules.shipments.service import doc_ready_total
 
 ROLE_WAREHOUSE = "warehouse_manager"
 ROLE_MANAGER = "manager"
@@ -52,6 +50,9 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     see_warehouse = role in (ROLE_WAREHOUSE, ROLE_WAREHOUSE_HEAD, "admin")
     see_manager = role in (ROLE_MANAGER, "admin")
     see_shift = role in (ROLE_SHIFT, ROLE_WAREHOUSE_HEAD, "admin")
+    # Приёмку задачи упаковки в работу делает начальник склада (менеджерский состав —
+    # как подстраховка через деталку); в очередь-карточек кладём её начальнику склада.
+    see_head = role in (ROLE_WAREHOUSE_HEAD, "admin")
     visible_roles = set()
     if see_warehouse:
         visible_roles.add(ROLE_WAREHOUSE)
@@ -59,6 +60,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         visible_roles.add(ROLE_MANAGER)
     if see_shift:
         visible_roles.add(ROLE_SHIFT)
+    if see_head:
+        visible_roles.add(ROLE_WAREHOUSE_HEAD)
     if not visible_roles:
         return []
 
@@ -129,31 +132,48 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 
-    if see_manager:
-        # Товарная отгрузка после упаковки оказалась полностью браком (0 годного):
-        # рейса не будет (везти нечего), брак вернулся на хранение — цикл фактически
-        # отработан, менеджер завершает отгрузку без рейса. Признак — awaiting_trip
-        # товарной отгрузки с нулём готового годного.
-        all_defect_rows = connection.execute(
-            "SELECT id, doc_number, priority_rank, updated_at, created_at FROM shipment_docs "
-            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ? AND COALESCE(cargo_type, ?) = ?",
-            (SHIPMENT_STATUS_AWAITING_TRIP, SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_GOOD),
+    if ROLE_WAREHOUSE_HEAD in visible_roles:
+        # «Ожидает принятия» — менеджер поставил задачу упаковки, начальник склада
+        # принимает её в работу (или отклоняет). Брак-отгрузка этот шаг минует.
+        assigned_rows = connection.execute(
+            "SELECT id, doc_number, status, priority_rank, updated_at, created_at FROM shipment_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ?",
+            (SHIPMENT_STATUS_ASSIGNED,),
         ).fetchall()
-        for r in all_defect_rows:
-            if doc_ready_total(connection, str(r["id"]), INV_Q_GOOD) > 0:
-                continue
+        for r in assigned_rows:
             tasks.append({
-                "kind": "shipment_complete_no_goods",
-                "title": f"Завершить {r['doc_number']} — весь товар брак",
-                "doc_type": "shipment",
+                "kind": "shipment_accept",
+                "title": f"Принять в работу {r['doc_number']}",
+                "doc_type": "shipment", "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]), "status": SHIPMENT_STATUS_ASSIGNED,
+                "role": ROLE_WAREHOUSE_HEAD, "since": r["updated_at"] or r["created_at"],
+                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if ROLE_WAREHOUSE in visible_roles:
+        # «Отгрузка» (dispatch) в статусе «Подготовка отгрузки» — задача кладовщику
+        # собрать и подготовить отгрузку. После отметки «Отгрузка подготовлена»
+        # (preparing → awaiting_trip) задача снимается; снимается и сама собой, если
+        # рейс увёз отгрузку прямо из подготовки.
+        dispatch_rows = connection.execute(
+            "SELECT id, doc_number, status, priority_rank, updated_at, created_at FROM dispatch_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ?",
+            (DISPATCH_STATUS_PREPARING,),
+        ).fetchall()
+        for r in dispatch_rows:
+            tasks.append({
+                "kind": "dispatch_prepare",
+                "title": f"Подготовить отгрузку {r['doc_number']}",
+                "doc_type": "dispatch",
                 "doc_id": str(r["id"]),
                 "doc_number": str(r["doc_number"]),
-                "status": SHIPMENT_STATUS_AWAITING_TRIP,
-                "role": ROLE_MANAGER,
+                "status": str(r["status"]),
+                "role": ROLE_WAREHOUSE,
                 "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 
+    if see_manager:
         # Поступление приняли рейсами с недопоставкой (рейсы кончились, план не закрыт) —
         # менеджер решает: закрыть с недопоставкой или довезти следующим рейсом.
         for r in list_shortage_receipts(connection):

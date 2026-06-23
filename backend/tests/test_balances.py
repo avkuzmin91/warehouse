@@ -723,3 +723,71 @@ def test_quality_change_defect_to_good(admin_client, client_id, product_ids):
             conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
             conn.commit()
         _cleanup_test_docs(client_id)
+
+
+def test_balances_zone_location_filter(admin_client, client_id, product_ids):
+    """Адресное хранение: фильтр /balances/zones?location= по части кода ячейки."""
+    pid, _color_id, _size_id = product_ids
+    room = f"T{uuid.uuid4().hex[:4]}"
+    cell = admin_client.post("/locations", json={"room": room, "rack": "А", "section": 1, "floor": 1})
+    assert cell.status_code == 200, cell.text
+    cell = cell.json()
+    with get_connection() as conn:
+        _insert_move(
+            conn, client_id, product_ids, 7,
+            from_op="intake", to_op="storage", from_quality="good", to_quality="good",
+            from_zone_id=None, to_zone_id=cell["id"],
+        )
+        conn.commit()
+    try:
+        # часть кода адреса находит ячейку
+        items = admin_client.get(f"/balances/zones?client_id={client_id}&location={room}").json()["items"]
+        assert any(it["location_id"] == cell["id"] and it["location_name"] == cell["code"] for it in items)
+
+        # непопадающий фильтр исключает её
+        items2 = admin_client.get(f"/balances/zones?client_id={client_id}&location=ZZZNOPE").json()["items"]
+        assert all(it["location_id"] != cell["id"] for it in items2)
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.execute("DELETE FROM unloading_zones WHERE id = ?", (cell["id"],))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_balances_zone_pagination_by_location(admin_client, client_id, product_ids):
+    """Серверная пагинация: страница = N местоположений, total = число мест."""
+    pid, _color_id, _size_id = product_ids
+    room = f"T{uuid.uuid4().hex[:4]}"
+    cell_ids: list[str] = []
+    for rack in ("А", "Б", "В"):
+        c = admin_client.post("/locations", json={"room": room, "rack": rack, "section": 1, "floor": 1})
+        assert c.status_code == 200, c.text
+        cell_ids.append(c.json()["id"])
+    with get_connection() as conn:
+        for cid in cell_ids:
+            _insert_move(
+                conn, client_id, product_ids, 5,
+                from_op="intake", to_op="storage", from_quality="good", to_quality="good",
+                from_zone_id=None, to_zone_id=cid,
+            )
+        conn.commit()
+    try:
+        p1 = admin_client.get(f"/balances/zones?client_id={client_id}&location={room}&page=1&limit=2").json()
+        assert p1["total"] == 3 and p1["page"] == 1 and p1["limit"] == 2
+        assert p1["truncated"] is False
+        locs1 = {it["location_id"] for it in p1["items"]}
+        assert len(locs1) == 2
+
+        p2 = admin_client.get(f"/balances/zones?client_id={client_id}&location={room}&page=2&limit=2").json()
+        assert p2["total"] == 3
+        locs2 = {it["location_id"] for it in p2["items"]}
+        assert len(locs2) == 1
+        # страницы не пересекаются — каждое место ровно на одной странице
+        assert not (locs1 & locs2)
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.execute("DELETE FROM unloading_zones WHERE room = ?", (room.upper(),))
+            conn.commit()
+        _cleanup_test_docs(client_id)

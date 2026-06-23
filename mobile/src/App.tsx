@@ -11,19 +11,38 @@ import { ScanProductScreen } from './screens/ScanProductScreen'
 import { StockScreen } from './screens/StockScreen'
 import { TripDetailScreen } from './screens/TripDetailScreen'
 import { ShipmentDetailScreen } from './screens/ShipmentDetailScreen'
-
-// Нижняя навигация — только на «корневых» вкладках. На детальных экранах
-// (рейс/отгрузка/профиль) есть своя кнопка «назад», а скан — полноэкранный,
-// поэтому таб-бар там скрыт.
-const NAV_ROUTES = new Set(['tasks', 'trips', 'shipments', 'stock'])
+import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
+import { ReceiptFormScreen } from './screens/manager/ReceiptFormScreen'
+import { ReceiptDetailScreen } from './screens/manager/ReceiptDetailScreen'
+import { PackingListScreen } from './screens/manager/PackingListScreen'
+import { ShipmentFormScreen } from './screens/manager/ShipmentFormScreen'
+import { PackingDetailScreen } from './screens/manager/PackingDetailScreen'
+import { DispatchListScreen } from './screens/manager/DispatchListScreen'
+import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
+import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
+import { WarehouseHubScreen } from './screens/manager/WarehouseHubScreen'
+import { ManagerTripsScreen } from './screens/manager/ManagerTripsScreen'
 
 function Main() {
-  const { route } = useNav()
+  // Таб-бар — только на «корневых» вкладках (isTab). На детальных экранах есть своя
+  // кнопка «назад», а скан — полноэкранный, поэтому таб-бар там скрыт.
+  const { route, isTab } = useNav()
   let screen
   switch (route.name) {
     case 'tasks':     screen = <TasksScreen />; break
     case 'trips':     screen = <TripsListScreen />; break
     case 'shipments': screen = <ShipmentsListScreen />; break
+    case 'mTrips':    screen = <ManagerTripsScreen />; break
+    case 'mWarehouse': screen = <WarehouseHubScreen />; break
+    case 'mReceipts': screen = <ReceiptsListScreen />; break
+    case 'receiptNew': screen = <ReceiptFormScreen />; break
+    case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break
+    case 'mPacking':  screen = <PackingListScreen />; break
+    case 'shipmentNew': screen = <ShipmentFormScreen />; break
+    case 'mPackingDoc': screen = <PackingDetailScreen docId={route.id} />; break
+    case 'mDispatch': screen = <DispatchListScreen />; break
+    case 'dispatchNew': screen = <DispatchFormScreen />; break
+    case 'mDispatchDoc': screen = <DispatchDetailScreen docId={route.id} />; break
     case 'profile':   screen = <ProfileScreen />; break
     case 'scan':      screen = <ScanScreen />; break
     case 'scanProduct': screen = <ScanProductScreen match={route.match} />; break
@@ -34,7 +53,7 @@ function Main() {
   return (
     <>
       {screen}
-      {NAV_ROUTES.has(route.name) && <BottomNav />}
+      {isTab && <BottomNav />}
     </>
   )
 }

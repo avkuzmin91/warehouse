@@ -310,6 +310,59 @@ def test_receipt_split_across_two_trips(admin_client, client_id):
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
 
 
+def test_receipt_split_across_cells_on_unload(admin_client, client_id):
+    """Принятое по строке раскладывается по нескольким ячейкам: журнал пишет движение
+    на каждую ячейку, остаток встаёт в свои места, карточка показывает раскладку."""
+    import uuid as _uuid
+    doc_id, line_id, pid, cid, _zone = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    zone_a, zone_b = str(_uuid.uuid4()), str(_uuid.uuid4())
+
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 10}]}],
+    })
+    admin_client.post(f"/trips/{t1}/handoff")
+    admin_client.post(f"/trips/{t1}/arrival", json={})
+    unload = _unload_with_receive(admin_client, t1, [{
+        "line_id": line_id, "accepted_qty": 10,
+        "placements": [
+            {"storage_zone_id": zone_a, "storage_zone_name": "Зона A", "qty": 7},
+            {"storage_zone_id": zone_b, "storage_zone_name": "Зона B", "qty": 3},
+        ],
+    }])
+    assert unload.status_code == 200, unload.text
+
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 10
+    assert _storage_good_in_zone(client_id, pid, cid, zone_a) == 7
+    assert _storage_good_in_zone(client_id, pid, cid, zone_b) == 3
+
+    placements = {p["storage_zone_id"]: p["qty"] for p in rec["lines"][0]["placements"]}
+    assert placements == {zone_a: 7, zone_b: 3}
+
+
+def test_unload_split_cell_missing_zone_rejected(admin_client, client_id):
+    """Ячейка с количеством, но без места — приёмку не проводим (нужно указать место)."""
+    doc_id, line_id, _pid, _cid, _zone0 = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    # У строки нет плановой зоны — снимаем, чтобы не сработал фолбэк на неё.
+    admin_client.patch(f"/receipts/{doc_id}/lines/{line_id}",
+                       json={"storage_zone_id": None, "storage_zone_name": None})
+
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 10}]}],
+    })
+    admin_client.post(f"/trips/{t1}/handoff")
+    admin_client.post(f"/trips/{t1}/arrival", json={})
+    got = _unload_with_receive(admin_client, t1, [{
+        "line_id": line_id, "accepted_qty": 10,
+        "placements": [{"storage_zone_id": "", "storage_zone_name": None, "qty": 10}],
+    }])
+    assert got.status_code == 400
+    assert "место хранения" in got.json()["detail"].lower()
+
+
 def test_trip_detail_shows_per_trip_received_qty(admin_client, client_id):
     """Карточка рейса показывает принятое В ЭТОМ рейсе (received_qty), отдельно от
     накопленного по всем рейсам (accepted_qty)."""

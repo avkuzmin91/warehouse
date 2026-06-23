@@ -257,7 +257,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                           <td style={{ width: 120 }}>
                             <button
                               className="btn ghost sm" style={{ padding: '2px 6px', height: 'auto' }}
-                              title="Открыть отгрузку" onClick={() => navigate(`/inventory/shipments/${s.shipment_doc_id}`)}
+                              title="Открыть отгрузку" onClick={() => navigate(`/inventory/dispatches/${s.shipment_doc_id}`)}
                             >
                               <span className="mono" style={{ fontWeight: 500, color: 'var(--c-accent-text)' }}>{s.doc_number}</span>
                             </button>

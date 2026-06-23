@@ -25,10 +25,12 @@ from modules.inventory.router import router as inventory_router
 from modules.invoices.router import router as invoices_router
 from modules.expenses.router import router as expenses_router
 from modules.timesheet.router import router as timesheet_router
+from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
+from modules.dispatch.router import router as dispatch_router
 from modules.tasks.router import router as tasks_router
 from modules.users.router import router as users_router
 
@@ -632,10 +634,12 @@ def removed_client_portal_api(removed_path: str):
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(dictionaries_router)
+app.include_router(locations_router)
 app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
+app.include_router(dispatch_router)
 app.include_router(balances_router)
 app.include_router(cabinet_router)
 app.include_router(invoices_router)

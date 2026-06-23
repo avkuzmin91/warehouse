@@ -48,7 +48,7 @@ export function TripsListScreen() {
         ) : items.length === 0 ? (
           <div className="center">
             <div className="center-ico">
-              <Icon name="truckIn" size={26} />
+              <Icon name="truck" size={26} />
             </div>
             <div>Нет рейсов в работе</div>
           </div>

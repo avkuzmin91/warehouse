@@ -74,11 +74,19 @@ export type TripDetail = {
   shipments: TripShipmentItem[]
 }
 
+export type TripUnloadPlacement = {
+  storage_zone_id?: string | null
+  storage_zone_name?: string | null
+  qty: number
+}
+
 export type TripUnloadReceiptLine = {
   line_id: string
   accepted_qty: number
   storage_zone_id?: string | null
   storage_zone_name?: string | null
+  // Раскладка по нескольким ячейкам; accepted_qty = сумме qty. Пусто → одна ячейка.
+  placements?: TripUnloadPlacement[]
 }
 
 export type TripUnloadPayload = {

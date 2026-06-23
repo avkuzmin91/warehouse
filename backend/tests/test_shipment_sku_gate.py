@@ -105,8 +105,33 @@ def test_plan_passes_after_sku_assigned(admin_client, pending_product):
     assert detail["lines"][0]["sku_pending"] is False
     assert sku_base.upper() in detail["lines"][0]["product_sku"].upper()
 
-    adv = admin_client.post(f"/shipments/{doc_id}/advance")
-    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned (гейт SKU здесь)
+    assert adv.status_code == 200 and adv.json()["message"] == "assigned", adv.text
+    adv2 = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    assert adv2.status_code == 200 and adv2.json()["message"] == "packing", adv2.text
+
+
+def test_assigned_sku_visible_in_lines_list(admin_client, pending_product):
+    """Список «По товарам» (/shipments/lines) показывает live SKU после присвоения.
+
+    Снимок l.product_sku в строке остаётся пустым (товар был «ожидает SKU»),
+    поэтому список обязан подставлять актуальный products.sku — иначе SKU «теряется».
+    """
+    cid, pid = pending_product["client_id"], pending_product["product_id"]
+    seed_storage_good(cid, product_id=pid, product_sku="", qty=5)
+    doc_id = admin_client.post("/shipments", json=_shipment_payload(cid, pid)).json()["message"]
+
+    sku_base = f"LIST-{pid[:8]}"
+    assert admin_client.patch(f"/products/{pid}", json={"sku_base": sku_base}).status_code == 200
+
+    # Строка документа в списке отдаёт присвоенный SKU…
+    resp = admin_client.get(f"/shipments/lines?client_id={cid}").json()
+    line = next(it for it in resp["items"] if it["doc_id"] == doc_id)
+    assert sku_base.upper() in line["product_sku"].upper()
+
+    # …и поиск по новому SKU находит документ (фильтр тоже смотрит на live SKU).
+    found = admin_client.get(f"/shipments/lines?sku={sku_base}").json()
+    assert any(it["doc_id"] == doc_id for it in found["items"])
 
 
 def test_change_existing_sku_reflected_on_line(admin_client, pending_product):

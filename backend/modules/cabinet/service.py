@@ -3,27 +3,25 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from config import (
+    CABINET_DISPATCH_OPS_VISIBLE,
+    CABINET_DISPATCH_VISIBLE_STATUSES,
     CABINET_RECEIPT_OPS_VISIBLE,
     CABINET_RECEIPT_VISIBLE_STATUSES,
-    CABINET_SHIPMENT_OPS_VISIBLE,
-    CABINET_SHIPMENT_VISIBLE_STATUSES,
+    DISPATCH_CARGO_DEFECT,
+    DISPATCH_CARGO_GOOD,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     INV_OP_WRITTEN_OFF,
     PRODUCT_LIST_SORT_COLUMNS,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
-    SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_CARGO_GOOD,
-    SHIPMENT_STATUS_AWAITING_TRIP,
-    SHIPMENT_STATUS_ON_PACKING,
-    SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_RELOCATING,
 )
 from dbconn import like_substring_param
 from modules.cabinet.schemas import (
     CabinetBalanceTotals,
     CabinetEventItem,
-    CabinetLineFile,
     CabinetOpItem,
     CabinetPackingReportDay,
     CabinetPackingReportResponse,
@@ -44,6 +42,7 @@ from modules.cabinet.schemas import (
     CabinetShipmentLinesResponse,
     CabinetShipmentListItem,
     CabinetShipmentListResponse,
+    CabinetShipmentTrip,
     CabinetSummaryResponse,
     CabinetWriteOffItem,
     CabinetWriteOffsResponse,
@@ -250,7 +249,7 @@ def _receipt_status_cond(status: str | None) -> tuple[str, list[str]]:
 
 
 def _shipment_status_cond(status: str | None) -> tuple[str, list[str]]:
-    allowed = [status] if status else sorted(CABINET_SHIPMENT_VISIBLE_STATUSES)
+    allowed = [status] if status else sorted(CABINET_DISPATCH_VISIBLE_STATUSES)
     placeholders = ",".join("?" for _ in allowed)
     return f"d.status IN ({placeholders})", allowed
 
@@ -465,26 +464,8 @@ def get_cabinet_receipt(connection, *, client_id: str, doc_id: str) -> CabinetRe
 
 
 # ---------------------------------------------------------------------------
-# Отгрузки (клиентская проекция)
+# Отгрузки клиента (домен dispatch, клиентская проекция)
 # ---------------------------------------------------------------------------
-
-# Нетто-упаковка по строке — то же правило, что в карточке отгрузки (router shipments).
-_PACKED_SUBQUERY = """
-    COALESCE((
-        SELECT SUM(CASE
-            WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
-            WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
-            ELSE 0 END)
-        + SUM(CASE
-            WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
-            WHEN zr.from_quality='defect' AND COALESCE(zr.to_quality,'')<>'defect'   THEN -zr.qty
-            ELSE 0 END)
-        FROM zone_relocations zr
-        JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
-        WHERE sl2.doc_id = d.id
-    ), 0) AS total_packed_qty
-"""
-
 
 def list_cabinet_shipments(
     connection,
@@ -510,14 +491,14 @@ def list_cabinet_shipments(
         cond, status_params = _shipment_status_cond(status)
         conds.append(cond)
         params.extend(status_params)
-    if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+    if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():
         s = like_substring_param(search)
         conds.append(
-            "(d.doc_number LIKE ? OR EXISTS (SELECT 1 FROM shipment_lines sl"
-            " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0 AND COALESCE(sl.store_name,'') LIKE ?))"
+            "(d.doc_number LIKE ? OR EXISTS (SELECT 1 FROM dispatch_lines l"
+            " WHERE l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0 AND COALESCE(l.store_name,'') LIKE ?))"
         )
         params += [s, s]
     if date_from:
@@ -529,7 +510,7 @@ def list_cabinet_shipments(
     where = " AND ".join(conds)
 
     total = int(connection.execute(
-        f"SELECT COUNT(*) AS cnt FROM shipment_docs d WHERE {where}", params
+        f"SELECT COUNT(*) AS cnt FROM dispatch_docs d WHERE {where}", params
     ).fetchone()["cnt"])
 
     order_sql = (
@@ -546,10 +527,9 @@ def list_cabinet_shipments(
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.store_name) FILTER (WHERE l.is_deleted = 0), NULL) AS store_names,
                COUNT(l.id) FILTER (WHERE l.is_deleted = 0) AS sku_count,
                COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted = 0), 0) AS total_qty,
-               COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted = 0), 0) AS total_shipped_qty,
-               {_PACKED_SUBQUERY}
-        FROM shipment_docs d
-        LEFT JOIN shipment_lines l ON l.doc_id = d.id
+               COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted = 0), 0) AS total_shipped_qty
+        FROM dispatch_docs d
+        LEFT JOIN dispatch_lines l ON l.doc_id = d.id
         WHERE {where}
         GROUP BY d.id
         ORDER BY {order_sql}
@@ -569,7 +549,6 @@ def list_cabinet_shipments(
             status=str(r["status"]),
             sku_count=int(r["sku_count"] or 0),
             total_qty=int(r["total_qty"] or 0),
-            total_packed_qty=int(r["total_packed_qty"] or 0),
             total_shipped_qty=int(r["total_shipped_qty"] or 0),
             created_at=str(r["created_at"]),
         )
@@ -595,7 +574,7 @@ def list_cabinet_shipment_lines(
     cond, status_params = _shipment_status_cond(status)
     conds.append(cond)
     params.extend(status_params)
-    if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
+    if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():
@@ -612,7 +591,7 @@ def list_cabinet_shipment_lines(
 
     total = int(connection.execute(
         f"""SELECT COUNT(*) AS cnt
-            FROM shipment_lines l JOIN shipment_docs d ON d.id = l.doc_id
+            FROM dispatch_lines l JOIN dispatch_docs d ON d.id = l.doc_id
             WHERE {where}""",
         params,
     ).fetchone()["cnt"])
@@ -623,9 +602,9 @@ def list_cabinet_shipment_lines(
         SELECT l.doc_id, d.doc_number, COALESCE(d.cargo_type, 'good') AS cargo_type,
                d.status, d.ship_date,
                l.product_name, l.product_sku, l.color_name, l.size_name,
-               l.qty, l.shipped_qty, l.store_name
-        FROM shipment_lines l
-        JOIN shipment_docs d ON d.id = l.doc_id
+               l.qty, l.shipped_qty, l.site_url, l.store_name
+        FROM dispatch_lines l
+        JOIN dispatch_docs d ON d.id = l.doc_id
         WHERE {where}
         ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
         LIMIT ? OFFSET ?
@@ -646,6 +625,7 @@ def list_cabinet_shipment_lines(
             size_name=r["size_name"],
             qty=int(r["qty"] or 0),
             shipped_qty=int(r["shipped_qty"] or 0),
+            site_url=r["site_url"],
             store_name=r["store_name"],
         )
         for r in rows
@@ -700,45 +680,32 @@ def list_cabinet_write_offs(
 def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetShipmentDetailResponse:
     cond, status_params = _shipment_status_cond(None)
     row = connection.execute(
-        f"SELECT * FROM shipment_docs d WHERE d.id = ? AND d.client_id = ? AND d.is_deleted = 0 AND {cond}",
+        f"SELECT * FROM dispatch_docs d WHERE d.id = ? AND d.client_id = ? AND d.is_deleted = 0 AND {cond}",
         [doc_id, client_id, *status_params],
     ).fetchone()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
 
     lines_rows = connection.execute(
-        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
+        "SELECT * FROM dispatch_lines WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at, id",
         (doc_id,),
     ).fetchall()
-    packed_rows = connection.execute(
-        """SELECT shipment_line_id,
-              COALESCE(SUM(CASE WHEN to_op='ready'   AND COALESCE(from_op,'')<>'ready' THEN qty
-                                WHEN from_op='ready' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
-              COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
-                                WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
-           FROM zone_relocations
-           WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
-           GROUP BY shipment_line_id""",
-        (doc_id,),
-    ).fetchall()
-    packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
 
-    files_rows = connection.execute(
-        "SELECT line_id, filename, url FROM shipment_line_files WHERE doc_id = ? AND is_deleted = 0 ORDER BY created_at",
+    trip_rows = connection.execute(
+        "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
+        "FROM trip_lines tl "
+        "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+        "ORDER BY t.trip_number",
         (doc_id,),
     ).fetchall()
-    files_by_line: dict[str, list[CabinetLineFile]] = {}
-    for f in files_rows:
-        files_by_line.setdefault(str(f["line_id"]), []).append(
-            CabinetLineFile(filename=str(f["filename"]), url=str(f["url"]))
-        )
 
-    ops_placeholders = ",".join("?" for _ in CABINET_SHIPMENT_OPS_VISIBLE)
+    ops_placeholders = ",".join("?" for _ in CABINET_DISPATCH_OPS_VISIBLE)
     ops_rows = connection.execute(
         f"""SELECT op_type, comment, created_at
-            FROM shipment_ops WHERE doc_id = ? AND op_type IN ({ops_placeholders})
+            FROM dispatch_ops WHERE doc_id = ? AND op_type IN ({ops_placeholders})
             ORDER BY created_at DESC""",
-        [doc_id, *sorted(CABINET_SHIPMENT_OPS_VISIBLE)],
+        [doc_id, *sorted(CABINET_DISPATCH_OPS_VISIBLE)],
     ).fetchall()
 
     return CabinetShipmentDetailResponse(
@@ -760,10 +727,8 @@ def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetS
                 size_name=l["size_name"],
                 qty=int(l["qty"] or 0),
                 shipped_qty=int(l["shipped_qty"] or 0),
-                packed_good=packed_by_line.get(str(l["id"]), (0, 0))[0],
-                packed_defect=packed_by_line.get(str(l["id"]), (0, 0))[1],
+                site_url=l["site_url"],
                 store_name=l["store_name"],
-                files=files_by_line.get(str(l["id"]), []),
             )
             for l in lines_rows
         ],
@@ -775,6 +740,7 @@ def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetS
             )
             for o in ops_rows
         ],
+        trips=[CabinetShipmentTrip(id=str(t["trip_id"]), number=str(t["trip_number"])) for t in trip_rows],
     )
 
 
@@ -786,12 +752,14 @@ def cabinet_balance_totals(connection, *, client_id: str) -> CabinetBalanceTotal
     from modules.balances.service import get_balances_summary
 
     summary = get_balances_summary(connection, client_id=client_id, search=None, has_defect=False)
+    # «Упаковано» (packed) для клиента — часть процесса упаковки: сворачиваем в
+    # packing_good, чтобы разбивка сходилась с total_good и не плодить новую корзину.
     return CabinetBalanceTotals(
         storage_good=summary.storage_good,
-        packing_good=summary.packing_good,
+        packing_good=summary.packing_good + summary.packed_good,
         ready_good=summary.ready_good,
-        total_good=summary.storage_good + summary.packing_good + summary.ready_good,
-        defect_total=summary.storage_defect + summary.packing_defect + summary.ready_defect,
+        total_good=summary.storage_good + summary.packing_good + summary.packed_good + summary.ready_good,
+        defect_total=summary.storage_defect + summary.packing_defect + summary.packed_defect + summary.ready_defect,
     )
 
 
@@ -810,16 +778,17 @@ def cabinet_summary(connection, *, client_id: str) -> CabinetSummaryResponse:
         page=1,
         limit=5,
         statuses=[
-            SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING,
-            SHIPMENT_STATUS_RELOCATING, SHIPMENT_STATUS_AWAITING_TRIP,
+            DISPATCH_STATUS_PREPARING,
+            DISPATCH_STATUS_AWAITING_TRIP,
+            DISPATCH_STATUS_PARTIALLY_SHIPPED,
         ],
         order="upcoming",
     ).items
 
     r_statuses = sorted(CABINET_RECEIPT_VISIBLE_STATUSES)
-    s_statuses = sorted(CABINET_SHIPMENT_VISIBLE_STATUSES)
+    s_statuses = sorted(CABINET_DISPATCH_VISIBLE_STATUSES)
     r_ops = sorted(CABINET_RECEIPT_OPS_VISIBLE)
-    s_ops = sorted(CABINET_SHIPMENT_OPS_VISIBLE)
+    s_ops = sorted(CABINET_DISPATCH_OPS_VISIBLE)
     events_rows = connection.execute(
         f"""
         SELECT 'receipt' AS doc_kind, o.doc_id, d.doc_number, o.op_type, o.qty, o.comment, o.created_at
@@ -830,8 +799,8 @@ def cabinet_summary(connection, *, client_id: str) -> CabinetSummaryResponse:
           AND o.op_type IN ({",".join("?" for _ in r_ops)})
         UNION ALL
         SELECT 'shipment' AS doc_kind, o.doc_id, d.doc_number, o.op_type, NULL AS qty, o.comment, o.created_at
-        FROM shipment_ops o
-        JOIN shipment_docs d ON d.id = o.doc_id
+        FROM dispatch_ops o
+        JOIN dispatch_docs d ON d.id = o.doc_id
         WHERE d.client_id = ? AND d.is_deleted = 0
           AND d.status IN ({",".join("?" for _ in s_statuses)})
           AND o.op_type IN ({",".join("?" for _ in s_ops)})

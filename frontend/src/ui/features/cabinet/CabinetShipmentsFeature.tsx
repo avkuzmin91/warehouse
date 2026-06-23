@@ -30,12 +30,9 @@ const MODE_TABS = [
   { id: 'items', label: 'По товарам' },
 ] as const
 
-// relocating и awaiting_trip показываются одним клиентским статусом — в опциях один пункт.
 const STATUS_OPTIONS = [
   { value: '', label: 'Все статусы' },
-  ...CABINET_SHIPMENT_STATUS_ORDER
-    .filter((s) => s !== 'awaiting_trip')
-    .map((s) => ({ value: s, label: CABINET_SHIPMENT_STATUS_LABELS[s] })),
+  ...CABINET_SHIPMENT_STATUS_ORDER.map((s) => ({ value: s, label: CABINET_SHIPMENT_STATUS_LABELS[s] })),
 ]
 
 const CARGO_OPTIONS = [
@@ -207,7 +204,8 @@ export function CabinetShipmentsFeature() {
                 <tr><Td colSpan={6}><EmptyState title="Отгрузок нет" sub="Документы появятся после принятия заказа в работу" /></Td></tr>
               ) : (
                 (docs.data?.items ?? []).map((item) => {
-                  const progressQty = item.status === 'shipped' ? item.total_shipped_qty : item.total_packed_qty
+                  const progressQty = item.total_shipped_qty
+                  const fullyShipped = item.total_qty > 0 && progressQty >= item.total_qty
                   return (
                     <tr key={item.id} onClick={() => navigate(`/cabinet/shipments/${item.id}`)} style={{ cursor: 'pointer' }}>
                       <Td>
@@ -227,7 +225,7 @@ export function CabinetShipmentsFeature() {
                       <Td className="num">
                         <div className="cellprog">
                           <div className="row" style={{ gap: 6 }}>
-                            <span className="t-sub">{item.status === 'shipped' ? 'отгружено' : 'упаковано'}</span>
+                            <span className="t-sub">отгружено</span>
                             <span style={{ fontWeight: 600 }}>{progressQty.toLocaleString('ru-RU')}</span>
                             <span className="t-sub">из {item.total_qty.toLocaleString('ru-RU')} шт</span>
                           </div>
@@ -235,7 +233,7 @@ export function CabinetShipmentsFeature() {
                             <CellProg
                               value={progressQty}
                               max={item.total_qty}
-                              color={item.status === 'shipped' ? 'var(--c-success)' : item.total_packed_qty >= item.total_qty ? 'var(--c-accent)' : 'var(--c-info)'}
+                              color={fullyShipped ? 'var(--c-success)' : 'var(--c-accent)'}
                             />
                           )}
                         </div>

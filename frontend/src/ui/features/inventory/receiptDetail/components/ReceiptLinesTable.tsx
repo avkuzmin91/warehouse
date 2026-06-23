@@ -166,7 +166,17 @@ function Row(props: Props & { line: ReceiptLine }) {
             {line.accepted_qty ?? '—'}
           </Td>
           <Td style={{ background: tintArr }}>
-            <span className="t-sub">{line.storage_zone_name || '—'}</span>
+            {line.placements.length > 1 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {line.placements.map((p, i) => (
+                  <span key={i} className="t-sub">
+                    {p.storage_zone_name || '—'} · <span className="num" style={{ fontWeight: 600 }}>{p.qty}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="t-sub">{line.placements[0]?.storage_zone_name || line.storage_zone_name || '—'}</span>
+            )}
           </Td>
         </>
       )}

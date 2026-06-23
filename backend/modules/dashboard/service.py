@@ -194,8 +194,8 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
                COALESCE(SUM(l.qty) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0), 0) AS total_qty,
                COALESCE((
                    SELECT SUM(CASE
-                       WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
-                       WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
+                       WHEN zr.to_op='packed' AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                       WHEN zr.from_op='packed' AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
                        ELSE 0 END)
                    + SUM(CASE
                        WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty

@@ -15,7 +15,8 @@ export function InventoryHomePage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, maxWidth: 800 }}>
         {[
           { to: '/inventory/receipts', icon: 'truckIn' as const, label: 'Поступления', sub: 'Список и приёмка товара' },
-          { to: '/inventory/shipments', icon: 'truckOut' as const, label: 'Отгрузки', sub: 'Сборка заказов клиентов' },
+          { to: '/inventory/packing', icon: 'forklift' as const, label: 'Упаковка', sub: 'Задачи упаковки и сборка заказов' },
+          { to: '/inventory/dispatches', icon: 'truckOut' as const, label: 'Отгрузки', sub: 'Рейсы и отгрузки клиентам' },
           { to: '/inventory/balances', icon: 'boxes' as const, label: 'Остатки', sub: 'Что и где лежит на складе' },
         ].map((item) => (
           <Card key={item.to} style={{ cursor: 'pointer' }}>

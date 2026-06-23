@@ -11,7 +11,7 @@ import { newRequestId } from '../api/http'
 import { balanceKey } from '../utils/balanceKey'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
-import { Combobox } from '../components/Combobox'
+import { ZoneField } from '../components/ZoneField'
 import { PullToRefresh } from '../components/PullToRefresh'
 
 // Место = физическая зона хранения; ∅ — товар без привязки к месту.
@@ -310,7 +310,9 @@ function MoveSheet({
   // Один логический перенос на эту шторку — стабильный id переживает повтор при обрыве сети.
   const [requestId] = useState(newRequestId)
 
-  const targets = zones.filter((z) => z.id !== from.location_id)
+  const targetOptions = zones
+    .filter((z) => z.id !== from.location_id)
+    .map((z) => ({ value: z.id, label: z.name }))
   const variant = variantLabel(from)
 
   async function submit() {
@@ -360,13 +362,6 @@ function MoveSheet({
           <span className={from.quality === 'defect' ? 'delta under' : ''}>{QUALITY_LABELS[from.quality]}</span>
         </div>
 
-        {error && (
-          <div className="alert">
-            <Icon name="alert" size={15} />
-            {error}
-          </div>
-        )}
-
         <div className="summary" style={{ marginBottom: 16 }}>
           <div className="kv">
             <span className="k">Откуда</span>
@@ -382,13 +377,20 @@ function MoveSheet({
           <div className="flabel">
             Куда <span className="req">*</span>
           </div>
-          <Combobox
-            value={toZoneId}
-            options={targets.map((z) => ({ value: z.id, label: z.name }))}
-            placeholder="Место назначения…"
-            title="Куда переместить"
-            onChange={setToZoneId}
-          />
+          <div className="line-row" style={{ marginTop: 0 }}>
+            <ZoneField
+              value={toZoneId}
+              options={targetOptions}
+              placeholder="Место назначения…"
+              title="Куда переместить"
+              onError={setError}
+              allowUnlisted
+              validateScan={(loc) =>
+                loc.id === from.location_id ? 'Это исходное место — выберите другое' : null
+              }
+              onChange={setToZoneId}
+            />
+          </div>
         </div>
 
         <div className="field">
@@ -396,7 +398,7 @@ function MoveSheet({
           <div className="line-row" style={{ marginTop: 0 }}>
             <input
               className="input num"
-              type="number"
+              type="text"
               inputMode="numeric"
               min={1}
               max={from.qty}
@@ -419,6 +421,13 @@ function MoveSheet({
             placeholder="Причина перемещения"
           />
         </div>
+
+        {error && (
+          <div className="alert" style={{ marginTop: 4 }}>
+            <Icon name="alert" size={15} />
+            {error}
+          </div>
+        )}
 
         <div className="line-row" style={{ marginTop: 4 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>

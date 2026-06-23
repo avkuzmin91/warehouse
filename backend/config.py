@@ -124,9 +124,19 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # ---------------------------------------------------------------------------
 
 SHIPMENT_STATUS_DRAFT             = "draft"
+# Менеджер поставил задачу, но склад ещё не взял её в работу: задача ждёт приёмки
+# начальником склада (он может принять, отклонить либо поправить ТЗ/файлы). Только
+# для годного груза — брак-отгрузка минует и упаковку, и этот шаг.
+SHIPMENT_STATUS_ASSIGNED          = "assigned"
 SHIPMENT_STATUS_PACKING           = "packing"
 SHIPMENT_STATUS_ON_PACKING        = "on_packing"
 SHIPMENT_STATUS_RELOCATING        = "relocating"
+# Терминальный исход «Задачи упаковки»: после раскладки по местам товар упакован
+# и готов к отгрузке. Дальше его возит отдельный домен dispatch (привязка к рейсу
+# и списание — там), задача упаковки на этом завершается.
+SHIPMENT_STATUS_PACKED            = "packed"
+# Легаси-статусы: документы в них больше не переводятся (их роль перешла к dispatch),
+# но константы нужны cabinet и исторической миграции данных.
 SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
 SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
 SHIPMENT_STATUS_SHIPPED           = "shipped"
@@ -138,9 +148,11 @@ SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
@@ -150,6 +162,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
@@ -157,9 +170,11 @@ SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:             "Создание",
+    SHIPMENT_STATUS_ASSIGNED:          "Ожидает принятия",
     SHIPMENT_STATUS_PACKING:           "В плане",
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
+    SHIPMENT_STATUS_PACKED:            "Упаковано",
     SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
     SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
     SHIPMENT_STATUS_SHIPPED:           "Завершён",
@@ -167,34 +182,55 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
 
-# Плановые переходы через /advance. relocating → awaiting_trip не здесь: его делает
-# отдельный эндпоинт «Готово к рейсу» (перемещение по местам). awaiting_trip → shipped —
-# при отправке привязанного рейса (логистика), тоже вне /advance.
+# Плановые переходы через /advance. relocating → packed не здесь: его делает
+# отдельный эндпоинт «Готово к рейсу» (раскладка по местам). packed — терминальный
+# исход задачи упаковки; отгрузку к рейсу далее возит домен dispatch.
+# draft → assigned: менеджер ставит задачу. assigned → packing: начальник склада
+# принимает её в работу (см. SHIPMENT_TRANSITION_ROLES) — только тогда склад начинает.
 SHIPMENT_TRANSITIONS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_ASSIGNED,
+    SHIPMENT_STATUS_ASSIGNED:   SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING:    SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_ON_PACKING: SHIPMENT_STATUS_RELOCATING,
 }
 
 # Роли, которым разрешён переход НА данный статус (целевой статус → роли).
-# В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
+# Ожидает принятия: менеджер ставит задачу. В плане (приёмка задачи): начальник склада
+# берёт в работу; менеджер тоже может — физически это делает второй менеджер, проверяя
+# первого. В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
 # начальник смены упаковал годный/брак и передаёт кладовщику.
 SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
-    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
+    SHIPMENT_STATUS_ASSIGNED:   frozenset({"manager", "admin"}),
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_head"}),
     SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
     SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor", "warehouse_head"}),
 }
 
+# Кто может принять/отклонить задачу упаковки на шаге «Ожидает принятия» — начальник
+# склада и менеджерский состав (см. примечание о роли в SHIPMENT_TRANSITION_ROLES).
+SHIPMENT_ACCEPT_ROLES: frozenset[str] = frozenset({"manager", "admin", "warehouse_head"})
+
 # Аннулировать можно только до передачи на упаковку включительно.
 SHIPMENT_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
 })
 
 SHIPMENT_REVERT_TRANSITIONS: dict[str, str] = {}
 
+# Менеджерский возврат товарной задачи упаковки «на упаковку» (→ on_packing) из
+# «Перемещение» или «Упаковано»: переупаковать/исправить. Для «Упаковано» при этом
+# откатывается раскладка по местам (см. return_to_packing). Брак упаковку минует —
+# для брак-отгрузки действие недоступно.
+SHIPMENT_RETURN_TO_PACKING_STATUSES: frozenset[str] = frozenset({
+    SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_PACKED,
+})
+
 SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
+    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
 })
 
@@ -246,6 +282,10 @@ SHIPMENT_PRIORITY_LABELS: dict[int | None, str] = {
 INV_OP_INTAKE      = "intake"
 INV_OP_STORAGE     = "storage"
 INV_OP_PACKING     = "packing"
+# «Упаковано» — товар прошёл стол упаковки (и годный, и брак), но ещё НЕ готов к
+# отгрузке: готовность наступает явным действием склада «Готово к рейсу»
+# (finish_relocation, relocating → packed), которое и переводит годное packed → ready.
+INV_OP_PACKED      = "packed"
 INV_OP_READY       = "ready"
 INV_OP_SHIPPED     = "shipped"
 INV_OP_WRITTEN_OFF = "written_off"
@@ -254,6 +294,7 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_INTAKE:      "На приёмке",
     INV_OP_STORAGE:     "На хранении",
     INV_OP_PACKING:     "На упаковке",
+    INV_OP_PACKED:      "Упакован",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",
     INV_OP_WRITTEN_OFF: "Списан",
@@ -273,6 +314,14 @@ INV_QUALITY_LABELS: dict[str, str] = {
     INV_Q_GOOD:   "Годный",
     INV_Q_DEFECT: "Брак",
 }
+
+# ── Адресное хранение: ячейки стеллажей (unloading_zones со структурой адреса) ──
+# Место хранения с координатами Помещение-Стеллаж-Секция-Этаж (код вида «1-А-10-1»).
+# QR на ячейке несёт идентификатор записи (стабилен при переименовании адреса),
+# человекочитаемый код печатается рядом. Префикс payload отличает QR места от ШК товара.
+LOCATION_KIND_CELL    = "cell"      # адресная ячейка стеллажа
+LOCATION_KIND_SPECIAL = "special"   # служебная зона (упаковка/отгрузка/прочее)
+LOCATION_QR_PREFIX    = "wms:loc:"
 
 # Причины списания остатков (zone_relocations.reason у движений → written_off)
 WRITEOFF_REASON_SHORTAGE      = "shortage"
@@ -296,7 +345,105 @@ SHIPMENT_OP_PACK            = "pack"
 SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
+SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
+# Начальник склада отклонил задачу: assigned → draft с причиной, возврат менеджеру.
+SHIPMENT_OP_REJECT          = "reject"
 SHIPMENT_OP_SHIP            = "ship"
+
+# ---------------------------------------------------------------------------
+# Отгрузки клиенту (dispatch_*) — коммерческо-логистическая сущность
+# ---------------------------------------------------------------------------
+# Отделена от «Задачи упаковки» (shipment_*, склад): менеджер набирает клиенту
+# товар из готового к отгрузке (ready) и в пути, логист дробит её по рейсам.
+# Связь со складом — только через журнальный остаток `ready` (по варианту×клиенту):
+# задача упаковки его производит, отгрузка — потребляет (списание ready→shipped
+# при выезде рейса). Документы друг на друга не ссылаются.
+
+DISPATCH_STATUS_DRAFT             = "draft"
+DISPATCH_STATUS_PREPARING         = "preparing"
+DISPATCH_STATUS_AWAITING_TRIP     = "awaiting_trip"
+DISPATCH_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
+DISPATCH_STATUS_SHIPPED           = "shipped"
+DISPATCH_STATUS_CANCELLED         = "cancelled"
+
+DISPATCH_STATUSES_ALL: list[str] = [
+    DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+]
+
+# Терминальные статусы (документ завершён, дальше не двигается).
+DISPATCH_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+})
+
+DISPATCH_STATUS_LABELS: dict[str, str] = {
+    DISPATCH_STATUS_DRAFT:             "Создание",
+    DISPATCH_STATUS_PREPARING:         "Подготовка отгрузки",
+    DISPATCH_STATUS_AWAITING_TRIP:     "Ожидает рейс",
+    DISPATCH_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
+    DISPATCH_STATUS_SHIPPED:           "Отгружено",
+    DISPATCH_STATUS_CANCELLED:         "Аннулирована",
+}
+
+# Состав/поля документа правятся только до перевода в «Ожидает рейс».
+DISPATCH_EDITABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_DRAFT,
+})
+
+# Аннулировать можно, пока ничего не уехало (до первого рейса).
+DISPATCH_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+})
+
+# Статусы, в которых отгрузка — кандидат на привязку к рейсу (есть готовый остаток).
+# Рейс можно заказать как на «Ожидает рейс», так и на ещё готовящиеся кладовщиком
+# («Подготовка отгрузки») — товар всё равно лежит в `ready`, спишется при выезде.
+DISPATCH_TRIP_SELECTABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+})
+
+DISPATCH_CARGO_GOOD   = "good"
+DISPATCH_CARGO_DEFECT = "defect"
+
+# Перевод draft → preparing («Подготовка отгрузки») делает менеджер (ставит задачу
+# кладовщику); гейт — весь товар покрыт свободным остатком `ready` и имеет SKU.
+# preparing → awaiting_trip («Ожидает рейс») отмечает кладовщик, закончив подготовку.
+# awaiting_trip/preparing → (partially_shipped/shipped) — при выезде привязанного
+# рейса (логистика), вне ручных переходов.
+DISPATCH_TRANSITION_ROLES: dict[str, frozenset[str]] = {
+    DISPATCH_STATUS_PREPARING:     frozenset({"manager", "admin"}),
+    DISPATCH_STATUS_AWAITING_TRIP: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
+}
+
+# Приоритет — как у задачи упаковки (меньше = срочнее), NULL = обычный.
+DISPATCH_PRIORITY_URGENT = 1
+DISPATCH_PRIORITY_HIGH   = 2
+DISPATCH_PRIORITY_LABELS: dict[int | None, str] = {
+    DISPATCH_PRIORITY_URGENT: "Срочно",
+    DISPATCH_PRIORITY_HIGH:   "Повышенный",
+    None:                     "Обычный",
+}
+
+# Типы операций журнала отгрузок клиенту (append-only)
+DISPATCH_OP_DOC_CREATE      = "doc_create"
+DISPATCH_OP_DOC_UPDATE      = "doc_update"
+DISPATCH_OP_PRIORITY_UPDATE = "priority_update"
+DISPATCH_OP_LINE_ADD        = "line_add"
+DISPATCH_OP_LINE_UPDATE     = "line_update"
+DISPATCH_OP_LINE_DELETE     = "line_delete"
+DISPATCH_OP_ADVANCE         = "advance"
+DISPATCH_OP_PREPARE         = "prepare"
+DISPATCH_OP_SHIP            = "ship"
+DISPATCH_OP_CANCEL          = "cancel"
 
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
@@ -632,6 +779,7 @@ CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
+    SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_AWAITING_TRIP,
     SHIPMENT_STATUS_PARTIALLY_SHIPPED,
     SHIPMENT_STATUS_SHIPPED,
@@ -654,6 +802,22 @@ CABINET_SHIPMENT_OPS_VISIBLE: frozenset[str] = frozenset({
     SHIPMENT_OP_PACK_CORRECTION,
     SHIPMENT_OP_SHIP,
     "cancel",
+})
+
+# Клиентская отгрузка = домен dispatch. Клиент видит её с момента передачи в
+# подготовку (черновик внутренний). Журнал — только человекочитаемые события
+# (отгружено / аннулировано); служебный advance с внутренними кодами скрыт.
+CABINET_DISPATCH_VISIBLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_SHIPPED,
+    DISPATCH_STATUS_CANCELLED,
+})
+
+CABINET_DISPATCH_OPS_VISIBLE: frozenset[str] = frozenset({
+    DISPATCH_OP_SHIP,
+    DISPATCH_OP_CANCEL,
 })
 
 # ---------------------------------------------------------------------------

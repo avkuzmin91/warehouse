@@ -17,10 +17,10 @@ interface NavItem {
 
 const OPS_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
-  { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
-  { to: '/inventory/shipments', icon: 'forklift', label: 'Отгрузки' },
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
+  { to: '/inventory/dispatches', icon: 'forklift', label: 'Отгрузки' },
+  { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
 ]
 
@@ -39,7 +39,6 @@ const TIMESHEET_NAV: NavItem[] = [
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
-  { to: '/inventory/shipments', icon: 'forklift', label: 'Отгрузки' },
 ]
 
 const ADMIN_NAV: NavItem[] = [
