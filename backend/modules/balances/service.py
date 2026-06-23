@@ -149,17 +149,10 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
                    {net_cols}
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
-        ),
-        variant_sku AS (
-            SELECT product_id, client_id, color_id, size_id,
-                   MAX(NULLIF(TRIM(sku), '')) AS sku
-            FROM product_variants
-            WHERE COALESCE(is_deleted, 0) = 0
-            GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT
             a.product_id,
-            COALESCE(vs.sku, a.product_sku) AS product_sku,
+            COALESCE(NULLIF(TRIM(prod.sku), ''), a.product_sku) AS product_sku,
             a.client_id, a.color_id, a.size_id,
             a.product_name, a.client_name, a.color_name, a.size_name,
             {bucket_selects},
@@ -170,11 +163,7 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
            AND c.client_id  IS NOT DISTINCT FROM a.client_id
            AND c.color_id   IS NOT DISTINCT FROM a.color_id
            AND c.size_id    IS NOT DISTINCT FROM a.size_id
-        LEFT JOIN variant_sku vs
-            ON vs.product_id = a.product_id
-           AND vs.client_id  IS NOT DISTINCT FROM a.client_id
-           AND vs.color_id   IS NOT DISTINCT FROM a.color_id
-           AND vs.size_id    IS NOT DISTINCT FROM a.size_id
+        LEFT JOIN products prod ON prod.id = a.product_id
     """
     return agg_query, line_params
 
@@ -329,20 +318,9 @@ def get_plannable_items(
     rows = connection.execute(
         f"""
         SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending,
-               COALESCE(vs.sku, p.product_sku) AS live_sku
+               COALESCE(NULLIF(TRIM(prod.sku), ''), p.product_sku) AS live_sku
         FROM ({query}) p
         LEFT JOIN products prod ON prod.id = p.product_id
-        LEFT JOIN (
-            SELECT product_id, client_id, color_id, size_id,
-                   MAX(NULLIF(TRIM(sku), '')) AS sku
-            FROM product_variants
-            WHERE COALESCE(is_deleted, 0) = 0
-            GROUP BY product_id, client_id, color_id, size_id
-        ) vs
-            ON vs.product_id = p.product_id
-           AND vs.client_id  IS NOT DISTINCT FROM p.client_id
-           AND vs.color_id   IS NOT DISTINCT FROM p.color_id
-           AND vs.size_id    IS NOT DISTINCT FROM p.size_id
         {where}
         ORDER BY p.product_name, p.color_name, p.size_name
         LIMIT ?
@@ -501,27 +479,16 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM gain
             UNION
             SELECT product_id, client_id, color_id, size_id, loc_id, op, quality FROM lose
-        ),
-        variant_sku AS (
-            SELECT product_id, client_id, color_id, size_id,
-                   MAX(NULLIF(TRIM(sku), '')) AS sku
-            FROM product_variants
-            WHERE COALESCE(is_deleted, 0) = 0
-            GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT x.loc_id AS location_id, x.op AS op_status, x.quality,
                pm.product_id,
-               COALESCE(vs.sku, pm.product_sku) AS product_sku,
+               COALESCE(NULLIF(TRIM(prod.sku), ''), pm.product_sku) AS product_sku,
                pm.client_id, pm.color_id, pm.size_id,
                pm.product_name, pm.client_name, pm.color_name, pm.size_name,
                GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}
-        LEFT JOIN variant_sku vs
-            ON vs.product_id = x.product_id
-           AND vs.client_id  IS NOT DISTINCT FROM x.client_id
-           AND vs.color_id   IS NOT DISTINCT FROM x.color_id
-           AND vs.size_id    IS NOT DISTINCT FROM x.size_id
+        LEFT JOIN products prod ON prod.id = x.product_id
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.op = x.op AND gi.quality = x.quality
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
     """
@@ -791,13 +758,15 @@ def ready_zones_for_variant(
     size_id: str | None,
     client_id: str | None,
     quality: str,
+    op: str = INV_OP_READY,
 ) -> list[dict]:
-    """Готовый к отгрузке остаток (`ready`-нетто) варианта×клиента×качества по местам.
+    """Остаток-источник отгрузки (`op`-нетто) варианта×клиента×качества по местам.
 
     Seam между «Задачей упаковки» (производит ready) и «Отгрузкой» (потребляет):
     остаток считается ПО ВАРИАНТУ (product/color/size×client×quality), а не по строке —
     отгрузка не знает, какая задача упаковки его подготовила. Возвращает [{zone_id,
     zone_name, net}] с net>0 по убыванию (для FIFO-списания при выезде рейса).
+    `op` — корзина-источник: годный отгружается из `ready`, брак — прямо из `storage`.
     """
     rows = connection.execute(
         """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
@@ -819,8 +788,8 @@ def ready_zones_for_variant(
            ) t
            GROUP BY zone_id HAVING SUM(net) > 0
            ORDER BY SUM(net) DESC""",
-        (product_id, color_id, size_id, client_id, INV_OP_READY, quality,
-         product_id, color_id, size_id, client_id, INV_OP_READY, quality),
+        (product_id, color_id, size_id, client_id, op, quality,
+         product_id, color_id, size_id, client_id, op, quality),
     ).fetchall()
     return [{"zone_id": r["zone_id"], "zone_name": r["zone_name"], "net": int(r["net"])} for r in rows]
 
@@ -833,22 +802,24 @@ def ready_available_for_dispatch(
     size_id: str | None,
     client_id: str | None,
     quality: str,
+    op: str = INV_OP_READY,
     exclude_doc_id: str | None = None,
 ) -> int:
-    """Свободный остаток `ready` варианта под отгрузку: готов минус уже зарезервированное
-    другими незакрытыми отгрузками.
+    """Свободный остаток-источник варианта под отгрузку: доступно минус уже
+    зарезервированное другими незакрытыми отгрузками.
 
-    ready-нетто (вариант×клиент×качество) − Σ(незавершённый объём ЗАФИКСИРОВАННЫХ
+    op-нетто (вариант×клиент×качество) − Σ(незавершённый объём ЗАФИКСИРОВАННЫХ
     отгрузок того же варианта: qty − shipped_qty, статусы preparing/awaiting_trip/
     partially_shipped). Черновики резерв НЕ держат — это лишь намерение; иначе два
     черновика взаимно заблокировали бы передачу в подготовку. Резерв возникает при
     фиксации (advance, draft → preparing): кто первый передал — тот и занял остаток,
-    второй не пройдёт гейт. `exclude_doc_id` исключает саму проверяемую отгрузку
-    (её спрос — это то, что мы и проверяем).
+    второй не пройдёт гейт. `op` — корзина-источник (годный из `ready`, брак из
+    `storage`). `exclude_doc_id` исключает саму проверяемую отгрузку (её спрос — это
+    то, что мы и проверяем).
     """
     ready = get_available_total(
         connection, product_id=product_id, color_id=color_id, size_id=size_id,
-        client_id=client_id, op=INV_OP_READY, quality=quality,
+        client_id=client_id, op=op, quality=quality,
     )
     cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
     conds = [

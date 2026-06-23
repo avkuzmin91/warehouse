@@ -18,7 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function ReceiptsListScreen() {
-  const { openReceiptNew } = useNav()
+  const { openReceiptNew, openReceiptDoc } = useNav()
   const [items, setItems] = useState<ReceiptListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

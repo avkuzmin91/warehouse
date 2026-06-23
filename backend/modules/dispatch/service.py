@@ -14,6 +14,7 @@ from config import (
     DISPATCH_TRIP_SELECTABLE_STATUSES,
     INV_OP_READY,
     INV_OP_SHIPPED,
+    INV_OP_STORAGE,
     INV_Q_DEFECT,
     INV_Q_GOOD,
     TRIP_STATUS_AWAITING_ARRIVAL,
@@ -58,6 +59,16 @@ def _doc_quality(connection, doc_id: str) -> str:
     return INV_Q_DEFECT if cargo == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
 
 
+def _source_op(quality: str) -> str:
+    """Корзина, из которой отгрузка списывает остаток.
+
+    Годный проходит упаковку (packed → ready) и отгружается из «Готов к отгрузке».
+    Брак упаковку не проходит — он отгружается напрямую «На хранении» (`storage`),
+    без раскладки в зону отгрузки.
+    """
+    return INV_OP_STORAGE if quality == INV_Q_DEFECT else INV_OP_READY
+
+
 def check_lines_have_sku(connection, doc_id: str) -> None:
     """Гейт перевода в «Ожидает рейс»: у каждого товара должен быть присвоен SKU.
 
@@ -82,10 +93,11 @@ def check_lines_have_sku(connection, doc_id: str) -> None:
 
 
 def check_lines_have_ready(connection, doc_id: str) -> None:
-    """Гейт перевода в «Ожидает рейс»: каждая позиция покрыта свободным остатком `ready`.
+    """Гейт перевода в «Ожидает рейс»: каждая позиция покрыта свободным остатком-источником.
 
     Спрос агрегируется по варианту (product/color/size), т.к. позиция может быть в
-    нескольких строках (разные магазины), а готовый остаток у неё общий.
+    нескольких строках (разные магазины), а остаток у неё общий. Источник зависит от
+    груза: годный — `ready` (готов к отгрузке), брак — `storage` (на хранении).
     """
     from modules.balances.service import ready_available_for_dispatch
 
@@ -94,6 +106,7 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
     ).fetchone()
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
+    source_op = _source_op(quality)
 
     rows = connection.execute(
         """SELECT product_id, color_id, size_id,
@@ -115,17 +128,20 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
             size_id=r["size_id"],
             client_id=client_id,
             quality=quality,
+            op=source_op,
             exclude_doc_id=doc_id,
         )
         demand = int(r["demand"] or 0)
         if demand > avail:
             label = " · ".join(x for x in [r["product_sku"], r["color_name"], r["size_name"]] if x) or r["product_name"]
-            short.append(f"«{label}»: нужно {demand}, готово {avail}")
+            avail_word = "на хранении" if quality == INV_Q_DEFECT else "готово"
+            short.append(f"«{label}»: нужно {demand}, {avail_word} {avail}")
     if short:
-        raise HTTPException(
-            status_code=400,
-            detail="Часть товара ещё не готова к отгрузке (нужно упаковать/дождаться). " + "; ".join(short),
+        head = (
+            "Недостаточно брака на хранении для отгрузки. " if quality == INV_Q_DEFECT
+            else "Часть товара ещё не готова к отгрузке (нужно упаковать/дождаться). "
         )
+        raise HTTPException(status_code=400, detail=head + "; ".join(short))
 
 
 def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
@@ -142,6 +158,7 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     ).fetchone()
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
+    source_op = _source_op(quality)
 
     lines = connection.execute(
         "SELECT id, product_id, color_id, size_id "
@@ -162,6 +179,7 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
             size_id=ln["size_id"],
             client_id=client_id,
             quality=quality,
+            op=source_op,
         )
         variant_ready_left[key] = sum(int(z["net"]) for z in zones)
 
@@ -193,15 +211,16 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
 def _insert_shipped_move(
     connection, *,
     line, client_id: str | None, client_name: str | None, quality: str,
-    from_zone_id: str | None, from_zone_name: str | None,
+    from_op: str, from_zone_id: str | None, from_zone_name: str | None,
     qty: int, user_id: str | None, dispatch_line_id: str, trip_id: str | None,
     comment: str | None,
 ) -> None:
-    """Журнальная запись списания при отгрузке (ready → shipped) с атрибуцией к строке отгрузки.
+    """Журнальная запись списания при отгрузке (`from_op` → shipped) с атрибуцией к строке.
 
     Прямой INSERT в zone_relocations (а не insert_inventory_move): движение нужно
     привязать к dispatch_line_id, которого нет в сигнатуре balances.insert_inventory_move.
     Список столбцов скопирован из balances.insert_inventory_move плюс dispatch_line_id.
+    `from_op` — корзина-источник: `ready` для годного, `storage` для брака.
     """
     connection.execute(
         """INSERT INTO zone_relocations
@@ -212,7 +231,7 @@ def _insert_shipped_move(
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), str(line["product_id"]), line["product_name"], line["product_sku"],
          line["color_id"], line["color_name"], line["size_id"], line["size_name"],
-         client_id, client_name, INV_OP_READY, INV_OP_SHIPPED, quality, quality,
+         client_id, client_name, from_op, INV_OP_SHIPPED, quality, quality,
          from_zone_id, from_zone_name, None, None, qty, comment,
          _now(), user_id, None,
          None, None, None, None, None, trip_id, dispatch_line_id),

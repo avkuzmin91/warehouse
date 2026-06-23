@@ -18,7 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function DispatchListScreen() {
-  const { openDispatchNew } = useNav()
+  const { openDispatchNew, openDispatchDoc } = useNav()
   const [items, setItems] = useState<DispatchListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -78,7 +78,7 @@ export function DispatchListScreen() {
               const tone = dispatchStatusTone(d.status)
               const eta = fmtDate(d.ship_date)
               return (
-                <div key={d.id} className="tile">
+                <button key={d.id} className="tile" onClick={() => openDispatchDoc(d.id)}>
                   <div className={`tile-ico${d.cargo_type === 'defect' ? ' gray' : ''}`}>
                     <Icon name="truckOut" size={21} />
                   </div>
@@ -106,7 +106,8 @@ export function DispatchListScreen() {
                       </span>
                     )
                   )}
-                </div>
+                  <span className="tile-chev"><Icon name="chev" size={18} /></span>
+                </button>
               )
             })}
           </>

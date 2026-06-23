@@ -25,7 +25,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function PackingListScreen() {
-  const { openShipmentNew } = useNav()
+  const { openShipmentNew, openPackingDoc } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -85,7 +85,7 @@ export function PackingListScreen() {
               const tone = STATUS_TONE[s.status] ?? ''
               const eta = fmtDate(s.ship_date)
               return (
-                <div key={s.id} className="tile">
+                <button key={s.id} className="tile" onClick={() => openPackingDoc(s.id)}>
                   <div className={`tile-ico${s.cargo_type === 'defect' ? ' gray' : ''}`}>
                     <Icon name={s.cargo_type === 'defect' ? 'refresh' : 'box'} size={21} />
                   </div>
@@ -113,7 +113,8 @@ export function PackingListScreen() {
                       </span>
                     )
                   )}
-                </div>
+                  <span className="tile-chev"><Icon name="chev" size={18} /></span>
+                </button>
               )
             })}
           </>
