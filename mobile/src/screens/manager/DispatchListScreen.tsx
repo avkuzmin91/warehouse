@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNav } from '../../nav/NavContext'
 import {
   getDispatches,
   DISPATCH_STATUS_LABELS,
@@ -17,6 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function DispatchListScreen() {
+  const { openDispatchNew } = useNav()
   const [items, setItems] = useState<DispatchListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -44,6 +46,9 @@ export function DispatchListScreen() {
     <div className="screen">
       <AppBar title="Отгрузки" sub="Документы отгрузки" />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
+        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openDispatchNew}>
+          <Icon name="plus" size={16} /> Новая отгрузка
+        </button>
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />

@@ -157,3 +157,30 @@ export async function request<T>(path: string, init?: RequestOptions): Promise<T
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
+
+/** Как request, но тело — FormData (multipart): Content-Type не задаём, его ставит браузер с boundary. */
+export async function requestForm<T>(path: string, init: RequestOptions): Promise<T> {
+  let headers = buildHeaders(path, init, false)
+  let response = await doFetch(path, init, headers)
+
+  const hadBearer = typeof headers.Authorization === 'string'
+  if (response.status === 401 && hadBearer && !init.skipRefresh) {
+    const refreshed = await tryRefreshSession()
+    if (refreshed) {
+      headers = buildHeaders(path, init, false)
+      response = await doFetch(path, init, headers)
+    }
+    if (response.status === 401) {
+      await clearTokens()
+      onSessionExpired?.()
+      throw new SessionExpiredError()
+    }
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
+  }
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}

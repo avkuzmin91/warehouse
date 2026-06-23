@@ -646,6 +646,32 @@ def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
     assert _balance(client_id, pos2) == (0, 0, 7, 0)
 
 
+def test_move_to_packing_from_partially_received_receipt(api, client_id):
+    """Передача на упаковку работает, когда товар приехал поступлением в статусе
+    partially_received (часть заказа ещё ждём): остаток уже на хранении, источник
+    зон не должен ограничиваться только done-поступлениями (баг «доступно 0»)."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    with get_connection() as c:
+        packing_id, _ = get_packing_zone(c)
+
+    doc_id_rcpt = _receive(api, client_id, pos, 20, intake_zone)
+    # Поступление приехало не целиком — рейс довёз часть, документ висит частично принятым.
+    with get_connection() as c:
+        c.execute("UPDATE receipt_docs SET status = 'partially_received' WHERE id = ?", (doc_id_rcpt,))
+        c.commit()
+    # Остаток на хранении виден несмотря на частичный приём (якорь включает partially_received).
+    assert _balance(client_id, pos) == (0, 0, 20, 0)
+
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 20)
+    _as(_WH)
+    mv = api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 20})
+    assert mv.status_code == 200, mv.text
+    assert _zone_qty(client_id, pos, packing_id, "on_packing") == 20
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 0
+    assert _balance(client_id, pos) == (0, 0, 0, 20)
+
+
 def test_move_to_packing_requires_warehouse_role(api, client_id):
     pos = _position()
     intake_zone = str(uuid.uuid4())

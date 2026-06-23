@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNav } from '../../nav/NavContext'
 import { listShipments, SHIPMENT_STATUS_LABELS, type ShipmentListItem } from '../../api/shipmentsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
@@ -24,6 +25,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function PackingListScreen() {
+  const { openShipmentNew } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -51,6 +53,9 @@ export function PackingListScreen() {
     <div className="screen">
       <AppBar title="Упаковка" sub="Задачи упаковки" />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
+        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openShipmentNew}>
+          <Icon name="plus" size={16} /> Новая задача упаковки
+        </button>
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />

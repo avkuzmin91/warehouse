@@ -13,6 +13,7 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
     RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_OP_MOVE_RETURN,
@@ -203,7 +204,12 @@ def _move_one_to_packing(
         raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
 
     pos_sql, pos_params = _line_pos_conds(line, "l.", "d.client_id", client_id)
-    src_conds = ["l.is_deleted = 0", "d.is_deleted = 0", f"d.status = '{RECEIPT_STATUS_DONE}'", pos_sql]
+    # Источник зон — поступления с проведённым приходом: done (принято полностью) и
+    # partially_received (часть уже лежит в storage). Якорь совпадает с остатками
+    # (_ANCHOR_STATUSES в balances): товар частично приехавшего поступления уже на
+    # складе и доступен к передаче на упаковку.
+    anchor_sql = f"d.status IN ('{RECEIPT_STATUS_DONE}', '{RECEIPT_STATUS_PARTIALLY_RECEIVED}')"
+    src_conds = ["l.is_deleted = 0", "d.is_deleted = 0", anchor_sql, pos_sql]
     src_params = list(pos_params)
     if from_zone_id:
         src_conds.append("l.storage_zone_id = ?"); src_params.append(from_zone_id)

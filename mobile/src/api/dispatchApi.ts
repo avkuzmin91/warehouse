@@ -36,6 +36,38 @@ export type DispatchListParams = {
   cargo_type?: DispatchCargoType
 }
 
+export type DispatchLineIn = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  color_id?: string | null
+  color_name?: string | null
+  size_id?: string | null
+  size_name?: string | null
+  qty: number
+  site_url?: string | null
+  store_id?: string | null
+  store_name?: string | null
+}
+
+export type DispatchDocCreate = {
+  cargo_type?: DispatchCargoType
+  client_id?: string | null
+  client_name?: string | null
+  logistics_cost?: number | null
+  ship_date?: string | null
+  comment?: string | null
+  lines?: DispatchLineIn[]
+}
+
+export function createDispatch(body: DispatchDocCreate): Promise<{ message: string }> {
+  return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function advanceDispatch(id: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
+}
+
 // --- API functions ---
 export function getDispatches(params: DispatchListParams = {}, signal?: AbortSignal): Promise<DispatchListResponse> {
   const sp = new URLSearchParams()

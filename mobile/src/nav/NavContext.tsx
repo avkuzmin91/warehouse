@@ -18,6 +18,9 @@ export type Route =
   | { name: 'trip'; id: string }
   | { name: 'shipment'; id: string }
   | { name: 'scanProduct'; match: BarcodeMatch }
+  | { name: 'receiptNew' }
+  | { name: 'shipmentNew' }
+  | { name: 'dispatchNew' }
 
 type NavState = {
   route: Route
@@ -31,6 +34,9 @@ type NavState = {
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
   openProfile: () => void
+  openReceiptNew: () => void
+  openShipmentNew: () => void
+  openDispatchNew: () => void
   back: () => void
 }
 
@@ -62,6 +68,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
     openProfile: () => setStack((s) => [...s, { name: 'profile' }]),
+    openReceiptNew: () => setStack((s) => [...s, { name: 'receiptNew' }]),
+    openShipmentNew: () => setStack((s) => [...s, { name: 'shipmentNew' }]),
+    openDispatchNew: () => setStack((s) => [...s, { name: 'dispatchNew' }]),
     back: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
   }
   return <NavCtx.Provider value={value}>{children}</NavCtx.Provider>

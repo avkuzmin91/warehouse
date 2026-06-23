@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNav } from '../../nav/NavContext'
 import {
   getReceipts,
   RECEIPT_STATUS_LABELS,
@@ -17,6 +18,7 @@ function fmtDate(d: string | null): string {
 }
 
 export function ReceiptsListScreen() {
+  const { openReceiptNew } = useNav()
   const [items, setItems] = useState<ReceiptListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -44,6 +46,9 @@ export function ReceiptsListScreen() {
     <div className="screen">
       <AppBar title="Поступления" sub="Документы приёмки" />
       <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
+        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openReceiptNew}>
+          <Icon name="plus" size={16} /> Новое поступление
+        </button>
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />

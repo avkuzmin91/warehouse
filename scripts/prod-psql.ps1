@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $dbContainer = if ($Env -eq 'prod') { 'wms_prod_db' } else { 'wms_test_db' }
+$dbName = if ($Env -eq 'prod') { 'app' } else { 'app_test' }
 $sshHost = if ($Env -eq 'prod') { 'wms-prod' } else { 'wms-test' }
 
 if ($Query -and $SqlFile) {
@@ -21,7 +22,7 @@ if (-not $Query -and -not $SqlFile) {
     Write-Error "Укажите -Query или -SqlFile"
 }
 
-$psqlBase = "docker exec -i $dbContainer psql -U postgres -d app -v ON_ERROR_STOP=1"
+$psqlBase = "docker exec -i $dbContainer psql -U postgres -d $dbName -v ON_ERROR_STOP=1"
 
 if ($Query) {
     $sql = ($Query.TrimEnd(';') + ';')

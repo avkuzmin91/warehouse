@@ -50,6 +50,36 @@ export function getReceiptLines(docId: string, signal?: AbortSignal): Promise<Re
   return request<ReceiptDetailResponse>(`/receipts/${docId}`, { signal }).then((d) => d.lines)
 }
 
+export type ReceiptLineInput = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  color_id?: string | null
+  color_name?: string | null
+  size_id?: string | null
+  size_name?: string | null
+  planned_qty: number
+}
+
+export type ReceiptCreatePayload = {
+  client_id: string
+  arrival_date?: string | null
+  comment?: string | null
+  logistics_cost?: number | null
+  lines: ReceiptLineInput[]
+}
+
+export function createReceipt(payload: ReceiptCreatePayload): Promise<{ message: string }> {
+  return request<{ message: string }>('/receipts', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function advanceReceiptStatus(docId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/receipts/${docId}/advance`, { method: 'POST' })
+}
+
 export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal): Promise<ReceiptListResponse> {
   const sp = new URLSearchParams()
   if (params.page)      sp.set('page', String(params.page))

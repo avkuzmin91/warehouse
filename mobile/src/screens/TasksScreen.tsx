@@ -78,9 +78,6 @@ export function TasksScreen() {
               <Icon name="check" size={26} />
             </div>
             <div>Активных задач нет</div>
-            <button className="btn ghost sm auto" onClick={() => load()} style={{ marginTop: 4 }}>
-              <Icon name="refresh" size={16} /> Обновить
-            </button>
           </div>
         ) : (
           <>
@@ -145,9 +142,6 @@ export function TasksScreen() {
                 </button>
               )
             })}
-            <button className="btn ghost sm" onClick={() => load()} style={{ marginTop: 6 }}>
-              <Icon name="refresh" size={16} /> Обновить
-            </button>
           </>
         )}
       </PullToRefresh>
