@@ -11,7 +11,7 @@ import type { IconName } from '../../../../primitives/Icon'
 /** Маршрут отгрузки: владелец, иконка и подсказка для каждого статуса. */
 export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string }> = {
   draft:         { role: 'manager',    icon: 'edit',     sub: 'состав, ТЗ и план' },
-  assigned:      { role: 'warehouse',  icon: 'inbox',    sub: 'начальник склада принимает задачу' },
+  assigned:      { role: 'warehouse_head', icon: 'inbox',  sub: 'начальник склада принимает задачу' },
   packing:       { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на упаковку' },
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },

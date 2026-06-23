@@ -150,7 +150,9 @@ def dispatches_summary(
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM dispatch_lines dl"
-                " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0 AND dl.product_sku LIKE ?)"
+                " LEFT JOIN products p ON p.id = dl.product_id"
+                " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
+                " AND COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ?)"
             )
             params.append(like_substring_param(sku))
         if date_from:
@@ -181,8 +183,11 @@ def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=404, detail="Документ не найден")
         remaining = dispatch_alloc_remaining(conn, doc_id)
         lines = conn.execute(
-            "SELECT id, product_sku, product_name, color_name, size_name, qty, shipped_qty "
-            "FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
+            "SELECT l.id, "
+            "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku, "
+            "l.product_name, l.color_name, l.size_name, l.qty, l.shipped_qty "
+            "FROM dispatch_lines l LEFT JOIN products p ON p.id = l.product_id "
+            "WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0 ORDER BY product_sku, l.id",
             (doc_id,),
         ).fetchall()
     items = [

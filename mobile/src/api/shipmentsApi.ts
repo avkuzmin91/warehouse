@@ -74,6 +74,28 @@ export function getShipment(id: string, signal?: AbortSignal): Promise<ShipmentD
   return request<ShipmentDetail>(`/shipments/${id}`, { signal })
 }
 
+export type ShipmentListParams = {
+  page?: number
+  limit?: number
+  status?: string
+  client_id?: string
+  search?: string
+  cargo_type?: 'good' | 'defect'
+}
+
+// Менеджерский список «Задач упаковки»: пагинация + фильтры (status опционален → все статусы).
+export function listShipments(params: ShipmentListParams = {}, signal?: AbortSignal): Promise<ShipmentListResponse> {
+  const sp = new URLSearchParams()
+  if (params.page)       sp.set('page', String(params.page))
+  if (params.limit)      sp.set('limit', String(params.limit))
+  if (params.status)     sp.set('status', params.status)
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.search)     sp.set('search', params.search)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  const q = sp.toString()
+  return request<ShipmentListResponse>(`/shipments${q ? `?${q}` : ''}`, { signal })
+}
+
 export type MoveAllocation = { from_zone_id: string | null; qty: number }
 
 // Передача на упаковку: явная разбивка по зонам-источникам (как в вебе).

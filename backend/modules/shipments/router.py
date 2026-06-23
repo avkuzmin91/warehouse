@@ -420,7 +420,7 @@ def list_shipment_lines(
             params += [s, s, s]
         if sku:
             s = like_substring_param(sku)
-            conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
+            conds.append("(COALESCE(NULLIF(p.sku, ''), l.product_sku) LIKE ? OR l.product_name LIKE ?)")
             params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
@@ -431,19 +431,22 @@ def list_shipment_lines(
             f"""SELECT COUNT(*) AS cnt
                 FROM shipment_lines l
                 JOIN shipment_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
                 WHERE {where}""",
             params,
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
         rows = conn.execute(
             f"""SELECT l.id AS line_id, l.doc_id AS doc_id,
-                    l.product_id, l.product_name, l.product_sku,
+                    l.product_id, l.product_name,
+                    COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
                     l.color_name, l.size_name, l.qty,
                     COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
                 FROM shipment_lines l
                 JOIN shipment_docs d ON d.id = l.doc_id
+                LEFT JOIN products p ON p.id = l.product_id
                 WHERE {where}
                 ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
                 LIMIT ? OFFSET ?""",

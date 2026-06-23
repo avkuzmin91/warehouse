@@ -372,7 +372,9 @@ def list_dispatches_aggregated(
     if sku:
         conds.append(
             "EXISTS (SELECT 1 FROM dispatch_lines dl"
-            " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0 AND dl.product_sku LIKE ?)"
+            " LEFT JOIN products p ON p.id = dl.product_id"
+            " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
+            " AND COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ?)"
         )
         params.append(like_substring_param(sku))
     if date_from:
