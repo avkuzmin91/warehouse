@@ -370,6 +370,13 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     onLink: handleLinkDispatches,
     onUnlink: handleUnlinkDispatch,
     onSaveDistribution: handleSaveDispatchDistribution,
+    searchCandidates: async (q, signal) => {
+      const res = await listDispatches(
+        { status: DISPATCH_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: doc.id, cargo_type: doc.cargo_type, search: q },
+        signal,
+      )
+      return res.items.filter((d) => !linkedDispatchIds.has(d.id))
+    },
     presetsLinked: true,
     busy,
   }

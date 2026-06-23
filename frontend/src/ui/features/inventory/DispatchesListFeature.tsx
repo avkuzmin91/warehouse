@@ -2,9 +2,9 @@ import { useMemo, useState, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDispatches,
-  getDispatchesSummary,
   advanceDispatch,
   DISPATCH_STATUS_LABELS,
+  DISPATCH_STATUS_ORDER,
   DISPATCH_STATUS_TONES,
 } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchListItem, DispatchStatus } from '../../../api/dispatchApi'
@@ -28,17 +28,6 @@ import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../h
 import { canCreateDocuments, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
-
-type StatusTabId = '' | DispatchStatus
-
-const STATUS_TABS: { id: StatusTabId; label: string }[] = [
-  { id: '',                  label: 'Все' },
-  { id: 'draft',             label: DISPATCH_STATUS_LABELS.draft },
-  { id: 'awaiting_trip',     label: DISPATCH_STATUS_LABELS.awaiting_trip },
-  { id: 'partially_shipped', label: DISPATCH_STATUS_LABELS.partially_shipped },
-  { id: 'shipped',           label: DISPATCH_STATUS_LABELS.shipped },
-  { id: 'cancelled',         label: DISPATCH_STATUS_LABELS.cancelled },
-]
 
 function dispatchProgress(item: DispatchListItem) {
   const total = item.total_qty || 0
@@ -101,18 +90,6 @@ export function DispatchesListFeature() {
     [page, search, skuFilter, clientId, statusParam, cargoParam, dateFrom, dateTo, reloadTick],
   )
 
-  const { data: summary } = useApi(
-    (signal) => getDispatchesSummary({
-      client_id: clientId || undefined,
-      search: search.trim() || undefined,
-      sku: skuFilter.trim() || undefined,
-      cargo_type: cargoParam,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }, signal),
-    [clientId, search, skuFilter, cargoParam, dateFrom, dateTo, reloadTick],
-  )
-
   const items = data?.items ?? []
   const total = data?.total ?? 0
 
@@ -126,10 +103,6 @@ export function DispatchesListFeature() {
       setAdvancingId(null)
     }
   }
-
-  const tabCount: Partial<Record<StatusTabId, number>> = summary
-    ? { '': summary.all, draft: summary.draft, awaiting_trip: summary.awaiting, shipped: summary.shipped }
-    : {}
 
   return (
     <ListPage
@@ -211,6 +184,16 @@ export function DispatchesListFeature() {
             ]}
             onChange={(v) => setCargoFilter(v)}
           />
+          <FilterSelect
+            label="Статус"
+            value={statusFilter}
+            options={[
+              { value: '', label: 'Все статусы' },
+              ...([...DISPATCH_STATUS_ORDER, 'cancelled'] as DispatchStatus[])
+                .map((s) => ({ value: s, label: DISPATCH_STATUS_LABELS[s] })),
+            ]}
+            onChange={(v) => setStatusFilter(v)}
+          />
           {(clientId || skuFilter || dateFrom || dateTo || statusFilter || cargoFilter) && (
             <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '', cargo: '' })}>
               <Icon name="x" size={12} />Сбросить
@@ -226,22 +209,6 @@ export function DispatchesListFeature() {
         </FiltersBar>
       }
     >
-      <div className="tabs" style={{ marginBottom: 14 }}>
-        {STATUS_TABS.map((t) => {
-          const count = tabCount[t.id]
-          return (
-            <button
-              key={t.id || 'all'}
-              className={`tab${statusFilter === t.id ? ' active' : ''}`}
-              onClick={() => setStatusFilter(t.id)}
-            >
-              {t.label}
-              {count != null && count > 0 && <span className="tab-count">{count}</span>}
-            </button>
-          )
-        })}
-      </div>
-
       <Table>
         <thead>
           <tr>
@@ -313,7 +280,7 @@ export function DispatchesListFeature() {
                               className="btn ghost sm"
                               disabled={advancingId === item.id}
                               onClick={(e) => handleAdvance(e, item)}
-                              title="Передать в ожидание рейса"
+                              title="Передать в подготовку"
                             >
                               <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
                             </button>

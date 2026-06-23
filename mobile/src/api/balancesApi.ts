@@ -1,6 +1,6 @@
 import { request, requestIdHeaders } from './http'
 
-export type InvOpStatus = 'storage' | 'packing' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'ready'
 export type InvQuality = 'good' | 'defect'
 
 // Остаток по месту хранения: основа экрана «Остатки» (где лежит товар) и выбора
@@ -68,6 +68,7 @@ export function createRelocation(payload: RelocationPayload, requestId: string):
 export const OP_STATUS_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
+  packed: 'Упаковано',
   ready: 'Готов к отгрузке',
 }
 

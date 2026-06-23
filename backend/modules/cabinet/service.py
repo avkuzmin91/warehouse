@@ -11,6 +11,7 @@ from config import (
     DISPATCH_CARGO_GOOD,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     INV_OP_WRITTEN_OFF,
     PRODUCT_LIST_SORT_COLUMNS,
     RECEIPT_STATUS_ON_INTAKE,
@@ -751,12 +752,14 @@ def cabinet_balance_totals(connection, *, client_id: str) -> CabinetBalanceTotal
     from modules.balances.service import get_balances_summary
 
     summary = get_balances_summary(connection, client_id=client_id, search=None, has_defect=False)
+    # «Упаковано» (packed) для клиента — часть процесса упаковки: сворачиваем в
+    # packing_good, чтобы разбивка сходилась с total_good и не плодить новую корзину.
     return CabinetBalanceTotals(
         storage_good=summary.storage_good,
-        packing_good=summary.packing_good,
+        packing_good=summary.packing_good + summary.packed_good,
         ready_good=summary.ready_good,
-        total_good=summary.storage_good + summary.packing_good + summary.ready_good,
-        defect_total=summary.storage_defect + summary.packing_defect + summary.ready_defect,
+        total_good=summary.storage_good + summary.packing_good + summary.packed_good + summary.ready_good,
+        defect_total=summary.storage_defect + summary.packing_defect + summary.packed_defect + summary.ready_defect,
     )
 
 
@@ -775,6 +778,7 @@ def cabinet_summary(connection, *, client_id: str) -> CabinetSummaryResponse:
         page=1,
         limit=5,
         statuses=[
+            DISPATCH_STATUS_PREPARING,
             DISPATCH_STATUS_AWAITING_TRIP,
             DISPATCH_STATUS_PARTIALLY_SHIPPED,
         ],

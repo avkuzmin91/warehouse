@@ -185,6 +185,79 @@ def test_shipment_plan_gate_partial_stock_blocks(admin_client, client_id):
     assert adv.status_code == 400, adv.text
 
 
+def test_add_line_in_plan_blocks_uncovered_product(admin_client, client_id):
+    """В статусе «В плане» нельзя дописать товар, которого ещё нет на складе."""
+    line = _fake_line()
+    line["qty"] = 5
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=5,
+    )
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    doc_id = r.json()["message"]
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
+
+    # Вторая позиция без остатка — должна отклоняться.
+    new_line = _fake_line()
+    new_line["product_sku"] = "FAKE-002"
+    new_line["qty"] = 3
+    add = admin_client.post(f"/shipments/{doc_id}/lines", json=new_line)
+    assert add.status_code == 400, add.text
+    assert "в пути" in add.json()["detail"].lower()
+
+    # Строка не должна была сохраниться (откат транзакции).
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert len(detail["lines"]) == 1
+
+
+def test_add_line_in_plan_allows_covered_product(admin_client, client_id):
+    """Добавить покрытую остатком позицию в «В плане» можно."""
+    line = _fake_line()
+    line["qty"] = 5
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=5,
+    )
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    doc_id = r.json()["message"]
+    assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "packing"
+
+    new_line = _fake_line()
+    new_line["product_sku"] = "FAKE-002"
+    new_line["qty"] = 4
+    seed_storage_good(
+        client_id, product_id=new_line["product_id"], product_name=new_line["product_name"],
+        product_sku=new_line["product_sku"], color_id=new_line["color_id"], color_name=new_line["color_name"],
+        qty=4,
+    )
+    add = admin_client.post(f"/shipments/{doc_id}/lines", json=new_line)
+    assert add.status_code == 200, add.text
+    assert len(admin_client.get(f"/shipments/{doc_id}").json()["lines"]) == 2
+
+
+def test_update_line_qty_in_plan_blocks_when_over_stock(admin_client, client_id):
+    """Поднять количество в «В плане» выше остатка нельзя."""
+    line = _fake_line()
+    line["qty"] = 5
+    seed_storage_good(
+        client_id, product_id=line["product_id"], product_name=line["product_name"],
+        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
+        qty=5,
+    )
+    r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
+    doc_id = r.json()["message"]
+    assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "packing"
+
+    line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    upd = admin_client.patch(f"/shipments/{doc_id}/lines/{line_id}", json={**line, "qty": 9})
+    assert upd.status_code == 400, upd.text
+    # Количество не должно было измениться.
+    assert admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["qty"] == 5
+
+
 def test_plannable_lists_stock_and_in_transit(admin_client, client_id):
     """Эндпоинт планирования отдаёт остаток на складе и товар в пути."""
     line = _fake_line()

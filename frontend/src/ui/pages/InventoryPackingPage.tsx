@@ -1,5 +1,5 @@
-import { PackingDayFeature } from '../features/inventory/PackingDayFeature'
+import { PackingTasksFeature } from '../features/inventory/PackingTasksFeature'
 
 export function InventoryPackingPage() {
-  return <PackingDayFeature />
+  return <PackingTasksFeature />
 }

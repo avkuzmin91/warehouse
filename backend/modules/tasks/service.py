@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from config import (
+    DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_STATUS_ON_PACKING,
@@ -122,6 +123,29 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_type": "shipment", "doc_id": str(r["id"]),
                 "doc_number": str(r["doc_number"]), "status": status,
                 "role": task_role, "since": r["updated_at"] or r["created_at"],
+                "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if ROLE_WAREHOUSE in visible_roles:
+        # «Отгрузка» (dispatch) в статусе «Подготовка отгрузки» — задача кладовщику
+        # собрать и подготовить отгрузку. После отметки «Отгрузка подготовлена»
+        # (preparing → awaiting_trip) задача снимается; снимается и сама собой, если
+        # рейс увёз отгрузку прямо из подготовки.
+        dispatch_rows = connection.execute(
+            "SELECT id, doc_number, status, priority_rank, updated_at, created_at FROM dispatch_docs "
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status = ?",
+            (DISPATCH_STATUS_PREPARING,),
+        ).fetchall()
+        for r in dispatch_rows:
+            tasks.append({
+                "kind": "dispatch_prepare",
+                "title": f"Подготовить отгрузку {r['doc_number']}",
+                "doc_type": "dispatch",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": str(r["status"]),
+                "role": ROLE_WAREHOUSE,
+                "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             })
 

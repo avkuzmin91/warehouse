@@ -12,6 +12,7 @@ import {
   uploadShipmentLineFile,
   deleteShipmentLineFile,
   returnShipmentLineFromPacking,
+  returnShipmentToPacking,
   SHIPMENT_STATUS_LABELS,
 } from '../../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
@@ -36,7 +37,7 @@ import { DatePicker } from '../../../primitives/DatePicker'
 import { AutoGrowTextarea, Field, Input } from '../../../primitives/Input'
 import { fmtDateLong } from '../../../../utils/format'
 import { balanceKey } from '../../../../utils/balanceKey'
-import { canViewCosts, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
+import { canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
@@ -65,7 +66,6 @@ export function ShipmentDetailFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const { unloadingZones } = useLookups()
-  const showCosts = canViewCosts(user)
   const canEdit = canEditShipments(user)
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
@@ -95,7 +95,6 @@ export function ShipmentDetailFeature() {
   const [infoClientName, setInfoClientName] = useState<string | null>(null)
   const [infoShipDate, setInfoShipDate] = useState('')
   const [infoActualShipDate, setInfoActualShipDate] = useState('')
-  const [infoLogisticsCost, setInfoLogisticsCost] = useState('')
   const [infoComment, setInfoComment] = useState('')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
@@ -107,7 +106,6 @@ export function ShipmentDetailFeature() {
     setInfoClientName(doc.client_name ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoActualShipDate(doc.actual_ship_date ?? '')
-    setInfoLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
   }, [doc])
@@ -129,14 +127,12 @@ export function ShipmentDetailFeature() {
   async function handleInfoSave() {
     if (!docId) return false
     setInfoSaving(true)
-    setError('')
     try {
       await updateShipment(docId, {
         client_id:      infoClientId,
         client_name:    infoClientName,
         ship_date:      infoShipDate || null,
         ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
-        ...(showCosts ? { logistics_cost: infoLogisticsCost ? parseFloat(infoLogisticsCost) : null } : {}),
         comment:        infoComment.trim() || null,
       })
       await load()
@@ -145,7 +141,7 @@ export function ShipmentDetailFeature() {
       setTimeout(() => setInfoSaved(false), 2000)
       return true
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      toast(e instanceof Error ? e.message : 'Ошибка сохранения', 'error')
       return false
     } finally {
       setInfoSaving(false)
@@ -167,7 +163,7 @@ export function ShipmentDetailFeature() {
   const canDelete = canEditPlanning && editableComposition
   const canEditPlan = canEditPlanning && editableComposition
   const canEditInfo = canEditPlanning && editableComposition
-  const canEditActualShipDate = false  // дата отгрузки (факт) проставляется при отправке рейса
+  const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
   const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isLegacyTerminal
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
@@ -253,13 +249,12 @@ export function ShipmentDetailFeature() {
 
   async function act(fn: () => Promise<unknown>, redirectAfter?: string) {
     setActing(true)
-    setError('')
     try {
       await fn()
       if (redirectAfter) navigate(redirectAfter)
       else await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка')
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
     } finally {
       setActing(false)
     }
@@ -348,9 +343,6 @@ export function ShipmentDetailFeature() {
 
   const hasUnsavedLineChanges = editableLines.some(linePlanDirty)
 
-  const infoLogisticsNumber = Number(infoLogisticsCost)
-  const infoLogisticsFilled = infoLogisticsCost.trim() !== '' && Number.isFinite(infoLogisticsNumber) && infoLogisticsNumber >= 0
-
   // Передача на упаковку выполняется по строке через шторку (немедленно), поэтому к моменту
   // перехода «Передать на упаковку» достаточно, что хоть что-то уже на столе (пул или упаковано).
   const someMovedToPacking = (doc?.lines ?? []).some(
@@ -410,16 +402,9 @@ export function ShipmentDetailFeature() {
           ? [
               {
                 ok: !!infoShipDate,
-                label: 'Дата отгрузки (план) указана',
-                error: 'Укажите дату отгрузки (план)',
+                label: 'Дата упаковки (план) указана',
+                error: 'Укажите дату упаковки (план)',
               },
-              ...(showCosts
-                ? [{
-                    ok: infoLogisticsFilled,
-                    label: 'Стоимость логистики указана',
-                    error: 'Укажите стоимость логистики',
-                  }]
-                : []),
               {
                 ok: someMovedToPacking,
                 label: 'Товар передан на упаковку',
@@ -491,7 +476,7 @@ export function ShipmentDetailFeature() {
       await refreshAfterLineChange()
       return true
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка')
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
       return false
     } finally {
       setSaving((prev) => ({ ...prev, [line.id]: false }))
@@ -610,6 +595,26 @@ export function ShipmentDetailFeature() {
     })
   }
 
+  // Менеджерский возврат «на упаковку» из «Перемещение» / «Упаковано» — для товарной
+  // задачи упаковки. Из «Упаковано» откатывается раскладка по местам, поэтому подтверждаем.
+  const canReturnToPacking = canEdit && !isDefectCargo && (isRelocating || isPacked)
+
+  async function handleReturnToPacking() {
+    const ok = await confirm({
+      title: 'Вернуть на упаковку?',
+      body: isPacked
+        ? 'Задача вернётся на этап «На упаковке», а раскладка упакованного товара по местам будет отменена. Товар, уже отгружённый или закреплённый за рейсом, вернуть нельзя — сначала отмените рейс.'
+        : 'Задача вернётся на этап «На упаковке» — упаковщик сможет продолжить или исправить упаковку.',
+      danger: true,
+      confirmLabel: 'Вернуть на упаковку',
+    })
+    if (!ok) return
+    await act(async () => {
+      await returnShipmentToPacking(docId!)
+      await refreshAfterLineChange()
+    })
+  }
+
   async function handleCancel() {
     const ok = await confirm({
       title: 'Аннулировать отгрузку?',
@@ -703,6 +708,11 @@ export function ShipmentDetailFeature() {
                 <Icon name="trash" size={14} />Удалить
               </button>
             )}
+            {canReturnToPacking && (
+              <button className="btn ghost" disabled={acting} onClick={handleReturnToPacking}>
+                <Icon name="arrowLeft" size={14} />Вернуть на упаковку
+              </button>
+            )}
             {canEdit && (isPacking || (isDefectCargo && isRelocating)) && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
@@ -725,10 +735,6 @@ export function ShipmentDetailFeature() {
           </>
         }
       />
-
-      {error && (
-        <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
-      )}
 
       {isPacked && (
         <Alert tone="success" style={{ marginBottom: 16 }}>
@@ -786,29 +792,16 @@ export function ShipmentDetailFeature() {
                       </div>
                     </div>
                   </Field>
-                  <Field label="Дата отгрузки (план)" required style={{ marginBottom: 0 }}>
+                  <Field label="Дата упаковки (план)" required style={{ marginBottom: 0 }}>
                     <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
                   </Field>
                   {canEditActualShipDate ? (
-                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
                       <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
                     </Field>
                   ) : (
-                    <Field label="Дата отгрузки (факт)" style={{ marginBottom: 0 }}>
+                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
                       <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
-                    </Field>
-                  )}
-                  {showCosts && (
-                    <Field label="Стоимость логистики для клиента, ₽" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                      <input
-                        className="input"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={infoLogisticsCost}
-                        onChange={(e) => { setInfoLogisticsCost(e.target.value); setInfoDirty(true) }}
-                        placeholder="0.00"
-                      />
                     </Field>
                   )}
                   <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
@@ -826,17 +819,8 @@ export function ShipmentDetailFeature() {
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <ReadOnlyField label="Дата отгрузки (план)" value={fmtDateLong(doc.ship_date)} />
-                  <ReadOnlyField label="Дата отгрузки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
-                  {showCosts && (
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <ReadOnlyField
-                        label="Стоимость логистики для клиента, ₽"
-                        value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : null}
-                        mono
-                      />
-                    </div>
-                  )}
+                  <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
+                  <ReadOnlyField label="Дата упаковки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
                   <div style={{ gridColumn: '1 / -1' }}>
                     <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
                   </div>
@@ -979,9 +963,6 @@ export function ShipmentDetailFeature() {
               <div style={{ padding: '0 2px' }}>
                 <ReadRow label="SKU" mono>{skuCount}</ReadRow>
                 <ReadRow label="Кол-во" mono strong>{planTotal} шт</ReadRow>
-                {showCosts && (
-                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-                )}
               </div>
             </Panel>
           )}
@@ -1044,9 +1025,6 @@ export function ShipmentDetailFeature() {
                 <ReadRow label="Отгружено" mono>
                   <span style={{ color: 'var(--c-success)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
                 </ReadRow>
-                {showCosts && (
-                  <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
-                )}
               </div>
             </Panel>
           )}

@@ -23,31 +23,30 @@ npm run lint     # tsc --noEmit (type-check)
 npm run build    # tsc + vite build → dist/
 ```
 
-## Сборка под iOS (только на macOS)
+## Сборка под Android (Windows/Mac/Linux с Android SDK)
 
-iOS-проект **не** коммитится (`/ios` в .gitignore) и создаётся на Mac:
+Android-проект **не** коммитится (`/android` в .gitignore) и создаётся локально:
 
 ```bash
-# на macOS с установленным Xcode + CocoaPods
 cd mobile
 npm install
-npm i capacitor-secure-storage-plugin   # secure storage для refresh-токена (iOS Keychain)
+npm i capacitor-secure-storage-plugin   # secure storage для refresh-токена (Android Keystore)
 npm i @capacitor-mlkit/barcode-scanning # камера-сканер ШК
 npm run build
-npx cap add ios          # генерирует ios/ из capacitor.config.ts
-npx cap sync ios         # ставит нативные поды (secure storage + barcode scanning)
-npx cap open ios         # открывает Xcode → Run на симуляторе/устройстве
+npx cap add android      # генерирует android/ из capacitor.config.ts
+npx cap sync android     # ставит нативные зависимости (secure storage + barcode scanning)
+npx cap open android     # открывает Android Studio → Run / Build APK
 ```
 
 > Нативные плагины (`capacitor-secure-storage-plugin` → `SecureStoragePlugin`,
 > `@capacitor-mlkit/barcode-scanning` → `BarcodeScanning`) нужны только нативной
 > сборке. В вебе они не зарегистрированы: `secureStore.ts` / `scan/ScanSource.ts`
 > перехватывают вызовы (сессия живёт в cookie, сканер — ручной ввод). При замене
-> плагина сохранить имя в `registerPlugin(...)`. Камере нужен ключ
-> `NSCameraUsageDescription` в `ios/App/App/Info.plist`.
+> плагина сохранить имя в `registerPlugin(...)`. Камере нужно разрешение
+> `android.permission.CAMERA` в `android/app/src/main/AndroidManifest.xml`.
 
-Для установки на реальный iPhone нужен Apple Developer аккаунт (подпись).
-Раздача тестировщикам — TestFlight.
+Для установки на устройство собрать APK/AAB в Android Studio; для публикации в
+Google Play — подписанный AAB (release keystore).
 
 Нативная сборка обязана знать абсолютный URL backend (прокси `/api` там не работает):
 
@@ -56,20 +55,12 @@ npx cap open ios         # открывает Xcode → Run на симулят�
 VITE_API_BASE_URL=https://api.ваш-домен
 ```
 
-## Сборка под Android (Windows/Mac/Linux с Android SDK)
-
-```bash
-npm run build
-npx cap add android
-npx cap open android     # Android Studio → Build APK
-```
-
 ## Аутентификация
 
 - **Веб (dev):** refresh — в HttpOnly cookie `wms_rt`, как во `frontend`.
 - **Натив:** запросы шлют заголовок `X-Client: mobile`; `/auth/login` и `/auth/refresh`
   возвращают refresh-токен в теле, приложение хранит его в secure storage
-  (iOS Keychain / Android Keystore) и шлёт обратно на `/auth/refresh` и `/auth/logout`.
+  (Android Keystore) и шлёт обратно на `/auth/refresh` и `/auth/logout`.
   Access-JWT (TTL 60 мин) — только в памяти, ротация переиспользует серверную
   replay-protection. Бэкенд: `backend/modules/auth/` (`X-Client`, `RefreshRequest`).
 

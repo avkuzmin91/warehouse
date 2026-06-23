@@ -55,7 +55,7 @@ export function ByProductView() {
 
   const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
   const defectQty = summary
-    ? summary.storage_defect + summary.packing_defect + summary.ready_defect
+    ? summary.storage_defect + summary.packing_defect + summary.packed_defect + summary.ready_defect
     : undefined
 
   return (
@@ -114,7 +114,7 @@ export function ByProductView() {
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
         <KPI label="Всего единиц" value={kpiVal(summary?.total)} unit="шт" />
         <KPI
           label={INV_OP_LABELS.storage}
@@ -125,6 +125,12 @@ export function ByProductView() {
         <KPI
           label={INV_OP_LABELS.packing}
           value={kpiVal(summary ? summary.packing_good + summary.packing_defect : undefined)}
+          valueColor="var(--c-info)"
+          unit="шт"
+        />
+        <KPI
+          label={INV_OP_LABELS.packed}
+          value={kpiVal(summary ? summary.packed_good + summary.packed_defect : undefined)}
           valueColor="var(--c-info)"
           unit="шт"
         />
@@ -151,15 +157,16 @@ export function ByProductView() {
             <th>Клиент</th>
             <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.storage}</th>
             <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.packing}</th>
+            <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.packed}</th>
             <th style={{ textAlign: 'right', width: 140 }}>{INV_OP_LABELS.ready}</th>
             <th style={{ textAlign: 'right', width: 90, borderLeft: '2px solid var(--c-border)' }}>Всего</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={6} />
+            <SkeletonRows rows={8} cols={7} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
+            <tr><td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
           ) : (
             items.map((item, i) => (
               <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${i}`}>
@@ -177,6 +184,9 @@ export function ByProductView() {
                 </Td>
                 <Td className="num">
                   <BucketCell good={item.packing_good} defect={item.packing_defect} accent="var(--c-info)" />
+                </Td>
+                <Td className="num">
+                  <BucketCell good={item.packed_good} defect={item.packed_defect} accent="var(--c-info)" />
                 </Td>
                 <Td className="num">
                   <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-success)" />

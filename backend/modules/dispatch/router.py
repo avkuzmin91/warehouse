@@ -17,12 +17,14 @@ from config import (
     DISPATCH_OP_LINE_ADD,
     DISPATCH_OP_LINE_DELETE,
     DISPATCH_OP_LINE_UPDATE,
+    DISPATCH_OP_PREPARE,
     DISPATCH_OP_PRIORITY_UPDATE,
     DISPATCH_PRIORITY_LABELS,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_DRAFT,
     DISPATCH_STATUS_LABELS,
+    DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
 )
@@ -160,10 +162,11 @@ def dispatches_summary(
             f"SELECT d.status FROM dispatch_docs d WHERE {where}", params
         ).fetchall()
     return {
-        "all":      len(rows),
-        "draft":    sum(1 for r in rows if r["status"] == DISPATCH_STATUS_DRAFT),
-        "awaiting": sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_TRIP),
-        "shipped":  sum(1 for r in rows if r["status"] in DISPATCH_TERMINAL_STATUSES),
+        "all":       len(rows),
+        "draft":     sum(1 for r in rows if r["status"] == DISPATCH_STATUS_DRAFT),
+        "preparing": sum(1 for r in rows if r["status"] == DISPATCH_STATUS_PREPARING),
+        "awaiting":  sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_TRIP),
+        "shipped":   sum(1 for r in rows if r["status"] in DISPATCH_TERMINAL_STATUSES),
     }
 
 
@@ -372,6 +375,7 @@ def delete_dispatch_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
 
 @router.post("/dispatches/{doc_id}/advance")
 def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
+    """Менеджер передаёт отгрузку кладовщику на подготовку (draft → preparing)."""
     now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
@@ -381,7 +385,7 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) != DISPATCH_STATUS_DRAFT:
-            raise HTTPException(status_code=400, detail="Перевести в «Ожидает рейс» можно только из черновика")
+            raise HTTPException(status_code=400, detail="Передать в подготовку можно только из черновика")
         has_lines = conn.execute(
             "SELECT 1 FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1", (doc_id,)
         ).fetchone()
@@ -391,11 +395,41 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
         check_lines_have_ready(conn, doc_id)
         conn.execute(
             "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (DISPATCH_STATUS_PREPARING, now, doc_id),
+        )
+        conn.execute(
+            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, DISPATCH_OP_ADVANCE, "Создание → Подготовка отгрузки", now, uid),
+        )
+        conn.commit()
+    return {"message": DISPATCH_STATUS_PREPARING}
+
+
+@router.post("/dispatches/{doc_id}/finish-preparation")
+def finish_dispatch_preparation(doc_id: str, user=Depends(_get_manager)):
+    """Кладовщик закончил подготовку отгрузки (preparing → awaiting_trip).
+
+    Доступ — менеджерский состав + кладовщик/начальник склада (get_current_manager).
+    Идемпотентно невозможно: гейт по статусу. Если рейс уже увёз отгрузку (статус
+    проскочил в shipped/partially_shipped), кнопка недоступна — задача снята сама.
+    """
+    now = _now()
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) != DISPATCH_STATUS_PREPARING:
+            raise HTTPException(status_code=400, detail="Отметить подготовку можно только в статусе «Подготовка отгрузки»")
+        conn.execute(
+            "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
             (DISPATCH_STATUS_AWAITING_TRIP, now, doc_id),
         )
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, DISPATCH_OP_ADVANCE, "Создание → Ожидает рейс", now, uid),
+            (str(uuid4()), doc_id, DISPATCH_OP_PREPARE, "Подготовка отгрузки → Ожидает рейс", now, uid),
         )
         conn.commit()
     return {"message": DISPATCH_STATUS_AWAITING_TRIP}

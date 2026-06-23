@@ -108,8 +108,8 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, site_url: siteUrl } : l))
   }
 
-  function addFromBalance(b: PlannableItem, qty: number) {
-    setLines((ls) => [...ls, {
+  function makeDraftLine(b: PlannableItem, qty: number): DraftLine {
+    return {
       _uid:         `line-${lineUidSeq.current++}`,
       product_id:   b.product_id,
       product_name: b.product_name,
@@ -125,7 +125,15 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       site_url:     null,
       store_id:     null,
       store_name:   null,
-    }])
+    }
+  }
+
+  function addFromBalance(b: PlannableItem, qty: number) {
+    setLines((ls) => [...ls, makeDraftLine(b, qty)])
+  }
+
+  function addManyFromBalance(rows: { item: PlannableItem; qty: number }[]) {
+    setLines((ls) => [...ls, ...rows.map(({ item, qty }) => makeDraftLine(item, qty))])
   }
 
   async function handleAssignSku(line: DraftLine, skuBase: string) {
@@ -208,7 +216,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
             </button>
             <PrimaryAction
               icon="arrowRight"
-              label="Передать в ожидание рейса"
+              label="Передать на подготовку"
               hint="уйдёт в очередь на привязку к рейсу — статус «Ожидает рейс»"
               disabled={saving}
               onClick={handleSendToAwaiting}
@@ -330,7 +338,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                         </td>
                         <td>
                           <input
-                            className="input sm"
+                            className="input"
                             placeholder="https://…"
                             value={l.site_url ?? ''}
                             onChange={(e) => setLineSiteUrl(l._uid, e.target.value)}
@@ -400,6 +408,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
           clientId={clientId}
           cargoType={cargoType}
           onAdd={(b, qty) => { addFromBalance(b, qty); setShowPicker(false) }}
+          onAddMany={addManyFromBalance}
           onClose={() => setShowPicker(false)}
         />
       )}

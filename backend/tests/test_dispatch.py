@@ -1,8 +1,9 @@
 """Интеграционные тесты домена dispatch («Отгрузка клиенту»).
 
-Проверяют: создание, гейт draft→awaiting_trip по готовому остатку `ready`,
-резервирование ready между отгрузками, списание при выезде рейса (consume),
-завершение, отмену, редактируемость только в черновике, гейт SKU, ссылку на сайт.
+Проверяют: создание, гейт draft→preparing по готовому остатку `ready`, отметку
+подготовки кладовщиком (preparing→awaiting_trip), резервирование ready между
+отгрузками, списание при выезде рейса (consume), завершение, отмену,
+редактируемость только в черновике, гейт SKU, ссылку на сайт.
 """
 from __future__ import annotations
 
@@ -118,8 +119,28 @@ def test_advance_succeeds_with_ready(admin_client, client_id):
     doc_id = _create(admin_client, client_id, pid, "DSP-T3", 5)
     r = admin_client.post(f"/dispatches/{doc_id}/advance")
     assert r.status_code == 200, r.text
+    assert r.json()["message"] == "preparing"
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "preparing"
+
+
+def test_finish_preparation_advances_to_awaiting_trip(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-T3B")
+    _seed_ready(client_id, product_id=pid, sku="DSP-T3B", qty=5)
+    doc_id = _create(admin_client, client_id, pid, "DSP-T3B", 5)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    # из подготовки кладовщик отмечает готовность → ожидает рейс
+    r = admin_client.post(f"/dispatches/{doc_id}/finish-preparation")
+    assert r.status_code == 200, r.text
     assert r.json()["message"] == "awaiting_trip"
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "awaiting_trip"
+    # повторная отметка из awaiting_trip запрещена
+    assert admin_client.post(f"/dispatches/{doc_id}/finish-preparation").status_code == 400
+
+
+def test_finish_preparation_blocked_from_draft(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-T3C")
+    doc_id = _create(admin_client, client_id, pid, "DSP-T3C", 1)
+    assert admin_client.post(f"/dispatches/{doc_id}/finish-preparation").status_code == 400
 
 
 def test_advance_blocked_when_ready_partial(admin_client, client_id):
@@ -164,6 +185,17 @@ def test_cancel_from_awaiting_trip(admin_client, client_id):
     _seed_ready(client_id, product_id=pid, sku="DSP-T7", qty=2)
     doc_id = _create(admin_client, client_id, pid, "DSP-T7", 2)
     assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    assert admin_client.post(f"/dispatches/{doc_id}/finish-preparation").status_code == 200
+    r = admin_client.post(f"/dispatches/{doc_id}/cancel")
+    assert r.status_code == 200, r.text
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "cancelled"
+
+
+def test_cancel_from_preparing(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-T7B")
+    _seed_ready(client_id, product_id=pid, sku="DSP-T7B", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-T7B", 2)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
     r = admin_client.post(f"/dispatches/{doc_id}/cancel")
     assert r.status_code == 200, r.text
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "cancelled"
@@ -178,7 +210,7 @@ def test_lines_editable_only_in_draft(admin_client, client_id):
         "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1,
     })
     assert add.status_code == 200, add.text
-    # после перевода в «Ожидает рейс» состав не правится
+    # после передачи в подготовку состав не правится
     # (поднимем ready до 3, чтобы пройти гейт)
     _seed_ready(client_id, product_id=pid, sku="DSP-T8", qty=1)
     assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200

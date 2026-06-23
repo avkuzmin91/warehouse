@@ -13,7 +13,7 @@ export function LinesTable({ lines }: { lines: DispatchLine[] }) {
         <tr>
           <th>Товар · вариант</th>
           <th style={{ width: 150 }}>Магазин</th>
-          <th style={{ width: 80 }}>Сайт</th>
+          <th style={{ width: 80 }}>Ссылка</th>
           <th style={{ textAlign: 'right', width: 70 }}>План</th>
           <th style={{ textAlign: 'right', width: 90 }}>Отгружено</th>
           <th style={{ textAlign: 'right', width: 80 }}>Остаток</th>

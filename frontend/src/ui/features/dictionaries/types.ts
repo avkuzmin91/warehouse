@@ -7,7 +7,7 @@ export type DictionaryTypeId =
   | 'colors'
   | 'clients'
   | 'suppliers'
-  | 'unloading-zones'
+  | 'locations'
   | 'warehouses'
   | 'own-warehouses'
   | 'reasons'
@@ -37,7 +37,7 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'sizes',         name: 'Размеры',       icon: 'ruler',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Размер' },
   { id: 'colors',        name: 'Цвета',         icon: 'palette',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Цвет' },
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
-  { id: 'unloading-zones', name: 'Местоположения',  icon: 'boxes',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Местоположение' },
+  { id: 'locations',     name: 'Места хранения', icon: 'grid',     kind: 'rich',   group: 'main',   createLabel: 'Сгенерировать ячейки' },
   { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
   { id: 'own-warehouses',   name: 'Наши склады',      icon: 'building', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад', adminOnly: true },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },

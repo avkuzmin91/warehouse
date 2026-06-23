@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   createReceipt,
@@ -6,20 +6,13 @@ import {
 } from '../../../api/receiptsApi'
 import { linkTripReceipts } from '../../../api/tripsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
-import {
-  getInventoryProducts,
-  getInventoryColorsForProduct,
-  getInventorySizesForProductAndColor,
-} from '../../../api/inventoryLookupsApi'
-import type { DictionaryItem, InventoryProductLookup } from '../../../api/domainTypes'
+import type { DictionaryItem } from '../../../api/domainTypes'
 import { Combobox } from '../../data/Combobox'
 import { Alert } from '../../primitives/Alert'
 import { Badge } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Icon } from '../../primitives/Icon'
 import { AutoGrowTextarea, Field } from '../../primitives/Input'
-import { Select } from '../../primitives/Select'
-import { Drawer } from '../../feedback/Drawer'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Table, Td } from '../../data/Table'
 import { useLookups } from '../../../hooks/useLookups'
@@ -30,11 +23,9 @@ import { DocHeader } from '../shared/process/DocHeader'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
 import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../shared/process/processUI'
 import { NumberStep } from './shared/NumberStep'
-import {
-  receiptLineColorRequired,
-  receiptLineSizeRequired,
-  receiptLineVariantKey,
-} from './shared/receiptLineVariantRules'
+import { receiptLineVariantKey } from './shared/receiptLineVariantRules'
+import { MatrixAddDrawer } from './shared/MatrixAddDrawer'
+import type { MatrixCell } from './shared/MatrixAddDrawer'
 import { ReceiptRailPanel } from './receiptDetail/components/ReceiptRailPanel'
 
 type DraftLine = ReceiptLineInput & { _id: number }
@@ -314,15 +305,29 @@ export function ReceiptCreateFeature() {
         </div>
       </div>
 
-      {/* Drawer: добавить строку */}
-      <AddLineDrawer
+      {/* Drawer: массовый ввод через матрицу цвет × размер */}
+      <MatrixAddDrawer
         key={showAddLine ? 'open' : 'closed'}
         open={showAddLine}
         clientId={clientId}
+        title="Добавить товары к приёмке"
         existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
-        onAdd={(line) => {
-          setLines((ls) => [...ls, { ...line, _id: genId() }])
+        onSubmit={(product, cells) => {
+          setLines((ls) => [
+            ...ls,
+            ...cells.map((c: MatrixCell) => ({
+              _id: genId(),
+              product_id: product.id,
+              product_name: product.name,
+              product_sku: product.sku,
+              color_id: c.color_id,
+              color_name: c.color_name,
+              size_id: c.size_id,
+              size_name: c.size_name,
+              planned_qty: c.qty,
+            })),
+          ])
           setShowAddLine(false)
         }}
       />
@@ -365,181 +370,5 @@ function OpPreviewItem({ icon, tone, title, sub }: { icon: string; tone: string;
         </div>
       </div>
     </div>
-  )
-}
-
-function AddLineDrawer({
-  open,
-  clientId,
-  existingKeys = [],
-  onClose,
-  onAdd,
-}: {
-  open: boolean
-  clientId: string
-  existingKeys?: string[]
-  onClose: () => void
-  onAdd: (line: ReceiptLineInput) => void
-}) {
-  const [products, setProducts] = useState<InventoryProductLookup[]>([])
-  const [productId, setProductId] = useState('')
-  const [colors, setColors] = useState<DictionaryItem[]>([])
-  const [colorId, setColorId] = useState('')
-  const [sizes, setSizes] = useState<DictionaryItem[]>([])
-  const [sizeId, setSizeId] = useState('')
-  const [qty, setQty] = useState(0)
-  const [qtyDraft, setQtyDraft] = useState('')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (open && clientId) {
-      getInventoryProducts(clientId).then(setProducts)
-    }
-  }, [open, clientId])
-
-  const selectedProduct = products.find((p) => p.id === productId)
-
-  useEffect(() => {
-    setColorId('')
-    setColors([])
-    setSizeId('')
-    setSizes([])
-    if (selectedProduct) {
-      getInventoryColorsForProduct(selectedProduct.id).then(setColors)
-    }
-  }, [productId, selectedProduct?.id])
-
-  useEffect(() => {
-    setSizeId('')
-    setSizes([])
-    if (selectedProduct && colorId) {
-      getInventorySizesForProductAndColor(selectedProduct.id, colorId).then(setSizes)
-    }
-  }, [colorId, selectedProduct?.id])
-
-  function handleAdd() {
-    if (!selectedProduct || qty < 1) return
-    if (needsColor && !colorId) return
-    if (needsSize && !sizeId) return
-    const variantKey = receiptLineVariantKey({ product_id: selectedProduct.id, color_id: colorId || null, size_id: sizeId || null })
-    if (existingKeys.includes(variantKey)) {
-      setError('Этот товар с таким цветом и размером уже добавлен — измените количество в существующей строке')
-      return
-    }
-    setError('')
-    const selectedColor = colors.find((c) => c.id === colorId)
-    const selectedSize = sizes.find((s) => s.id === sizeId)
-    onAdd({
-      product_id: selectedProduct.id,
-      product_name: selectedProduct.name,
-      product_sku: selectedProduct.sku,
-      color_id: colorId || null,
-      color_name: selectedColor?.name ?? null,
-      size_id: sizeId || null,
-      size_name: selectedSize?.name ?? null,
-      planned_qty: qty,
-    })
-  }
-
-  const needsColor = receiptLineColorRequired(selectedProduct)
-  const needsSize = receiptLineSizeRequired(selectedProduct)
-  const canPickSize = sizes.length > 0
-
-  return (
-    <Drawer
-      open={open}
-      onClose={onClose}
-      title="Добавить строку"
-
-      width={460}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>Отмена</button>
-          <button
-            className="btn primary"
-            disabled={!productId || (needsColor && !colorId) || qty < 1 || (needsSize && !sizeId)}
-            onClick={handleAdd}
-          >
-            <Icon name="plus" size={13} />Добавить
-          </button>
-        </>
-      }
-    >
-      {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
-      <div>
-        <label className="field-label">
-          <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-        </label>
-        <Combobox
-          value={productId}
-          placeholder="Поиск по SKU или названию…"
-          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku_pending ? 'Без SKU' : p.sku }))}
-          onChange={(v) => setProductId(String(v ?? ''))}
-          prefix="search"
-        />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14, alignItems: 'start' }}>
-        <div>
-          <label className="field-label">
-            <span>Цвет{needsColor && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
-          </label>
-          <Select
-            value={colorId}
-            placeholder={colors.length > 0 ? 'Выберите цвет' : '—'}
-            options={colors.map((c) => ({ value: c.id, label: c.name }))}
-            prefix="palette"
-            onChange={setColorId}
-            disabled={!selectedProduct || colors.length === 0}
-          />
-        </div>
-        <div>
-          <label className="field-label">
-            <span>Размер{needsSize && <span style={{ color: 'var(--c-danger)', marginLeft: 3 }}>*</span>}</span>
-            {!needsSize && selectedProduct && <span className="text-xs faint">не обязательно</span>}
-          </label>
-          <Select
-            value={sizeId}
-            placeholder={canPickSize ? 'Выберите размер' : '—'}
-            options={sizes.map((s) => ({ value: s.id, label: s.name }))}
-            prefix="ruler"
-            onChange={setSizeId}
-            disabled={!canPickSize}
-          />
-        </div>
-      </div>
-
-      <div style={{ marginTop: 14 }}>
-        <label className="field-label">
-          <span>Плановое количество <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-        </label>
-        <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--c-border-strong)', borderRadius: 'var(--r-md)', height: 30, width: 160, background: 'var(--c-bg-elev)' }}>
-          <button
-            className="btn ghost icon sm"
-            style={{ height: 28, width: 26, border: 0, borderRight: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => { const n = Math.max(1, qty - 1); setQty(n); setQtyDraft(String(n)) }}
-          >
-            <Icon name="minus" size={11} />
-          </button>
-          <input
-            inputMode="numeric"
-            value={qtyDraft}
-            onChange={(e) => {
-              const raw = e.target.value.replace(/\D/g, '')
-              setQtyDraft(raw)
-              if (raw !== '') setQty(parseInt(raw, 10))
-            }}
-            style={{ flex: 1, border: 0, outline: 'none', textAlign: 'center', fontFamily: 'var(--font-num)', fontSize: 13, fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", background: 'transparent', minWidth: 0 }}
-          />
-          <button
-            className="btn ghost icon sm"
-            style={{ height: 28, width: 26, border: 0, borderLeft: '1px solid var(--c-border)', flexShrink: 0 }}
-            onClick={() => { const n = qty + 1; setQty(n); setQtyDraft(String(n)) }}
-          >
-            <Icon name="plus" size={11} />
-          </button>
-        </div>
-      </div>
-    </Drawer>
   )
 }

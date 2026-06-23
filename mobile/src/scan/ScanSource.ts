@@ -11,7 +11,7 @@ export interface ScanSource {
   scan(): Promise<string | null>
 }
 
-// Нативный плагин ML Kit ставится на Mac перед сборкой:
+// Нативный плагин ML Kit ставится перед сборкой:
 //   npm i @capacitor-mlkit/barcode-scanning && npx cap sync
 // Имя зарегистрированного плагина — 'BarcodeScanning'. В вебе он не зарегистрирован:
 // isAvailable() вернёт false, экран покажет ручной ввод кода.

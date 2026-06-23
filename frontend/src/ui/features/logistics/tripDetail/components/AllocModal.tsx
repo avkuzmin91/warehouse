@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
@@ -61,6 +61,9 @@ export type AllocModalProps = {
   lex: AllocLexicon
   linkedDocs: AllocDoc[]
   candidates: AllocDoc[]
+  /** Серверный поиск кандидатов по всему пулу (номер/клиент/назначение). Если не задан —
+   *  пикер фильтрует только локально по предзагруженным `candidates`. */
+  searchCandidates?: (query: string, signal: AbortSignal) => Promise<AllocDoc[]>
   fetchLines: (docId: string) => Promise<AllocLine[]>
   onConfirm: (items: AllocItem[], removedDocIds: string[]) => Promise<void>
   busy?: boolean
@@ -311,23 +314,30 @@ function MainPane({ doc, lines, qty, setQty, fillAll, clearAll, query, setQuery,
 }
 
 /* ---------------- candidate picker ---------------- */
-function Picker({ candidates, addedIds, previewId, dateLabel, onHover, onCancel, onAdd }: {
+function Picker({ candidates, addedIds, previewId, dateLabel, query, setQuery, loading, serverFiltered, onHover, onCancel, onAdd }: {
   candidates: AllocDoc[]
   addedIds: string[]
   previewId: string | null
   dateLabel: string
+  query: string
+  setQuery: (v: string) => void
+  /** Идёт серверный запрос кандидатов по текущему запросу. */
+  loading?: boolean
+  /** Список уже отфильтрован сервером — локальный fold-фильтр не применяем. */
+  serverFiltered?: boolean
   onHover: (id: string) => void
   onCancel: () => void
   onAdd: (ids: string[]) => void
 }) {
   const [sel, setSel] = useState<Set<string>>(new Set())
-  const [q, setQ] = useState('')
   const avail = candidates.filter((c) => !addedIds.includes(c.doc_id))
   const filtered = useMemo(() => {
-    const f = foldCiSearch(q.trim())
-    const base = f ? avail.filter((c) => foldCiSearch(`${c.doc_number ?? ''} ${c.client ?? ''}`).includes(f)) : avail
+    const f = foldCiSearch(query.trim())
+    const base = (!serverFiltered && f)
+      ? avail.filter((c) => foldCiSearch(`${c.doc_number ?? ''} ${c.client ?? ''}`).includes(f))
+      : avail
     return [...base].sort(byClient)
-  }, [avail, q])
+  }, [avail, query, serverFiltered])
   function toggle(id: string) { setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n }) }
   return (
     <div className="picker">
@@ -338,12 +348,22 @@ function Picker({ candidates, addedIds, previewId, dateLabel, onHover, onCancel,
         </div>
         <label className="main-search">
           <span className="ic"><Icon name="search" size={13} /></span>
-          <input className="input sm" placeholder="Клиент или номер…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          <input className="input sm" placeholder="Клиент или номер…" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
         </label>
+        {serverFiltered && !query.trim() && (
+          <div className="subtle" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.35 }}>
+            Показаны ближайшие по очереди. Введите номер или клиента — поиск по всем отгрузкам.
+          </div>
+        )}
       </div>
       <div className="picker-list">
-        {filtered.length === 0 && <div className="subtle" style={{ textAlign: 'center', padding: '20px 0', fontSize: 12.5 }}>Нет доступных документов</div>}
-        {filtered.map((c) => (
+        {loading && <div className="subtle" style={{ textAlign: 'center', padding: '20px 0', fontSize: 12.5 }}>Поиск…</div>}
+        {!loading && filtered.length === 0 && (
+          <div className="subtle" style={{ textAlign: 'center', padding: '20px 0', fontSize: 12.5 }}>
+            {serverFiltered && query.trim() ? 'Ничего не нашлось' : 'Нет доступных документов'}
+          </div>
+        )}
+        {!loading && filtered.map((c) => (
           <button
             type="button"
             key={c.doc_id}
@@ -461,13 +481,30 @@ function PreviewPane({ doc, lines, onAdd, lex }: {
 }
 
 /* ---------------- root modal ---------------- */
-export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, linkedDocs, candidates, fetchLines, onConfirm, busy }: AllocModalProps) {
+export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, linkedDocs, candidates, searchCandidates, fetchLines, onConfirm, busy }: AllocModalProps) {
+  // Серверный поиск кандидатов: запрос живёт здесь, чтобы найденные документы
+  // попали в docMap (иначе добавленный из поиска документ не отрисуется).
+  const [pickerQuery, setPickerQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<AllocDoc[] | null>(null)
+  const [searchBusy, setSearchBusy] = useState(false)
+  // Накопитель всех увиденных в поиске документов: searchResults очищается при смене
+  // запроса, но добавленный документ должен остаться в docMap, иначе его чип не отрисуется.
+  const [seenDocs, setSeenDocs] = useState<Record<string, AllocDoc>>({})
+  const searchRef = useRef(searchCandidates)
+  searchRef.current = searchCandidates
+
   const docMap = useMemo(() => {
     const m: Record<string, AllocDoc> = {}
-    for (const d of [...linkedDocs, ...candidates]) m[d.doc_id] = d
+    for (const d of [...linkedDocs, ...candidates, ...Object.values(seenDocs)]) m[d.doc_id] = d
     return m
-  }, [linkedDocs, candidates])
+  }, [linkedDocs, candidates, seenDocs])
   const initialLinkedIds = useMemo(() => linkedDocs.map((d) => d.doc_id), [linkedDocs])
+
+  // Что показывать в пикере: пустой запрос → предзагруженные кандидаты; иначе серверный результат.
+  const pickerCandidates = useMemo(
+    () => (searchCandidates && pickerQuery.trim() ? (searchResults ?? []) : candidates),
+    [searchCandidates, pickerQuery, searchResults, candidates],
+  )
 
   const [addedIds, setAddedIds] = useState<string[]>(initialLinkedIds)
   const [activeId, setActiveId] = useState<string | null>(initialLinkedIds[0] ?? null)
@@ -477,6 +514,26 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
   const [qty, setQty] = useState<QtyMap>({})
   const [linesByDoc, setLinesByDoc] = useState<Record<string, AllocLine[]>>({})
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const fn = searchRef.current
+    if (!fn) return
+    const term = pickerQuery.trim()
+    if (!term) { setSearchResults(null); setSearchBusy(false); return }
+    setSearchBusy(true)
+    const ctrl = new AbortController()
+    const t = setTimeout(() => {
+      fn(term, ctrl.signal)
+        .then((res) => {
+          if (ctrl.signal.aborted) return
+          setSearchResults(res)
+          setSeenDocs((prev) => { const n = { ...prev }; for (const d of res) n[d.doc_id] = d; return n })
+          setSearchBusy(false)
+        })
+        .catch(() => { if (!ctrl.signal.aborted) setSearchBusy(false) })
+    }, 250)
+    return () => { clearTimeout(t); ctrl.abort() }
+  }, [pickerQuery])
 
   async function loadLines(docId: string) {
     if (linesByDoc[docId]) return
@@ -493,8 +550,8 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
     }
   }
 
-  function openPicker() { setPicking(true); setPreviewId(null) }
-  function closePicker() { setPicking(false); setPreviewId(null) }
+  function openPicker() { setPicking(true); setPreviewId(null); setPickerQuery('') }
+  function closePicker() { setPicking(false); setPreviewId(null); setPickerQuery('') }
   function preview(id: string) { setPreviewId(id); void loadLines(id) }
 
   // Загружаем строки всех уже привязанных документов при открытии (для прогресса в чипах)
@@ -607,7 +664,21 @@ export function AllocModal({ open, onClose, tripNumber, tripDestination, lex, li
             <div className="rail-foot">
               <button type="button" className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={openPicker}><Icon name="plus" size={14} /> Добавить</button>
             </div>
-            {picking && <Picker candidates={candidates} addedIds={addedIds} previewId={previewId} dateLabel={lex.dateLabel} onHover={preview} onCancel={closePicker} onAdd={addDocs} />}
+            {picking && (
+              <Picker
+                candidates={pickerCandidates}
+                addedIds={addedIds}
+                previewId={previewId}
+                dateLabel={lex.dateLabel}
+                query={pickerQuery}
+                setQuery={setPickerQuery}
+                loading={searchBusy}
+                serverFiltered={!!searchCandidates}
+                onHover={preview}
+                onCancel={closePicker}
+                onAdd={addDocs}
+              />
+            )}
           </div>
 
           {picking && previewId && docMap[previewId] && !addedIds.includes(previewId)

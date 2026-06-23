@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   getDispatch,
   advanceDispatch,
+  finishDispatchPreparation,
   cancelDispatch,
   updateDispatch,
   addDispatchLine,
@@ -23,7 +24,7 @@ import { OpEntry } from './components/OpEntry'
 import { DraftView } from './views/DraftView'
 import { ReadyView } from './views/ReadyView'
 import { FinalView } from './views/FinalView'
-import { canEditShipmentPlanning, canEditShipmentPriority } from '../../../../utils/access'
+import { canEditShipmentPlanning, canEditShipmentPriority, canPrepareDispatch } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 
 export function DispatchDetailFeature({ docId }: { docId: string }) {
@@ -33,6 +34,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const { user } = useCurrentUser()
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
+  const canPrepare = canPrepareDispatch(user)
 
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -74,7 +76,20 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       await advanceDispatch(docId)
       await load()
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Передать в ожидание рейса не удалось', 'error')
+      toast(e instanceof Error ? e.message : 'Передать в подготовку не удалось', 'error')
+    } finally {
+      setActing(false)
+    }
+  }
+
+  async function handleFinishPreparation() {
+    setActing(true)
+    setError('')
+    try {
+      await finishDispatchPreparation(docId)
+      await load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Отметить подготовку не удалось', 'error')
     } finally {
       setActing(false)
     }
@@ -164,6 +179,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const status = doc.status as DispatchStatus
   const cargoType = doc.cargo_type as DispatchCargoType
   const isDraft = status === 'draft'
+  const isPreparing = status === 'preparing'
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
 
@@ -173,12 +189,12 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         <Icon name="layers" size={14} />Журнал
         {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
       </button>
-      {canEditPlanning && (isDraft || isAwaiting) && (
+      {canEditPlanning && (isDraft || isPreparing || isAwaiting) && (
         <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
           <Icon name="x" size={14} />Аннулировать
         </button>
       )}
-      {(isAwaiting || isPartially || status === 'shipped') && doc.trips.map((t) => (
+      {(isPreparing || isAwaiting || isPartially || status === 'shipped') && doc.trips.map((t) => (
         <button key={t.id} className="btn" onClick={() => navigate(`/logistics/trips/${t.id}`)}>
           <Icon name="truckOut" size={14} />Рейс {t.number}
         </button>
@@ -186,10 +202,19 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       {canEditPlanning && isDraft && (
         <PrimaryAction
           icon="arrowRight"
-          label="Передать в ожидание рейса"
-          hint="уйдёт в очередь на привязку к рейсу — статус «Ожидает рейс»"
+          label="Передать в подготовку"
+          hint="кладовщик получит задачу подготовить отгрузку"
           disabled={acting}
           onClick={() => void handleAdvance()}
+        />
+      )}
+      {canPrepare && isPreparing && (
+        <PrimaryAction
+          icon="check"
+          label="Отгрузка подготовлена"
+          hint="перейдёт в очередь на рейс — статус «Ожидает рейс»"
+          disabled={acting}
+          onClick={() => void handleFinishPreparation()}
         />
       )}
     </>
@@ -228,7 +253,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onUpdateDoc={handleUpdateDoc}
           onReload={load}
         />
-      ) : (isAwaiting || isPartially) ? (
+      ) : (isPreparing || isAwaiting || isPartially) ? (
         <ReadyView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />
       ) : (
         <FinalView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />

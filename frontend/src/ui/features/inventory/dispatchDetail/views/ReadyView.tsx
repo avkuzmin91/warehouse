@@ -15,6 +15,7 @@ type Props = {
 export function ReadyView({ doc, onOpenTrip }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
+  const isPreparing = doc.status === 'preparing'
   const isPartially = doc.status === 'partially_shipped'
 
   const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
@@ -23,7 +24,11 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
 
   return (
     <>
-      {isPartially ? (
+      {isPreparing ? (
+        <Alert tone="info" style={{ marginBottom: 16 }}>
+          Кладовщик готовит отгрузку. Можно уже привязать к рейсу — товар спишется при его отправке.
+        </Alert>
+      ) : isPartially ? (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
           Часть отгрузки уже уехала. Остаток ожидает следующих рейсов — спишется при их отправке.
         </Alert>

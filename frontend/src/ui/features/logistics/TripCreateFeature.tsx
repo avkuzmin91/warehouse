@@ -182,6 +182,13 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
     onLink: saveShipDist,
     onUnlink: (id) => toggle(id),
     onSaveDistribution: saveShipDist,
+    searchCandidates: async (q, signal) => {
+      const res = await listDispatches(
+        { status: DISPATCH_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType, search: q },
+        signal,
+      )
+      return res.items.filter((s) => !selected.has(s.id))
+    },
     presetsLinked: false,
     busy: false,
   }

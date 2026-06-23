@@ -3,7 +3,9 @@ from __future__ import annotations
 from config import (
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     INV_OP_INTAKE,
+    INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
     INV_OP_SINKS,
@@ -38,7 +40,8 @@ _IN_TRANSIT_STATUS_SQL = ", ".join(f"'{s}'" for s in _IN_TRANSIT_STATUSES)
 
 # Модель остатков на двух осях — чистый replay журнала zone_relocations:
 #   операционный статус: storage «На хранении» | packing «На упаковке» |
-#                        ready «Готов к отгрузке» | shipped «Отгружен» (терминальный)
+#                        packed «Упаковано» | ready «Готов к отгрузке» |
+#                        shipped «Отгружен» (терминальный)
 #   качество:            good «Годный» | defect «Брак»
 #
 # Баланс позиции в корзине (op, quality) = Σ движений в корзину − Σ движений из корзины.
@@ -57,6 +60,8 @@ _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_STORAGE, INV_Q_DEFECT),
     (INV_OP_PACKING, INV_Q_GOOD),
     (INV_OP_PACKING, INV_Q_DEFECT),
+    (INV_OP_PACKED, INV_Q_GOOD),
+    (INV_OP_PACKED, INV_Q_DEFECT),
     (INV_OP_READY, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_DEFECT),
 ]
@@ -367,12 +372,36 @@ def get_balances_summary(
     return BalanceSummaryResponse(**totals, total=sum(totals.values()))
 
 
+def _zone_item(row) -> BalanceZoneItem:
+    return BalanceZoneItem(
+        location_id=row["location_id"],
+        location_name=row["actual_location_name"],
+        op_status=str(row["op_status"]),
+        quality=str(row["quality"]),
+        product_id=str(row["product_id"]),
+        product_name=str(row["product_name"]),
+        product_sku=str(row["product_sku"]),
+        client_id=row["client_id"],
+        client_name=row["client_name"],
+        color_id=row["color_id"],
+        color_name=row["color_name"],
+        size_id=row["size_id"],
+        size_name=row["size_name"],
+        qty=int(row["qty"] or 0),
+    )
+
+
 def get_balances_by_zone(
     connection,
     *,
     client_id: str | None,
     search: str | None,
     only_positive: bool,
+    location: str | None = None,
+    op_status: str | None = None,
+    quality: str | None = None,
+    page: int | None = None,
+    limit: int | None = None,
 ) -> BalanceZonesResponse:
     """Остатки в разрезе местоположения, длинный формат: одна строка на
     (местоположение, позиция, операционный статус, качество).
@@ -457,54 +486,84 @@ def get_balances_by_zone(
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
     """
 
-    rows = connection.execute(
-        f"""
-        SELECT *
+    # Доп. фильтры поверх агрегата: местоположение (часть кода адреса, напр. «1-А»),
+    # операционный статус и качество. Применяются в обоих режимах (с пагинацией и без).
+    extra = ""
+    extra_params: list = []
+    if location and location.strip():
+        extra += " AND b.actual_location_name ILIKE ?"
+        extra_params.append(like_substring_param(location))
+    if op_status and str(op_status).strip():
+        extra += " AND b.op_status = ?"
+        extra_params.append(str(op_status).strip())
+    if quality and str(quality).strip():
+        extra += " AND b.quality = ?"
+        extra_params.append(str(quality).strip())
+
+    base_subquery = f"""
+        SELECT b.*
         FROM (
-            SELECT
-                a.*,
-                COALESCE(uz.name, NULL) AS actual_location_name
+            SELECT a.*, uz.name AS actual_location_name
             FROM ({agg_query}) a
             LEFT JOIN unloading_zones uz ON uz.id = a.location_id
         ) b
-        WHERE b.qty > 0
+        WHERE b.qty > 0 {extra}
+    """
+
+    # Режим пагинации (web присылает limit): страница = N местоположений со всеми
+    # их строками. Мобильный экран без limit идёт по легаси-пути (потолок + truncated).
+    if limit is not None and limit > 0:
+        page_n = page if (page and page > 0) else 1
+        offset = (page_n - 1) * limit
+        rows = connection.execute(
+            f"""
+            WITH joined AS ({base_subquery}),
+            locs AS (
+                SELECT location_id,
+                       ROW_NUMBER() OVER (
+                           ORDER BY MAX(actual_location_name) IS NULL, MAX(actual_location_name)
+                       ) AS rn,
+                       COUNT(*) OVER () AS total_locs
+                FROM joined
+                GROUP BY location_id
+            )
+            SELECT j.*, l.total_locs
+            FROM joined j
+            JOIN locs l ON l.location_id IS NOT DISTINCT FROM j.location_id
+            WHERE l.rn > ? AND l.rn <= ?
+            ORDER BY l.rn, j.qty DESC, j.op_status, j.quality, j.product_name, j.color_name, j.size_name
+            """,
+            [*line_params, *extra_params, offset, offset + limit],
+        ).fetchall()
+        total = int(rows[0]["total_locs"]) if rows else 0
+        return BalanceZonesResponse(
+            items=[_zone_item(r) for r in rows],
+            truncated=False,
+            total=total,
+            page=page_n,
+            limit=limit,
+        )
+
+    rows = connection.execute(
+        f"""
+        SELECT * FROM ({base_subquery}) b2
         ORDER BY
-            b.actual_location_name IS NULL,
-            b.actual_location_name,
-            b.qty DESC,
-            b.op_status,
-            b.quality,
-            b.product_name,
-            b.color_name,
-            b.size_name
+            b2.actual_location_name IS NULL,
+            b2.actual_location_name,
+            b2.qty DESC,
+            b2.op_status,
+            b2.quality,
+            b2.product_name,
+            b2.color_name,
+            b2.size_name
         LIMIT {ZONE_ROWS_LIMIT + 1}
         """,
-        line_params,
+        [*line_params, *extra_params],
     ).fetchall()
 
     truncated = len(rows) > ZONE_ROWS_LIMIT
     rows = rows[:ZONE_ROWS_LIMIT]
-
-    items = [
-        BalanceZoneItem(
-            location_id=row["location_id"],
-            location_name=row["actual_location_name"],
-            op_status=str(row["op_status"]),
-            quality=str(row["quality"]),
-            product_id=str(row["product_id"]),
-            product_name=str(row["product_name"]),
-            product_sku=str(row["product_sku"]),
-            client_id=row["client_id"],
-            client_name=row["client_name"],
-            color_id=row["color_id"],
-            color_name=row["color_name"],
-            size_id=row["size_id"],
-            size_name=row["size_name"],
-            qty=int(row["qty"] or 0),
-        )
-        for row in rows
-    ]
-    return BalanceZonesResponse(items=items, truncated=truncated)
+    return BalanceZonesResponse(items=[_zone_item(r) for r in rows], truncated=truncated)
 
 
 def _eq_or_null(col: str, val) -> tuple[str, list]:
@@ -555,9 +614,10 @@ def insert_inventory_move(
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
     Покрывает приход приёмки (intake→storage), перемещение (оси не меняются),
-    передачу на упаковку (storage→packing), QC-упаковку (packing→ready /
-    packing,good→packing,defect), раскладку к рейсу, смену качества, списание
-    при отправке рейса (…→shipped) и ручное списание (…→written_off).
+    передачу на упаковку (storage→packing), упаковку (packing→packed годного и
+    брака), раскладку «Готово к рейсу» (packed→ready годного / packed→storage
+    брака), смену качества, списание при отправке рейса (…→shipped) и ручное
+    списание (…→written_off).
     packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки;
     receipt_line_id — только для прихода приёмки; reason — только для списания.
     """
@@ -739,11 +799,12 @@ def ready_available_for_dispatch(
     другими незакрытыми отгрузками.
 
     ready-нетто (вариант×клиент×качество) − Σ(незавершённый объём ЗАФИКСИРОВАННЫХ
-    отгрузок того же варианта: qty − shipped_qty, статусы awaiting_trip/partially_shipped).
-    Черновики резерв НЕ держат — это лишь намерение; иначе два черновика взаимно
-    заблокировали бы перевод в «Ожидает рейс». Резерв возникает при фиксации (advance):
-    кто первый перевёл — тот и занял остаток, второй не пройдёт гейт. `exclude_doc_id`
-    исключает саму проверяемую отгрузку (её спрос — это то, что мы и проверяем).
+    отгрузок того же варианта: qty − shipped_qty, статусы preparing/awaiting_trip/
+    partially_shipped). Черновики резерв НЕ держат — это лишь намерение; иначе два
+    черновика взаимно заблокировали бы передачу в подготовку. Резерв возникает при
+    фиксации (advance, draft → preparing): кто первый передал — тот и занял остаток,
+    второй не пройдёт гейт. `exclude_doc_id` исключает саму проверяемую отгрузку
+    (её спрос — это то, что мы и проверяем).
     """
     ready = get_available_total(
         connection, product_id=product_id, color_id=color_id, size_id=size_id,
@@ -758,7 +819,7 @@ def ready_available_for_dispatch(
         "dd.cargo_type = ?",
         "COALESCE(dl.is_deleted, 0) = 0",
         "COALESCE(dd.is_deleted, 0) = 0",
-        f"dd.status IN ('{DISPATCH_STATUS_AWAITING_TRIP}', '{DISPATCH_STATUS_PARTIALLY_SHIPPED}')",
+        f"dd.status IN ('{DISPATCH_STATUS_PREPARING}', '{DISPATCH_STATUS_AWAITING_TRIP}', '{DISPATCH_STATUS_PARTIALLY_SHIPPED}')",
     ]
     params: list = [product_id, color_id, size_id, client_id, cargo]
     if exclude_doc_id:

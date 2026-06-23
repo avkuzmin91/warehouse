@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 
-// Нативная обёртка (iOS/Android). На вебе false — там сессия живёт в refresh-cookie.
+// Нативная обёртка (Android). На вебе false — там сессия живёт в refresh-cookie.
 export const IS_NATIVE = Capacitor.isNativePlatform()
 
 function resolveApiBaseUrl(): string {

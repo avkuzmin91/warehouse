@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getPlannableItems } from '../../../../api/balancesApi'
 import type { PlannableItem } from '../../../../api/balancesApi'
 import type { ShipmentCargoType } from '../../../../api/shipmentsApi'
@@ -10,6 +10,11 @@ type Props = {
   clientId: string | null
   cargoType: ShipmentCargoType
   onAdd: (item: PlannableItem, qty: number, zoneId: string | null, zoneName: string | null) => void
+  /**
+   * Если задан — включается режим массового выбора: отметить несколько позиций
+   * с количеством и добавить все разом. Одиночный onAdd при этом не используется.
+   */
+  onAddMany?: (rows: { item: PlannableItem; qty: number }[]) => void
   onClose: () => void
 }
 
@@ -24,12 +29,18 @@ type PickRow = {
   cap: number
 }
 
-export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
+function rowKey(item: PlannableItem): string {
+  return `${item.product_id}|${item.color_id ?? ''}|${item.size_id ?? ''}`
+}
+
+export function BalancePicker({ clientId, cargoType, onAdd, onAddMany, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [rows, setRows] = useState<PickRow[]>([])
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState<{ row: PickRow; qty: number } | null>(null)
+  const [selected, setSelected] = useState<Record<string, { row: PickRow; qty: number }>>({})
 
+  const multi = !!onAddMany
   const isDefect = cargoType === 'defect'
 
   useEffect(() => {
@@ -57,6 +68,39 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
       })
     return () => ctrl.abort()
   }, [search, clientId, cargoType, isDefect])
+
+  function defaultQty(row: PickRow): number {
+    return row.onHand > 0 ? row.onHand : (row.cap > 0 ? row.cap : 1)
+  }
+
+  function toggle(row: PickRow) {
+    const k = rowKey(row.item)
+    setSelected((prev) => {
+      const next = { ...prev }
+      if (next[k]) delete next[k]
+      else next[k] = { row, qty: defaultQty(row) }
+      return next
+    })
+  }
+
+  function setSelectedQty(k: string, qty: number) {
+    setSelected((prev) => prev[k] ? { ...prev, [k]: { ...prev[k], qty: Math.max(1, qty) } } : prev)
+  }
+
+  function selectAllVisible() {
+    setSelected((prev) => {
+      const next = { ...prev }
+      for (const row of rows) {
+        const k = rowKey(row.item)
+        if (!next[k]) next[k] = { row, qty: defaultQty(row) }
+      }
+      return next
+    })
+  }
+
+  const selectedList = useMemo(() => Object.values(selected), [selected])
+  const selectedCount = selectedList.length
+  const selectedSum = selectedList.reduce((s, e) => s + e.qty, 0)
 
   const cap = pending ? pending.row.cap : 0
   const onHand = pending ? pending.row.onHand : 0
@@ -97,6 +141,16 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                 autoFocus
                 onChange={(e) => setSearch(e.target.value)}
               />
+            </div>
+          )}
+          {multi && !pending && rows.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+              <button className="btn ghost sm" onClick={selectAllVisible}>
+                <Icon name="check" size={12} />Отметить всё ({rows.length})
+              </button>
+              {selectedCount > 0 && (
+                <button className="btn ghost sm" onClick={() => setSelected({})}>Снять отметки</button>
+              )}
             </div>
           )}
         </div>
@@ -166,46 +220,72 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
             ) : rows.length === 0 ? (
               <EmptyState title="Ничего не найдено" sub={isDefect ? 'Нет брака на хранении по запросу' : 'Нет остатков и товара в пути по запросу'} />
             ) : (
-              rows.map((row, i) => (
-                <div
-                  key={`${row.item.product_id}__${row.item.color_id}__${row.item.size_id}__${i}`}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
-                    borderRadius: 8, border: '1px solid var(--c-border)',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => setPending({ row, qty: 0 })}
-                >
-                  <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{row.item.product_name}</div>
-                    <div className="t-sub mono">
-                      {row.item.sku_pending && (
-                        <span style={{ color: 'var(--c-warning)', fontWeight: 600 }}>
-                          Без SKU{(row.item.color_name || row.item.size_name) ? ' · ' : ''}
-                        </span>
-                      )}
-                      {[row.item.product_sku, row.item.color_name, row.item.size_name].filter(Boolean).join(' · ')}
+              rows.map((row, i) => {
+                const k = rowKey(row.item)
+                const checked = !!selected[k]
+                return (
+                  <div
+                    key={`${k}__${i}`}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
+                      borderRadius: 8, border: `1px solid ${checked ? 'var(--c-accent)' : 'var(--c-border)'}`,
+                      background: checked ? 'var(--c-accent-bg)' : undefined,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => multi ? toggle(row) : setPending({ row, qty: 0 })}
+                  >
+                    {multi && (
+                      <span className={`t-checkbox ${checked ? 'checked' : ''}`} style={{ flexShrink: 0 }}>
+                        {checked && <Icon name="check" size={10} />}
+                      </span>
+                    )}
+                    <div style={{ width: 34, height: 34, borderRadius: 6, background: 'var(--c-bg-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <Icon name="box" size={14} style={{ color: 'var(--c-text-muted)' }} />
                     </div>
-                  </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div className="mono" style={{ color: isDefect ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
-                      {row.onHand}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>
-                      {isDefect ? 'брак' : 'на складе'}
-                    </div>
-                    {!isDefect && row.inTransit > 0 && (
-                      <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 1 }}>
-                        +{row.inTransit} в пути
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{row.item.product_name}</div>
+                      <div className="t-sub mono">
+                        {row.item.sku_pending && (
+                          <span style={{ color: 'var(--c-warning)', fontWeight: 600 }}>
+                            Без SKU{(row.item.color_name || row.item.size_name) ? ' · ' : ''}
+                          </span>
+                        )}
+                        {[row.item.product_sku, row.item.color_name, row.item.size_name].filter(Boolean).join(' · ')}
                       </div>
+                    </div>
+                    {multi && checked ? (
+                      <div onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <NumberStep
+                          value={selected[k].qty}
+                          onChange={(v) => setSelectedQty(k, v)}
+                          warning={selected[k].qty > row.cap}
+                          width={104}
+                        />
+                        <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
+                          {isDefect ? 'брак' : 'на складе'} {row.onHand}{!isDefect && row.inTransit > 0 ? ` · в пути ${row.inTransit}` : ''}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div className="mono" style={{ color: isDefect ? 'var(--c-warning)' : 'var(--c-success)', fontWeight: 500, fontSize: 13 }}>
+                            {row.onHand}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>
+                            {isDefect ? 'брак' : 'на складе'}
+                          </div>
+                          {!isDefect && row.inTransit > 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginTop: 1 }}>
+                              +{row.inTransit} в пути
+                            </div>
+                          )}
+                        </div>
+                        {!multi && <Icon name="plus" size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />}
+                      </>
                     )}
                   </div>
-                  <Icon name="plus" size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         )}
@@ -226,6 +306,19 @@ export function BalancePicker({ clientId, cargoType, onAdd, onClose }: Props) {
                 )}
               >
                 <Icon name="plus" size={13} />Добавить
+              </button>
+            </>
+          ) : multi ? (
+            <>
+              <button className="btn" style={{ flex: 1 }} onClick={onClose}>Отмена</button>
+              <button
+                className="btn primary"
+                style={{ flex: 2 }}
+                disabled={selectedCount === 0}
+                onClick={() => { onAddMany!(selectedList.map((e) => ({ item: e.row.item, qty: e.qty }))); onClose() }}
+              >
+                <Icon name="plus" size={13} />
+                Добавить отмеченные{selectedCount > 0 ? ` · ${selectedCount} · ${selectedSum} шт` : ''}
               </button>
             </>
           ) : (

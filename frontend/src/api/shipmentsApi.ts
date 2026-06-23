@@ -3,7 +3,7 @@ import { request, requestForm } from './http'
 export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
-  draft:             'Создание',
+  draft:             'Черновик',
   packing:           'В плане',
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
@@ -435,6 +435,12 @@ export function returnShipmentLineFromPacking(docId: string, lineId: string, qty
 
 export function advanceShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, { method: 'POST' })
+}
+
+// Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
+// «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
+export function returnShipmentToPacking(id: string) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
 }
 
 export type ShipmentRelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }

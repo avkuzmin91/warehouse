@@ -148,7 +148,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           title="Основная информация"
           role="manager"
           state="active"
-          hint={canEdit ? 'План можно править до передачи в ожидание рейса' : undefined}
+          hint={canEdit ? 'План можно править до передачи в подготовку' : undefined}
           right={canEdit && infoSaved ? (
             <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
               <Icon name="check" size={12} />Сохранено
@@ -257,7 +257,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                       </td>
                       <td>
                         <input
-                          className="input sm"
+                          className="input"
                           placeholder="https://…"
                           value={d.siteUrl}
                           readOnly={!canEdit}
@@ -312,7 +312,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
         </PhaseBlock>
 
         <PhaseBlock icon="truckOut" title="Рейс и отгрузка" role="manager" state="locked"
-          hint="Привязка к рейсу и списание — после передачи в ожидание рейса">
+          hint="Привязка к рейсу и списание — после подготовки кладовщиком">
           <LockedGrid labels={['Рейсы', 'Отгружено']} />
         </PhaseBlock>
       </div>

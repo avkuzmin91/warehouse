@@ -85,7 +85,10 @@ def _awaiting_dispatch(admin_client, client_id: str, *, qty: int = 10, ready: in
     doc_id, line_id, pid = _create_dispatch(admin_client, client_id, qty=qty, cargo=cargo, sku=sku, product_id=pid)
     adv = admin_client.post(f"/dispatches/{doc_id}/advance")
     assert adv.status_code == 200, adv.text
-    assert adv.json()["message"] == "awaiting_trip"
+    assert adv.json()["message"] == "preparing"
+    fin = admin_client.post(f"/dispatches/{doc_id}/finish-preparation")
+    assert fin.status_code == 200, fin.text
+    assert fin.json()["message"] == "awaiting_trip"
     return doc_id, line_id, pid
 
 
@@ -164,8 +167,8 @@ def test_outbound_full_flow_cascades_dispatch_to_shipped(admin_client, client_id
     assert close.json()["message"] == "closed"
 
 
-def test_outbound_unload_blocked_until_dispatch_awaiting_trip(admin_client, client_id):
-    # Черновик отгрузки (с готовым остатком, но ещё не «Ожидает рейс») блокирует погрузку.
+def test_outbound_unload_blocked_for_draft_dispatch(admin_client, client_id):
+    # Черновик отгрузки (с готовым остатком, но ещё не переданный кладовщику) блокирует погрузку.
     pid = str(uuid.uuid4())
     _seed_ready(client_id, product_id=pid, sku="SKU-B", qty=5)
     doc_id, line_id, pid = _create_dispatch(admin_client, client_id, qty=5, sku="SKU-B", product_id=pid)
@@ -181,12 +184,13 @@ def test_outbound_unload_blocked_until_dispatch_awaiting_trip(admin_client, clie
     assert "не готовы к рейсу" in blocked.json()["detail"]
     assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
 
-    # Переводим в «Ожидает рейс» — погрузка завершается.
-    assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "awaiting_trip"
+    # Передаём кладовщику в подготовку — рейс уже можно грузить, не дожидаясь его отметки.
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "preparing"
     ok = admin_client.post(f"/trips/{trip_id}/unload", json={
         "load_factor": "full", "unload_started_at": "2026-06-10T07:35", "unload_finished_at": "2026-06-10T08:10",
     })
     assert ok.status_code == 200, ok.text
+    # Рейс уехал прямо из подготовки — задача снята с кладовщика, отгрузка проскочила в «Отгружено».
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "shipped"
 
 

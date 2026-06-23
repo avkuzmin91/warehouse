@@ -60,6 +60,7 @@ from modules.shipments.schemas import (
     ShipmentReturnFromPackingPayload,
 )
 from modules.shipments.service import (
+    _check_lines_covered_by_stock,
     advance_shipment,
     finish_defect_relocation,
     finish_relocation,
@@ -74,6 +75,7 @@ from modules.shipments.service import (
     return_defect_to_storage,
     return_line_from_packing,
     return_packing_pool_to_storage,
+    return_to_packing,
     reverse_packing_entry,
 )
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
@@ -296,8 +298,8 @@ def list_shipments(
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
                     COALESCE((
                         SELECT SUM(CASE
-                            WHEN zr.to_op='ready' AND COALESCE(zr.from_op,'')<>'ready' THEN zr.qty
-                            WHEN zr.from_op='ready' AND zr.to_op='packing'             THEN -zr.qty
+                            WHEN zr.to_op='packed' AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                            WHEN zr.from_op='packed' AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
                             ELSE 0 END)
                         + SUM(CASE
                             WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
@@ -500,8 +502,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op='ready'   AND COALESCE(from_op,'')<>'ready' THEN qty
-                                    WHEN from_op='ready' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
+                                    WHEN from_op='packed' AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
                   COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
                                     WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
                FROM zone_relocations
@@ -511,22 +513,38 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
 
-        # Раскладка по местам (годный: ready→ready из зоны упаковки; брак с упаковки:
-        # packing→storage; подготовка брак-отгрузки: storage→ready в зону отгрузки),
-        # чтобы показывать её после перемещения только для просмотра.
+        # Раскладка по местам = ЧИСТЫЙ остаток нужной корзины по месту (вошло − вышло),
+        # а не валовая сумма размещений: иначе возврат на упаковку (откат раскладки
+        # ready→ready / storage→packing) и повторная раскладка задвоили бы числа. Корзины:
+        # годный — ready/good (товар) по местам хранения; брак — storage/defect (товарная
+        # отгрузка) либо ready/defect (подготовка брак-отгрузки в зону отгрузки). Движения
+        # отгрузки (dispatch) не помечены shipment_line_id, поэтому в раскладку не попадают.
         placement_rows = conn.execute(
-            """SELECT shipment_line_id, from_quality AS kind, to_zone_id,
-                  MIN(to_zone_name) AS to_zone_name, COALESCE(SUM(qty), 0) AS qty
-               FROM zone_relocations
+            """SELECT shipment_line_id, kind, zone_id,
+                  MIN(zone_name) AS zone_name, SUM(net) AS qty
+               FROM (
+                   SELECT shipment_line_id, 'good' AS kind, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'good'
+                   UNION ALL
+                   SELECT shipment_line_id, 'good', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'good'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = 'storage' AND to_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'storage' AND from_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'defect'
+                   UNION ALL
+                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'defect'
+               ) t
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
-                 AND (
-                     (from_op = 'ready' AND to_op = 'ready')
-                     OR (from_op = 'packing' AND to_op = 'storage' AND from_quality = 'defect')
-                     OR (from_op = 'storage' AND to_op = 'ready' AND from_quality = 'defect')
-                 )
-               GROUP BY shipment_line_id, from_quality, to_zone_id
-               HAVING COALESCE(SUM(qty), 0) <> 0
-               ORDER BY MIN(to_zone_name)""",
+               GROUP BY shipment_line_id, kind, zone_id
+               HAVING SUM(net) > 0
+               ORDER BY MIN(zone_name)""",
             (doc_id,),
         ).fetchall()
         placements_by_line: dict[str, list[ShipmentLinePlacement]] = {}
@@ -534,8 +552,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             lid = str(r["shipment_line_id"])
             placements_by_line.setdefault(lid, []).append(ShipmentLinePlacement(
                 kind=str(r["kind"]),
-                zone_id=r["to_zone_id"],
-                zone_name=r["to_zone_name"],
+                zone_id=r["zone_id"],
+                zone_name=r["zone_name"],
                 qty=int(r["qty"] or 0),
             ))
 
@@ -735,6 +753,8 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name, now),
         )
+        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
+            _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
         conn.commit()
     return {"message": line_id}
 
@@ -761,6 +781,8 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name,
              line_id, doc_id),
         )
+        if str(row["status"]) == SHIPMENT_STATUS_PACKING:
+            _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
         conn.commit()
     return {"message": "ok"}
 
@@ -949,6 +971,14 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
         )
         conn.commit()
     return {"message": SHIPMENT_STATUS_CANCELLED}
+
+
+@router.post("/shipments/{doc_id}/return-to-packing")
+def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        next_status = return_to_packing(conn, doc_id, uid)
+    return {"message": next_status}
 
 
 @router.post("/shipments/{doc_id}/revert")

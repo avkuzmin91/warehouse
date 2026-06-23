@@ -15,6 +15,7 @@ from config import (
     DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUS_SHIPPED,
     INV_OP_INTAKE,
     INV_OP_READY,
@@ -564,6 +565,7 @@ def assert_dispatches_ready_for_load(connection, trip_id: str) -> None:
         str(r["doc_number"])
         for r in rows
         if str(r["status"]) not in (
+            DISPATCH_STATUS_PREPARING,
             DISPATCH_STATUS_AWAITING_TRIP,
             DISPATCH_STATUS_PARTIALLY_SHIPPED,
             DISPATCH_STATUS_CANCELLED,
@@ -603,7 +605,7 @@ def cascade_dispatches_to_shipped(connection, trip_id: str, trip_number: str, ui
             "SELECT status, priority_rank, cargo_type FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (sid,)
         ).fetchone()
         if not ship or str(ship["status"]) not in (
-            DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED
+            DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED
         ):
             continue
 

@@ -3,6 +3,7 @@ import { useNav } from '../nav/NavContext'
 import { Icon } from '../components/Icon'
 import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
+import { getLocationByCode, isLocationCode, type LocationMatch } from '../api/locationsApi'
 
 // Сканер ШК: камера в нативной сборке (ML Kit за абстракцией ScanSource — позже ТСД),
 // ручной ввод кода как fallback. Код → GET /products/by-barcode/{code}. См. docs/mobile-plan.md §6.2.
@@ -12,6 +13,7 @@ export function ScanScreen() {
   const [looking, setLooking] = useState(false)
   const [error, setError] = useState('')
   const [notFound, setNotFound] = useState('')
+  const [location, setLocation] = useState<LocationMatch | null>(null)
   const [scanAvailable, setScanAvailable] = useState(false)
 
   useEffect(() => {
@@ -28,12 +30,20 @@ export function ScanScreen() {
     setLooking(true)
     setError('')
     setNotFound('')
+    setLocation(null)
     try {
+      // QR ячейки («wms:loc:<id>») ведёт на место хранения, всё прочее — ШК товара.
+      if (isLocationCode(c)) {
+        const res = await getLocationByCode(c)
+        if (res.found && res.location) setLocation(res.location)
+        else setNotFound(c)
+        return
+      }
       const res = await getProductByBarcode(c)
       if (res.found && res.match) openScanProduct(res.match)
       else setNotFound(c)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось найти товар')
+      setError(err instanceof Error ? err.message : 'Не удалось найти')
     } finally {
       setLooking(false)
     }
@@ -86,7 +96,7 @@ export function ScanScreen() {
           ) : (
             <div className="alert warn" style={{ marginBottom: 4 }}>
               <Icon name="alert" size={15} />
-              Камера-сканер заработает в нативной сборке (iOS/Android). Сейчас — ручной ввод.
+              Камера-сканер заработает в нативной сборке (Android). Сейчас — ручной ввод.
             </div>
           )}
 
@@ -108,6 +118,7 @@ export function ScanScreen() {
               onChange={(e) => {
                 setCode(e.target.value)
                 setNotFound('') // результат прошлого кода не относится к новому вводу
+                setLocation(null)
               }}
             />
             <button className="btn auto" type="submit" disabled={looking || !code.trim()}>
@@ -122,10 +133,21 @@ export function ScanScreen() {
             </div>
           )}
 
+          {location && (
+            <div className="alert" style={{ marginTop: 12, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <div className="row" style={{ gap: 8 }}>
+                <Icon name="box" size={15} />
+                <strong>Место хранения</strong>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 0.5 }}>{location.code}</div>
+              {!location.is_active && <span className="t-sub">Ячейка в архиве</span>}
+            </div>
+          )}
+
           {notFound && (
             <div className="alert warn" style={{ marginTop: 12 }}>
               <Icon name="alert" size={15} />
-              Товар с кодом «{notFound}» не найден.
+              Код «{notFound}» не найден.
             </div>
           )}
 

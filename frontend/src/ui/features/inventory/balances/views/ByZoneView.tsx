@@ -14,6 +14,7 @@ import { useLookups } from '../../../../../hooks/useLookups'
 import { Table, Td } from '../../../../data/Table'
 import { Combobox } from '../../../../data/Combobox'
 import { FiltersBar, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
+import { Pagination } from '../../../../data/Pagination'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { Drawer } from '../../../../feedback/Drawer'
 import { useToast } from '../../../../feedback/Toast'
@@ -33,9 +34,13 @@ type LocationGroup = {
   totalQty: number
 }
 
+// Страница списка остатков по местам = N местоположений (со всеми их строками).
+const ZONE_PAGE_SIZE = 25
+
 const OP_TONE: Record<InvOpStatus, BadgeTone> = {
   storage: 'accent',
   packing: 'info',
+  packed:  'info',
   ready:   'success',
 }
 
@@ -47,9 +52,11 @@ const QUALITY_TONE: Record<InvQuality, BadgeTone> = {
 export function ByZoneView() {
   const [items, setItems] = useState<BalanceZoneItem[]>([])
   const [summary, setSummary] = useState<BalanceSummary | null>(null)
-  const [truncated, setTruncated] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [place, setPlace] = useState('')
   const [clientId, setClientId] = useState('')
   const [opFilter, setOpFilter] = useState('')
   const [qualityFilter, setQualityFilter] = useState('')
@@ -218,6 +225,11 @@ export function ByZoneView() {
         getBalancesByZone({
           search: search || undefined,
           client_id: clientId || undefined,
+          location: place || undefined,
+          op_status: (opFilter || undefined) as InvOpStatus | undefined,
+          quality: (qualityFilter || undefined) as InvQuality | undefined,
+          page,
+          limit: ZONE_PAGE_SIZE,
         }),
         getBalancesSummary({
           search: search || undefined,
@@ -225,26 +237,18 @@ export function ByZoneView() {
         }),
       ])
       setItems(res.items)
-      setTruncated(res.truncated)
+      setTotal(res.total)
       setSummary(sum)
     } finally {
       setLoading(false)
     }
-  }, [search, clientId])
+  }, [search, clientId, place, opFilter, qualityFilter, page])
 
   useEffect(() => { load() }, [load])
 
-  const filteredItems = useMemo(
-    () => items.filter((item) =>
-      (!opFilter || item.op_status === opFilter)
-      && (!qualityFilter || item.quality === qualityFilter),
-    ),
-    [items, opFilter, qualityFilter],
-  )
-
   const groups = useMemo<LocationGroup[]>(() => {
     const map = new Map<string, LocationGroup>()
-    for (const item of filteredItems) {
+    for (const item of items) {
       const key = item.location_id ?? '__none__'
       let group = map.get(key)
       if (!group) {
@@ -260,7 +264,7 @@ export function ByZoneView() {
       group.totalQty += item.qty
     }
     return [...map.values()]
-  }, [filteredItems])
+  }, [items])
 
   // Итоги — из /balances/summary (не зависят от усечения списка);
   // фильтры статуса/качества применяются выбором корзин.
@@ -273,16 +277,24 @@ export function ByZoneView() {
     const s = summary
     const storageQty = s ? bucket('storage', s.storage_good, s.storage_defect) : 0
     const packingQty = s ? bucket('packing', s.packing_good, s.packing_defect) : 0
+    const packedQty = s ? bucket('packed', s.packed_good, s.packed_defect) : 0
     const readyQty = s ? bucket('ready', s.ready_good, s.ready_defect) : 0
-    const defectQty = s ? bucket('storage', 0, s.storage_defect) + bucket('packing', 0, s.packing_defect) + bucket('ready', 0, s.ready_defect) : 0
+    const defectQty = s ? bucket('storage', 0, s.storage_defect) + bucket('packing', 0, s.packing_defect) + bucket('packed', 0, s.packed_defect) + bucket('ready', 0, s.ready_defect) : 0
     return {
-      totalQty: storageQty + packingQty + readyQty,
-      storageQty, packingQty, readyQty, defectQty,
+      totalQty: storageQty + packingQty + packedQty + readyQty,
+      storageQty, packingQty, packedQty, readyQty, defectQty,
     }
   }, [summary, opFilter, qualityFilter])
 
   const kpiVal = (n: number) => (summary ? n.toLocaleString('ru-RU') : '—')
-  const toggleOp = (op: InvOpStatus) => setOpFilter(opFilter === op ? '' : op)
+  // Любая смена фильтра возвращает на первую страницу (пагинация серверная).
+  const changeSearch = (v: string) => { setSearch(v); setPage(1) }
+  const changePlace = (v: string) => { setPlace(v); setPage(1) }
+  const changeClient = (v: string) => { setClientId(v); setPage(1) }
+  const changeOp = (v: string) => { setOpFilter(v); setPage(1) }
+  const changeQuality = (v: string) => { setQualityFilter(v); setPage(1) }
+  const toggleOp = (op: InvOpStatus) => { setOpFilter(opFilter === op ? '' : op); setPage(1) }
+  const resetFilters = () => { setClientId(''); setOpFilter(''); setQualityFilter(''); setPlace(''); setSearch(''); setPage(1) }
 
   return (
     <>
@@ -295,12 +307,30 @@ export function ByZoneView() {
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Товар, SKU…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => changeSearch(e.target.value)}
             />
             {search && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => changeSearch('')}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
+          </div>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Icon name="boxes" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
+            <input
+              className="input sm"
+              style={{ paddingLeft: 28, width: 170, paddingRight: place ? 26 : undefined }}
+              placeholder="Место, ячейка…"
+              value={place}
+              onChange={(e) => changePlace(e.target.value)}
+            />
+            {place && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => changePlace('')}
               >
                 <Icon name="x" size={12} />
               </button>
@@ -310,7 +340,7 @@ export function ByZoneView() {
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            onChange={(v) => setClientId(v)}
+            onChange={(v) => changeClient(v)}
             placeholder="Поиск клиента…"
           />
           <FilterSelect
@@ -320,9 +350,10 @@ export function ByZoneView() {
               { value: '', label: 'Все статусы' },
               { value: 'storage', label: INV_OP_LABELS.storage },
               { value: 'packing', label: INV_OP_LABELS.packing },
+              { value: 'packed', label: INV_OP_LABELS.packed },
               { value: 'ready', label: INV_OP_LABELS.ready },
             ]}
-            onChange={setOpFilter}
+            onChange={changeOp}
           />
           <FilterSelect
             label="Качество"
@@ -332,10 +363,10 @@ export function ByZoneView() {
               { value: 'good', label: INV_QUALITY_LABELS.good },
               { value: 'defect', label: INV_QUALITY_LABELS.defect },
             ]}
-            onChange={setQualityFilter}
+            onChange={changeQuality}
           />
-          {(clientId || opFilter || qualityFilter) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setOpFilter(''); setQualityFilter('') }}>
+          {(clientId || opFilter || qualityFilter || place || search) && (
+            <button className="btn ghost sm" onClick={resetFilters}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -349,7 +380,7 @@ export function ByZoneView() {
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(6, 1fr)' }}>
         <KPI label="Всего единиц" value={kpiVal(kpi.totalQty)} unit="шт" />
         <KPI
           label={INV_OP_LABELS.storage}
@@ -368,6 +399,14 @@ export function ByZoneView() {
           onClick={() => toggleOp('packing')}
         />
         <KPI
+          label={INV_OP_LABELS.packed}
+          value={kpiVal(kpi.packedQty)}
+          valueColor="var(--c-info)"
+          unit="шт"
+          active={opFilter === 'packed'}
+          onClick={() => toggleOp('packed')}
+        />
+        <KPI
           label={INV_OP_LABELS.ready}
           value={kpiVal(kpi.readyQty)}
           valueColor="var(--c-success)"
@@ -381,18 +420,9 @@ export function ByZoneView() {
           valueColor="var(--c-warning)"
           unit="шт"
           active={qualityFilter === 'defect'}
-          onClick={() => setQualityFilter(qualityFilter === 'defect' ? '' : 'defect')}
+          onClick={() => changeQuality(qualityFilter === 'defect' ? '' : 'defect')}
         />
       </div>
-
-      {truncated && !loading && (
-        <div
-          className="t-sub"
-          style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--c-bg-sunken)', color: 'var(--c-warning)' }}
-        >
-          Показаны не все строки — список обрезан серверным лимитом. Уточните фильтры; итоги в карточках посчитаны по всем данным.
-        </div>
-      )}
 
       {loading ? (
         <Table>
@@ -480,6 +510,12 @@ export function ByZoneView() {
               </Table>
             </Card>
           ))}
+        </div>
+      )}
+
+      {!loading && total > ZONE_PAGE_SIZE && (
+        <div style={{ marginTop: 16 }}>
+          <Pagination page={page} pageSize={ZONE_PAGE_SIZE} total={total} onPage={setPage} />
         </div>
       )}
 

@@ -18,13 +18,13 @@ interface CmdItem {
 const ALL_CMDS: CmdItem[] = [
   { section: 'Навигация', icon: 'home', label: 'Главная', sub: 'Сводка по складу', to: '/home' },
   { section: 'Навигация', icon: 'truckIn', label: 'Поступления', sub: 'Список и приёмка', to: '/inventory/receipts' },
-  { section: 'Навигация', icon: 'truckOut', label: 'Отгрузки', sub: 'Сборка заказов', to: '/inventory/shipments' },
-  { section: 'Навигация', icon: 'forklift', label: 'Упаковка', sub: 'План на день и факт упаковки', to: '/inventory/packing' },
+  { section: 'Навигация', icon: 'truckOut', label: 'Отгрузки', sub: 'Рейсы и отгрузки клиентам', to: '/inventory/dispatches' },
+  { section: 'Навигация', icon: 'forklift', label: 'Упаковка', sub: 'Задачи упаковки и производительность', to: '/inventory/packing' },
   { section: 'Навигация', icon: 'boxes', label: 'Остатки', sub: 'Что и где лежит', to: '/inventory/balances' },
   { section: 'Навигация', icon: 'book', label: 'Справочники', sub: 'Товары, цвета, размеры, клиенты', to: '/dictionaries' },
   { section: 'Навигация', icon: 'users', label: 'Пользователи и роли', sub: 'Управление доступом', to: '/dictionaries/users', usersAdminOnly: true },
   { section: 'Действия', icon: 'plus', label: 'Новое поступление', sub: 'Создать черновик документа', to: '/inventory/receipts/new', createOnly: true },
-  { section: 'Действия', icon: 'plus', label: 'Новая отгрузка', sub: 'Заявка от клиента', to: '/inventory/shipments/new', createOnly: true },
+  { section: 'Действия', icon: 'plus', label: 'Новая задача упаковки', sub: 'Сборка заказа клиента', to: '/inventory/shipments/new', createOnly: true },
   { section: 'Аккаунт', icon: 'lock', label: 'Сменить пароль', sub: '', to: '/account/password' },
 ]
 

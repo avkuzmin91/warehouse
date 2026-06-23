@@ -21,10 +21,25 @@ export type DispatchLink = {
   onUnlink: (dispatchDocId: string) => void
   /** Сохранение распределения из модала: привязка/замена + отвязка убранных. */
   onSaveDistribution: (items: TripDispatchLinkItem[], removedDocIds: string[]) => Promise<void>
+  /** Серверный поиск кандидатов по всему пулу (предзагруженных `options` мало — лимит 100). */
+  searchCandidates?: (query: string, signal: AbortSignal) => Promise<DispatchListItem[]>
   /** Пресеты-аллокации уже учтены в trip_alloc (карточка рейса) → их прибавляем к остатку.
    *  В создании рейса (false) распределение локальное, рейса ещё нет — не прибавляем. */
   presetsLinked?: boolean
   busy?: boolean
+}
+
+/** Кандидат-отгрузка → строка пикера AllocModal. */
+function toCandidate(c: DispatchListItem): AllocDoc {
+  return {
+    doc_id: c.id,
+    client: c.client_name,
+    doc_number: c.doc_number,
+    status_label: DISPATCH_STATUS_LABELS[c.status] ?? c.status,
+    status_tone: DISPATCH_STATUS_TONES[c.status] ?? '',
+    date: c.ship_date ?? null,
+    sub: `${c.sku_count} SKU · ${c.total_qty} шт`,
+  }
 }
 
 /** Блок «Отгрузки в рейсе» — зеркало ReceiptsBlock: карточки отгрузок + привязка через Drawer. */
@@ -158,15 +173,10 @@ export function DispatchesBlock({ title = 'Отгрузки в рейсе', righ
             status_label: DISPATCH_STATUS_LABELS[(d.dispatch_status ?? '') as DispatchStatus] ?? (d.dispatch_status ?? ''),
             status_tone: DISPATCH_STATUS_TONES[(d.dispatch_status ?? '') as DispatchStatus] ?? '',
           }))}
-          candidates={link.options.map((c): AllocDoc => ({
-            doc_id: c.id,
-            client: c.client_name,
-            doc_number: c.doc_number,
-            status_label: DISPATCH_STATUS_LABELS[c.status] ?? c.status,
-            status_tone: DISPATCH_STATUS_TONES[c.status] ?? '',
-            date: c.ship_date ?? null,
-            sub: `${c.sku_count} SKU · ${c.total_qty} шт`,
-          }))}
+          candidates={link.options.map(toCandidate)}
+          searchCandidates={link.searchCandidates
+            ? async (q, signal) => (await link.searchCandidates!(q, signal)).map(toCandidate)
+            : undefined}
           fetchLines={async (docId): Promise<AllocLine[]> => {
             const presets = dispatches.find((d) => d.dispatch_doc_id === docId)?.allocations
             const presetMap: Record<string, number> | null = presets && presets.length > 0

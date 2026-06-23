@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
+    INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
     INV_OP_STORAGE,
@@ -18,6 +19,7 @@ from config import (
     SHIPMENT_OP_PACK,
     SHIPMENT_OP_PACK_CORRECTION,
     SHIPMENT_OP_RELOCATE,
+    SHIPMENT_OP_RETURN_TO_PACKING,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
@@ -110,11 +112,16 @@ def _check_lines_have_sku(connection, doc_id: str) -> None:
 
 
 def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
-    """Гейт перевода в план: каждая позиция должна быть покрыта свободным годным
-    остатком «На хранении». Иначе товар ещё в пути — документ держим в черновике.
+    """Гейт плана: каждая позиция должна быть покрыта свободным годным остатком
+    «На хранении». Иначе товар ещё в пути — документ держим в черновике. Тот же
+    гейт применяется при добавлении/правке строк в статусе «В плане» — иначе можно
+    дописать в план товар, которого ещё нет на складе.
 
     Спрос агрегируем по варианту (product/color/size): одна позиция может быть в
-    нескольких строках (разные магазины), а остаток у неё общий."""
+    нескольких строках (разные магазины), а остаток у неё общий. Уже переданное на
+    упаковку по этому документу ушло из свободного склада, но за документом
+    закреплено — поэтому добавляем его обратно к доступному (иначе правка состава
+    после первой передачи кладовщику ложно отклоняется)."""
     from modules.balances.service import get_available_total
 
     rows = connection.execute(
@@ -128,6 +135,23 @@ def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
         (doc_id,),
     ).fetchall()
 
+    on_packing_rows = connection.execute(
+        """SELECT sl.product_id, sl.color_id, sl.size_id,
+                  COALESCE(SUM(CASE
+                     WHEN zr.to_op = 'packing'   AND zr.to_quality = 'good'   THEN zr.qty
+                     WHEN zr.from_op = 'packing' AND zr.from_quality = 'good' THEN -zr.qty
+                     ELSE 0 END), 0) AS on_packing
+           FROM zone_relocations zr
+           JOIN shipment_lines sl ON sl.id = zr.shipment_line_id
+           WHERE sl.doc_id = ? AND COALESCE(sl.is_deleted, 0) = 0
+           GROUP BY sl.product_id, sl.color_id, sl.size_id""",
+        (doc_id,),
+    ).fetchall()
+    on_packing = {
+        (str(r["product_id"]), r["color_id"], r["size_id"]): int(r["on_packing"] or 0)
+        for r in on_packing_rows
+    }
+
     short: list[str] = []
     for r in rows:
         available = get_available_total(
@@ -139,10 +163,12 @@ def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
             op=INV_OP_STORAGE,
             quality=INV_Q_GOOD,
         )
+        committed = on_packing.get((str(r["product_id"]), r["color_id"], r["size_id"]), 0)
+        supply = available + committed
         demand = int(r["demand"] or 0)
-        if demand > available:
+        if demand > supply:
             label = " · ".join(x for x in [r["product_sku"], r["color_name"], r["size_name"]] if x) or r["product_name"]
-            short.append(f"«{label}»: нужно {demand}, на складе {available}")
+            short.append(f"«{label}»: нужно {demand}, на складе {supply}")
     if short:
         raise HTTPException(
             status_code=400,
@@ -362,13 +388,14 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
 
 
 # Net упаковки по журналу (две оси):
-#   good  = конвертации в ready (упакован) минус откаты ready→packing;
-#           раскладка ready→ready и списание ready→shipped факт упаковки не меняют;
+#   good  = конвертации в packed (упаковано) минус откаты packed→packing;
+#           перевод packed→ready (готовность к отгрузке при «Готово к рейсу») и
+#           списание ready→shipped факт упаковки не меняют — число «упаковано» держится;
 #   defect = конвертации качества good→defect минус обратные. Раскладка брака
-#           (packing→storage с тем же качеством) и списание факт не меняют.
+#           (packed→storage с тем же качеством) и списание факт не меняют.
 _PACKED_NET_SQL = """
-    COALESCE(SUM(CASE WHEN {p}to_op='ready'   AND COALESCE({p}from_op,'')<>'ready' THEN {p}qty
-                      WHEN {p}from_op='ready' AND {p}to_op='packing'               THEN -{p}qty
+    COALESCE(SUM(CASE WHEN {p}to_op='packed'   AND {p}to_quality='good'   AND COALESCE({p}from_op,'') NOT IN ('packed','ready') THEN {p}qty
+                      WHEN {p}from_op='packed' AND {p}from_quality='good' AND {p}to_op='packing'                              THEN -{p}qty
                       ELSE 0 END), 0) AS good,
     COALESCE(SUM(CASE WHEN {p}to_quality='defect'   AND COALESCE({p}from_quality,'')<>'defect' THEN {p}qty
                       WHEN {p}from_quality='defect' AND COALESCE({p}to_quality,'')<>'defect'   THEN -{p}qty
@@ -464,11 +491,12 @@ def record_packing(
 
     pack_entry_id = str(uuid4())
     label = line["product_sku"] or line["product_name"]
-    # Упакованный годный → «Готов к отгрузке»; найденный брак остаётся «На упаковке»
-    # браком до раскладки кладовщиком (packing,good → packing,defect).
+    # И годный, и найденный брак уходят в «Упаковано» (packing,good → packed). Это ещё
+    # НЕ «Готов к отгрузке»: годное переведёт в ready только «Готово к рейсу»
+    # (finish_relocation), брак там же вернётся на хранение.
     for kind, delta, to_op in (
-        (INV_Q_GOOD, good_delta, INV_OP_READY),
-        (INV_Q_DEFECT, defect_delta, INV_OP_PACKING),
+        (INV_Q_GOOD, good_delta, INV_OP_PACKED),
+        (INV_Q_DEFECT, defect_delta, INV_OP_PACKED),
     ):
         if delta <= 0:
             continue
@@ -508,7 +536,7 @@ def list_packing_entries(connection, line_id: str) -> list[dict]:
               MIN(zr.created_at) AS created_at,
               MIN(zr.created_by) AS created_by,
               MIN(u.email) AS created_by_email,
-              COALESCE(SUM(CASE WHEN zr.to_op='ready'        THEN zr.qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN zr.to_op='packed' AND zr.to_quality='good' THEN zr.qty ELSE 0 END), 0) AS good,
               COALESCE(SUM(CASE WHEN zr.to_quality='defect'  THEN zr.qty ELSE 0 END), 0) AS defect
            FROM zone_relocations zr
            LEFT JOIN users u ON u.id = zr.created_by
@@ -709,11 +737,12 @@ def _doc_packed_qty(connection, doc_id: str) -> dict:
 def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str:
     """«Готово»: кладовщик раскидывает упакованный годный/брак по местам.
 
-    Упакованный годный переезжает из «Зоны упаковки» со статусом «Готов к отгрузке»
-    (ready→ready, остаётся доступен для отгрузки); брак возвращается на хранение
-    свободным (packing,defect → storage,defect). Не списывает — отгрузку к рейсу
-    далее возит домен dispatch. Гейт: по каждой строке суммы аллокаций должны точно
-    покрыть весь упакованный годный и весь брак. Переводит relocating → packed.
+    Это и есть момент «Готов к отгрузке»: упакованный годный переезжает из «Зоны
+    упаковки» packed → ready по реальным местам (становится доступен для отгрузки);
+    брак возвращается на хранение свободным (packed,defect → storage,defect). Не
+    списывает — отгрузку к рейсу далее возит домен dispatch. Гейт: по каждой строке
+    суммы аллокаций должны точно покрыть весь упакованный годный и весь брак.
+    Переводит relocating → packed.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
 
@@ -764,8 +793,8 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
             )
 
         for kind, allocs, from_op, to_op in (
-            (INV_Q_GOOD, good_allocs, INV_OP_READY, INV_OP_READY),
-            (INV_Q_DEFECT, defect_allocs, INV_OP_PACKING, INV_OP_STORAGE),
+            (INV_Q_GOOD, good_allocs, INV_OP_PACKED, INV_OP_READY),
+            (INV_Q_DEFECT, defect_allocs, INV_OP_PACKED, INV_OP_STORAGE),
         ):
             kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
             for zone_id, zone_name, qty in allocs:
@@ -1073,6 +1102,158 @@ def return_packing_pool_to_storage(connection, doc_id: str, user_id: str) -> int
     return total_returned
 
 
+def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str) -> int:
+    """Откат раскладки по местам (finish_relocation) при возврате «Упаковано» → «На упаковке».
+
+    finish_relocation для товара разложил, по каждой строке: годный packed→ready
+    (зона упаковки → реальные места), брак packed/defect → storage/defect (по местам),
+    нерешённый пул packing/good → storage/good (в самой зоне упаковки). Здесь пишем
+    компенсирующие обратные движения, восстанавливая состояние «На упаковке»: годный —
+    packed/good@зона упаковки, брак — packed/defect@зона упаковки, пул — packing/good@зона
+    упаковки. Net считается по журналу (forward − собственные реверсы), поэтому повторный
+    цикл возврат→переупаковка→возврат идемпотентен.
+
+    Гейт: товар не должен быть уже отгружён/привязан рейсом — если в каком-то месте
+    готового/брак-остатка меньше, чем нужно вернуть, откат запрещён (сначала отмените рейс).
+    Без commit — коммитит вызывающий.
+    """
+    from modules.balances.service import get_available_in_zone, get_packing_zone, insert_inventory_move
+
+    packing_id, packing_name = get_packing_zone(connection)
+
+    # (signature раскладки, обратная корзина-назначение @ зоне упаковки, ось качества, ярлык).
+    # Каждый кортеж: from_op/to_op/quality раскладки + куда вернуть (op,quality) + откуда
+    # её брать при проверке доступности (op,quality реальной корзины).
+    specs = [
+        # Годный: packed→ready по реальным местам → packed/good@зона упаковки.
+        dict(fwd_from=INV_OP_PACKED, fwd_to=INV_OP_READY, quality=INV_Q_GOOD,
+             back_to_op=INV_OP_PACKED, avail_op=INV_OP_READY, same_zone_only=False, kind_ru="годный"),
+        # Брак: packed→storage по местам → packed/defect@зона упаковки.
+        dict(fwd_from=INV_OP_PACKED, fwd_to=INV_OP_STORAGE, quality=INV_Q_DEFECT,
+             back_to_op=INV_OP_PACKED, avail_op=INV_OP_STORAGE, same_zone_only=False, kind_ru="брак"),
+        # Нерешённый пул: packing→storage годного В САМОЙ зоне упаковки → packing/good@зона упаковки.
+        dict(fwd_from=INV_OP_PACKING, fwd_to=INV_OP_STORAGE, quality=INV_Q_GOOD,
+             back_to_op=INV_OP_PACKING, avail_op=INV_OP_STORAGE, same_zone_only=True, kind_ru="пул"),
+    ]
+
+    lines = connection.execute(
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchall()
+
+    total = 0
+    for line in lines:
+        line_id = str(line["id"])
+        label = line["product_sku"] or line["product_name"]
+        for spec in specs:
+            # Чистый остаток раскладки по месту = вошло в место (forward: fwd_from→fwd_to) −
+            # уже возвращённое (reverse: avail_op→back_to_op, ведёт ИЗ места обратно в зону
+            # упаковки). Реверс детектируется по фактической сигнатуре возвратного движения,
+            # чтобы цикл возврат→переупаковка→возврат был идемпотентен.
+            zone_filter = (
+                "AND m.to_zone_id IS NOT DISTINCT FROM ? AND m.from_zone_id IS NOT DISTINCT FROM ?"
+                if spec["same_zone_only"] else ""
+            )
+            zone_params = [packing_id, packing_id] if spec["same_zone_only"] else []
+            rows = connection.execute(
+                f"""SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+                       SELECT m.to_zone_id AS zone_id, m.to_zone_name AS zone_name, m.qty AS net
+                       FROM zone_relocations m
+                       WHERE m.shipment_line_id = ?
+                         AND m.from_op = ? AND m.to_op = ?
+                         AND m.from_quality = ? AND m.to_quality = ? {zone_filter}
+                       UNION ALL
+                       SELECT m.from_zone_id, m.from_zone_name, -m.qty
+                       FROM zone_relocations m
+                       WHERE m.shipment_line_id = ?
+                         AND m.from_op = ? AND m.to_op = ?
+                         AND m.from_quality = ? AND m.to_quality = ? {zone_filter}
+                   ) t
+                   GROUP BY zone_id HAVING SUM(net) > 0""",
+                [line_id, spec["fwd_from"], spec["fwd_to"], spec["quality"], spec["quality"], *zone_params,
+                 line_id, spec["avail_op"], spec["back_to_op"], spec["quality"], spec["quality"], *zone_params],
+            ).fetchall()
+
+            for r in rows:
+                zone_id = r["zone_id"]
+                zone_name = r["zone_name"]
+                qty = int(r["net"] or 0)
+                if qty <= 0:
+                    continue
+                avail = get_available_in_zone(
+                    connection,
+                    product_id=str(line["product_id"]), color_id=line["color_id"], size_id=line["size_id"],
+                    client_id=client_id, zone_id=zone_id, op=spec["avail_op"], quality=spec["quality"],
+                )
+                if avail < qty:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Нельзя вернуть на упаковку «{line['product_name']}»: "
+                            f"часть товара уже отгружена или закреплена за рейсом "
+                            f"(в месте «{zone_name or 'без места'}» доступно {avail}, нужно {qty}). "
+                            "Сначала отмените отгрузку/рейс."
+                        ),
+                    )
+                insert_inventory_move(
+                    connection,
+                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                    color_id=line["color_id"], color_name=line["color_name"],
+                    size_id=line["size_id"], size_name=line["size_name"],
+                    client_id=client_id, client_name=None,
+                    from_op=spec["avail_op"], to_op=spec["back_to_op"],
+                    from_quality=spec["quality"], to_quality=spec["quality"],
+                    from_zone_id=zone_id, from_zone_name=zone_name,
+                    to_zone_id=packing_id, to_zone_name=packing_name,
+                    qty=qty, user_id=user_id, shipment_line_id=line_id,
+                    comment=f"Возврат на упаковку ({spec['kind_ru']}): {qty} шт ← {zone_name or 'без места'} — {label}",
+                )
+                total += qty
+    return total
+
+
+def return_to_packing(connection, doc_id: str, user_id: str) -> str:
+    """Менеджерский возврат товарной задачи упаковки «на упаковку» (→ on_packing).
+
+    Доступно из «Перемещение» и «Упаковано». Из «Перемещение» — чистая смена статуса
+    (остатки между on_packing и relocating не двигались). Из «Упаковано» — сперва
+    откатывается раскладка по местам (`_undo_relocation_to_packing`), восстанавливая
+    состояние стола упаковки. «Дата упаковки (факт)» сбрасывается — её заново проставит
+    следующая передача кладовщику. Брак упаковку минует — для брак-отгрузки запрещено.
+    """
+    doc = connection.execute(
+        "SELECT status, cargo_type, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if normalize_cargo_type(doc["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
+        raise HTTPException(status_code=400, detail="Брак-отгрузка минует упаковку — вернуть на упаковку нельзя")
+    status = str(doc["status"])
+    if status not in (SHIPMENT_STATUS_RELOCATING, SHIPMENT_STATUS_PACKED):
+        raise HTTPException(status_code=400, detail="Вернуть на упаковку можно только из «Перемещение» или «Упаковано»")
+
+    returned = 0
+    if status == SHIPMENT_STATUS_PACKED:
+        returned = _undo_relocation_to_packing(connection, doc_id, doc["client_id"], user_id)
+
+    now = _now()
+    connection.execute(
+        "UPDATE shipment_docs SET status=?, actual_ship_date=NULL, updated_at=? WHERE id=?",
+        (SHIPMENT_STATUS_ON_PACKING, now, doc_id),
+    )
+    comment = (
+        f"Возврат на упаковку из «Упаковано»: раскладка откатана ({returned} шт.)"
+        if status == SHIPMENT_STATUS_PACKED
+        else "Возврат на упаковку из «Перемещение»"
+    )
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_RETURN_TO_PACKING, comment, now, user_id),
+    )
+    connection.commit()
+    return SHIPMENT_STATUS_ON_PACKING
+
+
 def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> str:
     """Переводит документ на следующий статус с ролевым гейтом и проверками фазы.
 
@@ -1124,10 +1305,18 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
             raise HTTPException(status_code=400, detail="Упакуйте хотя бы часть товара перед передачей кладовщику")
 
     now = _now()
-    connection.execute(
-        "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
-        (next_status, now, doc_id),
-    )
+    # «Дата упаковки (факт)» = момент передачи кладовщику на размещение (вход в relocating):
+    # для товара — начсмены после упаковки, для брака — менеджер сразу из черновика.
+    if next_status == SHIPMENT_STATUS_RELOCATING:
+        connection.execute(
+            "UPDATE shipment_docs SET status=?, actual_ship_date=COALESCE(actual_ship_date, ?), updated_at=? WHERE id=?",
+            (next_status, date.today().isoformat(), now, doc_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
+            (next_status, now, doc_id),
+        )
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, "advance", f"{current} → {next_status}", now, user_id),

@@ -20,6 +20,8 @@ class BalanceItem(BaseModel):
     storage_defect: int
     packing_good: int
     packing_defect: int
+    packed_good: int
+    packed_defect: int
     ready_good: int
     ready_defect: int
     total: int
@@ -68,6 +70,8 @@ class BalanceSummaryResponse(BaseModel):
     storage_defect: int
     packing_good: int
     packing_defect: int
+    packed_good: int
+    packed_defect: int
     ready_good: int
     ready_defect: int
     total: int
@@ -76,7 +80,7 @@ class BalanceSummaryResponse(BaseModel):
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'storage' | 'packing' | 'ready'
+    op_status: str  # 'storage' | 'packing' | 'packed' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str
@@ -92,8 +96,14 @@ class BalanceZoneItem(BaseModel):
 
 class BalanceZonesResponse(BaseModel):
     items: list[BalanceZoneItem]
-    # Выборка обрезана лимитом — список неполный (итоги считать по /balances/summary)
+    # Выборка обрезана лимитом — список неполный (итоги считать по /balances/summary).
+    # Актуально только для режима без пагинации (mobile); в режиме с limit всегда False.
     truncated: bool = False
+    # Пагинация по местоположениям (заполняется, когда запрошен limit). total — число
+    # местоположений (страница = total/limit), а не строк.
+    total: int = 0
+    page: int = 1
+    limit: int = 0
 
 
 class ZoneRelocationCreate(BaseModel):

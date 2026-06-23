@@ -29,6 +29,20 @@ export function getInventorySizesForProductAndColor(productId: string, colorId: 
   return request<DictionaryItem[]>(`/inventory/lookups/sizes-for-sku?${sp.toString()}`, { signal })
 }
 
+export type ProductVariantPair = {
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
+}
+
+/** Полная матрица вариантов товара (цвет × размер) одним запросом — для массового ввода. */
+export function getInventoryProductVariants(productId: string, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('product_id', productId)
+  return request<ProductVariantPair[]>(`/inventory/lookups/variants?${sp.toString()}`, { signal })
+}
+
 export function getInventorySizes(signal?: AbortSignal) {
   return request<DictionaryItem[]>('/inventory/lookups/sizes', { signal })
 }

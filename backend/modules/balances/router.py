@@ -92,6 +92,11 @@ def list_plannable_items(
 def list_balances_by_zone(
     client_id: str | None = Query(None),
     search: str | None = Query(None),
+    location: str | None = Query(None),
+    op_status: str | None = Query(None),
+    quality: str | None = Query(None),
+    page: int | None = Query(None, ge=1),
+    limit: int | None = Query(None, ge=1, le=500),
     only_positive: bool = Query(True),
     user=Depends(get_current_shipment_viewer),
 ):
@@ -101,6 +106,11 @@ def list_balances_by_zone(
             client_id=client_id,
             search=search,
             only_positive=only_positive,
+            location=location,
+            op_status=op_status,
+            quality=quality,
+            page=page,
+            limit=limit,
         )
 
 

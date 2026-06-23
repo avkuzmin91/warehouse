@@ -1,9 +1,10 @@
 import { request } from './http'
 
-export type DispatchStatus = 'draft' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
+export type DispatchStatus = 'draft' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
 export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
   draft:             'Создание',
+  preparing:         'Подготовка отгрузки',
   awaiting_trip:     'Ожидает рейс',
   partially_shipped: 'Частично отгружено',
   shipped:           'Отгружено',
@@ -12,6 +13,7 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
 
 export const DISPATCH_STATUS_TONES: Record<DispatchStatus, string> = {
   draft:             '',
+  preparing:         'info',
   awaiting_trip:     'warning',
   partially_shipped: 'warning',
   shipped:           'success',
@@ -19,7 +21,7 @@ export const DISPATCH_STATUS_TONES: Record<DispatchStatus, string> = {
 }
 
 export const DISPATCH_STATUS_ORDER: DispatchStatus[] = [
-  'draft', 'awaiting_trip', 'partially_shipped', 'shipped',
+  'draft', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped',
 ]
 
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
@@ -43,14 +45,14 @@ export function dispatchPriorityTone(rank: number | null): 'danger' | 'warning' 
 
 /** Статусы отгрузок, доступные логисту для привязки к рейсу (есть готовый остаток). */
 export const DISPATCH_TRIP_SELECTABLE_STATUSES: DispatchStatus[] = [
-  'awaiting_trip', 'partially_shipped',
+  'preparing', 'awaiting_trip', 'partially_shipped',
 ]
 
 export type DispatchCargoType = 'good' | 'defect'
 
 export type DispatchOpType =
   | 'doc_create' | 'doc_update' | 'priority_update'
-  | 'line_add' | 'line_update' | 'line_delete' | 'advance' | 'ship' | 'cancel'
+  | 'line_add' | 'line_update' | 'line_delete' | 'advance' | 'prepare' | 'ship' | 'cancel'
 
 export type DispatchOp = {
   id:               string
@@ -146,10 +148,11 @@ export type DispatchListParams = {
 }
 
 export type DispatchSummary = {
-  all:      number
-  draft:    number
-  awaiting: number
-  shipped:  number
+  all:       number
+  draft:     number
+  preparing: number
+  awaiting:  number
+  shipped:   number
 }
 
 export type DispatchLineIn = {
@@ -282,6 +285,10 @@ export function deleteDispatchLine(docId: string, lineId: string) {
 
 export function advanceDispatch(id: string) {
   return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
+}
+
+export function finishDispatchPreparation(id: string) {
+  return request<{ message: string }>(`/dispatches/${id}/finish-preparation`, { method: 'POST' })
 }
 
 export function cancelDispatch(id: string) {

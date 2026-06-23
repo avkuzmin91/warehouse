@@ -2,8 +2,8 @@ import { registerPlugin } from '@capacitor/core'
 
 import { IS_NATIVE } from './constants'
 
-// Нативное защищённое хранилище refresh-токена: iOS Keychain / Android Keystore.
-// Плагин ставится на Mac перед нативной сборкой:
+// Нативное защищённое хранилище refresh-токена: Android Keystore.
+// Плагин ставится перед нативной сборкой:
 //   npm i capacitor-secure-storage-plugin && npx cap sync
 // На вебе плагин не зарегистрирован — все вызовы перехватываются и игнорируются
 // (там сессию держит refresh-cookie, см. docs/mobile-plan.md §6.1).

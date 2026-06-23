@@ -5,7 +5,8 @@ export const OP_LABELS: Record<string, string> = {
   line_add:        'Позиция добавлена',
   line_update:     'Позиция изменена',
   line_delete:     'Позиция удалена',
-  advance:         'Передано в ожидание рейса',
+  advance:         'Передано в подготовку',
+  prepare:         'Подготовка завершена',
   ship:            'Отгружено рейсом',
   cancel:          'Аннулирована',
 }
@@ -18,6 +19,7 @@ export const OP_ICONS: Record<string, string> = {
   line_update:     'edit',
   line_delete:     'trash',
   advance:         'arrowRight',
+  prepare:         'check',
   ship:            'truckOut',
   cancel:          'x',
 }
@@ -29,7 +31,8 @@ export const OP_TONES: Record<string, string> = {
   line_add:        '',
   line_update:     '',
   line_delete:     'warning',
-  advance:         'success',
+  advance:         '',
+  prepare:         'success',
   ship:            'success',
   cancel:          'danger',
 }
