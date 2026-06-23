@@ -7,10 +7,12 @@ import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
 import { NumberStep } from '../../shared/NumberStep'
 import { Icon } from '../../../../primitives/Icon'
+import { Badge } from '../../../../primitives/Badge'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
+import { fmtDateLong } from '../../../../../utils/format'
 
 type Row = { zoneId: string; qty: number }
 type ZoneSource = { id: string; name: string; available: number }
@@ -141,7 +143,32 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
   const noun = isDefect ? 'брак' : 'товар'
 
   return (
-    <PhaseBlock
+    <div style={{ maxWidth: 760 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 28,
+          padding: '12px 16px',
+          marginBottom: 14,
+          background: 'var(--c-bg-sunken)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--r-lg)',
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginBottom: 2 }}>Клиент</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{doc.client_name ?? '—'}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)', marginBottom: 2 }}>Дата отгрузки</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{fmtDateLong(doc.ship_date)}</div>
+        </div>
+        {isDefect && <Badge tone="warning">Брак</Badge>}
+      </div>
+
+      <PhaseBlock
         icon="archive"
         title="Подготовка к отгрузке"
         role="warehouse"
@@ -236,5 +263,6 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
           </div>
         )}
       </PhaseBlock>
+    </div>
   )
 }
