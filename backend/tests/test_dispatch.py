@@ -94,6 +94,74 @@ def _create(admin_client, client_id, product_id, sku, qty, site_url=None) -> str
     return r.json()["message"]
 
 
+def _seed_storage_defect(client_id: str, *, product_id: str, sku: str, qty: int,
+                         color_id=None, size_id=None) -> None:
+    """Засеять брак «На хранении» (movement intake → storage/defect) по варианту×клиенту."""
+    from modules.balances.service import insert_inventory_move
+
+    with get_connection() as conn:
+        insert_inventory_move(
+            conn,
+            product_id=product_id, product_name="Product", product_sku=sku,
+            color_id=color_id, color_name=None, size_id=size_id, size_name=None,
+            client_id=client_id, client_name="Test Client",
+            from_op="intake", to_op="storage",
+            from_quality="defect", to_quality="defect",
+            from_zone_id=None, from_zone_name=None,
+            to_zone_id=None, to_zone_name=None,
+            qty=qty, user_id="test-admin-id",
+        )
+        conn.commit()
+
+
+def _storage_defect_net(client_id: str, product_id: str) -> int:
+    from modules.balances.service import get_available_total
+
+    with get_connection() as conn:
+        return get_available_total(
+            conn, product_id=product_id, color_id=None, size_id=None,
+            client_id=client_id, op="storage", quality="defect",
+        )
+
+
+def _seed_storage_good(client_id: str, *, product_id: str, sku: str, qty: int,
+                       color_id=None, size_id=None) -> None:
+    """Засеять годный «На хранении» (movement intake → storage/good) по варианту×клиенту."""
+    from modules.balances.service import insert_inventory_move
+
+    with get_connection() as conn:
+        insert_inventory_move(
+            conn,
+            product_id=product_id, product_name="Product", product_sku=sku,
+            color_id=color_id, color_name=None, size_id=size_id, size_name=None,
+            client_id=client_id, client_name="Test Client",
+            from_op="intake", to_op="storage",
+            from_quality="good", to_quality="good",
+            from_zone_id=None, from_zone_name=None,
+            to_zone_id=None, to_zone_name=None,
+            qty=qty, user_id="test-admin-id",
+        )
+        conn.commit()
+
+
+def _storage_good_net(client_id: str, product_id: str) -> int:
+    from modules.balances.service import get_available_total
+
+    with get_connection() as conn:
+        return get_available_total(
+            conn, product_id=product_id, color_id=None, size_id=None,
+            client_id=client_id, op="storage", quality="good",
+        )
+
+
+def _create_defect(admin_client, client_id, product_id, sku, qty) -> str:
+    payload = _payload(client_id, product_id, sku, qty)
+    payload["cargo_type"] = "defect"
+    r = admin_client.post("/dispatches", json=payload)
+    assert r.status_code == 200, r.text
+    return r.json()["message"]
+
+
 def test_create_dispatch_returns_doc_id(admin_client, client_id):
     pid = _make_product(client_id, sku="DSP-T1")
     doc_id = _create(admin_client, client_id, pid, "DSP-T1", 3)
@@ -242,3 +310,106 @@ def test_priority_update(admin_client, client_id):
     r = admin_client.patch(f"/dispatches/{doc_id}/priority", json={"priority_rank": 1})
     assert r.status_code == 200, r.text
     assert admin_client.get(f"/dispatches/{doc_id}").json()["priority_rank"] == 1
+
+
+# --- Брак отгружается прямо из хранения (без раскладки в ready) ---
+
+def test_defect_advance_blocked_without_storage(admin_client, client_id):
+    """Брак-отгрузку нельзя передать в подготовку без остатка брака на хранении."""
+    pid = _make_product(client_id, sku="DSP-D1")
+    doc_id = _create_defect(admin_client, client_id, pid, "DSP-D1", 3)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+    assert "хранени" in r.json()["detail"].lower()
+
+
+def test_defect_advance_succeeds_from_storage(admin_client, client_id):
+    """Брак на хранении (без relocation в ready) проходит гейт draft→preparing."""
+    pid = _make_product(client_id, sku="DSP-D2")
+    _seed_storage_defect(client_id, product_id=pid, sku="DSP-D2", qty=5)
+    doc_id = _create_defect(admin_client, client_id, pid, "DSP-D2", 5)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 200, r.text
+    assert admin_client.post(f"/dispatches/{doc_id}/finish-preparation").status_code == 200
+
+
+def test_defect_consume_ships_from_storage(admin_client, client_id):
+    """Выезд рейса списывает брак с хранения (storage/defect → shipped)."""
+    from modules.dispatch.service import consume_stock_for_dispatch, dispatch_fully_shipped
+
+    pid = _make_product(client_id, sku="DSP-D3")
+    _seed_storage_defect(client_id, product_id=pid, sku="DSP-D3", qty=4)
+    doc_id = _create_defect(admin_client, client_id, pid, "DSP-D3", 4)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+
+    with get_connection() as conn:
+        consume_stock_for_dispatch(conn, doc_id, "test-admin-id", alloc=None, trip_id="trip-defect")
+        conn.commit()
+        assert dispatch_fully_shipped(conn, doc_id) is True
+
+    assert _storage_defect_net(client_id, pid) == 0
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert line["shipped_qty"] == 4
+
+
+def test_defect_reservation_blocks_second_dispatch(admin_client, client_id):
+    """Брак на хранении режется уже открытой брак-отгрузкой — двойной отгрузки нет."""
+    pid = _make_product(client_id, sku="DSP-D4")
+    _seed_storage_defect(client_id, product_id=pid, sku="DSP-D4", qty=5)
+    doc_a = _create_defect(admin_client, client_id, pid, "DSP-D4", 5)
+    doc_b = _create_defect(admin_client, client_id, pid, "DSP-D4", 5)
+    assert admin_client.post(f"/dispatches/{doc_a}/advance").status_code == 200
+    assert admin_client.post(f"/dispatches/{doc_b}/advance").status_code == 400
+
+
+# --- Годный товар отгружается и прямо из хранения (раскладка в ready необязательна) ---
+
+def test_good_advance_succeeds_from_storage_only(admin_client, client_id):
+    """Годный только «На хранении» (без relocation в ready) проходит гейт draft→preparing."""
+    pid = _make_product(client_id, sku="DSP-G1")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-G1", qty=5)
+    doc_id = _create(admin_client, client_id, pid, "DSP-G1", 5)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 200, r.text
+    assert admin_client.post(f"/dispatches/{doc_id}/finish-preparation").status_code == 200
+
+
+def test_good_consume_ships_from_storage_when_no_ready(admin_client, client_id):
+    """Выезд рейса списывает годный с хранения, когда в ready ничего нет."""
+    from modules.dispatch.service import consume_stock_for_dispatch, dispatch_fully_shipped
+
+    pid = _make_product(client_id, sku="DSP-G2")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-G2", qty=4)
+    doc_id = _create(admin_client, client_id, pid, "DSP-G2", 4)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+
+    with get_connection() as conn:
+        consume_stock_for_dispatch(conn, doc_id, "test-admin-id", alloc=None, trip_id="trip-good-storage")
+        conn.commit()
+        assert dispatch_fully_shipped(conn, doc_id) is True
+
+    assert _storage_good_net(client_id, pid) == 0
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert line["shipped_qty"] == 4
+
+
+def test_good_consume_prefers_ready_then_storage(admin_client, client_id):
+    """Списание берёт сначала ready, затем добирает недостающее из storage."""
+    from modules.dispatch.service import consume_stock_for_dispatch, dispatch_fully_shipped
+
+    pid = _make_product(client_id, sku="DSP-G3")
+    _seed_ready(client_id, product_id=pid, sku="DSP-G3", qty=2)
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-G3", qty=3)
+    doc_id = _create(admin_client, client_id, pid, "DSP-G3", 5)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+
+    with get_connection() as conn:
+        consume_stock_for_dispatch(conn, doc_id, "test-admin-id", alloc=None, trip_id="trip-good-mixed")
+        conn.commit()
+        assert dispatch_fully_shipped(conn, doc_id) is True
+
+    # обе корзины-источника опустошены ровно на доступное
+    assert _ready_net(client_id, pid) == 0
+    assert _storage_good_net(client_id, pid) == 0
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert line["shipped_qty"] == 5

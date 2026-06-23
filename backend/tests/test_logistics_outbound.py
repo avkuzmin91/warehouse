@@ -29,30 +29,40 @@ def client_id():
 
 def _seed_ready(client_id: str, *, product_id: str, sku: str, qty: int,
                 quality: str = "good", color_id=None, size_id=None) -> None:
-    """Готовый к отгрузке остаток (packing→ready) по варианту×клиенту×качеству."""
+    """Остаток-источник отгрузки по варианту×клиенту×качеству.
+
+    Годный отгружается из `ready` (сеем packing→ready), брак — прямо из `storage`
+    (сеем intake→storage), без раскладки в зону отгрузки.
+    """
     from modules.balances.service import insert_inventory_move
 
+    if quality == "defect":
+        from_op, to_op, to_zone_id, to_zone_name = "intake", "storage", None, None
+    else:
+        from_op, to_op, to_zone_id, to_zone_name = "packing", "ready", "zone-ready", "Готов"
     with get_connection() as conn:
         insert_inventory_move(
             conn,
             product_id=product_id, product_name="Товар", product_sku=sku,
             color_id=color_id, color_name=None, size_id=size_id, size_name=None,
             client_id=client_id, client_name="Test Client",
-            from_op="packing", to_op="ready", from_quality=quality, to_quality=quality,
+            from_op=from_op, to_op=to_op, from_quality=quality, to_quality=quality,
             from_zone_id=None, from_zone_name=None,
-            to_zone_id="zone-ready", to_zone_name="Готов",
+            to_zone_id=to_zone_id, to_zone_name=to_zone_name,
             qty=qty, user_id="test",
         )
         conn.commit()
 
 
 def _ready_net(client_id: str, product_id: str, quality: str = "good") -> int:
+    """Нетто остатка-источника: для брака — `storage`, для годного — `ready`."""
     from modules.balances.service import get_available_total
 
+    op = "storage" if quality == "defect" else "ready"
     with get_connection() as conn:
         return get_available_total(
             conn, product_id=product_id, color_id=None, size_id=None,
-            client_id=client_id, op="ready", quality=quality,
+            client_id=client_id, op=op, quality=quality,
         )
 
 

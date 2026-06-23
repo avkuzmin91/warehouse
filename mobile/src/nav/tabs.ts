@@ -22,9 +22,10 @@ const WAREHOUSE_TABS: TabDef[] = [
 ]
 
 const MANAGER_TABS: TabDef[] = [
-  { name: 'mReceipts', label: 'Поступления', icon: 'truckIn' },
+  { name: 'mReceipts', label: 'Поступления', icon: 'dolly' },
   { name: 'mPacking', label: 'Упаковка', icon: 'box' },
-  { name: 'mDispatch', label: 'Отгрузки', icon: 'truckOut' },
+  { name: 'mDispatch', label: 'Отгрузки', icon: 'forklift' },
+  { name: 'stock', label: 'Остатки', icon: 'layers' },
 ]
 
 // Менеджерский интерфейс (создание документов) — у ролей с правом создавать
@@ -35,7 +36,7 @@ export function tabsForRole(role: string): TabDef[] {
   return MANAGER_ROLES.has(role) ? MANAGER_TABS : WAREHOUSE_TABS
 }
 
-// Скан-FAB по центру таб-бара — только у складских ролей (сканер ШК/мест).
-export function showScanForRole(role: string): boolean {
-  return !MANAGER_ROLES.has(role)
+// Скан-FAB по центру таб-бара — у всех ролей (сканер ШК/мест).
+export function showScanForRole(_role: string): boolean {
+  return true
 }

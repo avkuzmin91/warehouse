@@ -59,14 +59,16 @@ def _doc_quality(connection, doc_id: str) -> str:
     return INV_Q_DEFECT if cargo == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
 
 
-def _source_op(quality: str) -> str:
-    """Корзина, из которой отгрузка списывает остаток.
+def _source_ops(quality: str) -> list[str]:
+    """Корзины-источники отгрузки, в порядке приоритета списания.
 
-    Годный проходит упаковку (packed → ready) и отгружается из «Готов к отгрузке».
-    Брак упаковку не проходит — он отгружается напрямую «На хранении» (`storage`),
-    без раскладки в зону отгрузки.
+    Годный проходит упаковку (packed → ready) и отгружается прежде всего из «Готов к
+    отгрузке» (`ready`), но раскладка в зону отгрузки — НЕ обязательна: если готового
+    остатка не хватает, отгрузка добирает прямо «На хранении» (`storage`). Поэтому
+    источник годного — `[ready, storage]` (сначала ready, затем storage).
+    Брак упаковку не проходит — он отгружается напрямую `storage`.
     """
-    return INV_OP_STORAGE if quality == INV_Q_DEFECT else INV_OP_READY
+    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_STORAGE]
 
 
 def check_lines_have_sku(connection, doc_id: str) -> None:
@@ -106,7 +108,7 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
     ).fetchone()
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
-    source_op = _source_op(quality)
+    source_ops = _source_ops(quality)
 
     rows = connection.execute(
         """SELECT product_id, color_id, size_id,
@@ -128,18 +130,18 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
             size_id=r["size_id"],
             client_id=client_id,
             quality=quality,
-            op=source_op,
+            ops=source_ops,
             exclude_doc_id=doc_id,
         )
         demand = int(r["demand"] or 0)
         if demand > avail:
             label = " · ".join(x for x in [r["product_sku"], r["color_name"], r["size_name"]] if x) or r["product_name"]
-            avail_word = "на хранении" if quality == INV_Q_DEFECT else "готово"
+            avail_word = "на хранении" if quality == INV_Q_DEFECT else "доступно"
             short.append(f"«{label}»: нужно {demand}, {avail_word} {avail}")
     if short:
         head = (
             "Недостаточно брака на хранении для отгрузки. " if quality == INV_Q_DEFECT
-            else "Часть товара ещё не готова к отгрузке (нужно упаковать/дождаться). "
+            else "Недостаточно товара (готового и на хранении) для отгрузки. "
         )
         raise HTTPException(status_code=400, detail=head + "; ".join(short))
 
@@ -158,7 +160,7 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     ).fetchone()
     client_id = doc["client_id"] if doc else None
     quality = _doc_quality(connection, doc_id)
-    source_op = _source_op(quality)
+    source_ops = _source_ops(quality)
 
     lines = connection.execute(
         "SELECT id, product_id, color_id, size_id "
@@ -172,16 +174,19 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
         key = (str(ln["product_id"]), ln["color_id"], ln["size_id"])
         if key in variant_ready_left:
             continue
-        zones = ready_zones_for_variant(
-            connection,
-            product_id=str(ln["product_id"]),
-            color_id=ln["color_id"],
-            size_id=ln["size_id"],
-            client_id=client_id,
-            quality=quality,
-            op=source_op,
-        )
-        variant_ready_left[key] = sum(int(z["net"]) for z in zones)
+        total = 0
+        for op in source_ops:
+            zones = ready_zones_for_variant(
+                connection,
+                product_id=str(ln["product_id"]),
+                color_id=ln["color_id"],
+                size_id=ln["size_id"],
+                client_id=client_id,
+                quality=quality,
+                op=op,
+            )
+            total += sum(int(z["net"]) for z in zones)
+        variant_ready_left[key] = total
 
     result: dict[str, int] = {}
     for ln in lines:
@@ -242,14 +247,15 @@ def consume_stock_for_dispatch(
     connection, doc_id: str, user_id: str,
     *, alloc: dict[str, int] | None = None, trip_id: str | None = None,
 ) -> None:
-    """Списание остатков при выезде рейса: журнальные движения (ready → shipped).
+    """Списание остатков при выезде рейса: журнальные движения (источник → shipped).
 
     Без commit — коммитит вызывающий (каскад рейса). Остаток берётся ПО ВАРИАНТУ
     (product/color/size × client × quality), т.к. отгрузка не знает, какая задача
-    упаковки его подготовила. `alloc` — сколько каждой строки увозит этот рейс;
-    при alloc=None списывается весь готовый остаток. shipped_qty накапливается
-    (инкремент), так отгрузка может уезжать несколькими рейсами. trip_id пишется
-    в журнал для точного сторно при отмене рейса.
+    упаковки его подготовила. Источник зависит от груза: годный — `ready`, брак —
+    `storage` (отгружается прямо с хранения). `alloc` — сколько каждой строки увозит
+    этот рейс; при alloc=None списывается весь доступный остаток. shipped_qty
+    накапливается (инкремент), так отгрузка может уезжать несколькими рейсами.
+    trip_id пишется в журнал для точного сторно при отмене рейса.
     """
     doc_row = connection.execute(
         "SELECT client_id, client_name, cargo_type FROM dispatch_docs WHERE id = ?",
@@ -259,7 +265,9 @@ def consume_stock_for_dispatch(
     client_id = doc_row["client_id"] if doc_row else None
     client_name = doc_row["client_name"] if doc_row else None
     quality = INV_Q_DEFECT if cargo_type == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
+    source_ops = _source_ops(quality)
     comment_prefix = "Отгрузка брака" if cargo_type == DISPATCH_CARGO_DEFECT else "Отгрузка"
+    avail_word = "брака на хранении" if cargo_type == DISPATCH_CARGO_DEFECT else "товара (готового и на хранении)"
 
     from modules.balances.service import ready_zones_for_variant
 
@@ -270,14 +278,20 @@ def consume_stock_for_dispatch(
 
     for line in lines:
         line_id = str(line["id"])
-        zones = ready_zones_for_variant(
-            connection,
-            product_id=str(line["product_id"]),
-            color_id=line["color_id"],
-            size_id=line["size_id"],
-            client_id=client_id,
-            quality=quality,
-        )
+        # Корзины-источники в порядке приоритета (ready раньше storage для годного),
+        # каждая помечена своим `op` — он пишется во `from_op` журнальной записи.
+        zones: list[dict] = []
+        for op in source_ops:
+            for z in ready_zones_for_variant(
+                connection,
+                product_id=str(line["product_id"]),
+                color_id=line["color_id"],
+                size_id=line["size_id"],
+                client_id=client_id,
+                quality=quality,
+                op=op,
+            ):
+                zones.append({**z, "op": op})
         available = sum(int(z["net"]) for z in zones)
         target = int(alloc.get(line_id, 0)) if alloc is not None else available
         if target <= 0:
@@ -285,7 +299,7 @@ def consume_stock_for_dispatch(
         if target > available:
             raise HTTPException(
                 status_code=400,
-                detail=f"Недостаточно готового остатка для отгрузки: нужно {target}, готово {available}",
+                detail=f"Недостаточно {avail_word} для отгрузки: нужно {target}, есть {available}",
             )
 
         shipped_total = 0
@@ -297,6 +311,7 @@ def consume_stock_for_dispatch(
             _insert_shipped_move(
                 connection,
                 line=line, client_id=client_id, client_name=client_name, quality=quality,
+                from_op=src["op"],
                 from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
                 qty=take, user_id=user_id, dispatch_line_id=line_id, trip_id=trip_id,
                 comment=f"{comment_prefix}: {take} шт.",

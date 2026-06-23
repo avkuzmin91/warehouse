@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from config import (
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
@@ -802,24 +804,28 @@ def ready_available_for_dispatch(
     size_id: str | None,
     client_id: str | None,
     quality: str,
-    op: str = INV_OP_READY,
+    ops: Sequence[str] = (INV_OP_READY,),
     exclude_doc_id: str | None = None,
 ) -> int:
     """Свободный остаток-источник варианта под отгрузку: доступно минус уже
     зарезервированное другими незакрытыми отгрузками.
 
-    op-нетто (вариант×клиент×качество) − Σ(незавершённый объём ЗАФИКСИРОВАННЫХ
-    отгрузок того же варианта: qty − shipped_qty, статусы preparing/awaiting_trip/
-    partially_shipped). Черновики резерв НЕ держат — это лишь намерение; иначе два
-    черновика взаимно заблокировали бы передачу в подготовку. Резерв возникает при
-    фиксации (advance, draft → preparing): кто первый передал — тот и занял остаток,
-    второй не пройдёт гейт. `op` — корзина-источник (годный из `ready`, брак из
-    `storage`). `exclude_doc_id` исключает саму проверяемую отгрузку (её спрос — это
-    то, что мы и проверяем).
+    Σ-по-корзинам нетто (вариант×клиент×качество) − Σ(незавершённый объём
+    ЗАФИКСИРОВАННЫХ отгрузок того же варианта: qty − shipped_qty, статусы preparing/
+    awaiting_trip/partially_shipped). Черновики резерв НЕ держат — это лишь намерение;
+    иначе два черновика взаимно заблокировали бы передачу в подготовку. Резерв
+    возникает при фиксации (advance, draft → preparing): кто первый передал — тот и
+    занял остаток, второй не пройдёт гейт. `ops` — корзины-источники (годный из
+    `ready`+`storage`: раскладка в зону отгрузки необязательна; брак из `storage`).
+    `exclude_doc_id` исключает саму проверяемую отгрузку (её спрос — это то, что мы и
+    проверяем).
     """
-    ready = get_available_total(
-        connection, product_id=product_id, color_id=color_id, size_id=size_id,
-        client_id=client_id, op=op, quality=quality,
+    ready = sum(
+        get_available_total(
+            connection, product_id=product_id, color_id=color_id, size_id=size_id,
+            client_id=client_id, op=op, quality=quality,
+        )
+        for op in ops
     )
     cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
     conds = [

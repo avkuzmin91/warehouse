@@ -3,7 +3,8 @@ import type { CSSProperties, ReactNode } from 'react'
 // Тонкие inline-иконки (Lucide-style, сетка 24×24) — единый язык с вебом и
 // мобильным редизайном. Портировано из дизайн-системы redesign-mobile/icons.jsx.
 export type IconName =
-  | 'home' | 'book' | 'truck' | 'truckIn' | 'truckOut' | 'box' | 'boxes' | 'alert'
+  | 'home' | 'book' | 'truck' | 'truckIn' | 'truckOut' | 'dolly' | 'forklift'
+  | 'box' | 'boxes' | 'alert'
   | 'users' | 'user' | 'shield' | 'chart' | 'pulse' | 'search' | 'plus'
   | 'filter' | 'download' | 'upload' | 'check' | 'x' | 'chev' | 'chevDown'
   | 'chevUp' | 'arrowLeft' | 'arrowRight' | 'arrowUp' | 'arrowDown' | 'more'
@@ -18,6 +19,8 @@ const PATHS: Record<IconName, ReactNode> = {
   truck: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /></>,
   truckIn: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /><path d="M9 4l3 3-3 3" /></>,
   truckOut: <><path d="M3 17V6h12v11" /><path d="M15 9h4l3 4v4h-7" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /><path d="M9 4l-3 3 3 3" /></>,
+  dolly: <><path d="M5 3v12a2 2 0 0 0 2 2h2" /><path d="M5 3l1.4 4.2" /><rect x="9" y="6" width="8" height="5" rx="0.5" /><rect x="9" y="11" width="8" height="6" rx="0.5" /><path d="M13 6v2" /><circle cx="8" cy="20" r="1.6" /><circle cx="15" cy="20" r="1.6" /></>,
+  forklift: <><path d="M5 17V7h6v7" /><path d="M11 14h4" /><path d="M15 4v10" /><path d="M15 14h5" /><circle cx="6.5" cy="19" r="1.6" /><circle cx="13" cy="19" r="1.6" /></>,
   box: <><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></>,
   boxes: <><rect x="3" y="3" width="8" height="8" rx="1" /><rect x="13" y="3" width="8" height="8" rx="1" /><rect x="3" y="13" width="8" height="8" rx="1" /><rect x="13" y="13" width="8" height="8" rx="1" /></>,
   alert: <><path d="M10.3 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><circle cx="12" cy="17" r="0.5" fill="currentColor" /></>,

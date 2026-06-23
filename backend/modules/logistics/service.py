@@ -18,7 +18,6 @@ from config import (
     DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUS_SHIPPED,
     INV_OP_INTAKE,
-    INV_OP_READY,
     INV_OP_SHIPPED,
     INV_OP_STORAGE,
     INV_Q_GOOD,
@@ -676,12 +675,14 @@ def cascade_dispatches_to_shipped(connection, trip_id: str, trip_number: str, ui
 
 
 def reverse_dispatch_consume_for_trip(connection, trip_id: str, uid: str) -> None:
-    """Сторно частичного списания при отмене outbound-рейса: возврат shipped → ready.
+    """Сторно частичного списания при отмене outbound-рейса: возврат shipped → источник.
 
     На каждое движение списания этого рейса пишем обратное (то же место и
     количество, привязка reverses_id), уменьшаем shipped_qty и откатываем статус
     отгрузки: → partially_shipped, если по другим рейсам что-то уже уехало, иначе
-    awaiting_trip. Без commit — коммитит вызывающий.
+    awaiting_trip. Без commit — коммитит вызывающий. Возврат идёт в ту же корзину,
+    из которой списали (`from_op` исходного движения): годный — в `ready`, брак — в
+    `storage`.
     """
     moves = connection.execute(
         "SELECT * FROM zone_relocations WHERE trip_id = ? AND to_op = ? AND reverses_id IS NULL",
@@ -697,9 +698,9 @@ def reverse_dispatch_consume_for_trip(connection, trip_id: str, uid: str) -> Non
         ).fetchone()
         if already:
             continue
-        # Обратное движение shipped → ready с тем же местом и привязкой к строке
-        # отгрузки. Прямой INSERT (а не insert_inventory_move): нужен dispatch_line_id,
-        # которого нет в сигнатуре balances.insert_inventory_move.
+        # Обратное движение shipped → исходная корзина (from_op списания) с тем же
+        # местом и привязкой к строке отгрузки. Прямой INSERT (а не insert_inventory_move):
+        # нужен dispatch_line_id, которого нет в сигнатуре balances.insert_inventory_move.
         connection.execute(
             """INSERT INTO zone_relocations
                (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
@@ -709,7 +710,7 @@ def reverse_dispatch_consume_for_trip(connection, trip_id: str, uid: str) -> Non
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (str(uuid4()), str(mv["product_id"]), mv["product_name"], mv["product_sku"],
              mv["color_id"], mv["color_name"], mv["size_id"], mv["size_name"],
-             mv["client_id"], mv["client_name"], INV_OP_SHIPPED, INV_OP_READY,
+             mv["client_id"], mv["client_name"], INV_OP_SHIPPED, str(mv["from_op"]),
              str(mv["to_quality"]), str(mv["from_quality"]),
              None, None, mv["from_zone_id"], mv["from_zone_name"], int(mv["qty"]),
              f"Возврат при отмене рейса: {int(mv['qty'])} шт.",

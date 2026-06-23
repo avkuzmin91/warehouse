@@ -190,18 +190,14 @@ export function MatrixEntrySheet({
                         <Icon name="check" size={13} /> добавлен
                       </span>
                     ) : (
-                      <div className="line-row" style={{ marginTop: 0, gap: 6, width: 'auto' }}>
-                        <button className="btn ghost" onClick={() => setCell(v.color_id, v.size_id, n - 1)} aria-label="Меньше">−</button>
-                        <input
-                          className="input num"
-                          inputMode="numeric"
-                          value={n ? String(n) : ''}
-                          placeholder="0"
-                          onChange={(e) => setCell(v.color_id, v.size_id, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                          style={{ width: 56 }}
-                        />
-                        <button className="btn ghost" onClick={() => setCell(v.color_id, v.size_id, n + 1)} aria-label="Больше">+</button>
-                      </div>
+                      <input
+                        className="input num"
+                        inputMode="numeric"
+                        value={n ? String(n) : ''}
+                        placeholder="0"
+                        onChange={(e) => setCell(v.color_id, v.size_id, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
+                        style={{ width: 72, flexShrink: 0 }}
+                      />
                     )}
                   </div>
                 )
