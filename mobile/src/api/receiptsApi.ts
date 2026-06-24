@@ -29,7 +29,12 @@ export type ReceiptListParams = {
   status?: string
   client_id?: string
   search?: string
+  available_for_trip_id?: string
 }
+
+// Поступления, которые можно довезти рейсом: «В плане» + «Частично принято» (остаток
+// вторым рейсом). Зеркало web RECEIPT_TRIP_SELECTABLE_STATUSES.
+export const RECEIPT_TRIP_SELECTABLE_STATUSES = 'planned,partially_received'
 
 // --- Types --- (состав поступления)
 export type ReceiptLine = {
@@ -118,6 +123,7 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
   if (params.status)    sp.set('status', params.status)
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search)    sp.set('search', params.search)
+  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<ReceiptListResponse>(`/receipts${q ? `?${q}` : ''}`, { signal })
 }

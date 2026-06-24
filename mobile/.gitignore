@@ -5,3 +5,10 @@ dist
 
 # Capacitor native project (генерируется с Android SDK)
 /android
+
+# Сборки и ключи подписи (не коммитим бинарники; keystore хранится вне репо)
+*.apk
+*.apk.idsig
+*.aab
+*.jks
+*.keystore

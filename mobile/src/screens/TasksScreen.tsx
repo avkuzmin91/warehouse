@@ -7,12 +7,10 @@ import { fmtEta, tripEtaLabel, type TripDirection } from '../api/tripsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon, type IconName } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { fmtDateTime } from '../utils/format'
 
 function sinceLabel(since?: string | null): string {
-  if (!since) return ''
-  const d = new Date(since)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return fmtDateTime(since, '')
 }
 
 // Иконка + тон плитки по типу задачи (визуальный язык редизайна).
@@ -30,14 +28,19 @@ export function TasksScreen() {
   const { user } = useAuth()
   const { openTrip, openShipment } = useNav()
   const [items, setItems] = useState<TaskItem[]>([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const load = useCallback((signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true)
     setError('')
-    return getTasks(50, signal)
-      .then((r) => setItems(r.items))
+    return getTasks(100, signal)
+      .then((r) => {
+        if (signal?.aborted) return
+        setItems(r.items)
+        setTotal(r.total)
+      })
       .catch((err) => {
         if (signal?.aborted) return
         setError(err instanceof Error ? err.message : 'Не удалось загрузить задачи')
@@ -142,6 +145,11 @@ export function TasksScreen() {
                 </button>
               )
             })}
+            {items.length < total && (
+              <div className="line-sub" style={{ textAlign: 'center', padding: '12px 0' }}>
+                Показаны первые {items.length} из {total}
+              </div>
+            )}
           </>
         )}
       </PullToRefresh>

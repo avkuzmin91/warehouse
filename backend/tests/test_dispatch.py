@@ -108,6 +108,7 @@ def _payload(client_id, product_id, sku, qty, site_url=None) -> dict:
         "client_name": "Test Client",
         "destination": "Moscow",
         "ship_date": "2026-07-01",
+        "comment": "Тех. задание: упаковать аккуратно",
         "lines": [{
             "product_id": product_id, "product_name": "Product", "product_sku": sku,
             "qty": qty, "site_url": site_url,
@@ -216,6 +217,22 @@ def test_advance_succeeds_with_ready(admin_client, client_id):
     assert r.status_code == 200, r.text
     assert r.json()["message"] == "preparing"
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "preparing"
+
+
+def test_advance_blocked_without_comment(admin_client, client_id):
+    """ТЗ (comment) обязательно при передаче отгрузки в подготовку — для товара и брака."""
+    pid = _make_product(client_id, sku="DSP-TZ1")
+    _seed_ready(client_id, product_id=pid, sku="DSP-TZ1", qty=5)
+    payload = _payload(client_id, pid, "DSP-TZ1", 5)
+    payload["comment"] = "   "
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+    assert "техническое задание" in r.json()["detail"].lower()
+
+    # после заполнения ТЗ передача проходит
+    assert admin_client.patch(f"/dispatches/{doc_id}", json={"comment": "Собрать к 18:00"}).status_code == 200
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
 
 
 def test_finish_preparation_advances_to_awaiting_trip(admin_client, client_id):

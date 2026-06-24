@@ -7,7 +7,7 @@ import { updateProduct } from '../../../../../api/adminApi'
 import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
 import { Icon } from '../../../../primitives/Icon'
-import { Field } from '../../../../primitives/Input'
+import { AutoGrowTextarea, Field } from '../../../../primitives/Input'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
@@ -28,7 +28,7 @@ type Props = {
   onAddLine: (item: PlannableItem, qty: number) => Promise<void>
   onUpdateLine: (lineId: string, body: { qty?: number; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
   onDeleteLine: (lineId: string) => Promise<void>
-  onUpdateDoc: (body: { client_id?: string | null; client_name?: string | null; ship_date?: string | null; logistics_cost?: number | null }) => Promise<boolean>
+  onUpdateDoc: (body: { client_id?: string | null; client_name?: string | null; ship_date?: string | null; logistics_cost?: number | null; comment?: string | null }) => Promise<boolean>
   onReload: () => Promise<void>
 }
 
@@ -54,6 +54,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
 
   const [shipDate, setShipDate] = useState(doc.ship_date ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+  const [comment, setComment] = useState(doc.comment ?? '')
   const [infoSaving, setInfoSaving] = useState(false)
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
@@ -61,6 +62,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   useEffect(() => {
     setShipDate(doc.ship_date ?? '')
     setLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
+    setComment(doc.comment ?? '')
     setInfoDirty(false)
   }, [doc])
 
@@ -120,6 +122,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
     const ok = await onUpdateDoc({
       ship_date: shipDate || null,
+      comment: comment.trim() || null,
       ...(showCosts ? { logistics_cost: costFilled ? costNum : null } : {}),
     })
     setInfoSaving(false)
@@ -187,6 +190,19 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                 )}
               </Field>
             )}
+            <Field label="Техническое задание" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+              {canEdit ? (
+                <AutoGrowTextarea
+                  minRows={3}
+                  placeholder="Опишите задачу для команды склада"
+                  value={comment}
+                  onChange={(e) => { setComment(e.target.value); setInfoDirty(true) }}
+                  style={{ resize: 'vertical', minHeight: 76 }}
+                />
+              ) : (
+                <div className="input" style={{ minHeight: 76, whiteSpace: 'pre-wrap', cursor: 'default' }}>{doc.comment || '—'}</div>
+              )}
+            </Field>
           </div>
         </PhaseBlock>
 

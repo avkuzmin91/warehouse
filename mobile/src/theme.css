@@ -408,6 +408,7 @@ button {
   cursor: pointer;
 }
 .icon-btn:active { background: var(--c-bg-active); }
+.icon-btn.danger { color: var(--c-danger); border-color: color-mix(in srgb, var(--c-danger) 28%, var(--c-border)); }
 
 .field { margin-bottom: 16px; }
 .flabel {
@@ -703,6 +704,68 @@ button {
 .delta.over { color: var(--c-success); }
 .delta.under { color: var(--c-danger); }
 
+/* Строки документа в деталке (план/принято, кол-во/отгружено) */
+.docline {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--c-border);
+}
+.docline:last-child { border-bottom: 0; }
+.docline-main { flex: 1; min-width: 0; }
+.docline-qty { flex: 0 0 auto; text-align: right; white-space: nowrap; }
+.docline-qty .big {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.docline-qty .small {
+  font-size: 11.5px;
+  color: var(--c-text-muted);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
+
+/* Строки истории операций */
+.oprow { padding: 9px 2px; border-bottom: 1px solid var(--c-border); }
+.oprow:last-child { border-bottom: 0; }
+.oprow-t { font-size: 13px; }
+.oprow-m { font-size: 11.5px; color: var(--c-text-subtle); margin-top: 2px; }
+
+/* Строка состава в форме (поступление / упаковка / отгрузка) */
+.formline { padding: 12px 0; border-bottom: 1px solid var(--c-border); }
+.formline:first-of-type { border-top: 1px solid var(--c-border); }
+.hint-warn { color: var(--c-warning); }
+.hint-danger { color: var(--c-danger); }
+
+/* Чип прикреплённого файла ТЗ */
+.filechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px 0 9px;
+  border-radius: var(--r-sm);
+  background: var(--c-bg-sunken);
+  color: var(--c-text-muted);
+  border: 1px solid var(--c-border);
+  font-size: 12px;
+  max-width: 100%;
+}
+.filechip .fc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filechip .fc-x {
+  display: inline-flex;
+  align-items: center;
+  color: var(--c-text-subtle);
+  margin-left: 1px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
 /* Заголовок блока годный/брак */
 .kindhead {
   display: flex;
@@ -941,6 +1004,20 @@ button {
 }
 .sheet-grip { width: 38px; height: 4px; border-radius: 99px; background: var(--c-border-strong); margin: 8px auto 14px; }
 .sheet h3 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
+
+/* Чекбокс выбора документа (мультивыбор в листах) */
+.pick-cb {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--c-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.pick-cb.on { background: var(--c-accent); border-color: var(--c-accent); }
 
 /* ============================================================
    Поле даты/времени (DateTimeField)

@@ -24,7 +24,7 @@ import { DraftView } from './views/DraftView'
 import { ReadyView } from './views/ReadyView'
 import { FinalView } from './views/FinalView'
 import { PreparePanel } from './components/PreparePanel'
-import { canEditShipmentPlanning, canEditShipmentPriority, canPrepareDispatch } from '../../../../utils/access'
+import { canEditShipmentPlanning, canEditShipmentPriority, canPrepareDispatch, isDispatchPreparer } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 
 export function DispatchDetailFeature({ docId }: { docId: string }) {
@@ -35,6 +35,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
   const canPrepare = canPrepareDispatch(user)
+  const showPrepareTask = isDispatchPreparer(user)
 
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -231,7 +232,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onUpdateDoc={handleUpdateDoc}
           onReload={load}
         />
-      ) : (isPreparing && canPrepare) ? (
+      ) : (isPreparing && showPrepareTask) ? (
         <PreparePanel doc={doc} canEdit={canPrepare} onDone={load} />
       ) : (isPreparing || isAwaiting || isPartially) ? (
         <ReadyView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />

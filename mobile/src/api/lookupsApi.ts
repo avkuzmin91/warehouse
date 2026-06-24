@@ -34,6 +34,20 @@ export function getClients(signal?: AbortSignal): Promise<DictionaryItem[]> {
   return request<DictionaryItem[]>('/inventory/lookups/clients', { signal })
 }
 
+// --- Справочники для рейсов (планирование менеджером) ---
+// origin рейса — точка логистики (warehouses), не «Наши склады».
+export function getWarehouses(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/warehouses', { signal })
+}
+
+export function getCarriers(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/carriers', { signal })
+}
+
+export function getVehicleTypes(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/vehicle-types', { signal })
+}
+
 export function getClientStores(clientId: string | null | undefined, signal?: AbortSignal): Promise<ClientStoreItem[]> {
   const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
   return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q}`, { signal })

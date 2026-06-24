@@ -482,12 +482,14 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+            "SELECT status, comment FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) != DISPATCH_STATUS_DRAFT:
             raise HTTPException(status_code=400, detail="Передать в подготовку можно только из черновика")
+        if not str(row["comment"] or "").strip():
+            raise HTTPException(status_code=400, detail="Заполните техническое задание")
         has_lines = conn.execute(
             "SELECT 1 FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1", (doc_id,)
         ).fetchone()

@@ -1,7 +1,9 @@
 import { request, requestIdHeaders } from './http'
+import { MOSCOW_TZ, moscowNowIso, parseMoscow } from '../utils/format'
 
 // --- Types --- (зеркало backend/modules/logistics/schemas.py)
 export type TripDirection = 'inbound' | 'outbound'
+export type TripCargoType = 'good' | 'defect'
 export type TripStatus = 'draft' | 'awaiting_arrival' | 'unloading' | 'costing' | 'closed' | 'cancelled'
 export type TripLoadFactor = 'full' | 'partial'
 
@@ -9,19 +11,30 @@ export type TripDoc = {
   id: string
   trip_number: string
   direction: TripDirection
-  cargo_type: 'good' | 'defect'
+  cargo_type: TripCargoType
   status: TripStatus
+  assignee_role: string | null
+  origin_id: string | null
   origin_name: string | null
+  carrier_id: string | null
   carrier_name: string | null
+  vehicle_type_id: string | null
   vehicle_type_name: string | null
   vehicle_number: string | null
   transport_ordered_at: string | null
   eta: string | null
+  cost_estimate: number | null
+  comment: string | null
   arrived_at: string | null
   unload_started_at: string | null
   unload_finished_at: string | null
   load_factor: TripLoadFactor | null
-  comment: string | null
+  logistics_cost_actual: number | null
+  waiting_cost: number | null
+  waiting_minutes: number | null
+  created_at: string
+  created_by: string | null
+  updated_at: string | null
 }
 
 export type TripReceiptAlloc = {
@@ -42,36 +55,49 @@ export type TripReceiptItem = {
   receipt_doc_id: string
   receipt_number: string | null
   receipt_status: string | null
+  client_id: string | null
   client_name: string | null
   allocated_qty: number
   received_qty: number
   allocations: TripReceiptAlloc[]
 }
 
-export type TripShipmentAlloc = {
+export type TripDispatchAlloc = {
   line_id: string
   product_sku: string | null
   product_name: string | null
   variant: string | null
-  qty: number
-  line_qty: number
-  shipped_qty: number
+  qty: number // увозит этот рейс
+  line_qty: number // план по строке
+  shipped_qty: number // отгружено всего (по всем рейсам)
 }
 
-export type TripShipmentItem = {
+export type TripDispatchItem = {
   line_id: string
-  shipment_doc_id: string
-  shipment_number: string | null
-  shipment_status: string | null
+  dispatch_doc_id: string
+  dispatch_number: string | null
+  dispatch_status: string | null
+  client_id: string | null
   client_name: string | null
   allocated_qty: number
-  allocations: TripShipmentAlloc[]
+  allocations: TripDispatchAlloc[]
+}
+
+export type TripOp = {
+  id: string
+  trip_id: string
+  op_type: string
+  comment: string | null
+  created_at: string
+  created_by: string | null
+  created_by_email: string | null
 }
 
 export type TripDetail = {
   doc: TripDoc
   receipts: TripReceiptItem[]
-  shipments: TripShipmentItem[]
+  dispatches: TripDispatchItem[]
+  ops: TripOp[]
 }
 
 export type TripUnloadPlacement = {
@@ -100,13 +126,16 @@ export type TripListItem = {
   id: string
   trip_number: string
   direction: TripDirection
-  cargo_type: 'good' | 'defect'
+  cargo_type: TripCargoType
   status: TripStatus
   origin_name: string | null
   carrier_name: string | null
+  vehicle_type_name: string | null
   vehicle_number: string | null
   eta: string | null
   arrived_at: string | null
+  cost_estimate: number | null
+  logistics_cost_actual: number | null
   created_at: string
   receipts_count: number
   items_qty: number
@@ -115,16 +144,106 @@ export type TripListItem = {
 
 export type TripListResponse = { items: TripListItem[]; total: number; page: number; limit: number }
 
+export type TripListParams = {
+  page?: number
+  limit?: number
+  direction?: TripDirection
+  status?: string
+  statuses?: string[]
+  carrier_id?: string
+  search?: string
+}
+
+// --- Manager payloads ---
+export type TripCreatePayload = {
+  direction?: TripDirection
+  cargo_type?: TripCargoType
+  origin_id?: string | null
+  origin_name?: string | null
+  carrier_id?: string | null
+  carrier_name?: string | null
+  vehicle_type_id?: string | null
+  vehicle_type_name?: string | null
+  vehicle_number?: string | null
+  transport_ordered_at?: string | null
+  eta?: string | null
+  cost_estimate?: number | null
+  comment?: string | null
+  receipt_doc_ids?: string[]
+  dispatch_doc_ids?: string[]
+}
+
+export type TripUpdatePayload = Omit<TripCreatePayload, 'direction' | 'cargo_type' | 'receipt_doc_ids' | 'dispatch_doc_ids'>
+
+export type TripCostPayload = {
+  logistics_cost_actual?: number | null
+  waiting_cost?: number | null
+  waiting_minutes?: number | null
+}
+
 // --- API functions ---
-export function getTrips(statuses: string[], limit = 50, signal?: AbortSignal): Promise<TripListResponse> {
+export function getTrips(params: TripListParams = {}, signal?: AbortSignal): Promise<TripListResponse> {
   const sp = new URLSearchParams()
-  for (const s of statuses) sp.append('statuses', s)
-  sp.set('limit', String(limit))
-  return request<TripListResponse>(`/trips?${sp.toString()}`, { signal })
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.direction) sp.set('direction', params.direction)
+  if (params.status) sp.set('status', params.status)
+  if (params.statuses) for (const s of params.statuses) sp.append('statuses', s)
+  if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
+  if (params.search) sp.set('search', params.search)
+  const q = sp.toString()
+  return request<TripListResponse>(`/trips${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getTrip(tripId: string, signal?: AbortSignal): Promise<TripDetail> {
   return request<TripDetail>(`/trips/${tripId}`, { signal })
+}
+
+export function createTrip(payload: TripCreatePayload): Promise<{ message: string }> {
+  return request<{ message: string }>('/trips', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function updateTrip(tripId: string, payload: TripUpdatePayload): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+/** Привязка целиком: пустые allocations = весь остаток документа (зеркало whole-doc на бэке). */
+export function linkTripReceipts(tripId: string, receiptDocIds: string[]): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/receipts`, {
+    method: 'POST',
+    body: JSON.stringify({ items: receiptDocIds.map((id) => ({ receipt_doc_id: id, allocations: [] })) }),
+  })
+}
+
+export function unlinkTripReceipt(tripId: string, receiptDocId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/receipts/${receiptDocId}`, { method: 'DELETE' })
+}
+
+export function linkTripDispatches(tripId: string, dispatchDocIds: string[]): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/dispatches`, {
+    method: 'POST',
+    body: JSON.stringify({ items: dispatchDocIds.map((id) => ({ dispatch_doc_id: id, allocations: [] })) }),
+  })
+}
+
+export function unlinkTripDispatch(tripId: string, dispatchDocId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/dispatches/${dispatchDocId}`, { method: 'DELETE' })
+}
+
+export function handoffTrip(tripId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/handoff`, { method: 'POST' })
+}
+
+export function tripCost(tripId: string, payload: TripCostPayload): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/cost`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function closeTrip(tripId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/close`, { method: 'POST' })
+}
+
+export function cancelTrip(tripId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/cancel`, { method: 'POST' })
 }
 
 export function tripArrival(tripId: string, arrivedAt: string | null, requestId: string): Promise<{ message: string }> {
@@ -147,10 +266,36 @@ export function tripUnload(tripId: string, payload: TripUnloadPayload, requestId
 export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   draft: 'Черновик',
   awaiting_arrival: 'Ожидает прибытия',
-  unloading: 'В работе',
+  unloading: 'Разгрузка',
   costing: 'Уточнение стоимости',
   closed: 'Закрыт',
   cancelled: 'Аннулирован',
+}
+
+const TRIP_STATUS_LABELS_OUTBOUND: Record<TripStatus, string> = {
+  ...TRIP_STATUS_LABELS,
+  unloading: 'Погрузка',
+}
+
+export function isOutbound(direction: string | null | undefined): boolean {
+  return direction === 'outbound'
+}
+
+/** Человекочитаемый статус с учётом направления (для outbound: «Погрузка»). */
+export function tripStatusLabel(status: TripStatus, direction: string | null | undefined): string {
+  return (isOutbound(direction) ? TRIP_STATUS_LABELS_OUTBOUND : TRIP_STATUS_LABELS)[status]
+}
+
+export function tripStatusTone(status: TripStatus): string {
+  const map: Record<TripStatus, string> = {
+    draft: '',
+    awaiting_arrival: 'info',
+    unloading: 'warning',
+    costing: 'warning',
+    closed: 'success',
+    cancelled: 'danger',
+  }
+  return map[status] ?? ''
 }
 
 export const TRIP_LOAD_LABELS: Record<TripLoadFactor, string> = {
@@ -162,10 +307,13 @@ export const TRIP_LOAD_LABELS: Record<TripLoadFactor, string> = {
 export function tripLexicon(direction: TripDirection) {
   const outbound = direction === 'outbound'
   return {
+    routeLabel: outbound ? 'Куда' : 'Откуда',
+    docsTitle: outbound ? 'Отгрузки в рейсе' : 'Поступления в рейсе',
     warehousePhase: outbound ? 'Погрузка' : 'Разгрузка',
     arrivalLabel: 'Прибытие',
     unloadStartLabel: outbound ? 'Начало погрузки' : 'Начало разгрузки',
     unloadEndLabel: outbound ? 'Окончание погрузки' : 'Окончание разгрузки',
+    etaLabel: 'Плановое прибытие',
     finishAction: outbound ? 'Завершить погрузку' : 'Завершить разгрузку',
     arrivedAction: outbound ? 'Машина прибыла' : 'Машина приехала',
     progressTitle: outbound ? 'Идёт погрузка' : 'Идёт разгрузка',
@@ -177,12 +325,18 @@ export function tripLexicon(direction: TripDirection) {
   }
 }
 
-/** ETA рейса → «21.06, 14:30» в локальной зоне; пусто, если даты нет/она кривая. */
+/** ETA рейса → «21.06, 14:30» по Москве; пусто, если даты нет/она кривая. */
 export function fmtEta(eta: string | null | undefined): string {
   if (!eta) return ''
-  const d = new Date(eta)
+  const d = parseMoscow(eta)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: MOSCOW_TZ,
+  })
 }
 
 /** Подпись планового времени рейса: приход транспорта (для отгрузки — под погрузку). */
@@ -190,9 +344,7 @@ export function tripEtaLabel(_direction: TripDirection): string {
   return 'Прибытие'
 }
 
-/** Локальное время в формате datetime без таймзоны (как datetime-local в вебе). */
+/** Текущее московское время в формате datetime без таймзоны (как datetime-local в вебе). */
 export function nowLocalIso(): string {
-  const d = new Date()
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  return moscowNowIso()
 }

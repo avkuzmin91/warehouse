@@ -14,7 +14,7 @@ export function TripsListScreen() {
   const load = useCallback((signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true)
     setError('')
-    return getTrips(['awaiting_arrival', 'unloading'], 50, signal)
+    return getTrips({ statuses: ['awaiting_arrival', 'unloading'], limit: 50 }, signal)
       .then((r) => setItems(r.items))
       .catch((err) => {
         if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить рейсы')
@@ -64,7 +64,7 @@ export function TripsListScreen() {
               return (
                 <button key={t.id} className="tile" onClick={() => openTrip(t.id)}>
                   <div className={`tile-ico${outbound ? ' green' : ''}`}>
-                    <Icon name={outbound ? 'truckOut' : 'truckIn'} size={21} />
+                    <Icon name="truck" size={21} />
                   </div>
                   <div className="tile-body">
                     <div className="tile-title">
@@ -86,7 +86,7 @@ export function TripsListScreen() {
                         {eta && t.vehicle_number && <span className="tile-eta-sep">·</span>}
                         {t.vehicle_number && (
                           <span className="tile-plate">
-                            <Icon name={outbound ? 'truckOut' : 'truckIn'} size={13} />
+                            <Icon name="truck" size={13} />
                             {t.vehicle_number}
                           </span>
                         )}

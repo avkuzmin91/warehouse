@@ -188,6 +188,18 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
             <RoleChip role="warehouse" />
           </div>
 
+          {doc.comment && (
+            <div style={{
+              marginTop: 16, padding: '12px 14px', borderRadius: 'var(--r-lg)',
+              background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-text-subtle)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>
+                Техническое задание
+              </div>
+              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{doc.comment}</div>
+            </div>
+          )}
+
           {/* общий прогресс + кнопка передачи хода */}
           <div style={{
             marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--c-border)',

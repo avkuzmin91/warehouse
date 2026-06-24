@@ -527,7 +527,6 @@ def record_packing(
             (str(uuid4()), doc_id, SHIPMENT_OP_PACK,
              f"Упаковка {kind_ru} ({packed_date}): +{delta} шт. — {label}", _now(), user_id),
         )
-    connection.commit()
     return line_packed_breakdown(connection, line_id)
 
 
@@ -712,7 +711,6 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
             (str(uuid4()), doc_id, SHIPMENT_OP_PACK_CORRECTION,
              f"Отмена упаковки {kind_ru}: −{qty} шт. — {label}", _now(), user_id),
         )
-    connection.commit()
     return line_packed_breakdown(connection, line_id)
 
 

@@ -170,6 +170,48 @@ export function finishRelocation(id: string, lines: RelocateLine[], requestId: s
   })
 }
 
+// --- Упаковка (QC начальника смены): внесение годного/брака по строке ---
+export type PackingPayload = { good_delta?: number; defect_delta?: number; packed_date: string }
+
+// on_packing: внести годный и/или брак одной записью (дельты неотрицательны).
+// requestId — идемпотентность: ретрай оборванного «Записать» не задвоит дельту.
+export function recordPacking(docId: string, lineId: string, payload: PackingPayload, requestId?: string) {
+  return request<{ message: string; packed_good: number; packed_defect: number }>(
+    `/shipments/${docId}/lines/${lineId}/pack`,
+    { method: 'POST', body: JSON.stringify(payload), headers: requestIdHeaders(requestId) },
+  )
+}
+
+export type ShipmentPackingEntry = {
+  id: string
+  packed_date: string | null
+  good: number
+  defect: number
+  created_at: string
+  created_by_email: string | null
+  reversed: boolean
+}
+
+export type ShipmentPackingResponse = {
+  plan: number
+  available_for_pack: number
+  packed_good: number
+  packed_defect: number
+  entries: ShipmentPackingEntry[]
+}
+
+export function getLinePacking(docId: string, lineId: string, signal?: AbortSignal) {
+  return request<ShipmentPackingResponse>(`/shipments/${docId}/lines/${lineId}/packing`, { signal })
+}
+
+// Отмена ошибочной записи компенсирующим движением (внести верную можно заново).
+export function reversePackingEntry(docId: string, lineId: string, entryId: string, requestId?: string) {
+  return request<{ message: string; packed_good: number; packed_defect: number }>(
+    `/shipments/${docId}/lines/${lineId}/packing/${entryId}/reverse`,
+    { method: 'POST', headers: requestIdHeaders(requestId) },
+  )
+}
+
 // --- Labels ---
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft: 'Черновик',

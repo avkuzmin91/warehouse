@@ -10,6 +10,8 @@ export type Route =
   | { name: 'trips' }
   | { name: 'shipments' }
   | { name: 'stock' }
+  | { name: 'packing' }
+  | { name: 'packDoc'; id: string }
   | { name: 'mTrips' }
   | { name: 'mWarehouse' }
   | { name: 'mReceipts' }
@@ -36,6 +38,7 @@ type NavState = {
   goTab: (t: TabName) => void
   openTrip: (id: string) => void
   openShipment: (id: string) => void
+  openPackDoc: (id: string) => void
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
   openProfile: () => void
@@ -76,6 +79,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
     goTab: (t) => setStack([{ name: t }]),
     openTrip: (id) => setStack((s) => [...s, { name: 'trip', id }]),
     openShipment: (id) => setStack((s) => [...s, { name: 'shipment', id }]),
+    openPackDoc: (id) => setStack((s) => [...s, { name: 'packDoc', id }]),
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
     openProfile: () => setStack((s) => [...s, { name: 'profile' }]),

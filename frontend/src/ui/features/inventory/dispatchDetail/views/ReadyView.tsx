@@ -48,6 +48,10 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
                 <ReadField label="Стоимость логистики, ₽" value={doc.logistics_cost != null ? doc.logistics_cost.toLocaleString('ru-RU') : '—'} mono />
               )}
             </div>
+            <div style={{ marginTop: 14 }}>
+              <div className="field-label"><span>Техническое задание</span></div>
+              <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{doc.comment || '—'}</div>
+            </div>
           </Panel>
 
           <Panel icon="boxes" title="Состав отгрузки">

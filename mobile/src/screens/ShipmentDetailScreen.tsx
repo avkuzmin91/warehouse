@@ -19,20 +19,13 @@ import {
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { ZoneField } from '../components/ZoneField'
+import { fmtDate, variantTitle } from '../utils/format'
 
 type Row = { zoneId: string; qty: number }
 type MoveZoneOption = { id: string; name: string; available: number }
 
 function lineTitle(l: ShipmentLine): string {
-  const variant = [l.color_name, l.size_name].filter(Boolean).join(' · ')
-  return variant ? `${l.product_name} · ${variant}` : l.product_name
-}
-
-function fmtDate(d: string | null): string {
-  if (!d) return '—'
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return d
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  return variantTitle(l.product_name, [l.color_name, l.size_name])
 }
 
 function sumRows(rows: Row[]): number {

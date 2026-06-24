@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { useNav } from '../../nav/NavContext'
-import { listShipments, SHIPMENT_STATUS_LABELS, type ShipmentListItem } from '../../api/shipmentsApi'
+import { useAuth } from '../../auth/AuthContext'
+import { listShipments, SHIPMENT_STATUS_LABELS } from '../../api/shipmentsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { LoadMore } from '../../components/LoadMore'
 import { PullToRefresh } from '../../components/PullToRefresh'
-
-function fmtDate(d: string | null): string {
-  if (!d) return ''
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-}
+import { canCreateDocuments } from '../../utils/access'
+import { fmtDate } from '../../utils/format'
+import { usePagedList } from '../../hooks/usePagedList'
 
 const STATUS_TONE: Record<string, string> = {
   draft: '',
@@ -26,36 +24,23 @@ const STATUS_TONE: Record<string, string> = {
 
 export function PackingListScreen() {
   const { openShipmentNew, openPackingDoc, back } = useNav()
-  const [items, setItems] = useState<ShipmentListItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  const load = useCallback((signal?: AbortSignal, silent = false) => {
-    if (!silent) setLoading(true)
-    setError('')
-    return listShipments({ limit: 50 }, signal)
-      .then((res) => setItems(res.items))
-      .catch((err) => {
-        if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить задачи упаковки')
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLoading(false)
-      })
-  }, [])
-
-  useEffect(() => {
-    const ac = new AbortController()
-    load(ac.signal)
-    return () => ac.abort()
-  }, [load])
+  const { user } = useAuth()
+  const canCreate = canCreateDocuments(user?.role)
+  const fetchPage = useCallback(
+    (page: number, limit: number, signal?: AbortSignal) => listShipments({ page, limit }, signal),
+    [],
+  )
+  const { items, total, loading, loadingMore, error, refresh, loadMore, hasMore } = usePagedList(fetchPage)
 
   return (
     <div className="screen">
       <AppBar title="Упаковка" sub="Задачи упаковки" onBack={back} />
-      <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
-        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openShipmentNew}>
-          <Icon name="plus" size={16} /> Новая задача упаковки
-        </button>
+      <PullToRefresh className="scroll pad-nav" onRefresh={refresh}>
+        {canCreate && (
+          <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openShipmentNew}>
+            <Icon name="plus" size={16} /> Новая задача упаковки
+          </button>
+        )}
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
@@ -78,12 +63,12 @@ export function PackingListScreen() {
           <>
             <div className="sec">
               Все задачи
-              <span className="sec-count">{items.length}</span>
+              <span className="sec-count">{total}</span>
             </div>
             {items.map((s) => {
               const urgent = s.priority_rank != null && s.priority_rank > 0
               const tone = STATUS_TONE[s.status] ?? ''
-              const eta = fmtDate(s.ship_date)
+              const eta = fmtDate(s.ship_date, '')
               return (
                 <button key={s.id} className="tile" onClick={() => openPackingDoc(s.id)}>
                   <div className={`tile-ico${s.cargo_type === 'defect' ? ' gray' : ''}`}>
@@ -117,6 +102,7 @@ export function PackingListScreen() {
                 </button>
               )
             })}
+            <LoadMore shown={items.length} total={total} hasMore={hasMore} loadingMore={loadingMore} onMore={loadMore} />
           </>
         )}
       </PullToRefresh>

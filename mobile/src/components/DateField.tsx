@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Icon } from './Icon'
+import { moscowTodayYmd } from '../utils/format'
 
 const MONTHS = [
   'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
@@ -42,8 +43,7 @@ function monthGrid(y: number, m: number): (number | null)[] {
 }
 
 function todayStr(): string {
-  const n = new Date()
-  return build(n.getFullYear(), n.getMonth(), n.getDate())
+  return moscowTodayYmd()
 }
 
 export function DateField({
@@ -68,8 +68,8 @@ export function DateField({
 
   const sel = useMemo(() => parse(draft), [draft])
   const today = useMemo(() => {
-    const n = new Date()
-    return { y: n.getFullYear(), m: n.getMonth(), d: n.getDate() }
+    const t = parse(todayStr())!
+    return { y: t.y, m: t.m, d: t.d }
   }, [open])
 
   function start() {

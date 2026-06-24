@@ -144,18 +144,15 @@ export function BalancePickerSheet({
                       {variantLabel(b)} · {hint(b)}
                     </div>
                   </div>
-                  <div className="line-row" style={{ marginTop: 0, gap: 6, width: 'auto' }}>
-                    <button className="btn ghost" onClick={() => setQ(b, n - 1)} aria-label="Меньше">−</button>
-                    <input
-                      className="input num"
-                      inputMode="numeric"
-                      value={n ? String(n) : ''}
-                      placeholder="0"
-                      onChange={(e) => setQ(b, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                      style={{ width: 56 }}
-                    />
-                    <button className="btn ghost" onClick={() => setQ(b, n + 1)} aria-label="Больше">+</button>
-                  </div>
+                  <input
+                    className="input num"
+                    inputMode="numeric"
+                    value={n ? String(n) : ''}
+                    placeholder="0"
+                    aria-label="Количество"
+                    onChange={(e) => setQ(b, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
+                    style={{ width: 72, flexShrink: 0 }}
+                  />
                 </div>
               )
             })}

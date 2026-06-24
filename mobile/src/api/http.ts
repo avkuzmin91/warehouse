@@ -125,6 +125,23 @@ async function readJsonBody<T>(response: Response): Promise<T> {
   }
 }
 
+// Несколько параллельных запросов могут получить 401 одновременно (типично при
+// старте экрана). Без дедупликации каждый запустил бы свой POST /auth/refresh, а на
+// нативе с ротацией refresh-токена параллельные обновления взаимно инвалидируют друг
+// друга (один выигрывает, остальные получают уже отозванный токен → разлогин среди
+// работы). Поэтому держим один общий in-flight промис: первый 401 запускает refresh,
+// остальные ждут его результат.
+let refreshInFlight: Promise<boolean> | null = null
+
+function refreshSessionOnce(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = tryRefreshSession().finally(() => {
+      refreshInFlight = null
+    })
+  }
+  return refreshInFlight
+}
+
 /** Одна попытка обновить access-токен: refresh-cookie (браузер) или refresh из памяти (натив). */
 async function tryRefreshSession(): Promise<boolean> {
   try {
@@ -154,7 +171,7 @@ export async function request<T>(path: string, init?: RequestOptions): Promise<T
   // 401 с Bearer и не на публичном auth-пути → одна попытка refresh + повтор.
   const hadBearer = typeof headers.Authorization === 'string'
   if (response.status === 401 && hadBearer && !init?.skipRefresh) {
-    const refreshed = await tryRefreshSession()
+    const refreshed = await refreshSessionOnce()
     if (refreshed) {
       headers = buildHeaders(path, init, true)
       response = await doFetch(path, init, headers)
@@ -181,7 +198,7 @@ export async function requestForm<T>(path: string, init: RequestOptions): Promis
 
   const hadBearer = typeof headers.Authorization === 'string'
   if (response.status === 401 && hadBearer && !init.skipRefresh) {
-    const refreshed = await tryRefreshSession()
+    const refreshed = await refreshSessionOnce()
     if (refreshed) {
       headers = buildHeaders(path, init, false)
       response = await doFetch(path, init, headers)

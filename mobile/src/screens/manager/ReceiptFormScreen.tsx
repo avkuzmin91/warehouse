@@ -19,7 +19,7 @@ function lineSub(l: DraftLine): string {
 }
 
 export function ReceiptFormScreen() {
-  const { back, goTab } = useNav()
+  const { back } = useNav()
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
@@ -88,7 +88,7 @@ export function ReceiptFormScreen() {
         lines: lines.map(({ _id, ...l }) => l),
       })
       await advanceReceiptStatus(res.message)
-      goTab('mReceipts')
+      back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
       setSaving(false)
@@ -151,25 +151,26 @@ export function ReceiptFormScreen() {
           </div>
         ) : (
           lines.map((l) => (
-            <div key={l._id} className="line-row" style={{ alignItems: 'center', marginTop: 0, padding: '8px 0' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
-                <div className="tile-meta">{lineSub(l)}</div>
+            <div key={l._id} className="formline">
+              <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
+                  <div className="tile-meta">{lineSub(l)}</div>
+                </div>
+                <button className="icon-btn danger" onClick={() => removeLine(l._id)} aria-label="Удалить">
+                  <Icon name="trash" size={15} />
+                </button>
               </div>
-              <div className="line-row" style={{ marginTop: 0, gap: 6, width: 'auto' }}>
-                <button className="btn ghost" onClick={() => setQty(l._id, l.planned_qty - 1)} aria-label="Меньше">−</button>
+
+              <div className="line-row" style={{ marginTop: 8 }}>
                 <input
                   className="input num"
                   inputMode="numeric"
                   value={l.planned_qty ? String(l.planned_qty) : ''}
                   placeholder="0"
+                  aria-label="Количество"
                   onChange={(e) => setQty(l._id, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                  style={{ width: 56 }}
                 />
-                <button className="btn ghost" onClick={() => setQty(l._id, l.planned_qty + 1)} aria-label="Больше">+</button>
-                <button className="btn ghost" onClick={() => removeLine(l._id)} aria-label="Удалить">
-                  <Icon name="trash" size={15} />
-                </button>
               </div>
             </div>
           ))

@@ -1,15 +1,22 @@
+import process from 'node:process'
 import type { CapacitorConfig } from '@capacitor/cli'
 
 // Android-проект создаётся с Android SDK: `npx cap add android`.
 // webDir = каталог сборки Vite (`npm run build`).
+//
+// DEV live-reload: эмулятор грузит UI с Vite dev-сервера на хосте. Включается ТОЛЬКО
+// переменной окружения CAP_SERVER_URL — например:
+//   CAP_SERVER_URL=http://10.0.2.2:5174 npx cap sync
+// (10.0.2.2 = loopback хоста из Android-эмулятора). Без неё сборка — продовая, UI из
+// dist. Раньше адрес был зашит в комментарии и его легко было забыть убрать перед
+// прод-сборкой; env-флаг исключает эту ошибку.
+const devServerUrl = process.env.CAP_SERVER_URL?.trim()
+
 const config: CapacitorConfig = {
   appId: 'com.projectff.warehouse.keeper',
-  appName: 'Склад · Кладовщик',
+  appName: 'Склад',
   webDir: 'dist',
-  // DEV live-reload: эмулятор грузит UI с Vite dev-сервера на хосте (10.0.2.2 = loopback
-  // хоста из Android-эмулятора). API идёт по относительному /api → Vite-прокси → backend:8000.
-  // ВЕРНУТЬ обратно (закомментировать) перед сборкой test/prod APK!
-  // server: { url: 'http://10.0.2.2:5174', cleartext: true },
+  ...(devServerUrl ? { server: { url: devServerUrl, cleartext: true } } : {}),
 }
 
 export default config

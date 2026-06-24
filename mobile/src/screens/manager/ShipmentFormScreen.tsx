@@ -42,7 +42,7 @@ function lineSub(l: DraftLine): string {
 }
 
 export function ShipmentFormScreen() {
-  const { back, goTab } = useNav()
+  const { back } = useNav()
   const [cargoType, setCargoType] = useState<InvQuality>('good')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
@@ -195,7 +195,7 @@ export function ShipmentFormScreen() {
       const docId = res.message
       await uploadDraftFiles(docId)
       if (plan) await advanceShipment(docId, newRequestId())
-      goTab('mPacking')
+      back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
       setSaving(false)
@@ -241,8 +241,12 @@ export function ShipmentFormScreen() {
             rows={3}
             placeholder="Опишите задачу для команды склада"
             value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            style={{ resize: 'vertical' }}
+            onChange={(e) => {
+              setComment(e.target.value)
+              e.target.style.height = 'auto'
+              e.target.style.height = `${e.target.scrollHeight}px`
+            }}
+            style={{ resize: 'none', overflow: 'hidden' }}
           />
         </div>
 
@@ -260,32 +264,31 @@ export function ShipmentFormScreen() {
             const overCap = l.qty > l.onHand + l.inTransit
             const waiting = !overCap && l.qty > l.onHand
             return (
-              <div key={l._uid} className="card-line" style={{ padding: '10px 0', borderBottom: '1px solid var(--c-border)' }}>
+              <div key={l._uid} className="formline">
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
                     <div className="tile-meta">{lineSub(l)}</div>
                     <div className="tile-meta">
-                      склад {l.onHand}{!isDefect && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
-                      {overCap ? ' · превышение' : waiting ? ' · ждёт прихода' : ''}
+                      склад {l.onHand}
+                      {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
+                      {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">ждёт прихода</span></> : ''}
                     </div>
                   </div>
-                  <button className="btn ghost" onClick={() => removeLine(l._uid)} aria-label="Удалить">
+                  <button className="icon-btn danger" onClick={() => removeLine(l._uid)} aria-label="Удалить">
                     <Icon name="trash" size={15} />
                   </button>
                 </div>
 
                 <div className="line-row" style={{ marginTop: 8, gap: 6 }}>
-                  <button className="btn ghost" onClick={() => setQty(l._uid, l.qty - 1)} aria-label="Меньше">−</button>
                   <input
                     className="input num"
                     inputMode="numeric"
                     value={l.qty ? String(l.qty) : ''}
                     placeholder="0"
+                    aria-label="Количество"
                     onChange={(e) => setQty(l._uid, parseInt(e.target.value.replace(/\D/g, ''), 10) || 1)}
-                    style={{ width: 56 }}
                   />
-                  <button className="btn ghost" onClick={() => setQty(l._uid, l.qty + 1)} aria-label="Больше">+</button>
                   <div style={{ flex: 1 }}>
                     <Combobox
                       value={l.store_id ?? ''}
@@ -308,19 +311,15 @@ export function ShipmentFormScreen() {
 
                 <div className="line-row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 6 }}>
                   {l.files.map((f, i) => (
-                    <span key={i} className="badge" style={{ gap: 4 }}>
+                    <span key={i} className="filechip">
                       <Icon name="file" size={12} />
-                      {f.name.length > 18 ? `${f.name.slice(0, 16)}…` : f.name}
-                      <button
-                        onClick={() => removeFile(l._uid, i)}
-                        aria-label="Убрать файл"
-                        style={{ marginLeft: 2, background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'inline-flex', color: 'inherit' }}
-                      >
+                      <span className="fc-name">{f.name}</span>
+                      <button className="fc-x" onClick={() => removeFile(l._uid, i)} aria-label="Убрать файл">
                         <Icon name="x" size={12} />
                       </button>
                     </span>
                   ))}
-                  <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+                  <label className="btn ghost sm auto" style={{ cursor: 'pointer' }}>
                     <Icon name="file" size={13} /> Файл ТЗ
                     <input
                       type="file"

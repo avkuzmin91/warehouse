@@ -14,11 +14,12 @@ import {
   type TripUnloadReceiptLine,
 } from '../api/tripsApi'
 import { getReceiptLines, type ReceiptLine } from '../api/receiptsApi'
-import { getShipment, type ShipmentLine } from '../api/shipmentsApi'
+import { getDispatch, type DispatchLine } from '../api/dispatchApi'
 import { AppBar } from '../components/AppBar'
 import { ZoneField } from '../components/ZoneField'
 import { DateTimeField } from '../components/DateTimeField'
 import { Icon } from '../components/Icon'
+import { MOSCOW_TZ, moscowNowIso, parseMoscow, variantTitle } from '../utils/format'
 
 const RECEIPT_STATUS: Record<string, { label: string; tone: string }> = {
   planned: { label: 'В плане', tone: '' },
@@ -27,7 +28,8 @@ const RECEIPT_STATUS: Record<string, { label: string; tone: string }> = {
   on_review: { label: 'На проверке', tone: 'warning' },
   done: { label: 'Поступил', tone: 'success' },
 }
-const SHIPMENT_STATUS: Record<string, { label: string; tone: string }> = {
+const DISPATCH_STATUS: Record<string, { label: string; tone: string }> = {
+  preparing: { label: 'Подготовка', tone: 'info' },
   awaiting_trip: { label: 'Ожидает рейс', tone: 'info' },
   partially_shipped: { label: 'Частично', tone: 'warning' },
   shipped: { label: 'Отгружено', tone: 'success' },
@@ -36,33 +38,31 @@ const SHIPMENT_STATUS: Record<string, { label: string; tone: string }> = {
 
 function fmtTime(v: string | null): string {
   if (!v) return '—'
-  const d = new Date(v)
+  const d = parseMoscow(v)
   if (Number.isNaN(d.getTime())) return v
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
 function minutesSince(v: string | null): number | null {
   if (!v) return null
-  const ms = Date.now() - new Date(v).getTime()
+  const ms = Date.now() - parseMoscow(v).getTime()
   if (Number.isNaN(ms) || ms < 0) return null
   return Math.round(ms / 60000)
 }
 
-/** ISO → значение для <input type="datetime-local"> в локальной зоне. */
+/** ISO → значение для DateTimeField (наивные стенные часы Москвы, YYYY-MM-DDTHH:mm). */
 function isoToLocalInput(iso: string | null): string {
   if (!iso) return ''
-  const d = new Date(iso)
+  const d = parseMoscow(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+  return d.toLocaleString('sv-SE', { timeZone: MOSCOW_TZ }).replace(' ', 'T').slice(0, 16)
 }
 function nowLocalInput(): string {
-  return isoToLocalInput(new Date().toISOString())
+  return moscowNowIso().slice(0, 16)
 }
 
 function lineTitle(a: { product_name: string | null; product_sku: string | null; variant: string | null }): string {
-  const name = a.product_name ?? a.product_sku ?? 'Товар'
-  return a.variant ? `${name} · ${a.variant}` : name
+  return variantTitle(a.product_name ?? a.product_sku ?? 'Товар', [a.variant])
 }
 
 export function TripDetailScreen({ tripId }: { tripId: string }) {
@@ -265,7 +265,7 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
               <div className="chips">
                 {doc.vehicle_type_name && (
                   <span className="pill">
-                    <Icon name={outbound ? 'truckOut' : 'truckIn'} size={14} /> {doc.vehicle_type_name}
+                    <Icon name="truck" size={14} /> {doc.vehicle_type_name}
                   </span>
                 )}
                 {doc.carrier_name && (
@@ -488,17 +488,17 @@ function Composition({ detail, outbound, title }: { detail: TripDetail; outbound
               )}
             </div>
           ))
-        : detail.shipments.map((s) => (
+        : detail.dispatches.map((s) => (
             <div key={s.line_id} className="group">
               <div className="group-head">
                 <span className="gname">
-                  {s.shipment_number ?? 'Отгрузка'}
+                  {s.dispatch_number ?? 'Отгрузка'}
                   {s.client_name ? ` · ${s.client_name}` : ''}
                 </span>
-                {s.shipment_status && SHIPMENT_STATUS[s.shipment_status] && (
-                  <span className={`badge ${SHIPMENT_STATUS[s.shipment_status].tone}`}>
+                {s.dispatch_status && DISPATCH_STATUS[s.dispatch_status] && (
+                  <span className={`badge ${DISPATCH_STATUS[s.dispatch_status].tone}`}>
                     <span className="dot" />
-                    {SHIPMENT_STATUS[s.shipment_status].label}
+                    {DISPATCH_STATUS[s.dispatch_status].label}
                   </span>
                 )}
               </div>
@@ -507,7 +507,7 @@ function Composition({ detail, outbound, title }: { detail: TripDetail; outbound
                   <ReadLine key={a.line_id} title={lineTitle(a)} sub={`увозит ${a.qty} шт`} />
                 ))
               ) : (
-                <ShipmentLinesFallback docId={s.shipment_doc_id} />
+                <DispatchLinesFallback docId={s.dispatch_doc_id} />
               )}
             </div>
           ))}
@@ -560,16 +560,15 @@ function ReceiptLinesFallback({ docId }: { docId: string }) {
 }
 
 /** Состав отгрузки для рейсов без построчной аллокации (legacy-привязка целиком):
- *  без trip_alloc состав не приходит в детали рейса — дотягиваем строки самой отгрузки.
- *  Зеркало web LinesBody/ShipmentLinesTable. */
-function ShipmentLinesFallback({ docId }: { docId: string }) {
-  const [lines, setLines] = useState<ShipmentLine[] | null>(null)
+ *  без trip_alloc состав не приходит в детали рейса — дотягиваем строки самой отгрузки. */
+function DispatchLinesFallback({ docId }: { docId: string }) {
+  const [lines, setLines] = useState<DispatchLine[] | null>(null)
   const [error, setError] = useState(false)
 
   useEffect(() => {
     const ac = new AbortController()
     setError(false)
-    getShipment(docId, ac.signal)
+    getDispatch(docId, ac.signal)
       .then((d) => {
         if (!ac.signal.aborted) setLines(d.lines)
       })

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Icon } from './Icon'
+import { moscowNowIso } from '../utils/format'
 
 const MONTHS = [
   'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
@@ -70,8 +71,8 @@ export function DateTimeField({
 
   const sel = useMemo(() => parse(draft), [draft])
   const today = useMemo(() => {
-    const n = new Date()
-    return { y: n.getFullYear(), m: n.getMonth(), d: n.getDate() }
+    const t = parse(initialNow())!
+    return { y: t.y, m: t.m, d: t.d }
   }, [open])
 
   function start() {
@@ -195,6 +196,5 @@ export function DateTimeField({
 }
 
 function initialNow(): string {
-  const n = new Date()
-  return build(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes())
+  return moscowNowIso().slice(0, 16)
 }

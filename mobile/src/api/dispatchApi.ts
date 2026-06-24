@@ -34,7 +34,11 @@ export type DispatchListParams = {
   client_id?: string
   search?: string
   cargo_type?: DispatchCargoType
+  available_for_trip_id?: string
 }
+
+// Отгрузки, которые можно увезти рейсом. Зеркало web DISPATCH_TRIP_SELECTABLE_STATUSES.
+export const DISPATCH_TRIP_SELECTABLE_STATUSES = 'preparing,awaiting_trip,partially_shipped'
 
 export type DispatchLineIn = {
   product_id: string
@@ -119,6 +123,7 @@ export function getDispatches(params: DispatchListParams = {}, signal?: AbortSig
   if (params.client_id)  sp.set('client_id', params.client_id)
   if (params.search)     sp.set('search', params.search)
   if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  if (params.available_for_trip_id) sp.set('available_for_trip_id', params.available_for_trip_id)
   const q = sp.toString()
   return request<DispatchListResponse>(`/dispatches${q ? `?${q}` : ''}`, { signal })
 }

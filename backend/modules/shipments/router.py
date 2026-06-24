@@ -812,11 +812,23 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/pack")
-def pack_line(doc_id: str, line_id: str, body: ShipmentLinePackPayload, user=Depends(_get_packer)):
+def pack_line(
+    doc_id: str,
+    line_id: str,
+    body: ShipmentLinePackPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_packer),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_pack")
+        if not proceed:
+            return stored
         packed = record_packing(conn, doc_id, line_id, body.good_delta, body.defect_delta, body.packed_date, uid)
-    return {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+        result = {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.get("/shipments/{doc_id}/lines/{line_id}/packing", response_model=ShipmentPackingResponse)
@@ -853,11 +865,23 @@ def get_packing_productivity(
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/packing/{entry_id}/reverse")
-def reverse_line_packing(doc_id: str, line_id: str, entry_id: str, user=Depends(_get_packer)):
+def reverse_line_packing(
+    doc_id: str,
+    line_id: str,
+    entry_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_packer),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_pack_reverse")
+        if not proceed:
+            return stored
         packed = reverse_packing_entry(conn, doc_id, line_id, entry_id, uid)
-    return {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+        result = {"message": "ok", "packed_good": packed["good"], "packed_defect": packed["defect"]}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/move-to-packing")

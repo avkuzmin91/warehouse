@@ -1,54 +1,38 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { useNav } from '../../nav/NavContext'
+import { useAuth } from '../../auth/AuthContext'
 import {
   getDispatches,
   DISPATCH_STATUS_LABELS,
   dispatchStatusTone,
-  type DispatchListItem,
 } from '../../api/dispatchApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { LoadMore } from '../../components/LoadMore'
 import { PullToRefresh } from '../../components/PullToRefresh'
-
-function fmtDate(d: string | null): string {
-  if (!d) return ''
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-}
+import { canCreateDocuments } from '../../utils/access'
+import { fmtDate } from '../../utils/format'
+import { usePagedList } from '../../hooks/usePagedList'
 
 export function DispatchListScreen() {
   const { openDispatchNew, openDispatchDoc, back } = useNav()
-  const [items, setItems] = useState<DispatchListItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  const load = useCallback((signal?: AbortSignal, silent = false) => {
-    if (!silent) setLoading(true)
-    setError('')
-    return getDispatches({ limit: 50 }, signal)
-      .then((res) => setItems(res.items))
-      .catch((err) => {
-        if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить отгрузки')
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLoading(false)
-      })
-  }, [])
-
-  useEffect(() => {
-    const ac = new AbortController()
-    load(ac.signal)
-    return () => ac.abort()
-  }, [load])
+  const { user } = useAuth()
+  const canCreate = canCreateDocuments(user?.role)
+  const fetchPage = useCallback(
+    (page: number, limit: number, signal?: AbortSignal) => getDispatches({ page, limit }, signal),
+    [],
+  )
+  const { items, total, loading, loadingMore, error, refresh, loadMore, hasMore } = usePagedList(fetchPage)
 
   return (
     <div className="screen">
       <AppBar title="Отгрузки" sub="Документы отгрузки" onBack={back} />
-      <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
-        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openDispatchNew}>
-          <Icon name="plus" size={16} /> Новая отгрузка
-        </button>
+      <PullToRefresh className="scroll pad-nav" onRefresh={refresh}>
+        {canCreate && (
+          <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openDispatchNew}>
+            <Icon name="plus" size={16} /> Новая отгрузка
+          </button>
+        )}
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
@@ -63,7 +47,7 @@ export function DispatchListScreen() {
         ) : items.length === 0 ? (
           <div className="center">
             <div className="center-ico">
-              <Icon name="truckOut" size={26} />
+              <Icon name="forklift" size={26} />
             </div>
             <div>Нет отгрузок</div>
           </div>
@@ -71,16 +55,16 @@ export function DispatchListScreen() {
           <>
             <div className="sec">
               Все документы
-              <span className="sec-count">{items.length}</span>
+              <span className="sec-count">{total}</span>
             </div>
             {items.map((d) => {
               const urgent = d.priority_rank != null && d.priority_rank > 0
               const tone = dispatchStatusTone(d.status)
-              const eta = fmtDate(d.ship_date)
+              const eta = fmtDate(d.ship_date, '')
               return (
                 <button key={d.id} className="tile" onClick={() => openDispatchDoc(d.id)}>
                   <div className={`tile-ico${d.cargo_type === 'defect' ? ' gray' : ''}`}>
-                    <Icon name="truckOut" size={21} />
+                    <Icon name="forklift" size={21} />
                   </div>
                   <div className="tile-body">
                     <div className="tile-title">
@@ -110,6 +94,7 @@ export function DispatchListScreen() {
                 </button>
               )
             })}
+            <LoadMore shown={items.length} total={total} hasMore={hasMore} loadingMore={loadingMore} onMore={loadMore} />
           </>
         )}
       </PullToRefresh>

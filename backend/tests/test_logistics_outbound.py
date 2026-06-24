@@ -72,7 +72,7 @@ def _create_dispatch(admin_client, client_id: str, *, qty: int, cargo: str = "go
     pid = product_id or str(uuid.uuid4())
     r = admin_client.post("/dispatches", json={
         "cargo_type": cargo, "client_id": client_id, "client_name": "Test Client",
-        "destination": "Москва", "ship_date": "2026-06-10",
+        "destination": "Москва", "ship_date": "2026-06-10", "comment": "Тех. задание",
         "lines": [{"product_id": pid, "product_name": "Товар", "product_sku": sku, "qty": qty}],
     })
     assert r.status_code == 200, r.text

@@ -11,6 +11,8 @@ import { ScanProductScreen } from './screens/ScanProductScreen'
 import { StockScreen } from './screens/StockScreen'
 import { TripDetailScreen } from './screens/TripDetailScreen'
 import { ShipmentDetailScreen } from './screens/ShipmentDetailScreen'
+import { ShiftPackingListScreen } from './screens/ShiftPackingListScreen'
+import { ShiftPackingDetailScreen } from './screens/ShiftPackingDetailScreen'
 import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
 import { ReceiptFormScreen } from './screens/manager/ReceiptFormScreen'
 import { ReceiptDetailScreen } from './screens/manager/ReceiptDetailScreen'
@@ -49,6 +51,8 @@ function Main() {
     case 'stock':     screen = <StockScreen />; break
     case 'trip':      screen = <TripDetailScreen tripId={route.id} />; break
     case 'shipment':  screen = <ShipmentDetailScreen shipmentId={route.id} />; break
+    case 'packing':   screen = <ShiftPackingListScreen />; break
+    case 'packDoc':   screen = <ShiftPackingDetailScreen shipmentId={route.id} />; break
   }
   return (
     <>

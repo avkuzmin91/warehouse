@@ -8,18 +8,7 @@ import {
 } from '../../api/receiptsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
-
-function fmtDate(d: string | null): string {
-  if (!d) return '—'
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return d
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-}
-function fmtDateTime(d: string): string {
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return d
-  return dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
+import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function ReceiptDetailScreen({ docId }: { docId: string }) {
   const { back } = useNav()
@@ -72,28 +61,32 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
             </div>
 
             <div className="sec">Строки<span className="sec-count">{detail.lines.length}</span></div>
-            {detail.lines.map((l) => (
-              <div key={l.id} className="line-row" style={{ marginTop: 0, padding: '8px 0', borderBottom: '1px solid var(--c-border)' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name ?? '—'}</div>
-                  <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
+            <div className="line" style={{ padding: '2px 14px' }}>
+              {detail.lines.map((l) => (
+                <div key={l.id} className="docline">
+                  <div className="docline-main">
+                    <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name ?? '—'}</div>
+                    <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
+                  </div>
+                  <div className="docline-qty">
+                    <div className="big">план {l.planned_qty}</div>
+                    {l.accepted_qty != null && <div className="small">принято {l.accepted_qty}</div>}
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <div className="mono">план {l.planned_qty}</div>
-                  {l.accepted_qty != null && <div className="tile-meta mono">принято {l.accepted_qty}</div>}
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
 
             {detail.ops.length > 0 && (
               <>
                 <div className="sec" style={{ marginTop: 16 }}>История<span className="sec-count">{detail.ops.length}</span></div>
-                {detail.ops.map((op) => (
-                  <div key={op.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--c-border)' }}>
-                    <div style={{ fontSize: 13 }}>{op.comment ?? op.op_type}</div>
-                    <div className="tile-meta">{fmtDateTime(op.created_at)}{op.created_by_email ? ` · ${op.created_by_email}` : ''}</div>
-                  </div>
-                ))}
+                <div className="line" style={{ padding: '2px 14px' }}>
+                  {detail.ops.map((op) => (
+                    <div key={op.id} className="oprow">
+                      <div className="oprow-t">{op.comment ?? op.op_type}</div>
+                      <div className="oprow-m">{fmtDateTime(op.created_at)}{op.created_by_email ? ` · ${op.created_by_email}` : ''}</div>
+                    </div>
+                  ))}
+                </div>
               </>
             )}
           </>

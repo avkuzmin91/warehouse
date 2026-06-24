@@ -1,54 +1,38 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { useNav } from '../../nav/NavContext'
+import { useAuth } from '../../auth/AuthContext'
 import {
   getReceipts,
   RECEIPT_STATUS_LABELS,
   receiptStatusTone,
-  type ReceiptListItem,
 } from '../../api/receiptsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { LoadMore } from '../../components/LoadMore'
 import { PullToRefresh } from '../../components/PullToRefresh'
-
-function fmtDate(d: string | null): string {
-  if (!d) return ''
-  const dt = new Date(d)
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-}
+import { canCreateDocuments } from '../../utils/access'
+import { fmtDate } from '../../utils/format'
+import { usePagedList } from '../../hooks/usePagedList'
 
 export function ReceiptsListScreen() {
   const { openReceiptNew, openReceiptDoc, back } = useNav()
-  const [items, setItems] = useState<ReceiptListItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  const load = useCallback((signal?: AbortSignal, silent = false) => {
-    if (!silent) setLoading(true)
-    setError('')
-    return getReceipts({ limit: 50 }, signal)
-      .then((res) => setItems(res.items))
-      .catch((err) => {
-        if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить поступления')
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLoading(false)
-      })
-  }, [])
-
-  useEffect(() => {
-    const ac = new AbortController()
-    load(ac.signal)
-    return () => ac.abort()
-  }, [load])
+  const { user } = useAuth()
+  const canCreate = canCreateDocuments(user?.role)
+  const fetchPage = useCallback(
+    (page: number, limit: number, signal?: AbortSignal) => getReceipts({ page, limit }, signal),
+    [],
+  )
+  const { items, total, loading, loadingMore, error, refresh, loadMore, hasMore } = usePagedList(fetchPage)
 
   return (
     <div className="screen">
       <AppBar title="Поступления" sub="Документы приёмки" onBack={back} />
-      <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
-        <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openReceiptNew}>
-          <Icon name="plus" size={16} /> Новое поступление
-        </button>
+      <PullToRefresh className="scroll pad-nav" onRefresh={refresh}>
+        {canCreate && (
+          <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={openReceiptNew}>
+            <Icon name="plus" size={16} /> Новое поступление
+          </button>
+        )}
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
@@ -63,7 +47,7 @@ export function ReceiptsListScreen() {
         ) : items.length === 0 ? (
           <div className="center">
             <div className="center-ico">
-              <Icon name="truckIn" size={26} />
+              <Icon name="dolly" size={26} />
             </div>
             <div>Нет поступлений</div>
           </div>
@@ -71,15 +55,15 @@ export function ReceiptsListScreen() {
           <>
             <div className="sec">
               Все документы
-              <span className="sec-count">{items.length}</span>
+              <span className="sec-count">{total}</span>
             </div>
             {items.map((r) => {
               const tone = receiptStatusTone(r.status)
-              const eta = fmtDate(r.arrival_date)
+              const eta = fmtDate(r.arrival_date, '')
               return (
                 <button key={r.id} className="tile" onClick={() => openReceiptDoc(r.id)}>
                   <div className="tile-ico">
-                    <Icon name="truckIn" size={21} />
+                    <Icon name="dolly" size={21} />
                   </div>
                   <div className="tile-body">
                     <div className="tile-title">
@@ -101,6 +85,7 @@ export function ReceiptsListScreen() {
                 </button>
               )
             })}
+            <LoadMore shown={items.length} total={total} hasMore={hasMore} loadingMore={loadingMore} onMore={loadMore} />
           </>
         )}
       </PullToRefresh>

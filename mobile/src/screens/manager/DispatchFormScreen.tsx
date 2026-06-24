@@ -25,7 +25,7 @@ function lineSub(l: DraftLine): string {
 }
 
 export function DispatchFormScreen() {
-  const { back, goTab } = useNav()
+  const { back } = useNav()
   const [cargoType, setCargoType] = useState<DispatchCargoType>('good')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
@@ -33,6 +33,7 @@ export function DispatchFormScreen() {
   const [stores, setStores] = useState<ClientStoreItem[]>([])
   const [shipDate, setShipDate] = useState('')
   const [logisticsCost, setLogisticsCost] = useState('')
+  const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
@@ -68,6 +69,7 @@ export function DispatchFormScreen() {
   if (!clientId) blockReasons.push('Выберите клиента')
   if (!shipDate) blockReasons.push('Укажите дату отгрузки')
   if (!costFilled) blockReasons.push('Укажите стоимость логистики')
+  if (comment.trim() === '') blockReasons.push('Заполните техническое задание')
   if (lines.length === 0) blockReasons.push('Добавьте хотя бы одну позицию')
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
   if (!allOnStock) blockReasons.push('Часть товара ещё в пути — сохраните черновик и передайте в рейс после прихода')
@@ -139,6 +141,7 @@ export function DispatchFormScreen() {
         client_name: clientName,
         ship_date: shipDate || null,
         logistics_cost: costFilled ? costNum : null,
+        comment: comment.trim() || null,
         lines: lines.map((l) => ({
           product_id: l.product_id,
           product_name: l.product_name,
@@ -154,7 +157,7 @@ export function DispatchFormScreen() {
         })),
       })
       if (advance) await advanceDispatch(res.message)
-      goTab('mDispatch')
+      back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
       setSaving(false)
@@ -204,6 +207,18 @@ export function DispatchFormScreen() {
           />
         </div>
 
+        <div className="field">
+          <div className="flabel">Техническое задание <span className="req">*</span></div>
+          <textarea
+            className="input"
+            rows={3}
+            placeholder="Опишите задачу для команды склада"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            style={{ resize: 'vertical', minHeight: 76 }}
+          />
+        </div>
+
         <div className="sec" style={{ marginTop: 4 }}>
           Состав
           <span className="sec-count">{lines.length}</span>
@@ -218,7 +233,7 @@ export function DispatchFormScreen() {
             const overCap = l.qty > l.ready + l.onHand + l.inTransit
             const waiting = !overCap && l.qty > l.ready + l.onHand
             return (
-              <div key={l._uid} style={{ padding: '10px 0', borderBottom: '1px solid var(--c-border)' }}>
+              <div key={l._uid} className="formline">
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
@@ -227,26 +242,24 @@ export function DispatchFormScreen() {
                       {isDefect
                         ? `брак ${l.onHand}`
                         : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
-                      {!isDefect && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
-                      {overCap ? ' · превышение' : waiting ? ' · ждёт прихода' : ''}
+                      {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
+                      {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">ждёт прихода</span></> : ''}
                     </div>
                   </div>
-                  <button className="btn ghost" onClick={() => removeLine(l._uid)} aria-label="Удалить">
+                  <button className="icon-btn danger" onClick={() => removeLine(l._uid)} aria-label="Удалить">
                     <Icon name="trash" size={15} />
                   </button>
                 </div>
 
                 <div className="line-row" style={{ marginTop: 8, gap: 6 }}>
-                  <button className="btn ghost" onClick={() => setQty(l._uid, l.qty - 1)} aria-label="Меньше">−</button>
                   <input
                     className="input num"
                     inputMode="numeric"
                     value={l.qty ? String(l.qty) : ''}
                     placeholder="0"
+                    aria-label="Количество"
                     onChange={(e) => setQty(l._uid, parseInt(e.target.value.replace(/\D/g, ''), 10) || 1)}
-                    style={{ width: 56 }}
                   />
-                  <button className="btn ghost" onClick={() => setQty(l._uid, l.qty + 1)} aria-label="Больше">+</button>
                   <div style={{ flex: 1 }}>
                     <Combobox
                       value={l.store_id ?? ''}
