@@ -223,6 +223,29 @@ button {
   text-transform: none;
 }
 
+/* Сворачиваемая секция (журнал/история): кнопка-заголовок */
+.sec-toggle {
+  width: 100%;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.sec-toggle .sec-l {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sec-toggle .sec-chev {
+  color: var(--c-text-faint);
+  transition: transform 0.15s ease;
+}
+.sec-toggle.open .sec-chev {
+  transform: rotate(90deg);
+}
+
 /* ============================================================
    Плитки-строки списков
    ============================================================ */
@@ -359,6 +382,12 @@ button {
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
 
+/* Раскладка остатков (упаковано/склад/в пути) в окне выбора товара — отдельная
+   строка переносимых бейджей, чтобы цифры не обрезались длинным SKU/вариантом. */
+.stock-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.stock-row .badge { height: 20px; padding: 0 7px; font-size: 11px; }
+.stock-row .badge b { font-weight: 700; font-variant-numeric: tabular-nums; }
+
 /* ============================================================
    Кнопки / поля
    ============================================================ */
@@ -391,6 +420,9 @@ button {
 .btn.ghost:active { background: var(--c-bg-active); }
 .btn.sm { height: 44px; font-size: 14px; }
 .btn.auto { width: auto; padding: 0 18px; }
+.btn.danger { background: var(--c-danger); border-color: var(--c-danger); box-shadow: none; }
+.btn.danger:active { background: color-mix(in srgb, var(--c-danger) 85%, #000); }
+.btn.ghost.danger { background: var(--c-bg-elev); color: var(--c-danger); border-color: color-mix(in srgb, var(--c-danger) 30%, var(--c-border)); }
 
 /* Компактная иконочная кнопка — действие на строке, не занимает отдельный ряд. */
 .icon-btn {
@@ -445,6 +477,15 @@ button {
   font-family: var(--font-mono);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.textarea {
+  height: auto;
+  min-height: 50px;
+  padding: 12px 14px;
+  line-height: 1.45;
+  resize: none;
+  overflow: hidden;
 }
 
 .inputwrap { position: relative; display: flex; align-items: center; }

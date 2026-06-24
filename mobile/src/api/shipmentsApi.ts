@@ -112,6 +112,31 @@ export function createShipment(body: ShipmentDocCreate): Promise<{ message: stri
   return request<{ message: string }>('/shipments', { method: 'POST', body: JSON.stringify(body) })
 }
 
+export type ShipmentDocUpdate = {
+  cargo_type?: 'good' | 'defect'
+  client_id?: string | null
+  client_name?: string | null
+  ship_date?: string | null
+  comment?: string | null
+}
+
+// Правка черновика/плана: PATCH шлёт только заполненные поля (бэк exclude_unset).
+export function updateShipment(id: string, body: ShipmentDocUpdate): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function addShipmentLine(docId: string, body: ShipmentLineIn): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateShipmentLine(docId: string, lineId: string, body: ShipmentLineIn): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function deleteShipmentLine(docId: string, lineId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
+}
+
 export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<{ message: string }> {
   const form = new FormData()
   form.append('file', file)

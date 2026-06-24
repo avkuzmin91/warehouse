@@ -42,6 +42,9 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
   const lineUidSeq = useRef(0)
+  // Черновик, созданный при первом нажатии «В ожидание рейса»: переиспользуем его id при
+  // повторном нажатии, чтобы не плодить документы, если advance упал на гейте.
+  const createdIdRef = useRef<string | null>(null)
 
   const { clients } = useLookups()
   const { user } = useCurrentUser()
@@ -63,15 +66,18 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     return () => controller.abort()
   }, [clientId])
 
+  useEffect(() => { createdIdRef.current = null }, [lines, clientId, cargoType, shipDate, logisticsCost])
+
   const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
-  // Доступно к передаче в подготовку сразу — «упаковано + склад» (ready + storage):
-  // бэкенд отгружает годный прежде всего из упакованного, добирая со склада. Сверх этого,
-  // но в пределах «+ в пути» — черновик сохранить можно, передать в подготовку — только
-  // когда товар придёт.
+  // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
+  // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
+  // не упакованный, и товар в пути можно сохранить черновиком, но не передать в подготовку.
+  const srcAvail = (l: DraftLine) => (isDefectCargo ? l.onHand : l.ready)
+  const hasNotPacked = lines.some((l) => !isDefectCargo && l.qty > l.ready && l.qty <= l.ready + l.onHand)
   const hasInTransit = lines.some((l) => l.qty > l.ready + l.onHand && l.qty <= l.ready + l.onHand + l.inTransit)
   const hasOverCap = lines.some((l) => l.qty > l.ready + l.onHand + l.inTransit)
-  const allOnStock = lines.every((l) => l.qty <= l.ready + l.onHand)
+  const allReady = lines.every((l) => l.qty <= srcAvail(l))
   const logisticsCostNumber = Number(logisticsCost)
   const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
@@ -82,7 +88,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
-    { ok: allOnStock, label: 'Весь товар на остатках', error: 'Часть товара ещё в пути — сохраните черновик и передайте в рейс после прихода' },
+    { ok: allReady, label: isDefectCargo ? 'Брак доступен на складе' : 'Товар упакован', error: isDefectCargo ? 'Часть брака недоступна на складе — уменьшите количество' : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -150,27 +156,33 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     setError('')
     setSaving(true)
     try {
-      const res = await createDispatch({
-        cargo_type:  cargoType,
-        client_id:   clientId || null,
-        client_name: clientName || null,
-        ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
-        ship_date:   shipDate || null,
-        lines: lines.map((line) => ({
-          product_id:   line.product_id,
-          product_name: line.product_name,
-          product_sku:  line.product_sku,
-          color_id:     line.color_id,
-          color_name:   line.color_name,
-          size_id:      line.size_id,
-          size_name:    line.size_name,
-          qty:          line.qty,
-          site_url:     line.site_url || null,
-          store_id:     line.store_id ?? null,
-          store_name:   line.store_name ?? null,
-        })),
-      })
-      const docId = res.message
+      // Если черновик уже создан (advance ранее упал на гейте) — переиспользуем его id,
+      // чтобы повторное нажатие не плодило новые документы. Ссылка сбрасывается при правке формы.
+      let docId = createdIdRef.current
+      if (!docId) {
+        const res = await createDispatch({
+          cargo_type:  cargoType,
+          client_id:   clientId || null,
+          client_name: clientName || null,
+          ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
+          ship_date:   shipDate || null,
+          lines: lines.map((line) => ({
+            product_id:   line.product_id,
+            product_name: line.product_name,
+            product_sku:  line.product_sku,
+            color_id:     line.color_id,
+            color_name:   line.color_name,
+            size_id:      line.size_id,
+            size_name:    line.size_name,
+            qty:          line.qty,
+            site_url:     line.site_url || null,
+            store_id:     line.store_id ?? null,
+            store_name:   line.store_name ?? null,
+          })),
+        })
+        docId = res.message
+        createdIdRef.current = docId
+      }
       if (toAwaiting) await advanceDispatch(docId)
       navigate(`/inventory/dispatches/${docId}`)
     } catch (e) {
@@ -238,6 +250,11 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
           <span>Часть товара ещё в пути. Сохраните черновик — передать в рейс можно будет после прихода.</span>
         </Alert>
       )}
+      {!hasOverCap && !hasInTransit && hasNotPacked && (
+        <Alert tone="info" style={{ marginBottom: 14 }}>
+          <span>Часть товара ещё не упакована. Отгрузить можно только упакованный товар — создайте задачу упаковки, а пока сохраните черновик.</span>
+        </Alert>
+      )}
 
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
@@ -302,7 +319,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                 <tbody>
                   {lines.map((l) => {
                     const overCap = l.qty > l.ready + l.onHand + l.inTransit
-                    const waiting = !overCap && l.qty > l.ready + l.onHand
+                    const waiting = !overCap && l.qty > srcAvail(l)
                     return (
                       <tr key={l._uid} style={overCap ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td>

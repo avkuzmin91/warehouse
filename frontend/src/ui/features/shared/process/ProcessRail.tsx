@@ -36,9 +36,12 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
               <div style={{
                 width: 22, height: 22, borderRadius: 99, flexShrink: 0, zIndex: 1,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: future ? 'var(--c-bg-elev)' : dotColor,
-                border: future ? '1.5px dashed var(--c-border-strong)' : `1.5px solid ${dotColor}`,
-                color: future ? 'var(--c-text-faint)' : '#fff',
+                // done — сплошная заливка (зелёный) + галочка; active — «полый» кружок
+                // с цветной рамкой и иконкой роли. Иначе active-шаг роли «Начальник
+                // склада» (акцент = зелёный) сливается с зелёным done-шагом.
+                background: done ? dotColor : 'var(--c-bg-elev)',
+                border: future ? '1.5px dashed var(--c-border-strong)' : `${active ? 2 : 1.5}px solid ${dotColor}`,
+                color: done ? '#fff' : active ? dotColor : 'var(--c-text-faint)',
                 boxShadow: active ? `0 0 0 4px color-mix(in oklab, ${dotColor} 16%, transparent)` : 'none',
               }}>
                 {done ? <Icon name="check" size={11} /> : <Icon name={step.icon} size={11} />}

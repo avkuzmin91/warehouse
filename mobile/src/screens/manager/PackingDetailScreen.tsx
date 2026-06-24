@@ -12,7 +12,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function PackingDetailScreen({ docId }: { docId: string }) {
-  const { back } = useNav()
+  const { back, openPackingEdit } = useNav()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -70,6 +70,12 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                 </div>
               ))}
             </div>
+
+            {doc.status === 'draft' && (
+              <button className="btn" style={{ marginTop: 16 }} onClick={() => openPackingEdit(doc.id)}>
+                <Icon name="edit" size={15} /> Редактировать черновик
+              </button>
+            )}
           </>
         )}
       </div>

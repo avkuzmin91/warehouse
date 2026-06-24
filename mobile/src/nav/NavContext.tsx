@@ -24,10 +24,14 @@ export type Route =
   | { name: 'scanProduct'; match: BarcodeMatch }
   | { name: 'receiptNew' }
   | { name: 'shipmentNew' }
+  | { name: 'shipmentEdit'; id: string }
   | { name: 'dispatchNew' }
+  | { name: 'dispatchEdit'; id: string }
+  | { name: 'tripNew' }
   | { name: 'mReceiptDoc'; id: string }
   | { name: 'mPackingDoc'; id: string }
   | { name: 'mDispatchDoc'; id: string }
+  | { name: 'mTripDoc'; id: string }
 
 type NavState = {
   route: Route
@@ -47,10 +51,14 @@ type NavState = {
   openDispatchList: () => void
   openReceiptNew: () => void
   openShipmentNew: () => void
+  openPackingEdit: (id: string) => void
   openDispatchNew: () => void
+  openDispatchEdit: (id: string) => void
+  openTripNew: () => void
   openReceiptDoc: (id: string) => void
   openPackingDoc: (id: string) => void
   openDispatchDoc: (id: string) => void
+  openManagerTrip: (id: string) => void
   back: () => void
 }
 
@@ -88,10 +96,14 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openDispatchList: () => setStack((s) => [...s, { name: 'mDispatch' }]),
     openReceiptNew: () => setStack((s) => [...s, { name: 'receiptNew' }]),
     openShipmentNew: () => setStack((s) => [...s, { name: 'shipmentNew' }]),
+    openPackingEdit: (id) => setStack((s) => [...s, { name: 'shipmentEdit', id }]),
     openDispatchNew: () => setStack((s) => [...s, { name: 'dispatchNew' }]),
+    openDispatchEdit: (id) => setStack((s) => [...s, { name: 'dispatchEdit', id }]),
+    openTripNew: () => setStack((s) => [...s, { name: 'tripNew' }]),
     openReceiptDoc: (id) => setStack((s) => [...s, { name: 'mReceiptDoc', id }]),
     openPackingDoc: (id) => setStack((s) => [...s, { name: 'mPackingDoc', id }]),
     openDispatchDoc: (id) => setStack((s) => [...s, { name: 'mDispatchDoc', id }]),
+    openManagerTrip: (id) => setStack((s) => [...s, { name: 'mTripDoc', id }]),
     back: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
   }
   return <NavCtx.Provider value={value}>{children}</NavCtx.Provider>

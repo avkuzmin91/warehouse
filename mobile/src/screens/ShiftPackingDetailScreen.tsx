@@ -15,6 +15,7 @@ import {
 import { AppBar } from '../components/AppBar'
 import { DateField } from '../components/DateField'
 import { Icon } from '../components/Icon'
+import { CollapsibleSection } from '../components/CollapsibleSection'
 import { fmtDate, moscowTodayYmd, variantTitle } from '../utils/format'
 
 function lineTitle(l: ShipmentLine): string {
@@ -395,7 +396,7 @@ function PackLineSheet({
           </button>
         </div>
 
-        <div className="sec" style={{ marginTop: 16 }}>История упаковки</div>
+        <CollapsibleSection title="История упаковки" count={histLoading ? undefined : entries.length} style={{ marginTop: 16 }}>
         {histLoading ? (
           <div className="line-sub" style={{ textAlign: 'center', padding: '12px 0' }}>Загрузка…</div>
         ) : entries.length === 0 ? (
@@ -421,6 +422,7 @@ function PackLineSheet({
             </div>
           ))
         )}
+        </CollapsibleSection>
       </div>
     </div>
   )

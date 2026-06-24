@@ -66,12 +66,18 @@ export type DispatchDocCreate = {
 
 export type DispatchLine = {
   id: string
+  product_id: string
   product_name: string
   product_sku: string
+  sku_pending: boolean
+  color_id: string | null
   color_name: string | null
+  size_id: string | null
   size_name: string | null
   qty: number
   shipped_qty: number
+  site_url: string | null
+  store_id: string | null
   store_name: string | null
   remaining: number
 }
@@ -88,6 +94,7 @@ export type DispatchDetail = {
   id: string
   doc_number: string
   cargo_type: DispatchCargoType
+  client_id: string | null
   client_name: string | null
   logistics_cost: number | null
   ship_date: string | null
@@ -108,6 +115,39 @@ export function getDispatch(id: string, signal?: AbortSignal): Promise<DispatchD
 
 export function createDispatch(body: DispatchDocCreate): Promise<{ message: string }> {
   return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export type DispatchDocUpdate = {
+  cargo_type?: DispatchCargoType
+  client_id?: string | null
+  client_name?: string | null
+  logistics_cost?: number | null
+  ship_date?: string | null
+  comment?: string | null
+}
+
+// Правка черновика: PATCH шлёт только заполненные поля (бэк exclude_unset).
+export function updateDispatch(id: string, body: DispatchDocUpdate): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export type DispatchLineUpdate = {
+  qty?: number
+  site_url?: string | null
+  store_id?: string | null
+  store_name?: string | null
+}
+
+export function addDispatchLine(docId: string, body: DispatchLineIn): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${docId}/lines`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateDispatchLine(docId: string, lineId: string, body: DispatchLineUpdate): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function deleteDispatchLine(docId: string, lineId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
 
 export function advanceDispatch(id: string): Promise<{ message: string }> {

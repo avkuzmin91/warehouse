@@ -8,6 +8,7 @@ import {
 } from '../../api/receiptsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function ReceiptDetailScreen({ docId }: { docId: string }) {
@@ -77,8 +78,7 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
             </div>
 
             {detail.ops.length > 0 && (
-              <>
-                <div className="sec" style={{ marginTop: 16 }}>История<span className="sec-count">{detail.ops.length}</span></div>
+              <CollapsibleSection title="История" count={detail.ops.length} style={{ marginTop: 16 }}>
                 <div className="line" style={{ padding: '2px 14px' }}>
                   {detail.ops.map((op) => (
                     <div key={op.id} className="oprow">
@@ -87,7 +87,7 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
                     </div>
                   ))}
                 </div>
-              </>
+              </CollapsibleSection>
             )}
           </>
         )}

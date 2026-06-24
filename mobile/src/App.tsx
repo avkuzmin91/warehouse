@@ -23,7 +23,9 @@ import { DispatchListScreen } from './screens/manager/DispatchListScreen'
 import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
 import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
 import { WarehouseHubScreen } from './screens/manager/WarehouseHubScreen'
-import { ManagerTripsScreen } from './screens/manager/ManagerTripsScreen'
+import { ManagerTripsListScreen } from './screens/manager/ManagerTripsListScreen'
+import { TripFormScreen } from './screens/manager/TripFormScreen'
+import { ManagerTripDetailScreen } from './screens/manager/ManagerTripDetailScreen'
 
 function Main() {
   // Таб-бар — только на «корневых» вкладках (isTab). На детальных экранах есть своя
@@ -34,16 +36,20 @@ function Main() {
     case 'tasks':     screen = <TasksScreen />; break
     case 'trips':     screen = <TripsListScreen />; break
     case 'shipments': screen = <ShipmentsListScreen />; break
-    case 'mTrips':    screen = <ManagerTripsScreen />; break
+    case 'mTrips':    screen = <ManagerTripsListScreen />; break
+    case 'tripNew':   screen = <TripFormScreen />; break
+    case 'mTripDoc':  screen = <ManagerTripDetailScreen tripId={route.id} />; break
     case 'mWarehouse': screen = <WarehouseHubScreen />; break
     case 'mReceipts': screen = <ReceiptsListScreen />; break
     case 'receiptNew': screen = <ReceiptFormScreen />; break
     case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break
     case 'mPacking':  screen = <PackingListScreen />; break
     case 'shipmentNew': screen = <ShipmentFormScreen />; break
+    case 'shipmentEdit': screen = <ShipmentFormScreen docId={route.id} />; break
     case 'mPackingDoc': screen = <PackingDetailScreen docId={route.id} />; break
     case 'mDispatch': screen = <DispatchListScreen />; break
     case 'dispatchNew': screen = <DispatchFormScreen />; break
+    case 'dispatchEdit': screen = <DispatchFormScreen docId={route.id} />; break
     case 'mDispatchDoc': screen = <DispatchDetailScreen docId={route.id} />; break
     case 'profile':   screen = <ProfileScreen />; break
     case 'scan':      screen = <ScanScreen />; break

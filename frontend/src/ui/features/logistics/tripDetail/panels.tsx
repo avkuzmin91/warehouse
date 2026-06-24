@@ -4,7 +4,7 @@ import type { IconName } from '../../../primitives/Icon'
 import type { TripOp, TripStatus } from '../../../../api/tripsApi'
 import { ProcessRail } from '../components/ProcessRail'
 import { CostLedger } from '../components/CostLedger'
-import { fmtDateTime } from './format'
+import { OpEntry } from './components/OpEntry'
 
 /** Карточка-обёртка (по образцу .card / .card-head проекта). */
 export function Panel({ icon, iconColor = 'var(--c-accent)', title, right, children, bodyPad = true }: {
@@ -52,18 +52,13 @@ export function CostPanel({ estimate, actual, waiting, showActual }: {
 
 export function JournalPanel({ ops }: { ops: TripOp[] }) {
   return (
-    <Panel icon="layers" title="Журнал">
+    <Panel icon="layers" title="Журнал" right={ops.length > 0 ? <span className="t-sub">{ops.length}</span> : undefined} bodyPad={false}>
       {ops.length === 0 ? (
-        <div className="t-sub">Нет операций</div>
+        <div className="t-sub" style={{ padding: 14 }}>Нет операций</div>
       ) : (
-        <div className="col gap-8">
+        <div style={{ padding: '6px 14px 10px' }}>
           {ops.map((op) => (
-            <div key={op.id} style={{ fontSize: 12.5 }}>
-              <div>{op.comment ?? op.op_type}</div>
-              <div className="t-sub" style={{ fontSize: 11 }}>
-                {fmtDateTime(op.created_at)}{op.created_by_email ? ` · ${op.created_by_email}` : ''}
-              </div>
-            </div>
+            <OpEntry key={op.id} op={op} />
           ))}
         </div>
       )}

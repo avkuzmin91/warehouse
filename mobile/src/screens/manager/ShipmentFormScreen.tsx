@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import {
   createShipment,
+  updateShipment,
+  addShipmentLine,
+  updateShipmentLine,
+  deleteShipmentLine,
   advanceShipment,
   getShipment,
   uploadShipmentLineFile,
@@ -9,11 +13,12 @@ import {
 } from '../../api/shipmentsApi'
 import { newRequestId } from '../../api/http'
 import { getClients, getClientStores, type DictionaryItem, type ClientStoreItem } from '../../api/lookupsApi'
-import type { PlannableItem, InvQuality } from '../../api/balancesApi'
+import { getPlannableItems, type PlannableItem, type InvQuality } from '../../api/balancesApi'
 import { balanceKey } from '../../utils/balanceKey'
 import { AppBar } from '../../components/AppBar'
 import { Combobox } from '../../components/Combobox'
 import { DateField } from '../../components/DateField'
+import { TextArea } from '../../components/TextArea'
 import { Icon } from '../../components/Icon'
 import { BalancePickerSheet } from './BalancePickerSheet'
 import { AssignSkuSheet } from './AssignSkuSheet'
@@ -31,6 +36,7 @@ function validateFile(file: File): string | null {
 type DraftLine = ShipmentLineIn & {
   _uid: string
   _key: string
+  _serverId: string | null
   onHand: number
   inTransit: number
   sku_pending: boolean
@@ -41,8 +47,9 @@ function lineSub(l: DraftLine): string {
   return [l.product_sku || 'без SKU', l.color_name, l.size_name].filter(Boolean).join(' · ')
 }
 
-export function ShipmentFormScreen() {
+export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
   const { back } = useNav()
+  const editing = !!docId
   const [cargoType, setCargoType] = useState<InvQuality>('good')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
@@ -53,9 +60,11 @@ export function ShipmentFormScreen() {
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
+  const [loadingDoc, setLoadingDoc] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const uidSeq = useRef(0)
+  const initialServerIds = useRef<Set<string>>(new Set())
 
   const isDefect = cargoType === 'defect'
 
@@ -66,6 +75,59 @@ export function ShipmentFormScreen() {
       .catch(() => { /* aborted */ })
     return () => ac.abort()
   }, [])
+
+  useEffect(() => {
+    if (!docId) return
+    const ac = new AbortController()
+    setLoadingDoc(true)
+    ;(async () => {
+      try {
+        const d = await getShipment(docId, ac.signal)
+        if (ac.signal.aborted) return
+        const plannable = await getPlannableItems(
+          { client_id: d.client_id || undefined, cargo_type: d.cargo_type, limit: 1000 },
+          ac.signal,
+        ).then((r) => r.items).catch(() => [] as PlannableItem[])
+        if (ac.signal.aborted) return
+        const byKey = new Map(plannable.map((p) => [balanceKey(p), p]))
+        const initIds = new Set<string>()
+        setCargoType(d.cargo_type)
+        setClientId(d.client_id ?? '')
+        setClientName(d.client_name)
+        setShipDate(d.ship_date ?? '')
+        setComment(d.comment ?? '')
+        setLines(d.lines.map((l) => {
+          initIds.add(l.id)
+          const p = byKey.get(balanceKey(l))
+          return {
+            _uid: `line-${uidSeq.current++}`,
+            _key: balanceKey(l),
+            _serverId: l.id,
+            product_id: l.product_id,
+            product_name: l.product_name,
+            product_sku: l.product_sku,
+            color_id: l.color_id,
+            color_name: l.color_name,
+            size_id: l.size_id,
+            size_name: l.size_name,
+            qty: l.qty,
+            onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
+            inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
+            sku_pending: !!p?.sku_pending,
+            store_id: l.store_id,
+            store_name: l.store_name,
+            files: [],
+          }
+        }))
+        initialServerIds.current = initIds
+      } catch (e) {
+        if (!ac.signal.aborted) setError(e instanceof Error ? e.message : 'Не удалось загрузить документ')
+      } finally {
+        if (!ac.signal.aborted) setLoadingDoc(false)
+      }
+    })()
+    return () => ac.abort()
+  }, [docId])
 
   useEffect(() => {
     if (!clientId) { setStores([]); return }
@@ -105,6 +167,7 @@ export function ShipmentFormScreen() {
       ...rows.map(({ item: b, qty }) => ({
         _uid: `line-${uidSeq.current++}`,
         _key: balanceKey(b),
+        _serverId: null as string | null,
         product_id: b.product_id,
         product_name: b.product_name,
         product_sku: b.product_sku,
@@ -150,6 +213,22 @@ export function ShipmentFormScreen() {
     setSkuLine(null)
   }
 
+  function lineToIn(l: DraftLine): ShipmentLineIn {
+    return {
+      product_id: l.product_id,
+      product_name: l.product_name,
+      product_sku: l.product_sku,
+      color_id: l.color_id,
+      color_name: l.color_name,
+      size_id: l.size_id,
+      size_name: l.size_name,
+      qty: l.qty,
+      store_id: l.store_id ?? null,
+      store_name: l.store_name ?? null,
+    }
+  }
+
+  // Создание: файлы грузим после получения id строк (матч по ключу+магазину).
   async function uploadDraftFiles(docId: string) {
     const withFiles = lines.filter((l) => l.files.length > 0)
     if (withFiles.length === 0) return
@@ -166,6 +245,47 @@ export function ShipmentFormScreen() {
     }
   }
 
+  async function saveCreate(): Promise<string> {
+    const res = await createShipment({
+      cargo_type: cargoType,
+      client_id: clientId,
+      client_name: clientName,
+      ship_date: shipDate || null,
+      comment: comment.trim() || null,
+      lines: lines.map(lineToIn),
+    })
+    const newId = res.message
+    await uploadDraftFiles(newId)
+    return newId
+  }
+
+  // Правка: PATCH реквизитов + синхронизация строк (новые → POST, изменённые → PATCH,
+  // удалённые → DELETE). Новые файлы догружаем по серверным id строк.
+  async function saveEdit(id: string): Promise<void> {
+    await updateShipment(id, {
+      cargo_type: cargoType,
+      client_id: clientId,
+      client_name: clientName,
+      ship_date: shipDate || null,
+      comment: comment.trim() || null,
+    })
+    const present = new Set<string>()
+    for (const l of lines) {
+      if (l._serverId) {
+        present.add(l._serverId)
+        await updateShipmentLine(id, l._serverId, lineToIn(l))
+        for (const file of l.files) await uploadShipmentLineFile(id, l._serverId, file)
+      } else {
+        const res = await addShipmentLine(id, lineToIn(l))
+        const newLineId = res.message
+        for (const file of l.files) await uploadShipmentLineFile(id, newLineId, file)
+      }
+    }
+    for (const oldId of initialServerIds.current) {
+      if (!present.has(oldId)) await deleteShipmentLine(id, oldId)
+    }
+  }
+
   async function save(plan: boolean) {
     if (saving) return
     if (plan && blockReasons.length > 0) { setError(blockReasons[0]); return }
@@ -173,28 +293,9 @@ export function ShipmentFormScreen() {
     setError('')
     setSaving(true)
     try {
-      const res = await createShipment({
-        cargo_type: cargoType,
-        client_id: clientId,
-        client_name: clientName,
-        ship_date: shipDate || null,
-        comment: comment.trim() || null,
-        lines: lines.map((l) => ({
-          product_id: l.product_id,
-          product_name: l.product_name,
-          product_sku: l.product_sku,
-          color_id: l.color_id,
-          color_name: l.color_name,
-          size_id: l.size_id,
-          size_name: l.size_name,
-          qty: l.qty,
-          store_id: l.store_id ?? null,
-          store_name: l.store_name ?? null,
-        })),
-      })
-      const docId = res.message
-      await uploadDraftFiles(docId)
-      if (plan) await advanceShipment(docId, newRequestId())
+      const id = editing ? (docId as string) : await saveCreate()
+      if (editing) await saveEdit(id)
+      if (plan) await advanceShipment(id, newRequestId())
       back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
@@ -204,9 +305,23 @@ export function ShipmentFormScreen() {
 
   const storeOptions = stores.map((s) => ({ value: s.id, label: s.name }))
 
+  if (loadingDoc) {
+    return (
+      <div className="screen">
+        <AppBar title="Задача упаковки" sub="Загрузка…" onBack={back} noProfile />
+        <div className="center" style={{ padding: '32px 0' }}><div className="spin" /></div>
+      </div>
+    )
+  }
+
   return (
     <div className="screen">
-      <AppBar title="Новая задача упаковки" sub="Номер присвоится при сохранении" onBack={back} noProfile />
+      <AppBar
+        title={editing ? 'Изменить задачу упаковки' : 'Новая задача упаковки'}
+        sub={editing ? 'Черновик · правка состава и реквизитов' : 'Номер присвоится при сохранении'}
+        onBack={back}
+        noProfile
+      />
       <div className="scroll pad-nav">
         <div className="line-row" style={{ marginTop: 0, marginBottom: 12 }}>
           <button className={cargoType === 'good' ? 'btn' : 'btn ghost'} style={{ flex: 1 }} onClick={() => changeCargo('good')}>
@@ -236,17 +351,10 @@ export function ShipmentFormScreen() {
 
         <div className="field">
           <div className="flabel">Техническое задание {!isDefect && <span className="req">*</span>}</div>
-          <textarea
-            className="input"
-            rows={3}
+          <TextArea
             placeholder="Опишите задачу для команды склада"
             value={comment}
-            onChange={(e) => {
-              setComment(e.target.value)
-              e.target.style.height = 'auto'
-              e.target.style.height = `${e.target.scrollHeight}px`
-            }}
-            style={{ resize: 'none', overflow: 'hidden' }}
+            onChange={setComment}
           />
         </div>
 
@@ -358,7 +466,7 @@ export function ShipmentFormScreen() {
 
         <div className="line-row" style={{ marginTop: 14 }}>
           <button className="btn ghost" style={{ flex: 1 }} disabled={saving || !clientId || lines.length === 0} onClick={() => void save(false)}>
-            Черновик
+            {editing ? 'Сохранить' : 'Черновик'}
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>
             {saving ? '…' : 'Запланировать'}

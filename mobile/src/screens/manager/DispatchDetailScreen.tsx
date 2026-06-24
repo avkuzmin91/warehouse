@@ -3,10 +3,11 @@ import { useNav } from '../../nav/NavContext'
 import { getDispatch, DISPATCH_STATUS_LABELS, dispatchStatusTone, type DispatchDetail } from '../../api/dispatchApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function DispatchDetailScreen({ docId }: { docId: string }) {
-  const { back } = useNav()
+  const { back, openDispatchEdit } = useNav()
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -70,9 +71,14 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               ))}
             </div>
 
+            {doc.status === 'draft' && (
+              <button className="btn" style={{ marginTop: 16 }} onClick={() => openDispatchEdit(doc.id)}>
+                <Icon name="edit" size={15} /> Редактировать черновик
+              </button>
+            )}
+
             {doc.ops.length > 0 && (
-              <>
-                <div className="sec" style={{ marginTop: 16 }}>История<span className="sec-count">{doc.ops.length}</span></div>
+              <CollapsibleSection title="История" count={doc.ops.length} style={{ marginTop: 16 }}>
                 <div className="line" style={{ padding: '2px 14px' }}>
                   {doc.ops.map((op) => (
                     <div key={op.id} className="oprow">
@@ -81,7 +87,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                     </div>
                   ))}
                 </div>
-              </>
+              </CollapsibleSection>
             )}
           </>
         )}

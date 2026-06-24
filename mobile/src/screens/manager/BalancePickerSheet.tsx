@@ -70,11 +70,21 @@ export function BalancePickerSheet({
   function cap(b: PlannableItem): number {
     return ready(b) + storage(b) + transitOf(b)
   }
-  function hint(b: PlannableItem): string {
+  function stockChips(b: PlannableItem): { label: string; value: number; tone: string }[] {
+    const out: { label: string; value: number; tone: string }[] = []
+    if (dispatchGood) {
+      out.push({ label: 'упаковано', value: ready(b), tone: 'success' })
+      if (storage(b) > 0) out.push({ label: 'склад', value: storage(b), tone: 'accent' })
+    } else {
+      out.push(
+        cargoType === 'defect'
+          ? { label: 'брак', value: storage(b), tone: 'danger' }
+          : { label: 'склад', value: storage(b), tone: 'accent' },
+      )
+    }
     const t = transitOf(b)
-    const tail = t > 0 ? ` · в пути ${t}` : ''
-    if (dispatchGood) return `упаковано ${ready(b)}${storage(b) > 0 ? ` · склад ${storage(b)}` : ''}${tail}`
-    return `${cargoType === 'defect' ? 'брак' : 'склад'} ${storage(b)}${tail}`
+    if (t > 0) out.push({ label: 'в пути', value: t, tone: 'info' })
+    return out
   }
 
   function setQ(b: PlannableItem, n: number) {
@@ -137,11 +147,16 @@ export function BalancePickerSheet({
               const k = balanceKey(b)
               const n = qty[k] ?? 0
               return (
-                <div key={k} className="line-row" style={{ alignItems: 'center', marginTop: 0, padding: '7px 0' }}>
+                <div key={k} className="line-row" style={{ alignItems: 'flex-start', marginTop: 0, padding: '8px 0' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="tile-title" style={{ fontSize: 14 }}>{b.product_name}</div>
-                    <div className="tile-meta">
-                      {variantLabel(b)} · {hint(b)}
+                    <div className="tile-meta">{variantLabel(b)}</div>
+                    <div className="stock-row">
+                      {stockChips(b).map((c) => (
+                        <span key={c.label} className={`badge ${c.tone}`}>
+                          {c.label} <b>{c.value}</b>
+                        </span>
+                      ))}
                     </div>
                   </div>
                   <input

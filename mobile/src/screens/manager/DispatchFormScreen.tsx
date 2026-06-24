@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
-import { createDispatch, advanceDispatch, type DispatchLineIn, type DispatchCargoType } from '../../api/dispatchApi'
+import {
+  createDispatch,
+  updateDispatch,
+  addDispatchLine,
+  updateDispatchLine,
+  deleteDispatchLine,
+  advanceDispatch,
+  getDispatch,
+  type DispatchLineIn,
+  type DispatchCargoType,
+} from '../../api/dispatchApi'
 import { getClients, getClientStores, type DictionaryItem, type ClientStoreItem } from '../../api/lookupsApi'
-import type { PlannableItem } from '../../api/balancesApi'
+import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { balanceKey } from '../../utils/balanceKey'
 import { AppBar } from '../../components/AppBar'
 import { Combobox } from '../../components/Combobox'
 import { DateField } from '../../components/DateField'
+import { TextArea } from '../../components/TextArea'
 import { Icon } from '../../components/Icon'
 import { BalancePickerSheet } from './BalancePickerSheet'
 import { AssignSkuSheet } from './AssignSkuSheet'
@@ -14,6 +25,7 @@ import { AssignSkuSheet } from './AssignSkuSheet'
 type DraftLine = DispatchLineIn & {
   _uid: string
   _key: string
+  _serverId: string | null
   ready: number
   onHand: number
   inTransit: number
@@ -24,8 +36,9 @@ function lineSub(l: DraftLine): string {
   return [l.product_sku || 'без SKU', l.color_name, l.size_name].filter(Boolean).join(' · ')
 }
 
-export function DispatchFormScreen() {
+export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   const { back } = useNav()
+  const editing = !!docId
   const [cargoType, setCargoType] = useState<DispatchCargoType>('good')
   const [clients, setClients] = useState<DictionaryItem[]>([])
   const [clientId, setClientId] = useState('')
@@ -37,9 +50,15 @@ export function DispatchFormScreen() {
   const [lines, setLines] = useState<DraftLine[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
+  const [loadingDoc, setLoadingDoc] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const uidSeq = useRef(0)
+  const initialServerIds = useRef<Set<string>>(new Set())
+  // Черновик, созданный при первом нажатии «В ожидание рейса». Если создание прошло, а
+  // advance упал на гейте, повторное нажатие НЕ плодит новый документ — переиспользуем id.
+  // Любая правка формы сбрасывает ссылку (см. эффект ниже), чтобы не отгрузить устаревший черновик.
+  const createdIdRef = useRef<string | null>(null)
 
   const isDefect = cargoType === 'defect'
 
@@ -52,6 +71,66 @@ export function DispatchFormScreen() {
   }, [])
 
   useEffect(() => {
+    if (!docId) return
+    const ac = new AbortController()
+    setLoadingDoc(true)
+    ;(async () => {
+      try {
+        const d = await getDispatch(docId, ac.signal)
+        if (ac.signal.aborted) return
+        const plannable = await getPlannableItems(
+          { client_id: d.client_id || undefined, cargo_type: d.cargo_type, limit: 1000 },
+          ac.signal,
+        ).then((r) => r.items).catch(() => [] as PlannableItem[])
+        if (ac.signal.aborted) return
+        const byKey = new Map(plannable.map((p) => [balanceKey(p), p]))
+        const initIds = new Set<string>()
+        setCargoType(d.cargo_type)
+        setClientId(d.client_id ?? '')
+        setClientName(d.client_name)
+        setShipDate(d.ship_date ?? '')
+        setLogisticsCost(d.logistics_cost != null ? String(d.logistics_cost) : '')
+        setComment(d.comment ?? '')
+        setLines(d.lines.map((l) => {
+          initIds.add(l.id)
+          const p = byKey.get(balanceKey(l))
+          return {
+            _uid: `line-${uidSeq.current++}`,
+            _key: balanceKey(l),
+            _serverId: l.id,
+            product_id: l.product_id,
+            product_name: l.product_name,
+            product_sku: l.product_sku,
+            color_id: l.color_id,
+            color_name: l.color_name,
+            size_id: l.size_id,
+            size_name: l.size_name,
+            qty: l.qty,
+            ready: d.cargo_type === 'defect' ? 0 : (p?.ready_good ?? 0),
+            onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
+            inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
+            sku_pending: !!p?.sku_pending,
+            site_url: l.site_url,
+            store_id: l.store_id,
+            store_name: l.store_name,
+          }
+        }))
+        initialServerIds.current = initIds
+      } catch (e) {
+        if (!ac.signal.aborted) setError(e instanceof Error ? e.message : 'Не удалось загрузить документ')
+      } finally {
+        if (!ac.signal.aborted) setLoadingDoc(false)
+      }
+    })()
+    return () => ac.abort()
+  }, [docId])
+
+  useEffect(() => {
+    if (editing) return
+    createdIdRef.current = null
+  }, [editing, cargoType, clientId, shipDate, logisticsCost, comment, lines])
+
+  useEffect(() => {
     if (!clientId) { setStores([]); return }
     const ac = new AbortController()
     getClientStores(clientId, ac.signal)
@@ -61,7 +140,11 @@ export function DispatchFormScreen() {
   }, [clientId])
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
-  const allOnStock = lines.every((l) => l.qty <= l.ready + l.onHand)
+  // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
+  // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
+  // не упакованный, и товар в пути можно сохранить черновиком, но не передать в рейс.
+  const srcAvail = (l: DraftLine) => (isDefect ? l.onHand : l.ready)
+  const allReady = lines.every((l) => l.qty <= srcAvail(l))
   const costNum = Number(logisticsCost)
   const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
 
@@ -72,7 +155,11 @@ export function DispatchFormScreen() {
   if (comment.trim() === '') blockReasons.push('Заполните техническое задание')
   if (lines.length === 0) blockReasons.push('Добавьте хотя бы одну позицию')
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
-  if (!allOnStock) blockReasons.push('Часть товара ещё в пути — сохраните черновик и передайте в рейс после прихода')
+  if (!allReady) blockReasons.push(
+    isDefect
+      ? 'Часть брака недоступна на складе — уменьшите количество'
+      : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик',
+  )
 
   function changeClient(id: string, name: string | null) {
     if (lines.length > 0) return
@@ -91,6 +178,7 @@ export function DispatchFormScreen() {
       ...rows.map(({ item: b, qty }) => ({
         _uid: `line-${uidSeq.current++}`,
         _key: balanceKey(b),
+        _serverId: null as string | null,
         product_id: b.product_id,
         product_name: b.product_name,
         product_sku: b.product_sku,
@@ -128,6 +216,52 @@ export function DispatchFormScreen() {
     setSkuLine(null)
   }
 
+  function lineToIn(l: DraftLine): DispatchLineIn {
+    return {
+      product_id: l.product_id,
+      product_name: l.product_name,
+      product_sku: l.product_sku,
+      color_id: l.color_id,
+      color_name: l.color_name,
+      size_id: l.size_id,
+      size_name: l.size_name,
+      qty: l.qty,
+      site_url: l.site_url ?? null,
+      store_id: l.store_id ?? null,
+      store_name: l.store_name ?? null,
+    }
+  }
+
+  // Правка черновика: PATCH реквизитов + синхронизация строк. Существующие строки
+  // правим частично (qty/ссылка/магазин), новые добавляем, исчезнувшие удаляем.
+  async function saveEdit(id: string): Promise<void> {
+    await updateDispatch(id, {
+      cargo_type: cargoType,
+      client_id: clientId,
+      client_name: clientName,
+      ship_date: shipDate || null,
+      logistics_cost: costFilled ? costNum : null,
+      comment: comment.trim() || null,
+    })
+    const present = new Set<string>()
+    for (const l of lines) {
+      if (l._serverId) {
+        present.add(l._serverId)
+        await updateDispatchLine(id, l._serverId, {
+          qty: l.qty,
+          site_url: l.site_url ?? null,
+          store_id: l.store_id ?? null,
+          store_name: l.store_name ?? null,
+        })
+      } else {
+        await addDispatchLine(id, lineToIn(l))
+      }
+    }
+    for (const oldId of initialServerIds.current) {
+      if (!present.has(oldId)) await deleteDispatchLine(id, oldId)
+    }
+  }
+
   async function save(advance: boolean) {
     if (saving) return
     if (advance && blockReasons.length > 0) { setError(blockReasons[0]); return }
@@ -135,28 +269,25 @@ export function DispatchFormScreen() {
     setError('')
     setSaving(true)
     try {
-      const res = await createDispatch({
-        cargo_type: cargoType,
-        client_id: clientId,
-        client_name: clientName,
-        ship_date: shipDate || null,
-        logistics_cost: costFilled ? costNum : null,
-        comment: comment.trim() || null,
-        lines: lines.map((l) => ({
-          product_id: l.product_id,
-          product_name: l.product_name,
-          product_sku: l.product_sku,
-          color_id: l.color_id,
-          color_name: l.color_name,
-          size_id: l.size_id,
-          size_name: l.size_name,
-          qty: l.qty,
-          site_url: l.site_url ?? null,
-          store_id: l.store_id ?? null,
-          store_name: l.store_name ?? null,
-        })),
-      })
-      if (advance) await advanceDispatch(res.message)
+      let id = docId as string
+      if (editing) {
+        await saveEdit(id)
+      } else if (createdIdRef.current) {
+        id = createdIdRef.current
+      } else {
+        const res = await createDispatch({
+          cargo_type: cargoType,
+          client_id: clientId,
+          client_name: clientName,
+          ship_date: shipDate || null,
+          logistics_cost: costFilled ? costNum : null,
+          comment: comment.trim() || null,
+          lines: lines.map(lineToIn),
+        })
+        id = res.message
+        createdIdRef.current = id
+      }
+      if (advance) await advanceDispatch(id)
       back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
@@ -166,9 +297,23 @@ export function DispatchFormScreen() {
 
   const storeOptions = stores.map((s) => ({ value: s.id, label: s.name }))
 
+  if (loadingDoc) {
+    return (
+      <div className="screen">
+        <AppBar title="Отгрузка" sub="Загрузка…" onBack={back} noProfile />
+        <div className="center" style={{ padding: '32px 0' }}><div className="spin" /></div>
+      </div>
+    )
+  }
+
   return (
     <div className="screen">
-      <AppBar title="Новая отгрузка" sub="Номер присвоится при сохранении" onBack={back} noProfile />
+      <AppBar
+        title={editing ? 'Изменить отгрузку' : 'Новая отгрузка'}
+        sub={editing ? 'Черновик · правка состава и реквизитов' : 'Номер присвоится при сохранении'}
+        onBack={back}
+        noProfile
+      />
       <div className="scroll pad-nav">
         <div className="line-row" style={{ marginTop: 0, marginBottom: 12 }}>
           <button className={cargoType === 'good' ? 'btn' : 'btn ghost'} style={{ flex: 1 }} onClick={() => changeCargo('good')}>
@@ -209,13 +354,10 @@ export function DispatchFormScreen() {
 
         <div className="field">
           <div className="flabel">Техническое задание <span className="req">*</span></div>
-          <textarea
-            className="input"
-            rows={3}
+          <TextArea
             placeholder="Опишите задачу для команды склада"
             value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            style={{ resize: 'vertical', minHeight: 76 }}
+            onChange={setComment}
           />
         </div>
 
@@ -231,7 +373,8 @@ export function DispatchFormScreen() {
         ) : (
           lines.map((l) => {
             const overCap = l.qty > l.ready + l.onHand + l.inTransit
-            const waiting = !overCap && l.qty > l.ready + l.onHand
+            const inTransit = !isDefect && !overCap && l.qty > l.ready + l.onHand
+            const notPacked = !isDefect && !overCap && !inTransit && l.qty > l.ready
             return (
               <div key={l._uid} className="formline">
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
@@ -243,7 +386,7 @@ export function DispatchFormScreen() {
                         ? `брак ${l.onHand}`
                         : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
                       {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
-                      {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">ждёт прихода</span></> : ''}
+                      {overCap ? <> · <span className="hint-danger">превышение</span></> : inTransit ? <> · <span className="hint-warn">ждёт прихода</span></> : notPacked ? <> · <span className="hint-warn">не упаковано</span></> : ''}
                     </div>
                   </div>
                   <button className="icon-btn danger" onClick={() => removeLine(l._uid)} aria-label="Удалить">
@@ -317,7 +460,7 @@ export function DispatchFormScreen() {
 
         <div className="line-row" style={{ marginTop: 14 }}>
           <button className="btn ghost" style={{ flex: 1 }} disabled={saving || !clientId || lines.length === 0} onClick={() => void save(false)}>
-            Черновик
+            {editing ? 'Сохранить' : 'Черновик'}
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>
             {saving ? '…' : 'В ожидание рейса'}
