@@ -4,7 +4,7 @@ import { createTrip, handoffTrip, tripLexicon, type TripCargoType, type TripDire
 import { getCarriers, getVehicleTypes, getWarehouses, type DictionaryItem } from '../../api/lookupsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
-import { fmtDate } from '../../utils/format'
+import { fmtDate, moscowNowIso, moscowTodayYmd } from '../../utils/format'
 import { TripDocPickerSheet, type TripPickDoc } from './TripDocPickerSheet'
 import { TripPlanningFields, EMPTY_PLANNING, type PlanningValue } from './TripPlanningFields'
 
@@ -14,6 +14,12 @@ type Mode = 'inbound' | 'out_good' | 'out_defect'
 function modeToParams(mode: Mode): { direction: TripDirection; cargoType: TripCargoType } {
   if (mode === 'inbound') return { direction: 'inbound', cargoType: 'good' }
   return { direction: 'outbound', cargoType: mode === 'out_defect' ? 'defect' : 'good' }
+}
+
+// «Транспорт заказан» — момент создания карточки (МСК, дата+время); «Плановое прибытие»
+// — та же дата без времени (время кладовщик уточняет позже).
+function initialPlanning(): PlanningValue {
+  return { ...EMPTY_PLANNING, orderedAt: moscowNowIso().slice(0, 16), eta: moscowTodayYmd() }
 }
 
 export function TripFormScreen() {
@@ -27,7 +33,7 @@ export function TripFormScreen() {
   const [carriers, setCarriers] = useState<DictionaryItem[]>([])
   const [vehicleTypes, setVehicleTypes] = useState<DictionaryItem[]>([])
 
-  const [form, setForm] = useState<PlanningValue>(EMPTY_PLANNING)
+  const [form, setForm] = useState<PlanningValue>(initialPlanning)
   const [docs, setDocs] = useState<TripPickDoc[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [saving, setSaving] = useState(false)

@@ -4,7 +4,7 @@ import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripDispatches, l
 import type { TripReceiptItem, TripReceiptLinkItem, TripDispatchItem, TripDispatchLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
 import { getReceipts, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
 import type { ReceiptListItem } from '../../../api/receiptsApi'
-import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
+import { MOSCOW_TZ, parseMoscow, moscowTodayYmd } from '../../../utils/format'
 import { listDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../../api/dispatchApi'
 import type { DispatchListItem } from '../../../api/dispatchApi'
 import { Icon } from '../../primitives/Icon'
@@ -27,6 +27,16 @@ const EMPTY_FORM: PlanningFormValue = {
   vehicle_number: '', transport_ordered_at: '', eta: '', cost_estimate: '', comment: '',
 }
 
+// «Транспорт заказан» — момент создания карточки (МСК, дата+время); «Плановое прибытие»
+// — та же дата без времени (время кладовщик уточняет позже).
+function initialForm(): PlanningFormValue {
+  const day = moscowTodayYmd()
+  const time = new Date().toLocaleTimeString('en-GB', {
+    timeZone: MOSCOW_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  })
+  return { ...EMPTY_FORM, transport_ordered_at: `${day}T${time}`, eta: day }
+}
+
 function fmtDay(d: string | null): string | undefined {
   if (!d) return undefined
   const dt = parseMoscow(d)
@@ -44,7 +54,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   const defect = outbound && cargoType === 'defect'
   const lex = tripLexicon(direction)
 
-  const [form, setForm] = useState<PlanningFormValue>(EMPTY_FORM)
+  const [form, setForm] = useState<PlanningFormValue>(initialForm)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [shipDist, setShipDist] = useState<TripDispatchLinkItem[]>([])
   const [recvDist, setRecvDist] = useState<TripReceiptLinkItem[]>([])

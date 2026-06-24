@@ -1,7 +1,6 @@
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { RoleChip } from './RoleChip'
-import { roleAccent } from './roles'
 import type { ProcessRole } from './roles'
 
 /** Вертикальный таймлайн фаз процесса. Заменяет горизонтальный степпер.
@@ -27,8 +26,11 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
         const done = step.state === 'done'
         const active = step.state === 'active'
         const future = step.state === 'future'
+        // done — зелёный, active — индиго-акцент (системный стиль активного статуса,
+        // ср. .ptrack-step.active). Цвет роли для кружка не используем: у «Начальника
+        // склада» он совпадает с зелёным «выполнено».
         const dotColor = done ? 'var(--c-success)'
-          : active ? roleAccent(step.role)
+          : active ? 'var(--c-accent)'
           : 'var(--c-border-strong)'
         return (
           <div key={step.key} style={{ display: 'flex', gap: 12, position: 'relative' }}>
@@ -36,12 +38,9 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
               <div style={{
                 width: 22, height: 22, borderRadius: 99, flexShrink: 0, zIndex: 1,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                // done — сплошная заливка (зелёный) + галочка; active — «полый» кружок
-                // с цветной рамкой и иконкой роли. Иначе active-шаг роли «Начальник
-                // склада» (акцент = зелёный) сливается с зелёным done-шагом.
-                background: done ? dotColor : 'var(--c-bg-elev)',
-                border: future ? '1.5px dashed var(--c-border-strong)' : `${active ? 2 : 1.5}px solid ${dotColor}`,
-                color: done ? '#fff' : active ? dotColor : 'var(--c-text-faint)',
+                background: future ? 'var(--c-bg-elev)' : dotColor,
+                border: future ? '1.5px dashed var(--c-border-strong)' : `1.5px solid ${dotColor}`,
+                color: future ? 'var(--c-text-faint)' : '#fff',
                 boxShadow: active ? `0 0 0 4px color-mix(in oklab, ${dotColor} 16%, transparent)` : 'none',
               }}>
                 {done ? <Icon name="check" size={11} /> : <Icon name={step.icon} size={11} />}
