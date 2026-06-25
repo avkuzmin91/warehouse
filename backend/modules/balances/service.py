@@ -106,8 +106,8 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
         line_params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ?)")
-        line_params += [s, s]
+        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ? OR u.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        line_params += [s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     net_cols = ",\n                   ".join(
@@ -309,8 +309,8 @@ def get_plannable_items(
         params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ?)")
-        params += [s, s]
+        conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ? OR prod.sku LIKE ?)")
+        params += [s, s, s]
     conds.append(
         "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
         else "(p.storage_good > 0 OR p.ready_good > 0 OR p.in_transit > 0)"
@@ -424,8 +424,8 @@ def get_balances_by_zone(
         line_params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ?)")
-        line_params += [s, s]
+        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ? OR u.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        line_params += [s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     pos_join = (
@@ -1086,15 +1086,17 @@ def list_zone_relocations(
         params.append(client_id.strip())
     if search:
         s = like_substring_param(search)
-        conds.append("(r.product_name LIKE ? OR r.product_sku LIKE ?)")
-        params += [s, s]
+        conds.append("(r.product_name LIKE ? OR r.product_sku LIKE ? OR r.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        params += [s, s, s]
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
 
     offset = (page - 1) * limit
     rows = connection.execute(
         f"""
-        SELECT r.*, u.email AS created_by_email, COUNT(*) OVER() AS _total
+        SELECT r.*, COALESCE(NULLIF(TRIM(p.sku), ''), r.product_sku) AS effective_sku,
+               u.email AS created_by_email, COUNT(*) OVER() AS _total
         FROM zone_relocations r
+        LEFT JOIN products p ON p.id = r.product_id
         LEFT JOIN users u ON u.id = r.created_by
         {where}
         ORDER BY r.created_at DESC
@@ -1114,7 +1116,7 @@ def list_zone_relocations(
             from_quality=str(row["from_quality"] or INV_Q_GOOD),
             to_quality=str(row["to_quality"] or INV_Q_GOOD),
             product_name=row["product_name"],
-            product_sku=row["product_sku"],
+            product_sku=row["effective_sku"],
             color_name=row["color_name"],
             size_name=row["size_name"],
             client_name=row["client_name"],

@@ -82,6 +82,7 @@ from modules.shipments.service import (
     return_to_packing,
     reverse_packing_entry,
 )
+from modules.products.service import assign_product_sku_if_missing
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
 router = APIRouter(tags=["shipments"])
@@ -175,12 +176,19 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_document_c
         )
         for line in body.lines:
             store_id, store_name = _resolve_line_store(conn, body.client_id, line.store_id)
+            product_sku = assign_product_sku_if_missing(
+                conn,
+                product_id=line.product_id,
+                sku_base=line.product_sku,
+                updated_at=now,
+                user_id=uid,
+            ) or line.product_sku
             conn.execute(
                 """INSERT INTO shipment_lines
                    (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
                     qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
+                (str(uuid4()), doc_id, line.product_id, line.product_name, product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty,
                  line.shipped_qty, line.storage_zone_id, line.storage_zone_name, store_id, store_name, now),
             )
@@ -213,7 +221,9 @@ def shipments_summary(
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
-                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
+                " LEFT JOIN products p ON p.id = sl.product_id"
+                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
+                " AND COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ?)"
             )
             params.append(like_substring_param(sku))
         if date_from:
@@ -286,7 +296,9 @@ def list_shipments(
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
-                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0 AND sl.product_sku LIKE ?)"
+                " LEFT JOIN products p ON p.id = sl.product_id"
+                " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
+                " AND COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ?)"
             )
             params.append(like_substring_param(sku))
         if date_from:
@@ -768,12 +780,19 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         line_id = str(uuid4())
         store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
+        product_sku = assign_product_sku_if_missing(
+            conn,
+            product_id=body.product_id,
+            sku_base=body.product_sku,
+            updated_at=now,
+            user_id=str(user["id"]),
+        ) or body.product_sku
         conn.execute(
             """INSERT INTO shipment_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,
                 size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
+            (line_id, doc_id, body.product_id, body.product_name, product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name, now),
         )
@@ -795,12 +814,19 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
             raise HTTPException(status_code=400, detail="Состав отгрузки нельзя менять после отправки")
         store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
+        product_sku = assign_product_sku_if_missing(
+            conn,
+            product_id=body.product_id,
+            sku_base=body.product_sku,
+            updated_at=_now(),
+            user_id=str(user["id"]),
+        ) or body.product_sku
         conn.execute(
             """UPDATE shipment_lines SET
                product_id=?,product_name=?,product_sku=?,color_id=?,color_name=?,
                size_id=?,size_name=?,qty=?,shipped_qty=?,storage_zone_id=?,storage_zone_name=?,store_id=?,store_name=?
                WHERE id=? AND doc_id=? AND is_deleted=0""",
-            (body.product_id, body.product_name, body.product_sku,
+            (body.product_id, body.product_name, product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
              body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name,
              line_id, doc_id),

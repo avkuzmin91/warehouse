@@ -420,6 +420,70 @@ def _assign_variant_skus_from_base(
         )
 
 
+def _fill_empty_line_sku_snapshots(connection: Any, *, product_id: str, sku: str) -> None:
+    for table_name in ("shipment_lines", "dispatch_lines"):
+        connection.execute(
+            f"""
+            UPDATE {table_name}
+            SET product_sku = ?
+            WHERE product_id = ?
+              AND COALESCE(NULLIF(TRIM(product_sku), ''), '') = ''
+            """,
+            (sku, product_id),
+        )
+
+
+def assign_product_sku_if_missing(
+    connection: Any,
+    *,
+    product_id: str,
+    sku_base: str | None,
+    updated_at: str,
+    user_id: str | None = None,
+) -> str:
+    sku_t = str(sku_base or "").strip()
+    if not sku_t:
+        return ""
+    row = connection.execute(
+        """
+        SELECT sku, COALESCE(sku_pending, 0) AS sku_pending, client_id
+        FROM products
+        WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+        """,
+        (product_id,),
+    ).fetchone()
+    if not row:
+        return sku_t
+    cur_sku = str(row["sku"] or "").strip()
+    if cur_sku:
+        return cur_sku
+
+    new_sku = _normalize_sku(sku_t)
+    client_id = str(row["client_id"]) if row["client_id"] else None
+    if client_id is not None and _sku_taken_for_client_except_product(connection, new_sku, client_id, product_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
+
+    _assign_variant_skus_from_base(
+        connection,
+        product_id=product_id,
+        new_base_sku=new_sku,
+        updated_at=updated_at,
+        client_id=client_id,
+    )
+    if user_id:
+        connection.execute(
+            "UPDATE products SET sku = ?, sku_pending = 0, updated_at = ?, updated_by_id = ? WHERE id = ?",
+            (new_sku, updated_at, user_id, product_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE products SET sku = ?, sku_pending = 0, updated_at = ? WHERE id = ?",
+            (new_sku, updated_at, product_id),
+        )
+    _fill_empty_line_sku_snapshots(connection, product_id=product_id, sku=new_sku)
+    return new_sku
+
+
 def _soft_delete_variants_for_product(connection: Any, product_id: str, admin_id: str, ts: str) -> None:
     connection.execute(
         """
