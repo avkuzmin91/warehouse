@@ -382,9 +382,9 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
             "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
             "FROM trip_lines tl "
             "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
-            "WHERE tl.receipt_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+            "WHERE tl.receipt_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND t.status != ? "
             "ORDER BY t.trip_number",
-            (doc_id,),
+            (doc_id, TRIP_STATUS_CANCELLED),
         ).fetchall()
 
         state = compute_state(conn, doc_id)
@@ -571,7 +571,10 @@ def update_receipt_actual_arrival(doc_id: str, payload: ReceiptActualArrivalUpda
             raise HTTPException(status_code=400, detail="Завершённый документ нельзя изменять")
 
         linked = conn.execute(
-            "SELECT 1 FROM trip_lines WHERE receipt_doc_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1", (doc_id,)
+            "SELECT 1 FROM trip_lines tl "
+            "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+            "WHERE tl.receipt_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND t.status != ? LIMIT 1",
+            (doc_id, TRIP_STATUS_CANCELLED),
         ).fetchone()
         if linked:
             raise HTTPException(status_code=400, detail="Дата прибытия (факт) управляется рейсом — измените её в рейсе")

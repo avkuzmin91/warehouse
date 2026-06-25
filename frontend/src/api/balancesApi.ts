@@ -74,6 +74,8 @@ export type PlannableItem = {
   storage_good: number
   storage_defect: number
   in_transit: number
+  /** Кратность товара на палете (из карточки товара) — для рекомендации числа палет. */
+  items_per_pallet: number | null
 }
 
 export type PlannableListResponse = {

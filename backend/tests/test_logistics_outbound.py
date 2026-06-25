@@ -73,7 +73,7 @@ def _create_dispatch(admin_client, client_id: str, *, qty: int, cargo: str = "go
     r = admin_client.post("/dispatches", json={
         "cargo_type": cargo, "client_id": client_id, "client_name": "Test Client",
         "destination": "Москва", "ship_date": "2026-06-10", "comment": "Тех. задание",
-        "lines": [{"product_id": pid, "product_name": "Товар", "product_sku": sku, "qty": qty}],
+        "lines": [{"product_id": pid, "product_name": "Товар", "product_sku": sku, "qty": qty, "pallets_qty": 1}],
     })
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
@@ -254,6 +254,26 @@ def test_outbound_unlink_dispatch_during_loading(admin_client, client_id):
     late_d = admin_client.get(f"/dispatches/{late}").json()
     assert late_d["status"] == "draft"
     assert not late_d["trips"]
+
+
+def test_cancel_trip_unlinks_dispatch(admin_client, client_id):
+    # Аннулирование рейса «отвязывает» отгрузку: рейс исчезает из карточки и
+    # количество снова свободно к распределению (отменённый рейс не держит alloc).
+    doc_id, line_id, _ = _awaiting_dispatch(admin_client, client_id, qty=5)
+    trip_id = _trip_with_dispatch(admin_client, doc_id)
+
+    linked = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert any(t["id"] == trip_id for t in linked["trips"])
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    assert cancel.json()["message"] == "cancelled"
+
+    after = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert after["trips"] == []
+
+    rem = admin_client.get(f"/dispatches/{doc_id}/trip-alloc-remaining").json()
+    assert rem["lines"][0]["remaining"] == 5
 
 
 def test_outbound_handoff_requires_linked_dispatch(admin_client):

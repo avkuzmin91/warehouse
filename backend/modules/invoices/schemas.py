@@ -190,7 +190,9 @@ class ShipmentContentsResponse(BaseModel):
     sku_count: int = 0
     suggested_amount_kop: int = 0          # Σ qty × тариф на дату отгрузки (товары)
     logistics_amount_kop: int = 0          # Σ logistics_cost отгрузок (логистика)
+    pallets_amount_kop:   int = 0          # Σ палет × цена палета клиента
     has_missing_price:    bool = False     # по части позиций тариф не заведён
+    has_missing_pallet_price: bool = False # есть палеты, но цена палета не заведена
 
 
 class ReceiptContentsResponse(BaseModel):

@@ -375,7 +375,9 @@ def shipment_contents(shipment_ids: str = Query(""), user=Depends(_get_finance))
         **data,
         suggested_amount_kop=amount["amount_kop"],
         logistics_amount_kop=logistics["dispatch_logistics_kop"],
+        pallets_amount_kop=amount["pallets_amount_kop"],
         has_missing_price=amount["has_missing_price"],
+        has_missing_pallet_price=amount["has_missing_pallet_price"],
     )
 
 

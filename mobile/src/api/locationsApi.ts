@@ -9,6 +9,8 @@ export type LocationMatch = {
   section: string | null
   floor: string | null
   kind: string
+  is_packing_zone: boolean
+  is_shipping_zone: boolean
   is_active: boolean
   is_deleted: boolean
   created_at: string

@@ -42,6 +42,7 @@ export type PlannableItem = {
   storage_good: number
   storage_defect: number
   in_transit: number
+  items_per_pallet: number | null
 }
 
 export type PlannableParams = { client_id?: string; search?: string; cargo_type?: InvQuality; limit?: number }
@@ -56,7 +57,7 @@ export function getPlannableItems(params: PlannableParams = {}, signal?: AbortSi
   return request<{ items: PlannableItem[] }>(`/balances/plannable${q ? `?${q}` : ''}`, { signal })
 }
 
-export type ZoneBalanceParams = { clientId?: string; search?: string }
+export type ZoneBalanceParams = { clientId?: string; search?: string; location?: string }
 
 // Доступно складскому составу (shipment_viewer). only_positive=true по умолчанию на бэке.
 export function getBalancesByZone(
@@ -66,6 +67,7 @@ export function getBalancesByZone(
   const sp = new URLSearchParams()
   if (params.clientId) sp.set('client_id', params.clientId)
   if (params.search) sp.set('search', params.search)
+  if (params.location) sp.set('location', params.location)
   const q = sp.toString()
   return request<ZoneBalancesResponse>(`/balances/zones${q ? `?${q}` : ''}`, { signal })
 }

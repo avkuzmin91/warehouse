@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
+import { recommendedPallets } from '../../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../../../api/domainTypes'
@@ -19,29 +20,32 @@ import { fmtYmdAsDmy } from '../../../../../utils/format'
 import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 
-type LineDraft = { qty: number; siteUrl: string; storeId: string; storeName: string | null }
+type LineDraft = { qty: number; pallets: number | null; palletsTouched: boolean; siteUrl: string; storeId: string; storeName: string | null }
 
 type Props = {
   doc: DispatchDetail
   canEdit: boolean
   acting: boolean
   onAddLine: (item: PlannableItem, qty: number) => Promise<void>
-  onUpdateLine: (lineId: string, body: { qty?: number; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
+  onUpdateLine: (lineId: string, body: { qty?: number; pallets_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
   onDeleteLine: (lineId: string) => Promise<void>
   onUpdateDoc: (body: { client_id?: string | null; client_name?: string | null; ship_date?: string | null; logistics_cost?: number | null; comment?: string | null }) => Promise<boolean>
   onReload: () => Promise<void>
+  registerInfoFlush?: (fn: (() => Promise<boolean>) | null) => void
 }
 
 function draftFromLine(line: DispatchLine): LineDraft {
   return {
-    qty:       line.qty,
-    siteUrl:   line.site_url ?? '',
-    storeId:   line.store_id ?? '',
-    storeName: line.store_name ?? null,
+    qty:            line.qty,
+    pallets:        line.pallets_qty,
+    palletsTouched: false,
+    siteUrl:        line.site_url ?? '',
+    storeId:        line.store_id ?? '',
+    storeName:      line.store_name ?? null,
   }
 }
 
-export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUpdateDoc, onReload }: Props) {
+export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUpdateDoc, onReload, registerInfoFlush }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const isDefectCargo = doc.cargo_type === 'defect'
@@ -90,12 +94,21 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   }
 
   function setDraft(lineId: string, patch: Partial<LineDraft>) {
-    setDrafts((prev) => ({ ...prev, [lineId]: { ...(prev[lineId] ?? { qty: 1, siteUrl: '', storeId: '', storeName: null }), ...patch } }))
+    setDrafts((prev) => ({ ...prev, [lineId]: { ...(prev[lineId] ?? { qty: 1, pallets: null, palletsTouched: false, siteUrl: '', storeId: '', storeName: null }), ...patch } }))
+  }
+
+  function setLineQty(line: DispatchLine, qty: number) {
+    const d = getDraft(line)
+    const nextQty = Math.max(1, qty)
+    // Пока палеты не правили вручную — держим рекомендацию из кратности товара.
+    const pallets = d.palletsTouched ? d.pallets : (recommendedPallets(nextQty, line.items_per_pallet) ?? d.pallets)
+    setDraft(line.id, { qty: nextQty, pallets })
   }
 
   function lineDirty(line: DispatchLine): boolean {
     const d = getDraft(line)
     return d.qty !== line.qty
+      || (d.pallets ?? null) !== (line.pallets_qty ?? null)
       || d.siteUrl !== (line.site_url ?? '')
       || d.storeId !== (line.store_id ?? '')
       || d.storeName !== (line.store_name ?? null)
@@ -106,17 +119,18 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     setSavingLine(line.id)
     try {
       await onUpdateLine(line.id, {
-        qty:        d.qty,
-        site_url:   d.siteUrl.trim() || null,
-        store_id:   d.storeId || null,
-        store_name: d.storeId ? d.storeName : null,
+        qty:         d.qty,
+        pallets_qty: d.pallets,
+        site_url:    d.siteUrl.trim() || null,
+        store_id:    d.storeId || null,
+        store_name:  d.storeId ? d.storeName : null,
       })
     } finally {
       setSavingLine(null)
     }
   }
 
-  async function handleInfoSave() {
+  async function handleInfoSave(): Promise<boolean> {
     setInfoSaving(true)
     const costNum = Number(logisticsCost)
     const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
@@ -131,7 +145,16 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       setInfoSaved(true)
       setTimeout(() => setInfoSaved(false), 2000)
     }
+    return ok
   }
+
+  // Пробрасываем сохранение «Основной информации» наверх: «Передать в подготовку»
+  // сначала закоммитит незакоммиченные правки (в т.ч. ТЗ), иначе бэк отклонит переход.
+  useEffect(() => {
+    if (!registerInfoFlush) return
+    registerInfoFlush(() => (infoDirty ? handleInfoSave() : Promise.resolve(true)))
+    return () => registerInfoFlush(null)
+  })
 
   async function handleAssignSku(line: DispatchLine, skuBase: string) {
     await updateProduct(line.product_id, { sku_base: skuBase })
@@ -139,6 +162,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   }
 
   const totalQty = doc.lines.reduce((s, l) => s + l.qty, 0)
+  const totalPallets = doc.lines.reduce((s, l) => s + (getDraft(l).pallets ?? 0), 0)
   const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size
   const hasPendingSku = doc.lines.some((l) => l.sku_pending)
 
@@ -230,7 +254,8 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                   <th>Товар · вариант</th>
                   <th style={{ width: 160 }}>Магазин</th>
                   <th style={{ width: 200 }}>Ссылка на сайт</th>
-                  <th style={{ textAlign: 'right', width: 150 }}>План</th>
+                  <th style={{ textAlign: 'right', width: 130 }}>План</th>
+                  <th style={{ textAlign: 'right', width: 120 }}>Палеты</th>
                   <th style={{ width: 64 }} />
                 </tr>
               </thead>
@@ -287,8 +312,30 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                             value={d.qty}
                             disabled={!canEdit}
                             tone={dirty ? 'accent' : 'normal'}
-                            onChange={(v) => setDraft(l.id, { qty: Math.max(1, v) })}
+                            onChange={(v) => setLineQty(l, v)}
                           />
+                        </div>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                          <input
+                            className="input sm num"
+                            inputMode="numeric"
+                            placeholder="0"
+                            aria-label="Количество палет"
+                            readOnly={!canEdit}
+                            value={d.pallets != null ? String(d.pallets) : ''}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/\D/g, '')
+                              setDraft(l.id, { pallets: raw === '' ? null : Math.max(0, parseInt(raw, 10)), palletsTouched: true })
+                            }}
+                            style={{ width: 64, textAlign: 'right', borderColor: (d.pallets ?? 0) < 1 ? 'var(--c-warning)' : undefined }}
+                          />
+                        </div>
+                        <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
+                          {l.items_per_pallet
+                            ? `реком. ${recommendedPallets(d.qty, l.items_per_pallet)}`
+                            : 'кратность не задана'}
                         </div>
                       </td>
                       <td>
@@ -320,6 +367,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                     Итого: {skuCount} SKU
                   </td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
+                  <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalPallets}</td>
                   <td />
                 </tr>
               </tfoot>
@@ -339,6 +387,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           <div style={{ padding: '0 2px' }}>
             <ReadRow label="SKU" mono>{skuCount}</ReadRow>
             <ReadRow label="Кол-во" mono strong>{totalQty} шт</ReadRow>
+            <ReadRow label="Палет" mono strong>{totalPallets}</ReadRow>
             {showCosts && (
               <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>
             )}

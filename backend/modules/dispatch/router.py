@@ -43,6 +43,7 @@ from modules.dispatch.schemas import (
     DispatchPriorityUpdate,
 )
 from modules.dispatch.service import (
+    check_lines_have_pallets,
     check_lines_have_ready,
     check_lines_have_sku,
     dispatch_alloc_remaining,
@@ -88,11 +89,11 @@ def create_dispatch(body: DispatchDocCreate, user=Depends(_get_manager)):
             conn.execute(
                 """INSERT INTO dispatch_lines
                    (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-                    qty,shipped_qty,site_url,store_id,store_name,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty,
-                 0, line.site_url, line.store_id, line.store_name, now),
+                 line.pallets_qty, 0, line.site_url, line.store_id, line.store_name, now),
             )
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
@@ -397,11 +398,11 @@ def add_dispatch_line(doc_id: str, body: DispatchLineIn, user=Depends(_get_manag
         conn.execute(
             """INSERT INTO dispatch_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-                qty,shipped_qty,site_url,store_id,store_name,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
-             0, body.site_url, body.store_id, body.store_name, now),
+             body.pallets_qty, 0, body.site_url, body.store_id, body.store_name, now),
         )
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
@@ -496,6 +497,7 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
         if not has_lines:
             raise HTTPException(status_code=400, detail="Добавьте товар")
         check_lines_have_sku(conn, doc_id)
+        check_lines_have_pallets(conn, doc_id)
         check_lines_have_ready(conn, doc_id)
         conn.execute(
             "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",

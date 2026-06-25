@@ -7,6 +7,7 @@ export function LinesTable({ lines }: { lines: DispatchLine[] }) {
   }
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + l.shipped_qty, 0)
+  const palletsTotal = lines.reduce((s, l) => s + (l.pallets_qty ?? 0), 0)
   return (
     <table className="t">
       <thead>
@@ -15,6 +16,7 @@ export function LinesTable({ lines }: { lines: DispatchLine[] }) {
           <th style={{ width: 150 }}>Магазин</th>
           <th style={{ width: 80 }}>Ссылка</th>
           <th style={{ textAlign: 'right', width: 70 }}>План</th>
+          <th style={{ textAlign: 'right', width: 70 }}>Палеты</th>
           <th style={{ textAlign: 'right', width: 90 }}>Отгружено</th>
           <th style={{ textAlign: 'right', width: 80 }}>Остаток</th>
         </tr>
@@ -40,6 +42,7 @@ export function LinesTable({ lines }: { lines: DispatchLine[] }) {
                 )}
               </td>
               <td className="num">{l.qty}</td>
+              <td className="num">{l.pallets_qty ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</td>
               <td className="num"><span style={{ color: l.shipped_qty > 0 ? 'var(--c-success)' : 'var(--c-text-subtle)' }}>{l.shipped_qty}</span></td>
               <td className="num">{remaining}</td>
             </tr>
@@ -50,6 +53,7 @@ export function LinesTable({ lines }: { lines: DispatchLine[] }) {
         <tr style={{ background: 'var(--c-bg-sunken)' }}>
           <td colSpan={3} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{planTotal}</td>
+          <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{palletsTotal}</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{shippedTotal}</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{Math.max(0, planTotal - shippedTotal)}</td>
         </tr>

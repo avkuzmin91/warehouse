@@ -21,6 +21,7 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
     TRIP_STATUS_AWAITING_ARRIVAL,
+    TRIP_STATUS_CANCELLED,
     TRIP_STATUS_DRAFT,
     TRIP_STATUS_UNLOADING,
 )
@@ -103,6 +104,27 @@ def check_lines_have_sku(connection, doc_id: str) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Укажите SKU для товаров без артикула перед отгрузкой: {names}",
+        )
+
+
+def check_lines_have_pallets(connection, doc_id: str) -> None:
+    """Гейт перевода в подготовку: у каждой строки указано количество палет (>= 1).
+
+    Менеджер обязан задать число палет при создании отгрузки — это основа тарификации
+    палет клиенту. Рекомендация считается из `products.items_per_pallet`, но финальное
+    число вводит менеджер.
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT product_name FROM dispatch_lines "
+        "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 "
+        "AND COALESCE(pallets_qty, 0) < 1 ORDER BY product_name",
+        (doc_id,),
+    ).fetchall()
+    if rows:
+        names = ", ".join(f"«{r['product_name']}»" for r in rows)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Укажите количество палет для позиций: {names}",
         )
 
 
@@ -652,6 +674,7 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
 
     lines_rows = connection.execute(
         "SELECT l.*, COALESCE(p.sku_pending, 0) AS sku_pending, "
+        "p.items_per_pallet AS items_per_pallet, "
         "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS effective_sku "
         "FROM dispatch_lines l "
         "LEFT JOIN products p ON p.id = l.product_id "
@@ -668,9 +691,9 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
         "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
         "FROM trip_lines tl "
         "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
-        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND t.status != ? "
         "ORDER BY t.trip_number",
-        (doc_id,),
+        (doc_id, TRIP_STATUS_CANCELLED),
     ).fetchall()
 
     lines = [
@@ -686,6 +709,8 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
             "size_name": l["size_name"],
             "qty": int(l["qty"] or 0),
             "shipped_qty": int(l["shipped_qty"] or 0),
+            "pallets_qty": int(l["pallets_qty"]) if l["pallets_qty"] is not None else None,
+            "items_per_pallet": int(l["items_per_pallet"]) if l["items_per_pallet"] is not None else None,
             "site_url": l["site_url"],
             "store_id": l["store_id"],
             "store_name": l["store_name"],

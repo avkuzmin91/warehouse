@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createDispatch, advanceDispatch } from '../../../api/dispatchApi'
+import { createDispatch, advanceDispatch, recommendedPallets } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchLineIn } from '../../../api/dispatchApi'
 import type { PlannableItem } from '../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
@@ -8,7 +8,7 @@ import type { ClientStoreItem } from '../../../api/domainTypes'
 import { Combobox } from '../../data/Combobox'
 import type { ComboboxOption } from '../../data/Combobox'
 import { Icon } from '../../primitives/Icon'
-import { Field } from '../../primitives/Input'
+import { Field, AutoGrowTextarea } from '../../primitives/Input'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Alert } from '../../primitives/Alert'
 import { EmptyState } from '../../primitives/EmptyState'
@@ -25,7 +25,10 @@ import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = DispatchLineIn & { _uid: string; ready: number; onHand: number; inTransit: number; sku_pending: boolean }
+type DraftLine = DispatchLineIn & {
+  _uid: string; ready: number; onHand: number; inTransit: number; sku_pending: boolean
+  itemsPerPallet: number | null; pallets: number | null; palletsTouched: boolean
+}
 
 export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoType }) {
   const navigate = useNavigate()
@@ -34,6 +37,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const [clientName, setClientName] = useState<string | null>(null)
   const [logisticsCost, setLogisticsCost] = useState('')
   const [shipDate, setShipDate] = useState('')
+  const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [showPicker, setShowPicker] = useState(false)
@@ -66,10 +70,12 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     return () => controller.abort()
   }, [clientId])
 
-  useEffect(() => { createdIdRef.current = null }, [lines, clientId, cargoType, shipDate, logisticsCost])
+  useEffect(() => { createdIdRef.current = null }, [lines, clientId, cargoType, shipDate, logisticsCost, comment])
 
   const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
+  const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
+  const allPallets = lines.every((l) => (l.pallets ?? 0) >= 1)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
   // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
   // не упакованный, и товар в пути можно сохранить черновиком, но не передать в подготовку.
@@ -84,10 +90,12 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const readyChecks = [
     { ok: !!clientId, label: 'Клиент выбран', error: 'Выберите клиента' },
     { ok: !!shipDate, label: 'Дата отгрузки (план) указана', error: 'Укажите дату отгрузки' },
+    { ok: comment.trim() !== '', label: 'Техническое задание заполнено', error: 'Заполните техническое задание' },
     ...(showCosts ? [{ ok: logisticsCostFilled, label: 'Стоимость логистики указана', error: 'Укажите стоимость логистики' }] : []),
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
+    { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет (≥ 1) для каждой позиции' },
     { ok: allReady, label: isDefectCargo ? 'Брак доступен на складе' : 'Товар упакован', error: isDefectCargo ? 'Часть брака недоступна на складе — уменьшите количество' : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
@@ -99,7 +107,19 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   }
 
   function updateQty(uid: string, qty: number) {
-    setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, qty: Math.max(1, qty) } : l))
+    setLines((ls) => ls.map((l) => {
+      if (l._uid !== uid) return l
+      const nextQty = Math.max(1, qty)
+      // Пока менеджер не правил палеты вручную — держим рекомендацию из кратности.
+      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(nextQty, l.itemsPerPallet) ?? l.pallets)
+      return { ...l, qty: nextQty, pallets }
+    }))
+  }
+
+  function setPallets(uid: string, value: number | null) {
+    setLines((ls) => ls.map((l) => l._uid === uid
+      ? { ...l, pallets: value == null ? null : Math.max(0, value), palletsTouched: true }
+      : l))
   }
 
   function removeLine(uid: string) {
@@ -131,6 +151,9 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       onHand:       isDefectCargo ? b.storage_defect : b.storage_good,
       inTransit:    isDefectCargo ? 0 : b.in_transit,
       sku_pending:  !!b.sku_pending,
+      itemsPerPallet: b.items_per_pallet,
+      pallets:      recommendedPallets(qty, b.items_per_pallet),
+      palletsTouched: false,
       site_url:     null,
       store_id:     null,
       store_name:   null,
@@ -166,6 +189,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
           client_name: clientName || null,
           ...(showCosts ? { logistics_cost: logisticsCostFilled ? logisticsCostNumber : null } : {}),
           ship_date:   shipDate || null,
+          comment:     comment.trim() || null,
           lines: lines.map((line) => ({
             product_id:   line.product_id,
             product_name: line.product_name,
@@ -175,6 +199,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
             size_id:      line.size_id,
             size_name:    line.size_name,
             qty:          line.qty,
+            pallets_qty:  line.pallets,
             site_url:     line.site_url || null,
             store_id:     line.store_id ?? null,
             store_name:   line.store_name ?? null,
@@ -289,6 +314,15 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                   />
                 </Field>
               )}
+              <Field label="Техническое задание" required style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                <AutoGrowTextarea
+                  minRows={3}
+                  placeholder="Опишите задачу для команды склада"
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  style={{ resize: 'vertical', minHeight: 76 }}
+                />
+              </Field>
             </div>
           </PhaseBlock>
 
@@ -313,6 +347,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                     <th style={{ width: 170 }}>Магазин</th>
                     <th style={{ width: 200 }}>Ссылка на сайт</th>
                     <th style={{ textAlign: 'right', width: 176 }}>План отгрузки</th>
+                    <th style={{ textAlign: 'right', width: 132 }}>Палеты</th>
                     <th style={{ width: 32 }} />
                   </tr>
                 </thead>
@@ -382,6 +417,27 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                           </div>
                         </td>
                         <td>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                            <input
+                              className="input sm num"
+                              inputMode="numeric"
+                              placeholder="0"
+                              aria-label="Количество палет"
+                              value={l.pallets != null ? String(l.pallets) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/\D/g, '')
+                                setPallets(l._uid, raw === '' ? null : parseInt(raw, 10))
+                              }}
+                              style={{ width: 70, textAlign: 'right', borderColor: (l.pallets ?? 0) < 1 ? 'var(--c-warning)' : undefined }}
+                            />
+                          </div>
+                          <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
+                            {l.itemsPerPallet
+                              ? `реком. ${recommendedPallets(l.qty, l.itemsPerPallet)} · ${l.itemsPerPallet}/пал`
+                              : 'кратность не задана'}
+                          </div>
+                        </td>
+                        <td>
                           <button className="btn ghost icon sm" onClick={() => removeLine(l._uid)}>
                             <Icon name="trash" size={13} />
                           </button>
@@ -396,6 +452,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                       Итого: {lines.length} SKU
                     </td>
                     <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
+                    <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalPallets}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -416,6 +473,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="SKU" mono>{lines.length}</ReadRow>
               <ReadRow label="Кол-во" mono strong>{totalQty} шт</ReadRow>
+              <ReadRow label="Палет" mono strong>{totalPallets}</ReadRow>
               <ReadRow label="Дата (план)" mono>{shipDate ? fmtYmdAsDmy(shipDate) : '—'}</ReadRow>
               {showCosts && (
                 <ReadRow label="Логистика" mono>{logisticsCostFilled ? `${logisticsCostNumber.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>

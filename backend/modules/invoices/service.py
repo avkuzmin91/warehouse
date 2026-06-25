@@ -574,7 +574,13 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
 
     Качество тарифа берётся по cargo_type отгрузки (good/defect), дата — фактическая
     дата отгрузки (или плановая). `has_missing_price` = по части позиций тариф не
-    заведён (такие позиции в сумму не вошли) — UI предупреждает менеджера."""
+    заведён (такие позиции в сумму не вошли) — UI предупреждает менеджера.
+
+    Палеты считаются отдельным компонентом `pallets_amount_kop`: Σ палет документа ×
+    цена палета клиента (client_pallet_prices) на дату отгрузки. Цена палета — по
+    клиенту, без разделения на годный/брак. `has_missing_pallet_price` = у клиента
+    есть палеты, но цена не заведена."""
+    from modules.pallet_pricing.service import pallet_price_for_event
     from modules.pricing.service import price_for_event
     from modules.timesheet.service import business_today
 
@@ -584,7 +590,10 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         if sid and sid not in ids:
             ids.append(sid)
     if not ids:
-        return {"amount_kop": 0, "has_missing_price": False, "priced_qty": 0, "unpriced_qty": 0}
+        return {
+            "amount_kop": 0, "has_missing_price": False, "priced_qty": 0, "unpriced_qty": 0,
+            "pallets_amount_kop": 0, "has_missing_pallet_price": False,
+        }
 
     today = business_today().isoformat()
     placeholders = ",".join("?" for _ in ids)
@@ -597,17 +606,21 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
     amount = 0
     priced_qty = 0
     unpriced_qty = 0
+    pallets_amount = 0
+    has_missing_pallet_price = False
     for doc in docs:
         doc_id = str(doc["id"])
         client_id = doc["client_id"]
         quality = str(doc["cargo_type"] or "good")
         day = str(doc["actual_ship_date"] or doc["ship_date"] or today)[:10]
         lines = connection.execute(
-            "SELECT product_id, qty FROM dispatch_lines "
+            "SELECT product_id, qty, COALESCE(pallets_qty, 0) AS pallets_qty FROM dispatch_lines "
             "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
             (doc_id,),
         ).fetchall()
+        pallets_total = 0
         for line in lines:
+            pallets_total += int(line["pallets_qty"] or 0)
             qty = int(line["qty"] or 0)
             if qty <= 0:
                 continue
@@ -619,12 +632,20 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
             else:
                 amount += price * qty
                 priced_qty += qty
+        if pallets_total > 0:
+            pallet_price = pallet_price_for_event(connection, str(client_id), day) if client_id else None
+            if pallet_price is None:
+                has_missing_pallet_price = True
+            else:
+                pallets_amount += pallet_price * pallets_total
 
     return {
         "amount_kop": amount,
         "has_missing_price": unpriced_qty > 0,
         "priced_qty": priced_qty,
         "unpriced_qty": unpriced_qty,
+        "pallets_amount_kop": pallets_amount,
+        "has_missing_pallet_price": has_missing_pallet_price,
     }
 
 

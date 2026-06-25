@@ -99,12 +99,10 @@ export function ManagerTripsListScreen() {
                       {eta ? ` · ${eta}` : ''}
                     </div>
                   </div>
-                  {tone && (
-                    <span className={`badge ${tone}`}>
-                      <span className="dot" />
-                      {tripStatusLabel(t.status, t.direction)}
-                    </span>
-                  )}
+                  <span className={tone ? `badge ${tone}` : 'badge'}>
+                    <span className="dot" />
+                    {tripStatusLabel(t.status, t.direction)}
+                  </span>
                   <span className="tile-chev">
                     <Icon name="chev" size={18} />
                   </span>

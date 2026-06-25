@@ -57,22 +57,26 @@ function printLabels(labels: { code: string; qr_svg: string }[]) {
   win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR-этикетки мест</title>
     <style>
       * { box-sizing: border-box; }
-      @page { margin: 6mm; }
+      /* Физический размер этикетки = размер страницы, иначе драйвер масштабирует
+         лист под мелкую этикетку и QR/код становятся крошечными. */
+      @page { size: 58mm 40mm; margin: 0; }
       body { margin: 0; font-family: system-ui, sans-serif; }
       .toolbar { padding: 12px 16px; border-bottom: 1px solid #ddd; }
       .toolbar button { font-size: 14px; padding: 6px 14px; cursor: pointer; }
       .label {
         page-break-after: always; break-after: page;
+        width: 58mm; height: 40mm; padding: 1.5mm;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        min-height: 96vh; text-align: center;
+        text-align: center; overflow: hidden;
       }
       .label:last-child { page-break-after: auto; break-after: auto; }
       .label .qr { line-height: 0; }
-      .label .qr svg { width: 60mm; height: 60mm; display: block; }
-      .label .code { margin-top: 1mm; font-weight: 700; font-size: 30px; letter-spacing: 1px; }
-      @media print { .toolbar { display: none; } .label { min-height: 100vh; } }
+      .label .qr svg { width: 31mm; height: 31mm; display: block; }
+      .label .code { margin-top: 0.8mm; font-weight: 700; font-size: 5.5mm; line-height: 1; letter-spacing: 0.5px; }
+      @media screen { body { background: #f4f4f4; } .label { background: #fff; margin: 8px auto; box-shadow: 0 1px 4px rgba(0,0,0,.2); } }
+      @media print { .toolbar { display: none; } }
     </style></head><body>
-    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} (по одной на странице)</div>
+    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • размер 58×40 мм (по одной на этикетку). В диалоге печати выберите этот размер и масштаб 100% / «Реальный размер».</div>
     ${cells}
     </body></html>`)
   win.document.close()

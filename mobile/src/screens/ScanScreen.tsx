@@ -3,17 +3,16 @@ import { useNav } from '../nav/NavContext'
 import { Icon } from '../components/Icon'
 import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
-import { getLocationByCode, isLocationCode, type LocationMatch } from '../api/locationsApi'
+import { getLocationByCode, isLocationCode } from '../api/locationsApi'
 
 // Сканер ШК: камера в нативной сборке (ML Kit за абстракцией ScanSource — позже ТСД),
 // ручной ввод кода как fallback. Код → GET /products/by-barcode/{code}. См. docs/mobile-plan.md §6.2.
 export function ScanScreen() {
-  const { back, openScanProduct } = useNav()
+  const { back, openScanProduct, openScanLocation } = useNav()
   const [code, setCode] = useState('')
   const [looking, setLooking] = useState(false)
   const [error, setError] = useState('')
   const [notFound, setNotFound] = useState('')
-  const [location, setLocation] = useState<LocationMatch | null>(null)
   const [scanAvailable, setScanAvailable] = useState(false)
 
   useEffect(() => {
@@ -30,12 +29,11 @@ export function ScanScreen() {
     setLooking(true)
     setError('')
     setNotFound('')
-    setLocation(null)
     try {
-      // QR ячейки («wms:loc:<id>») ведёт на место хранения, всё прочее — ШК товара.
+      // QR ячейки («wms:loc:<id>») ведёт на карточку места, всё прочее — ШК товара.
       if (isLocationCode(c)) {
         const res = await getLocationByCode(c)
-        if (res.found && res.location) setLocation(res.location)
+        if (res.found && res.location) openScanLocation(res.location)
         else setNotFound(c)
         return
       }
@@ -118,7 +116,6 @@ export function ScanScreen() {
               onChange={(e) => {
                 setCode(e.target.value)
                 setNotFound('') // результат прошлого кода не относится к новому вводу
-                setLocation(null)
               }}
             />
             <button className="btn auto" type="submit" disabled={looking || !code.trim()}>
@@ -130,17 +127,6 @@ export function ScanScreen() {
             <div className="alert" style={{ marginTop: 12 }}>
               <Icon name="alert" size={15} />
               {error}
-            </div>
-          )}
-
-          {location && (
-            <div className="alert" style={{ marginTop: 12, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-              <div className="row" style={{ gap: 8 }}>
-                <Icon name="box" size={15} />
-                <strong>Место хранения</strong>
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 0.5 }}>{location.code}</div>
-              {!location.is_active && <span className="t-sub">Ячейка в архиве</span>}
             </div>
           )}
 

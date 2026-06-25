@@ -236,7 +236,7 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
   const { data, loading } = useApi(
     (signal) => shipmentIds.length
       ? getShipmentContents(shipmentIds, signal)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, has_missing_price: false }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false }),
     [key],
   )
   if (shipmentIds.length === 0) return null
@@ -244,6 +244,7 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
   const products = data?.products ?? []
   const goods = data?.suggested_amount_kop ?? 0
   const logistics = data?.logistics_amount_kop ?? 0
+  const pallets = data?.pallets_amount_kop ?? 0
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
@@ -256,8 +257,9 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
       </div>
       {data && (
         <CostBreakdown
-          goods={goods} logistics={logistics}
+          goods={goods} logistics={logistics} pallets={pallets}
           hasMissingPrice={data.has_missing_price}
+          hasMissingPalletPrice={data.has_missing_pallet_price}
           onApplyAmount={onApplyAmount}
         />
       )}
@@ -330,7 +332,7 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
   const { data: ship } = useApi(
     (s) => shipmentIds.length
       ? getShipmentContents(shipmentIds, s)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, has_missing_price: false }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false }),
     [shipKey],
   )
   const { data: rec } = useApi(
@@ -343,23 +345,28 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
 
   const goods = ship?.suggested_amount_kop ?? 0
   const logistics = (ship?.logistics_amount_kop ?? 0) + (rec?.logistics_amount_kop ?? 0)
+  const pallets = ship?.pallets_amount_kop ?? 0
   return (
     <CostBreakdown
-      goods={goods} logistics={logistics}
+      goods={goods} logistics={logistics} pallets={pallets}
       hasMissingPrice={ship?.has_missing_price ?? false}
+      hasMissingPalletPrice={ship?.has_missing_pallet_price ?? false}
       onApplyAmount={onApplyAmount}
     />
   )
 }
 
 /** Разбивка стоимости Товары / Логистика / Итого + опц. кнопка «В сумму счёта». */
-export function CostBreakdown({ goods, logistics, hasMissingPrice, onApplyAmount }: {
+export function CostBreakdown({ goods, logistics, pallets = 0, hasMissingPrice, hasMissingPalletPrice, onApplyAmount }: {
   goods: number
   logistics: number
+  pallets?: number
   hasMissingPrice?: boolean
+  hasMissingPalletPrice?: boolean
   onApplyAmount?: (kopecks: number) => void
 }) {
-  const total = goods + logistics
+  const total = goods + logistics + pallets
+  const hasRows = goods > 0 || logistics > 0 || pallets > 0
   return (
     <div style={{ padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: 'var(--c-bg-sunken)' }}>
       {goods > 0 && (
@@ -381,10 +388,23 @@ export function CostBreakdown({ goods, logistics, hasMissingPrice, onApplyAmount
           <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(logistics)}</span>
         </div>
       )}
+      {(pallets > 0 || hasMissingPalletPrice) && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: 'var(--c-text-subtle)' }}>
+            Палеты
+            {hasMissingPalletPrice && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6, color: 'var(--c-warning)' }}>
+                <Icon name="alert" size={11} />цена не заведена
+              </span>
+            )}
+          </span>
+          <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(pallets)}</span>
+        </div>
+      )}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-        paddingTop: goods > 0 || logistics > 0 ? 6 : 0,
-        borderTop: goods > 0 || logistics > 0 ? '1px solid var(--c-border)' : 'none',
+        paddingTop: hasRows ? 6 : 0,
+        borderTop: hasRows ? '1px solid var(--c-border)' : 'none',
       }}>
         <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Итого:</span>
         <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-accent)' }}>

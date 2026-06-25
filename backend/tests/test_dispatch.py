@@ -111,7 +111,7 @@ def _payload(client_id, product_id, sku, qty, site_url=None) -> dict:
         "comment": "Тех. задание: упаковать аккуратно",
         "lines": [{
             "product_id": product_id, "product_name": "Product", "product_sku": sku,
-            "qty": qty, "site_url": site_url,
+            "qty": qty, "pallets_qty": 1, "site_url": site_url,
         }],
     }
 
@@ -338,7 +338,7 @@ def test_lines_editable_only_in_draft(admin_client, client_id):
     doc_id = _create(admin_client, client_id, pid, "DSP-T8", 2)
     # в черновике добавление строки доступно
     add = admin_client.post(f"/dispatches/{doc_id}/lines", json={
-        "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1,
+        "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1, "pallets_qty": 1,
     })
     assert add.status_code == 200, add.text
     # после передачи в подготовку состав не правится

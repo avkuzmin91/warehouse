@@ -12,6 +12,7 @@ class DispatchLineIn(BaseModel):
     size_id:      str | None = None
     size_name:    str | None = None
     qty:          int = Field(ge=1)
+    pallets_qty:  int | None = Field(default=None, ge=0)
     site_url:     str | None = None
     store_id:     str | None = None
     store_name:   str | None = None
@@ -43,10 +44,11 @@ class DispatchDocUpdate(BaseModel):
 
 
 class DispatchLineUpdate(BaseModel):
-    qty:        int | None = Field(default=None, ge=1)
-    site_url:   str | None = None
-    store_id:   str | None = None
-    store_name: str | None = None
+    qty:         int | None = Field(default=None, ge=1)
+    pallets_qty: int | None = Field(default=None, ge=0)
+    site_url:    str | None = None
+    store_id:    str | None = None
+    store_name:  str | None = None
 
 
 class DispatchPriorityUpdate(BaseModel):
@@ -80,6 +82,8 @@ class DispatchLineItem(BaseModel):
     size_name:    str | None
     qty:          int
     shipped_qty:  int
+    pallets_qty:      int | None = None
+    items_per_pallet: int | None = None
     site_url:     str | None = None
     store_id:     str | None
     store_name:   str | None

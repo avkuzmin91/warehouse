@@ -27,12 +27,14 @@ from modules.expenses.router import router as expenses_router
 from modules.timesheet.router import router as timesheet_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
+from modules.pallet_pricing.router import router as pallet_pricing_router
 from modules.pricing.router import router as pricing_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
 from modules.dispatch.router import router as dispatch_router
 from modules.tasks.router import router as tasks_router
+from modules.scan.router import router as scan_router
 from modules.users.router import router as users_router
 
 
@@ -507,6 +509,24 @@ def _ensure_runtime_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_packing_prices_lookup "
             "ON product_packing_prices (product_id, client_id, quality, effective_from)"
         )
+        # Палеты: кол-во в строке отгрузки + цена палета по клиенту — для dev-старта без alembic.
+        conn.execute("ALTER TABLE IF EXISTS dispatch_lines ADD COLUMN IF NOT EXISTS pallets_qty INTEGER")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS client_pallet_prices (
+                id             TEXT PRIMARY KEY,
+                client_id      TEXT NOT NULL,
+                price_kop      INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_pallet_prices_lookup "
+            "ON client_pallet_prices (client_id, effective_from)"
+        )
         conn.commit()
 
 
@@ -683,6 +703,7 @@ app.include_router(locations_router)
 app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(pricing_router)
+app.include_router(pallet_pricing_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(dispatch_router)
@@ -693,4 +714,5 @@ app.include_router(expenses_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
+app.include_router(scan_router)
 app.include_router(dashboard_router)

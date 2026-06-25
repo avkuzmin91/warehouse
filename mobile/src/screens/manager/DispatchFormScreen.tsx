@@ -8,6 +8,7 @@ import {
   deleteDispatchLine,
   advanceDispatch,
   getDispatch,
+  recommendedPallets,
   type DispatchLineIn,
   type DispatchCargoType,
 } from '../../api/dispatchApi'
@@ -30,6 +31,9 @@ type DraftLine = DispatchLineIn & {
   onHand: number
   inTransit: number
   sku_pending: boolean
+  itemsPerPallet: number | null
+  pallets: number | null
+  palletsTouched: boolean
 }
 
 function lineSub(l: DraftLine): string {
@@ -110,6 +114,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
             inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
             sku_pending: !!p?.sku_pending,
+            itemsPerPallet: l.items_per_pallet ?? p?.items_per_pallet ?? null,
+            pallets: l.pallets_qty,
+            palletsTouched: false,
             site_url: l.site_url,
             store_id: l.store_id,
             store_name: l.store_name,
@@ -140,6 +147,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   }, [clientId])
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
+  const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
   // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
   // не упакованный, и товар в пути можно сохранить черновиком, но не передать в рейс.
@@ -155,6 +163,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (comment.trim() === '') blockReasons.push('Заполните техническое задание')
   if (lines.length === 0) blockReasons.push('Добавьте хотя бы одну позицию')
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
+  if (lines.some((l) => (l.pallets ?? 0) < 1)) blockReasons.push('Укажите количество палет для каждой позиции')
   if (!allReady) blockReasons.push(
     isDefect
       ? 'Часть брака недоступна на складе — уменьшите количество'
@@ -191,6 +200,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
         inTransit: cargoType === 'defect' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
+        itemsPerPallet: b.items_per_pallet,
+        pallets: recommendedPallets(qty, b.items_per_pallet),
+        palletsTouched: false,
         site_url: null as string | null,
         store_id: null as string | null,
         store_name: null as string | null,
@@ -200,7 +212,17 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   }, [cargoType])
 
   function setQty(uid: string, qty: number) {
-    setLines((ls) => ls.map((l) => (l._uid === uid ? { ...l, qty: Math.max(1, Math.floor(qty)) } : l)))
+    setLines((ls) => ls.map((l) => {
+      if (l._uid !== uid) return l
+      const nextQty = Math.max(1, Math.floor(qty))
+      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(nextQty, l.itemsPerPallet) ?? l.pallets)
+      return { ...l, qty: nextQty, pallets }
+    }))
+  }
+  function setPallets(uid: string, value: number | null) {
+    setLines((ls) => ls.map((l) => (l._uid === uid
+      ? { ...l, pallets: value == null ? null : Math.max(0, value), palletsTouched: true }
+      : l)))
   }
   function removeLine(uid: string) {
     setLines((ls) => ls.filter((l) => l._uid !== uid))
@@ -226,6 +248,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
       size_id: l.size_id,
       size_name: l.size_name,
       qty: l.qty,
+      pallets_qty: l.pallets,
       site_url: l.site_url ?? null,
       store_id: l.store_id ?? null,
       store_name: l.store_name ?? null,
@@ -249,6 +272,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         present.add(l._serverId)
         await updateDispatchLine(id, l._serverId, {
           qty: l.qty,
+          pallets_qty: l.pallets,
           site_url: l.site_url ?? null,
           store_id: l.store_id ?? null,
           store_name: l.store_name ?? null,
@@ -414,6 +438,26 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                   </div>
                 </div>
 
+                <div className="line-row" style={{ marginTop: 8, gap: 6, alignItems: 'center' }}>
+                  <input
+                    className="input num"
+                    inputMode="numeric"
+                    value={l.pallets != null ? String(l.pallets) : ''}
+                    placeholder="Палеты"
+                    aria-label="Количество палет"
+                    style={(l.pallets ?? 0) < 1 ? { borderColor: 'var(--c-warning)' } : undefined}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '')
+                      setPallets(l._uid, raw === '' ? null : parseInt(raw, 10))
+                    }}
+                  />
+                  <div className="line-sub" style={{ flex: 1 }}>
+                    {l.itemsPerPallet
+                      ? `палеты · реком. ${recommendedPallets(l.qty, l.itemsPerPallet)} (${l.itemsPerPallet}/пал)`
+                      : 'палеты · кратность не задана'}
+                  </div>
+                </div>
+
                 <div className="line-row" style={{ marginTop: 8 }}>
                   <input
                     className="input"
@@ -448,6 +492,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           <div className="summary" style={{ marginTop: 16 }}>
             <div className="kv"><span className="k">SKU</span><span className="v mono">{lines.length}</span></div>
             <div className="kv"><span className="k">Кол-во</span><span className="v mono">{totalQty} шт</span></div>
+            <div className="kv"><span className="k">Палет</span><span className="v mono">{totalPallets}</span></div>
           </div>
         )}
 

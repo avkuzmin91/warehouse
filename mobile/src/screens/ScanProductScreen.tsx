@@ -10,6 +10,7 @@ import { useNav } from '../nav/NavContext'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { ScanDocsBlock } from '../components/ScanDocsBlock'
 
 // Сортировка строк: сначала «На хранении», затем по качеству (годный → брак), затем по месту.
 const OP_ORDER: Record<string, number> = { storage: 0, packing: 1, ready: 2 }
@@ -157,6 +158,8 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
             )}
           </>
         )}
+
+        <ScanDocsBlock variantId={match.variant_id} />
       </PullToRefresh>
     </div>
   )

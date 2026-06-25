@@ -28,6 +28,7 @@ const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
   { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
   { to: '/finance/pricing', icon: 'tag', label: 'Стоимость упаковки' },
+  { to: '/finance/pallet-pricing', icon: 'layers', label: 'Стоимость палета' },
 ]
 
 const TIMESHEET_NAV: NavItem[] = [

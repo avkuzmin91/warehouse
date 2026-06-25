@@ -8,7 +8,7 @@ import { useLookups } from '../../../hooks/useLookups'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
 import { EmptyState } from '../../primitives/EmptyState'
-import { FiltersBar, FilterSelect } from '../../data/FiltersBar'
+import { FiltersBar, FilterSelect, FilterCombobox } from '../../data/FiltersBar'
 import { Pagination } from '../../data/Pagination'
 
 const LIMIT = 20
@@ -130,8 +130,8 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />
         </div>
-        <FilterSelect label="Тип" value={typeId} options={typeOptions} onChange={(v) => { setTypeId(v); setPage(1) }} />
-        <FilterSelect label="Клиент" value={clientId} options={clientOptions} onChange={(v) => { setClientId(v); setPage(1) }} />
+        <FilterCombobox label="Тип" value={typeId} options={typeOptions} onChange={(v) => { setTypeId(v); setPage(1) }} placeholder="Поиск типа…" />
+        <FilterCombobox label="Клиент" value={clientId} options={clientOptions} onChange={(v) => { setClientId(v); setPage(1) }} placeholder="Поиск клиента…" />
         <FilterSelect label="Статус" value={actuality} options={ACTUALITY_OPTIONS} onChange={(v) => { setActuality(v); setPage(1) }} />
         <FilterSelect label="SKU" value={skuState} options={SKU_OPTIONS} onChange={(v) => { setSkuState(v); setPage(1) }} />
         {hasFilters && (

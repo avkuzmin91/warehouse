@@ -75,6 +75,10 @@ export type DispatchLine = {
   size_name:    string | null
   qty:          number
   shipped_qty:  number
+  /** Количество палет в строке (вводит менеджер; обязательно перед передачей в подготовку). */
+  pallets_qty:  number | null
+  /** Кратность товара на палете из карточки товара — для рекомендации. */
+  items_per_pallet: number | null
   site_url:     string | null
   store_id:     string | null
   store_name:   string | null
@@ -192,6 +196,7 @@ export type DispatchLineIn = {
   size_id?:     string | null
   size_name?:   string | null
   qty:          number
+  pallets_qty?: number | null
   site_url?:    string | null
   store_id?:    string | null
   store_name?:  string | null
@@ -223,10 +228,18 @@ export type DispatchDocUpdate = {
 }
 
 export type DispatchLineUpdate = {
-  qty?:        number
-  site_url?:   string | null
-  store_id?:   string | null
-  store_name?: string | null
+  qty?:         number
+  pallets_qty?: number | null
+  site_url?:    string | null
+  store_id?:    string | null
+  store_name?:  string | null
+}
+
+/** Рекомендованное число палет: кратность товара на палете округляется вверх.
+ *  null — кратность не задана в карточке товара (менеджер вводит вручную). */
+export function recommendedPallets(qty: number, itemsPerPallet: number | null | undefined): number | null {
+  if (!itemsPerPallet || itemsPerPallet <= 0) return null
+  return Math.max(1, Math.ceil(qty / itemsPerPallet))
 }
 
 function buildListQuery(params: DispatchListParams): string {

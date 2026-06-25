@@ -17,6 +17,7 @@ from config import (
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
+    TRIP_STATUS_CANCELLED,
 )
 from dbconn import like_substring_param
 from modules.cabinet.schemas import (
@@ -695,9 +696,9 @@ def get_cabinet_shipment(connection, *, client_id: str, doc_id: str) -> CabinetS
         "SELECT DISTINCT t.id AS trip_id, t.trip_number AS trip_number "
         "FROM trip_lines tl "
         "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
-        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND t.status != ? "
         "ORDER BY t.trip_number",
-        (doc_id,),
+        (doc_id, TRIP_STATUS_CANCELLED),
     ).fetchall()
 
     ops_placeholders = ",".join("?" for _ in CABINET_DISPATCH_OPS_VISIBLE)

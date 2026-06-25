@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   getDispatch,
@@ -8,6 +8,7 @@ import {
   addDispatchLine,
   updateDispatchLine,
   deleteDispatchLine,
+  recommendedPallets,
 } from '../../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchDetail, DispatchStatus } from '../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../api/balancesApi'
@@ -42,6 +43,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
+  // DraftView регистрирует здесь функцию сохранения «Основной информации» (в т.ч. ТЗ),
+  // чтобы «Передать в подготовку» сохранило незакоммиченные правки до перехода по статусу.
+  const flushDraftInfo = useRef<(() => Promise<boolean>) | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -74,6 +78,10 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     setActing(true)
     setError('')
     try {
+      if (flushDraftInfo.current) {
+        const ok = await flushDraftInfo.current()
+        if (!ok) return
+      }
       await advanceDispatch(docId)
       await load()
     } catch (e) {
@@ -106,6 +114,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         size_id:      item.size_id,
         size_name:    item.size_name,
         qty,
+        pallets_qty:  recommendedPallets(qty, item.items_per_pallet),
         site_url:     null,
         store_id:     null,
         store_name:   null,
@@ -113,7 +122,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     })
   }
 
-  async function handleUpdateLine(lineId: string, body: { qty?: number; site_url?: string | null; store_id?: string | null; store_name?: string | null }): Promise<boolean> {
+  async function handleUpdateLine(lineId: string, body: { qty?: number; pallets_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }): Promise<boolean> {
     try {
       await updateDispatchLine(docId, lineId, body)
       await load()
@@ -231,6 +240,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onDeleteLine={handleDeleteLine}
           onUpdateDoc={handleUpdateDoc}
           onReload={load}
+          registerInfoFlush={(fn) => { flushDraftInfo.current = fn }}
         />
       ) : (isPreparing && showPrepareTask) ? (
         <PreparePanel doc={doc} canEdit={canPrepare} onDone={load} />

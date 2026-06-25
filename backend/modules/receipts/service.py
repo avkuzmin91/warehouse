@@ -185,8 +185,11 @@ def list_receipts_aggregated(
     elif unlinked_to_trip:
         conds.append(
             "NOT EXISTS (SELECT 1 FROM trip_lines tl"
-            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0)"
+            " JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0"
+            " WHERE tl.receipt_doc_id = d.id AND COALESCE(tl.is_deleted, 0) = 0"
+            " AND t.status != ?)"
         )
+        params.append(TRIP_STATUS_CANCELLED)
 
     where = " AND ".join(conds)
 
@@ -251,9 +254,10 @@ def list_receipts_aggregated(
             FROM trip_lines tl
             JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0
             WHERE tl.receipt_doc_id IN ({placeholders}) AND COALESCE(tl.is_deleted, 0) = 0
+              AND t.status != ?
             ORDER BY t.trip_number
             """,
-            doc_ids,
+            doc_ids + [TRIP_STATUS_CANCELLED],
         ).fetchall()
         for tr in trip_rows:
             trips_by_doc.setdefault(str(tr["doc_id"]), []).append(

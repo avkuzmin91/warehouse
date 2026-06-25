@@ -199,6 +199,27 @@ def test_receipt_candidates_include_receipts_linked_to_other_trips(admin_client,
     assert other_receipt not in new_trip_ids
 
 
+def test_cancel_trip_unlinks_receipt(admin_client, client_id):
+    # Аннулирование рейса «отвязывает» поступление: рейс исчезает из карточки и
+    # поступление снова попадает в кандидаты «без рейса».
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = admin_client.post("/trips", json={"receipt_doc_ids": [receipt_id]}).json()["message"]
+
+    linked = admin_client.get(f"/receipts/{receipt_id}").json()
+    assert any(t["id"] == trip_id for t in linked["doc"]["trips"])
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    assert cancel.json()["message"] == "cancelled"
+
+    after = admin_client.get(f"/receipts/{receipt_id}").json()
+    assert after["doc"]["trips"] == []
+    assert after["doc"]["trip_id"] is None
+
+    candidates = admin_client.get("/receipts?status=planned&unlinked_to_trip=true&limit=100").json()
+    assert any(item["id"] == receipt_id for item in candidates["items"])
+
+
 # --- Дробление поступления по нескольким inbound-рейсам ---
 
 def _planned_receipt_with_line(admin_client, client_id: str, planned: int = 10):

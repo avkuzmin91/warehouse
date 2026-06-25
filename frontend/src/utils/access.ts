@@ -51,10 +51,12 @@ export function canPrepareDispatch(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
 }
 
-// Карточку-задачу «Соберите по ячейкам» в статусе подготовки физически видит только
-// кладовщик. Менеджер/админ видят обычную карточку статуса (ReadyView), а не задачу.
+// Карточку-задачу «Соберите по ячейкам» в статусе подготовки видит кладовщик —
+// плюс менеджерский состав, чтобы при необходимости подготовить отгрузку (выбрать
+// ячейки и отметить «Отгрузка подготовлена») за кладовщика прямо из карточки.
 export function isDispatchPreparer(user: User | null | undefined): boolean {
-  return user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
+  return user?.role === 'admin' || user?.role === 'manager'
+    || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
 }
 
 export function canCreateDocuments(user: User | null | undefined): boolean {

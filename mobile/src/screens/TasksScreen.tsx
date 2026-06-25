@@ -111,7 +111,6 @@ export function TasksScreen() {
                     <div className="tile-meta">
                       {t.doc_number}
                       {t.since ? ` · ${sinceLabel(t.since)}` : ''}
-                      {!actionable ? ' · скоро' : ''}
                     </div>
                     {t.doc_type === 'trip' && (fmtEta(t.eta) || t.vehicle_number) && (
                       <div className={`tile-meta tile-eta${t.kind === 'trip_cost' ? ' muted' : ''}`}>
@@ -131,12 +130,17 @@ export function TasksScreen() {
                       </div>
                     )}
                   </div>
-                  {urgent && (
+                  {urgent ? (
                     <span className="badge danger">
                       <span className="dot" />
                       Срочно
                     </span>
-                  )}
+                  ) : !actionable ? (
+                    <span className="badge">
+                      <span className="dot" />
+                      Скоро
+                    </span>
+                  ) : null}
                   {actionable && (
                     <span className="tile-chev">
                       <Icon name="chev" size={18} />

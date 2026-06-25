@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import type { BarcodeMatch } from '../api/productsApi'
+import type { LocationMatch } from '../api/locationsApi'
 import { useAuth } from '../auth/AuthContext'
 import { tabsForRole, showScanForRole, type TabDef, type TabName } from './tabs'
 
@@ -22,6 +23,7 @@ export type Route =
   | { name: 'trip'; id: string }
   | { name: 'shipment'; id: string }
   | { name: 'scanProduct'; match: BarcodeMatch }
+  | { name: 'scanLocation'; location: LocationMatch }
   | { name: 'receiptNew' }
   | { name: 'shipmentNew' }
   | { name: 'shipmentEdit'; id: string }
@@ -45,6 +47,7 @@ type NavState = {
   openPackDoc: (id: string) => void
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
+  openScanLocation: (location: LocationMatch) => void
   openProfile: () => void
   openReceiptsList: () => void
   openPackingList: () => void
@@ -90,6 +93,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openPackDoc: (id) => setStack((s) => [...s, { name: 'packDoc', id }]),
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
+    openScanLocation: (location) => setStack((s) => [...s, { name: 'scanLocation', location }]),
     openProfile: () => setStack((s) => [...s, { name: 'profile' }]),
     openReceiptsList: () => setStack((s) => [...s, { name: 'mReceipts' }]),
     openPackingList: () => setStack((s) => [...s, { name: 'mPacking' }]),
