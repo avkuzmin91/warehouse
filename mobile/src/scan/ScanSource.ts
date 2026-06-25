@@ -5,7 +5,7 @@ import { IS_NATIVE } from '../api/constants'
 // Источник сканирования за абстракцией: сейчас камера, позже — аппаратный ТСД
 // (вторая реализация ScanSource), без переписывания экранов. См. docs/mobile-plan.md §8.
 export interface ScanSource {
-  /** Доступно ли сканирование на этой платформе (камера в нативной сборке). */
+  /** Доступно ли сканирование на этой платформе. */
   isAvailable(): Promise<boolean>
   /**
    * Открыть сканер, вернуть код или null, если пользователь отменил. Бросает при отказе в доступе.
@@ -17,8 +17,7 @@ export interface ScanSource {
 
 // Нативный плагин ML Kit ставится перед сборкой:
 //   npm i @capacitor-mlkit/barcode-scanning && npx cap sync
-// Имя зарегистрированного плагина — 'BarcodeScanning'. В вебе он не зарегистрирован:
-// isAvailable() вернёт false, экран покажет ручной ввод кода.
+// Имя зарегистрированного плагина — 'BarcodeScanner'. В вебе экран покажет ручной ввод кода.
 interface Barcode {
   rawValue?: string
   displayValue?: string
@@ -33,7 +32,7 @@ interface ListenerHandle {
 interface BarcodeScanningPlugin {
   isSupported(): Promise<{ supported: boolean }>
   requestPermissions(): Promise<{ camera: string }>
-  scan(): Promise<{ barcodes: Barcode[] }>
+  scan(options?: { formats?: string[]; autoZoom?: boolean }): Promise<{ barcodes: Barcode[] }>
   isGoogleBarcodeScannerModuleAvailable(): Promise<{ available: boolean }>
   installGoogleBarcodeScannerModule(): Promise<void>
   addListener(
@@ -42,7 +41,23 @@ interface BarcodeScanningPlugin {
   ): Promise<ListenerHandle>
 }
 
-const BarcodeScanning = registerPlugin<BarcodeScanningPlugin>('BarcodeScanning')
+const BarcodeScanning = registerPlugin<BarcodeScanningPlugin>('BarcodeScanner')
+
+const SCAN_FORMATS = [
+  'CODE_128',
+  'CODE_39',
+  'CODE_93',
+  'CODABAR',
+  'EAN_13',
+  'EAN_8',
+  'ITF',
+  'UPC_A',
+  'UPC_E',
+  'QR_CODE',
+  'DATA_MATRIX',
+  'PDF_417',
+  'AZTEC',
+]
 
 // GoogleBarcodeScannerModuleInstallState (из плагина): нужные нам терминальные состояния.
 const MODULE_STATE_CANCELED = 3
@@ -79,12 +94,7 @@ async function ensureGoogleModule(onProgress?: (percent: number) => void): Promi
 
 class CameraScanSource implements ScanSource {
   async isAvailable(): Promise<boolean> {
-    if (!IS_NATIVE) return false
-    try {
-      return (await BarcodeScanning.isSupported()).supported
-    } catch {
-      return false
-    }
+    return IS_NATIVE
   }
 
   async scan(onModuleProgress?: (percent: number) => void): Promise<string | null> {
@@ -93,7 +103,7 @@ class CameraScanSource implements ScanSource {
       throw new Error('Нет доступа к камере. Разрешите доступ в настройках телефона.')
     }
     await ensureGoogleModule(onModuleProgress)
-    const { barcodes } = await BarcodeScanning.scan()
+    const { barcodes } = await BarcodeScanning.scan({ formats: SCAN_FORMATS, autoZoom: true })
     const first = barcodes.find((b) => (b.rawValue ?? b.displayValue ?? '').trim())
     if (!first) return null
     return String(first.rawValue ?? first.displayValue ?? '').trim() || null
