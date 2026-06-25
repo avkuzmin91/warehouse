@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
+import { useAuth } from '../../auth/AuthContext'
 import { getDispatch, DISPATCH_STATUS_LABELS, dispatchStatusTone, type DispatchDetail } from '../../api/dispatchApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
+import { canCreateDocuments } from '../../utils/access'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function DispatchDetailScreen({ docId }: { docId: string }) {
   const { back, openDispatchEdit } = useNav()
+  const { user } = useAuth()
+  const canEdit = canCreateDocuments(user?.role)
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -71,7 +75,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               ))}
             </div>
 
-            {doc.status === 'draft' && (
+            {doc.status === 'draft' && canEdit && (
               <button className="btn" style={{ marginTop: 16 }} onClick={() => openDispatchEdit(doc.id)}>
                 <Icon name="edit" size={15} /> Редактировать черновик
               </button>

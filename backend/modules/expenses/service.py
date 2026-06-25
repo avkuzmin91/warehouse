@@ -81,7 +81,7 @@ def next_expense_number(connection) -> str:
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(exp_number, 5) AS INTEGER)), 0) AS max_n
         FROM material_expenses
-        WHERE exp_number LIKE 'EXP-%'
+        WHERE exp_number LIKE 'EXP-%' AND SUBSTR(exp_number, 5) ~ '^[0-9]+$'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1
@@ -108,6 +108,184 @@ def resolve_payment_source(connection, source_id: str) -> str:
     if not row:
         raise HTTPException(status_code=400, detail="Выберите источник оплаты")
     return str(row["name"])
+
+
+def _expense_journal(connection, expense_id: str, op_type: str, comment: str, uid: str | None) -> None:
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, op_type, comment, now_iso(), uid),
+    )
+
+
+def recompute_expense_payment(connection, expense_id: str) -> tuple[int, str]:
+    """Пересчитывает paid_amount/payment_status расхода по журналу expense_payments.
+
+    Статус выводится: аннулированный остаётся аннулированным; иначе оплачено≥сумма →
+    paid, 0<оплачено<сумма → partially_paid, оплачено=0 → awaiting. paid_on проставляется
+    датой последнего платежа только при полном погашении (иначе снимается). Не коммитит.
+    Возвращает (paid_amount, payment_status)."""
+    row = connection.execute(
+        "SELECT amount, payment_status FROM material_expenses WHERE id = ?", (expense_id,)
+    ).fetchone()
+    amount = int(row["amount"])
+    agg = connection.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS paid, MAX(paid_on) AS last_on "
+        "FROM expense_payments WHERE expense_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (expense_id,),
+    ).fetchone()
+    paid = int(agg["paid"] or 0)
+
+    if str(row["payment_status"]) == EXPENSE_PAYMENT_CANCELLED:
+        status = EXPENSE_PAYMENT_CANCELLED
+    elif paid >= amount and amount > 0:
+        status = EXPENSE_PAYMENT_PAID
+    elif paid > 0:
+        status = EXPENSE_PAYMENT_PARTIAL
+    else:
+        status = EXPENSE_PAYMENT_AWAITING
+
+    paid_on = agg["last_on"] if status == EXPENSE_PAYMENT_PAID else None
+    connection.execute(
+        "UPDATE material_expenses SET paid_amount = ?, payment_status = ?, paid_on = ?, updated_at = ? "
+        "WHERE id = ?",
+        (paid, status, paid_on, now_iso(), expense_id),
+    )
+    return paid, status
+
+
+def add_expense_payment(
+    connection, expense_row, *, amount: int, paid_on: str, payment_source_id: str,
+    src_name: str, uid: str | None, comment: str | None = None,
+) -> tuple[int, str]:
+    """Проводит один платёж по расходу: запись в журнал expense_payments + пересчёт
+    статуса + человекочитаемая запись в expense_ops. Сумму и остаток валидирует вызывающий.
+    Не коммитит. Возвращает (paid_amount, payment_status)."""
+    expense_id = str(expense_row["id"])
+    connection.execute(
+        "INSERT INTO expense_payments (id,expense_id,amount,paid_on,payment_source_id,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, int(amount), paid_on, payment_source_id,
+         (comment or None), now_iso(), uid),
+    )
+    paid, status = recompute_expense_payment(connection, expense_id)
+    # Источник последнего платежа держим на самом расходе — для колонки «Оплата»
+    # в списке и как подсказку к повторной оплате остатка.
+    connection.execute(
+        "UPDATE material_expenses SET payment_source_id = ? WHERE id = ?",
+        (payment_source_id, expense_id),
+    )
+    total = int(expense_row["amount"])
+    tail = "оплачено полностью" if status == EXPENSE_PAYMENT_PAID \
+        else f"оплачено {format_kopecks(paid)} из {format_kopecks(total)}"
+    _expense_journal(
+        connection, expense_id, EXPENSE_OP_PAYMENT,
+        f"Платёж {format_kopecks(int(amount))} · {src_name} · {tail}", uid,
+    )
+    return paid, status
+
+
+def revert_expense_payments(connection, expense_id: str, amount: int, uid: str | None) -> None:
+    """Откат всех платежей расхода: soft-delete журнала + возврат в «ожидает оплаты».
+    Не коммитит."""
+    connection.execute(
+        "UPDATE expense_payments SET is_deleted = 1 WHERE expense_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (expense_id,),
+    )
+    recompute_expense_payment(connection, expense_id)
+    _expense_journal(
+        connection, expense_id, EXPENSE_OP_UNPAY,
+        f"Отметки об оплате сняты: {format_kopecks(int(amount))} · возврат в ожидание", uid,
+    )
+
+
+def carrier_outstanding_logistics(connection) -> list[dict]:
+    """Перевозчики с непогашенным остатком по логистическим расходам (для массовой оплаты).
+    Остаток = SUM(amount − paid_amount) по неаннулированным расходам kind=logistics с
+    остатком > 0, сгруппировано по carrier_id."""
+    rows = connection.execute(
+        """
+        SELECT e.carrier_id AS id, cr.name AS name,
+               COALESCE(SUM(e.amount - COALESCE(e.paid_amount, 0)), 0) AS outstanding,
+               COUNT(*) AS count
+        FROM material_expenses e
+        LEFT JOIN carriers cr ON cr.id = e.carrier_id
+        WHERE COALESCE(e.is_deleted, 0) = 0
+          AND e.kind = ?
+          AND e.carrier_id IS NOT NULL
+          AND e.payment_status != ?
+          AND (e.amount - COALESCE(e.paid_amount, 0)) > 0
+        GROUP BY e.carrier_id, cr.name
+        HAVING COALESCE(SUM(e.amount - COALESCE(e.paid_amount, 0)), 0) > 0
+        ORDER BY outstanding DESC
+        """,
+        (EXPENSE_KIND_LOGISTICS, EXPENSE_PAYMENT_CANCELLED),
+    ).fetchall()
+    return [
+        {
+            "carrier_id": str(r["id"]),
+            "carrier_name": str(r["name"]) if r["name"] else "Без перевозчика",
+            "outstanding_amount": int(r["outstanding"]),
+            "count": int(r["count"]),
+        }
+        for r in rows
+    ]
+
+
+def pay_carrier_fifo(
+    connection, *, carrier_id: str, amount: int, paid_on: str,
+    payment_source_id: str, src_name: str, uid: str | None,
+) -> dict:
+    """Массовая оплата перевозчику: распределяет сумму по его непогашенным логистическим
+    расходам от ранних к поздним (spent_on ASC, тай-брейк created_at ASC), закрывая каждый
+    целиком, последний — частично. Сумма не может превышать суммарный остаток (валидируется).
+    Не коммитит. Возвращает сводку распределения."""
+    rows = connection.execute(
+        """
+        SELECT * FROM material_expenses
+        WHERE COALESCE(is_deleted, 0) = 0
+          AND kind = ?
+          AND carrier_id = ?
+          AND payment_status != ?
+          AND (amount - COALESCE(paid_amount, 0)) > 0
+        ORDER BY spent_on ASC, created_at ASC
+        """,
+        (EXPENSE_KIND_LOGISTICS, carrier_id, EXPENSE_PAYMENT_CANCELLED),
+    ).fetchall()
+
+    outstanding = sum(int(r["amount"]) - int(r["paid_amount"] or 0) for r in rows)
+    if outstanding <= 0:
+        raise HTTPException(status_code=400, detail="У перевозчика нет расходов к оплате")
+    if int(amount) > outstanding:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Сумма превышает долг перевозчику ({format_kopecks(outstanding)})",
+        )
+
+    remaining = int(amount)
+    affected = 0
+    fully = 0
+    for r in rows:
+        if remaining <= 0:
+            break
+        owed = int(r["amount"]) - int(r["paid_amount"] or 0)
+        pay = min(owed, remaining)
+        _, status = add_expense_payment(
+            connection, r, amount=pay, paid_on=paid_on,
+            payment_source_id=payment_source_id, src_name=src_name, uid=uid,
+            comment="Массовая оплата перевозчику",
+        )
+        remaining -= pay
+        affected += 1
+        if status == EXPENSE_PAYMENT_PAID:
+            fully += 1
+
+    return {
+        "allocated_amount": int(amount) - remaining,
+        "affected_count": affected,
+        "fully_paid_count": fully,
+        "partially_paid_count": affected - fully,
+    }
 
 
 def _expense_filter_sql(
@@ -159,6 +337,9 @@ def _row_to_list_item(r) -> dict:
         "quantity": float(r["quantity"]),
         "unit": r["unit"],
         "amount": int(r["amount"]),
+        "paid_amount": int(r["paid_amount"] or 0),
+        "carrier_id": r["carrier_id"],
+        "carrier_name": r["carrier_name"],
         "payment_source_id": r["payment_source_id"],
         "payment_source_name": r["payment_source_name"],
         "supplier": r["supplier"],
@@ -184,12 +365,14 @@ _LIST_SELECT = """
     SELECT e.*,
            c.name AS category_name,
            ps.name AS payment_source_name,
+           cr.name AS carrier_name,
            u.email AS created_by_email,
            (SELECT COUNT(*) FROM expense_files f
             WHERE f.expense_id = e.id AND COALESCE(f.is_deleted, 0) = 0) AS file_count
     FROM material_expenses e
     LEFT JOIN expense_categories c ON c.id = e.category_id
     LEFT JOIN expense_payment_sources ps ON ps.id = e.payment_source_id
+    LEFT JOIN carriers cr ON cr.id = e.carrier_id
     LEFT JOIN users u ON u.id = e.created_by
 """
 
@@ -242,12 +425,23 @@ def expense_summary(
         date_from=date_from, date_to=date_to,
         kind=kind, payment_status=payment_status, kinds=kinds,
     )
+    # «Оплачено» — фактически проведённые деньги (paid_amount), «Ожидает» — остаток
+    # к оплате (amount − paid_amount) по неаннулированным; частично оплаченные дают
+    # свой остаток в «Ожидает», уже проведённую часть — в «Оплачено».
+    # Аннулированные расходы — снятые обязательства; в денежные итоги и разбивки
+    # они не входят (но остаются в списке и под фильтром «Аннулирован»).
+    # «Итого» = неаннулированная сумма = «Ожидает» + «Оплачено».
+    active_where = f"{where} AND e.payment_status != ?"
+    active_params = [*params, EXPENSE_PAYMENT_CANCELLED]
     head = connection.execute(
-        f"SELECT COUNT(*) AS n, COALESCE(SUM(e.amount), 0) AS total, "
-        f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN e.amount ELSE 0 END), 0) AS awaiting, "
-        f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN e.amount ELSE 0 END), 0) AS paid "
+        f"SELECT COUNT(*) AS n, "
+        f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 ELSE e.amount END), 0) AS total, "
+        f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
+        f"     ELSE GREATEST(e.amount - COALESCE(e.paid_amount, 0), 0) END), 0) AS awaiting, "
+        f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
+        f"     ELSE COALESCE(e.paid_amount, 0) END), 0) AS paid "
         f"FROM material_expenses e WHERE {where}",
-        [EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PAID, *params],
+        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, *params],
     ).fetchone()
 
     by_cat = connection.execute(
@@ -256,11 +450,11 @@ def expense_summary(
                COALESCE(SUM(e.amount), 0) AS amount, COUNT(*) AS count
         FROM material_expenses e
         LEFT JOIN expense_categories c ON c.id = e.category_id
-        WHERE {where}
+        WHERE {active_where}
         GROUP BY e.category_id, c.name
         ORDER BY amount DESC
         """,
-        params,
+        active_params,
     ).fetchall()
 
     by_src = connection.execute(
@@ -269,11 +463,11 @@ def expense_summary(
                COALESCE(SUM(e.amount), 0) AS amount, COUNT(*) AS count
         FROM material_expenses e
         LEFT JOIN expense_payment_sources ps ON ps.id = e.payment_source_id
-        WHERE {where}
+        WHERE {active_where}
         GROUP BY e.payment_source_id, ps.name
         ORDER BY amount DESC
         """,
-        params,
+        active_params,
     ).fetchall()
 
     def _bd(rows) -> list[dict]:
@@ -329,6 +523,32 @@ def load_detail(connection, expense_id: str) -> dict:
             "created_at": str(f["created_at"]),
         }
         for f in file_rows
+    ]
+
+    pay_rows = connection.execute(
+        """
+        SELECT p.id, p.amount, p.paid_on, p.payment_source_id, ps.name AS payment_source_name,
+               p.comment, p.created_at, p.created_by, u.email AS created_by_email
+        FROM expense_payments p
+        LEFT JOIN expense_payment_sources ps ON ps.id = p.payment_source_id
+        LEFT JOIN users u ON u.id = p.created_by
+        WHERE p.expense_id = ? AND COALESCE(p.is_deleted, 0) = 0
+        ORDER BY p.created_at
+        """,
+        (expense_id,),
+    ).fetchall()
+    item["payments"] = [
+        {
+            "id": str(p["id"]),
+            "amount": int(p["amount"]),
+            "paid_on": p["paid_on"],
+            "payment_source_id": p["payment_source_id"],
+            "payment_source_name": p["payment_source_name"],
+            "comment": p["comment"],
+            "created_at": str(p["created_at"]),
+            "created_by_email": p["created_by_email"],
+        }
+        for p in pay_rows
     ]
 
     op_rows = connection.execute(
@@ -456,17 +676,18 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
 
     trip_number = str(trip_row["trip_number"])
     carrier = (trip_row["carrier_name"] or None)
+    carrier_id = (trip_row["carrier_id"] or None)
     spent_on = _date_part(trip_row["arrived_at"]) or today_iso()
     name = f"Логистика рейса {trip_number}"
 
     if existing:
         if str(existing["payment_status"]) != EXPENSE_PAYMENT_AWAITING:
             return  # оплаченный/отменённый расход не трогаем
-        if int(existing["amount"]) == amount:
+        if int(existing["amount"]) == amount and str(existing["carrier_id"] or "") == str(carrier_id or ""):
             return
         connection.execute(
-            "UPDATE material_expenses SET amount = ?, supplier = ?, updated_at = ? WHERE id = ?",
-            (amount, carrier, now_iso(), str(existing["id"])),
+            "UPDATE material_expenses SET amount = ?, supplier = ?, carrier_id = ?, updated_at = ? WHERE id = ?",
+            (amount, carrier, carrier_id, now_iso(), str(existing["id"])),
         )
         connection.execute(
             "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
@@ -483,11 +704,11 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     connection.execute(
         """INSERT INTO material_expenses
            (id,exp_number,spent_on,category_id,name,quantity,unit,amount,
-            payment_source_id,supplier,comment,kind,payment_status,
+            payment_source_id,supplier,carrier_id,comment,kind,payment_status,
             source_kind,source_id,created_at,created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (expense_id, exp_number, spent_on, category_id, name, 1, None, amount,
-         None, carrier, None, EXPENSE_KIND_LOGISTICS, EXPENSE_PAYMENT_AWAITING,
+         None, carrier, carrier_id, None, EXPENSE_KIND_LOGISTICS, EXPENSE_PAYMENT_AWAITING,
          EXPENSE_SOURCE_TRIP, trip_id, now_iso(), uid),
     )
     connection.execute(
@@ -611,11 +832,11 @@ def record_payroll_expense(
     name = f"{label} ЗП — {emp['full_name']}"
     connection.execute(
         """INSERT INTO material_expenses
-           (id,exp_number,spent_on,category_id,name,quantity,unit,amount,
+           (id,exp_number,spent_on,category_id,name,quantity,unit,amount,paid_amount,
             payment_source_id,supplier,comment,kind,payment_status,paid_on,
             period_start,period_end,source_kind,source_id,created_at,created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (expense_id, exp_number, paid_on, cat_id, name, 1, None, amount,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (expense_id, exp_number, paid_on, cat_id, name, 1, None, amount, amount,
          None, None, None, EXPENSE_KIND_SALARY, EXPENSE_PAYMENT_PAID, paid_on,
          period_start, period_end, EXPENSE_SOURCE_PAYROLL, str(payment_id), now_iso(), uid),
     )

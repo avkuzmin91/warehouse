@@ -85,6 +85,16 @@ RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
     RECEIPT_STATUS_CANCELLED,
 })
 
+RECEIPT_STATUS_LABELS: dict[str, str] = {
+    RECEIPT_STATUS_DRAFT:              "Создание",
+    RECEIPT_STATUS_PLANNED:            "В плане",
+    RECEIPT_STATUS_ON_INTAKE:          "На приёмке",
+    RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
+    RECEIPT_STATUS_ON_REVIEW:          "На проверке",
+    RECEIPT_STATUS_DONE:               "Завершён",
+    RECEIPT_STATUS_CANCELLED:          "Аннулирован",
+}
+
 RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
     # Дальше поступление двигает только рейс: приёмка идёт в разгрузке рейса
@@ -174,7 +184,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_PACKING:           "В плане",
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
-    SHIPMENT_STATUS_PACKED:            "Упаковано",
+    SHIPMENT_STATUS_PACKED:            "Упакован",
     SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
     SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
     SHIPMENT_STATUS_SHIPPED:           "Завершён",
@@ -588,6 +598,8 @@ INVOICE_OP_ISSUE           = "issue"
 INVOICE_OP_DOC_UPDATE      = "doc_update"
 INVOICE_OP_SHIPMENT_LINK   = "shipment_link"
 INVOICE_OP_SHIPMENT_UNLINK = "shipment_unlink"
+INVOICE_OP_RECEIPT_LINK    = "receipt_link"
+INVOICE_OP_RECEIPT_UNLINK  = "receipt_unlink"
 INVOICE_OP_DUE_DATE_CHANGE = "due_date_change"
 INVOICE_OP_AMOUNT_CHANGE   = "amount_change"
 INVOICE_OP_PAYMENT         = "payment"

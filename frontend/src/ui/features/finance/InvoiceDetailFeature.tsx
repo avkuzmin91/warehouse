@@ -4,6 +4,7 @@ import {
   cancelInvoice,
   closeInvoice,
   deleteInvoiceFile,
+  detachInvoiceReceipt,
   detachInvoiceShipment,
   getInvoice,
   INVOICE_OP_LABELS,
@@ -28,9 +29,9 @@ import { useLookups } from '../../../hooks/useLookups'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDate, fmtDateShort, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel, SelectedContentsRollup } from './financeUI'
+import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel, SelectedContentsRollup, SelectedReceiptsRollup, InvoiceSummaryPanel } from './financeUI'
 import { InvoiceRailPanel, invoicePhase } from './InvoiceRail'
-import { PayModal, DueModal, AmountModal, AttachModal } from './InvoiceModals'
+import { PayModal, DueModal, AmountModal, AttachModal, AttachReceiptsModal } from './InvoiceModals'
 
 const OP_DOT: Partial<Record<InvoiceOpType, string>> = {
   issue: 'var(--c-accent)',
@@ -58,6 +59,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const [dueOpen, setDueOpen] = useState(false)
   const [amountOpen, setAmountOpen] = useState(false)
   const [attachOpen, setAttachOpen] = useState(false)
+  const [attachRecOpen, setAttachRecOpen] = useState(false)
   const [expandedShip, setExpandedShip] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -65,6 +67,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const [draftSaving, setDraftSaving] = useState(false)
   const [showReasons, setShowReasons] = useState(false)
   const draftSave = useRef<() => Promise<DraftSaveResult>>(async () => null)
+  const draftSetAmount = useRef<((kopecks: number) => void) | null>(null)
 
   if (loading && !inv) {
     return (
@@ -103,9 +106,10 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     closed: inv.status === 'closed' && inv.updated_at ? fmtDateShort(inv.updated_at) : undefined,
   }
 
+  const docCount = inv.shipments.length + inv.receipts.length
   // Готовность к выставлению (draft → issued): зеркало серверных гейтов.
   const issueChecklist = [
-    { ok: inv.shipments.length > 0, label: inv.shipments.length > 0 ? `Привязаны отгрузки (${inv.shipments.length})` : 'Привяжите хотя бы одну отгрузку' },
+    { ok: docCount > 0, label: docCount > 0 ? `Привязаны документы (${inv.shipments.length} отгр. · ${inv.receipts.length} пост.)` : 'Привяжите отгрузку или поступление' },
     { ok: inv.total_amount > 0, label: inv.total_amount > 0 ? `Сумма счёта ${formatMoneyKopecks(inv.total_amount)}` : 'Укажите сумму счёта' },
     { ok: !!inv.due_date, label: inv.due_date ? `Срок расчёта ${fmtDate(inv.due_date)}` : 'Укажите плановую дату расчёта' },
     { ok: inv.files.length > 0, label: inv.files.length > 0 ? `Файл прикреплён (${inv.files.length})` : 'Прикрепите файл счёта' },
@@ -128,7 +132,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
       due = saved.due_date
     }
     const reasons = [
-      inv.shipments.length === 0 ? 'Привяжите хотя бы одну отгрузку' : null,
+      inv.shipments.length + inv.receipts.length === 0 ? 'Привяжите отгрузку или поступление' : null,
       amount <= 0 ? 'Укажите сумму счёта' : null,
       !due ? 'Укажите плановую дату расчёта' : null,
       inv.files.length === 0 ? 'Прикрепите файл счёта' : null,
@@ -151,7 +155,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     if (!inv) return
     const ok = await confirm({
       title: 'Аннулировать счёт?',
-      body: `Счёт ${inv.doc_number} будет аннулирован, привязанные отгрузки освободятся. Это действие нельзя отменить.`,
+      body: `Счёт ${inv.doc_number} будет аннулирован, привязанные отгрузки и поступления освободятся. Это действие нельзя отменить.`,
       danger: true, confirmLabel: 'Аннулировать',
     })
     if (!ok) return
@@ -163,6 +167,13 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     const ok = await confirm({ title: 'Отвязать отгрузку?', body: `Отгрузка ${docNumber} вернётся в реестр «без счёта».`, confirmLabel: 'Отвязать' })
     if (!ok) return
     detachInvoiceShipment(inv.id, shipmentDocId).then(() => { toast('Отгрузка отвязана', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
+  }
+
+  async function handleDetachReceipt(receiptDocId: string, docNumber: string) {
+    if (!inv) return
+    const ok = await confirm({ title: 'Отвязать поступление?', body: `Поступление ${docNumber} вернётся в реестр «без счёта».`, confirmLabel: 'Отвязать' })
+    if (!ok) return
+    detachInvoiceReceipt(inv.id, receiptDocId).then(() => { toast('Поступление отвязано', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -232,7 +243,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
         {/* Главная колонка */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {draft
-            ? <DraftParamsPanel inv={inv} markRequired={showReasons} onSaved={reload} onDirty={setDraftDirty} onBusy={setDraftSaving} saveRef={draftSave} />
+            ? <DraftParamsPanel inv={inv} markRequired={showReasons} onSaved={reload} onDirty={setDraftDirty} onBusy={setDraftSaving} saveRef={draftSave} setAmountRef={draftSetAmount} />
             : <FinanceSummary total={inv.total_amount} paid={inv.paid_amount} dueDate={fmtDate(inv.due_date)} overdue={inv.overdue} cancelled={cancelled} />}
 
           <InvoiceSection
@@ -266,6 +277,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                           <td><span style={{ color: 'var(--c-text-subtle)' }}>{s.destination ?? '—'}</span></td>
                           <td style={{ width: 104 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(s.ship_date)}</span></td>
                           <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{s.total_qty} шт · {s.sku_count} SKU</span></td>
+                          <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }} title="Логистика для клиента"><span className="mono" style={{ fontSize: 12, color: s.logistics_cost_kop > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>{formatMoneyKopecks(s.logistics_cost_kop)}</span></td>
                           <td style={{ width: 84, textAlign: 'right' }}>
                             {/* «Отвязать» — крайнее справа (деструктивное действие), шеврон состава слева от него.
                                 Слот удаления зарезервирован по ширине, поэтому шеврон не сдвигается, когда на
@@ -286,7 +298,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                         </tr>
                         {open && (
                           <tr>
-                            <td colSpan={6} style={{ background: 'var(--c-bg-sunken)', padding: '8px 14px 10px 16px' }}>
+                            <td colSpan={7} style={{ background: 'var(--c-bg-sunken)', padding: '8px 14px 10px 16px' }}>
                               <ShipmentContentsPanel shipmentId={s.shipment_doc_id} />
                             </td>
                           </tr>
@@ -297,6 +309,52 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                 </tbody>
               </table>
               <SelectedContentsRollup shipmentIds={inv.shipments.map((s) => s.shipment_doc_id)} label="Сводка по товарам" />
+              </>
+            )}
+          </InvoiceSection>
+
+          <InvoiceSection
+            icon="truckIn" title="Поступления" count={inv.receipts.length} accent="var(--c-accent)" state={editable ? 'active' : 'done'}
+            right={editable ? (
+              <button className="btn ghost sm" onClick={() => setAttachRecOpen(true)}>
+                <Icon name="plus" size={12} />Добавить
+              </button>
+            ) : undefined}
+          >
+            {inv.receipts.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>Нет привязанных поступлений.</div>
+            ) : (
+              <>
+              <table className="t" style={{ margin: '0 -14px', width: 'calc(100% + 28px)' }}>
+                <tbody>
+                  {inv.receipts.map((rec) => (
+                    <tr key={rec.receipt_doc_id}>
+                      <td style={{ width: 120 }}>
+                        <button
+                          className="btn ghost sm" style={{ padding: '2px 6px', height: 'auto' }}
+                          title="Открыть поступление" onClick={() => navigate(`/inventory/receipts/${rec.receipt_doc_id}`)}
+                        >
+                          <span className="mono" style={{ fontWeight: 500, color: 'var(--c-accent-text)' }}>{rec.doc_number}</span>
+                        </button>
+                      </td>
+                      <td><span style={{ color: 'var(--c-text-subtle)' }}>{rec.supplier_name ?? '—'}</span></td>
+                      <td style={{ width: 104 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(rec.arrival_date)}</span></td>
+                      <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }}><span className="mono" style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{rec.total_qty} шт · {rec.sku_count} SKU</span></td>
+                      <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }} title="Логистика для клиента"><span className="mono" style={{ fontSize: 12, color: rec.logistics_cost_kop > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>{formatMoneyKopecks(rec.logistics_cost_kop)}</span></td>
+                      <td style={{ width: 58, textAlign: 'right' }}>
+                        <span style={{ width: 26, display: 'inline-flex', justifyContent: 'center' }}>
+                          {editable && (
+                            <button className="btn ghost icon sm" title="Отвязать" onClick={() => handleDetachReceipt(rec.receipt_doc_id, rec.doc_number)}>
+                              <Icon name="x" size={13} />
+                            </button>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <SelectedReceiptsRollup receiptIds={inv.receipts.map((r) => r.receipt_doc_id)} label="Логистика по поступлениям" />
               </>
             )}
           </InvoiceSection>
@@ -378,6 +436,18 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <InvoiceRailPanel phase={phase} overdue={inv.overdue} dueReached={inv.due_reached} dueDate={fmtDate(inv.due_date)} duePrev={duePrevRaw ? fmtDate(duePrevRaw) : null} stamps={stamps} />
 
+          <InvoiceSummaryPanel
+            clientName={inv.client_name}
+            shipmentCount={inv.shipments.length}
+            receiptCount={inv.receipts.length}
+            totalQty={inv.shipments.reduce((a, s) => a + s.total_qty, 0) + inv.receipts.reduce((a, r) => a + r.total_qty, 0)}
+            dueDateText={fmtDate(inv.due_date)}
+            amountKop={inv.total_amount}
+            shipmentIds={inv.shipments.map((s) => s.shipment_doc_id)}
+            receiptIds={inv.receipts.map((r) => r.receipt_doc_id)}
+            onApplyAmount={draft ? ((kop) => draftSetAmount.current?.(kop)) : undefined}
+          />
+
           {draft && <ChecklistPanel title="Готовность к выставлению" items={issueChecklist} />}
           {active && <ChecklistPanel title="Готовность к завершению" items={checklist} />}
 
@@ -413,18 +483,20 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
       {dueOpen && <DueModal invoice={inv} onClose={() => setDueOpen(false)} onDone={() => { setDueOpen(false); reload() }} />}
       {amountOpen && <AmountModal invoice={inv} onClose={() => setAmountOpen(false)} onDone={() => { setAmountOpen(false); reload() }} />}
       {attachOpen && <AttachModal invoice={inv} onClose={() => setAttachOpen(false)} onDone={() => { setAttachOpen(false); reload() }} />}
+      {attachRecOpen && <AttachReceiptsModal invoice={inv} onClose={() => setAttachRecOpen(false)} onDone={() => { setAttachRecOpen(false); reload() }} />}
     </div>
   )
 }
 
 // ── Правка реквизитов черновика ──────────────────────────────────────────────
-function DraftParamsPanel({ inv, markRequired, onSaved, onDirty, onBusy, saveRef }: {
+function DraftParamsPanel({ inv, markRequired, onSaved, onDirty, onBusy, saveRef, setAmountRef }: {
   inv: InvoiceDetail
   markRequired: boolean
   onSaved: () => void
   onDirty: (d: boolean) => void
   onBusy: (b: boolean) => void
   saveRef: React.MutableRefObject<() => Promise<DraftSaveResult>>
+  setAmountRef: React.MutableRefObject<((kopecks: number) => void) | null>
 }) {
   const toast = useToast()
   const { clients } = useLookups()
@@ -464,6 +536,10 @@ function DraftParamsPanel({ inv, markRequired, onSaved, onDirty, onBusy, saveRef
   }
 
   useEffect(() => { saveRef.current = save })
+  useEffect(() => {
+    setAmountRef.current = (kop) => setAmount(String(kop / 100))
+    return () => { setAmountRef.current = null }
+  }, [setAmountRef])
   useEffect(() => { onDirty(dirty) }, [dirty, onDirty])
   useEffect(() => { onBusy(busy) }, [busy, onBusy])
 

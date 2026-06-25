@@ -82,3 +82,9 @@ export function setProductPrice(productId: string, payload: SetPricePayload) {
     body: JSON.stringify(payload),
   })
 }
+
+export function deleteProductPrice(productId: string, priceId: string) {
+  return request<{ message: string }>(`/pricing/products/${productId}/prices/${priceId}`, {
+    method: 'DELETE',
+  })
+}

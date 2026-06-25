@@ -29,6 +29,7 @@ def _cleanup_invoices_and_shipments(client_id: str) -> None:
         ]
         for iid in inv_ids:
             conn.execute("DELETE FROM invoice_shipments WHERE invoice_id = ?", (iid,))
+            conn.execute("DELETE FROM invoice_receipts WHERE invoice_id = ?", (iid,))
             conn.execute("DELETE FROM invoice_payments WHERE invoice_id = ?", (iid,))
             conn.execute("DELETE FROM invoice_ops WHERE invoice_id = ?", (iid,))
             conn.execute("DELETE FROM invoice_files WHERE invoice_id = ?", (iid,))
@@ -42,6 +43,14 @@ def _cleanup_invoices_and_shipments(client_id: str) -> None:
             conn.execute("DELETE FROM dispatch_ops WHERE doc_id = ?", (sid,))
             conn.execute("DELETE FROM dispatch_lines WHERE doc_id = ?", (sid,))
         conn.execute("DELETE FROM dispatch_docs WHERE client_id = ?", (client_id,))
+        rec_ids = [
+            r["id"] for r in conn.execute(
+                "SELECT id FROM receipt_docs WHERE client_id = ?", (client_id,)
+            ).fetchall()
+        ]
+        for rid in rec_ids:
+            conn.execute("DELETE FROM receipt_lines WHERE doc_id = ?", (rid,))
+        conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
         conn.commit()
 
 
@@ -68,6 +77,41 @@ def _shipped_shipment(admin_client, client_id: str, ship_date: str = "2026-06-10
         conn.execute("UPDATE dispatch_docs SET status = 'shipped' WHERE id = ?", (doc_id,))
         conn.commit()
     return doc_id
+
+
+def _done_receipt(client_id: str, *, logistics_cost: float = 0.0, arrival_date: str = "2026-06-05") -> str:
+    """Завершённое поступление клиента с ценой логистики — кандидат на включение в счёт.
+
+    Пишем напрямую в БД (без зависимости от справочника клиентов/товаров), статус
+    сразу `done`. logistics_cost — рубли, в счёт идёт как round(rub*100) копеек."""
+    import uuid as _uuid
+
+    doc_id = str(_uuid.uuid4())
+    now = "2026-06-05T00:00:00+00:00"
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO receipt_docs "
+            "(id, doc_number, client_id, supplier_name, arrival_date, status, logistics_cost, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (doc_id, f"WH-T{doc_id[:8]}", client_id, "Поставщик", arrival_date,
+             "done", logistics_cost, now),
+        )
+        conn.commit()
+    return doc_id
+
+
+def _add_receipt_lines(rec: str, rows: list[tuple[str, int]]) -> None:
+    """Строки поступления напрямую в БД (accepted_qty — фактически принято)."""
+    now = "2026-06-05T00:00:00+00:00"
+    with get_connection() as conn:
+        for i, (pid, qty) in enumerate(rows):
+            conn.execute(
+                "INSERT INTO receipt_lines "
+                "(id,doc_id,product_id,product_name,product_sku,planned_qty,accepted_qty,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (f"{rec}-l{i}", rec, pid, f"Товар {pid}", pid.upper(), qty, qty, now),
+            )
+        conn.commit()
 
 
 _XLSX = ("calc.xlsx", b"PK\x03\x04dummy",
@@ -531,7 +575,9 @@ def test_shipment_contents_rollup(admin_client, client_id):
     # Пустой набор — пустая сводка.
     empty = admin_client.get("/invoices/shipment-contents?shipment_ids=")
     assert empty.status_code == 200, empty.text
-    assert empty.json() == {"products": [], "total_qty": 0, "sku_count": 0}
+    eb = empty.json()
+    assert eb["products"] == [] and eb["total_qty"] == 0 and eb["sku_count"] == 0
+    assert eb["logistics_amount_kop"] == 0
 
 
 def test_due_date_reason_in_journal(admin_client, client_id):
@@ -545,3 +591,131 @@ def test_due_date_reason_in_journal(admin_client, client_id):
     d = admin_client.get(f"/invoices/{invoice_id}").json()
     changes = [o for o in d["ops"] if o["op_type"] == "due_date_change"]
     assert changes and "Причина: Отсрочка по договорённости" in changes[-1]["comment"]
+
+
+# ── Логистика и поступления в счёте ──────────────────────────────────────────────
+
+def _uninvoiced_receipt_ids(admin_client, client_id: str) -> set[str]:
+    r = admin_client.get(f"/invoices/uninvoiced-receipts?client_id={client_id}&limit=200")
+    assert r.status_code == 200, r.text
+    return {it["id"] for it in r.json()["items"]}
+
+
+def test_shipment_logistics_in_detail(admin_client, client_id):
+    # Логистика отгрузки (dispatch_docs.logistics_cost, рубли) выводится в счёт копейками.
+    ship = _shipped_shipment(admin_client, client_id)
+    with get_connection() as conn:
+        conn.execute("UPDATE dispatch_docs SET logistics_cost = 1500 WHERE id = ?", (ship,))
+        conn.commit()
+    invoice_id = _draft_invoice(admin_client, client_id, ship=ship, total_amount=5000)
+    d = admin_client.get(f"/invoices/{invoice_id}").json()
+    item = next(s for s in d["shipments"] if s["shipment_doc_id"] == ship)
+    assert item["logistics_cost_kop"] == 150000          # 1500 ₽ → копейки
+    assert d["dispatch_logistics_kop"] == 150000
+    assert d["receipt_logistics_kop"] == 0
+
+
+def test_shipment_contents_includes_logistics(admin_client, client_id):
+    ship = _shipped_shipment(admin_client, client_id)
+    _add_shipment_lines(ship, [("p-x", 100)])
+    with get_connection() as conn:
+        conn.execute("UPDATE dispatch_docs SET logistics_cost = 2000 WHERE id = ?", (ship,))
+        conn.commit()
+    r = admin_client.get(f"/invoices/shipment-contents?shipment_ids={ship}")
+    assert r.status_code == 200, r.text
+    assert r.json()["logistics_amount_kop"] == 200000
+
+
+def test_attach_and_detach_receipt(admin_client, client_id):
+    rec = _done_receipt(client_id, logistics_cost=800)
+    assert rec in _uninvoiced_receipt_ids(admin_client, client_id)
+
+    iid = _draft_invoice(admin_client, client_id, total_amount=5000)
+    attach = admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]})
+    assert attach.status_code == 200, attach.text
+
+    d = admin_client.get(f"/invoices/{iid}").json()
+    assert [r["receipt_doc_id"] for r in d["receipts"]] == [rec]
+    assert d["receipts"][0]["logistics_cost_kop"] == 80000
+    assert d["receipt_logistics_kop"] == 80000
+    assert "receipt_link" in {o["op_type"] for o in d["ops"]}
+    # Зарезервировано — исчезло из реестра «без счёта».
+    assert rec not in _uninvoiced_receipt_ids(admin_client, client_id)
+
+    detach = admin_client.delete(f"/invoices/{iid}/receipts/{rec}")
+    assert detach.status_code == 200, detach.text
+    assert rec in _uninvoiced_receipt_ids(admin_client, client_id)
+    d2 = admin_client.get(f"/invoices/{iid}").json()
+    assert d2["receipts"] == []
+    assert "receipt_unlink" in {o["op_type"] for o in d2["ops"]}
+
+
+def test_receipt_cannot_be_in_two_invoices(admin_client, client_id):
+    rec = _done_receipt(client_id, logistics_cost=500)
+    inv1 = _draft_invoice(admin_client, client_id, total_amount=1000)
+    assert admin_client.post(f"/invoices/{inv1}/receipts", json={"receipt_ids": [rec]}).status_code == 200
+
+    inv2 = _draft_invoice(admin_client, client_id, total_amount=1000)
+    dup = admin_client.post(f"/invoices/{inv2}/receipts", json={"receipt_ids": [rec]})
+    assert dup.status_code == 400, dup.text
+    assert "уже привязано" in dup.json()["detail"]
+
+
+def test_only_done_receipts_allowed(admin_client, client_id):
+    rec = _done_receipt(client_id, logistics_cost=500)
+    with get_connection() as conn:
+        conn.execute("UPDATE receipt_docs SET status = 'on_review' WHERE id = ?", (rec,))
+        conn.commit()
+    iid = _draft_invoice(admin_client, client_id, total_amount=1000)
+    bad = admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]})
+    assert bad.status_code == 400, bad.text
+    assert "только завершённые" in bad.json()["detail"]
+
+
+def test_issue_invoice_with_only_receipt(admin_client, client_id):
+    # Счёт можно выставить, если привязано только поступление (без отгрузок).
+    rec = _done_receipt(client_id, logistics_cost=1200)
+    iid = _draft_invoice(admin_client, client_id, total_amount=120000, due_date="2026-07-01")
+    assert admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]}).status_code == 200
+    _attach_file(admin_client, iid)
+    issued = admin_client.post(f"/invoices/{iid}/issue")
+    assert issued.status_code == 200, issued.text
+    assert admin_client.get(f"/invoices/{iid}").json()["status"] == "issued"
+
+
+def test_receipt_contents_logistics_and_rollup(admin_client, client_id):
+    rec1 = _done_receipt(client_id, logistics_cost=300)
+    rec2 = _done_receipt(client_id, logistics_cost=700)
+    _add_receipt_lines(rec1, [("p-x", 40), ("p-y", 10)])
+    _add_receipt_lines(rec2, [("p-x", 60)])
+
+    r = admin_client.get(f"/invoices/receipt-contents?receipt_ids={rec1},{rec2}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["logistics_amount_kop"] == 100000            # (300+700) ₽
+    by_id = {p["product_id"]: p["qty"] for p in body["products"]}
+    assert by_id == {"p-x": 100, "p-y": 10}
+
+
+def test_cancel_frees_receipt(admin_client, client_id):
+    rec = _done_receipt(client_id, logistics_cost=400)
+    iid = _draft_invoice(admin_client, client_id, total_amount=1000)
+    assert admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]}).status_code == 200
+    assert rec not in _uninvoiced_receipt_ids(admin_client, client_id)
+
+    cancel = admin_client.post(f"/invoices/{iid}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    assert rec in _uninvoiced_receipt_ids(admin_client, client_id)
+
+
+def test_receipt_of_other_client_rejected(admin_client, client_id):
+    other = make_client_id()
+    try:
+        rec = _done_receipt(other, logistics_cost=500)
+        iid = _draft_invoice(admin_client, client_id, total_amount=1000)
+        bad = admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]})
+        assert bad.status_code == 400, bad.text
+        assert "другому клиенту" in bad.json()["detail"]
+    finally:
+        _cleanup_invoices_and_shipments(other)
+        cleanup_client(other)

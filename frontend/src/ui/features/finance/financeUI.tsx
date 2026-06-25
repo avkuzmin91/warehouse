@@ -5,8 +5,9 @@ import { Badge } from '../../primitives/Badge'
 import { formatMoneyKopecks } from '../../../utils/format'
 import { useApi } from '../../../hooks/useApi'
 import { getShipment } from '../../../api/shipmentsApi'
-import { getShipmentContents } from '../../../api/invoicesApi'
+import { getShipmentContents, getReceiptContents } from '../../../api/invoicesApi'
 import type { ProductPreview } from '../../../api/invoicesApi'
+import { Panel, ReadRow } from '../shared/process/processUI'
 
 /** Компактные деньги для KPI: рубли без копеек, не растягивают карточку. «2 400 000 ₽». */
 export function kpiMoney(kopecks: number): string {
@@ -235,13 +236,55 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
   const { data, loading } = useApi(
     (signal) => shipmentIds.length
       ? getShipmentContents(shipmentIds, signal)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, has_missing_price: false }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, has_missing_price: false }),
     [key],
   )
   if (shipmentIds.length === 0) return null
 
   const products = data?.products ?? []
-  const suggested = data?.suggested_amount_kop ?? 0
+  const goods = data?.suggested_amount_kop ?? 0
+  const logistics = data?.logistics_amount_kop ?? 0
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+        <span style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{label}</span>
+        {data && (
+          <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-muted)' }}>
+            {data.total_qty.toLocaleString('ru-RU')} шт · {data.sku_count} SKU
+          </span>
+        )}
+      </div>
+      {data && (
+        <CostBreakdown
+          goods={goods} logistics={logistics}
+          hasMissingPrice={data.has_missing_price}
+          onApplyAmount={onApplyAmount}
+        />
+      )}
+      {loading && !data ? (
+        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Подсчёт…</div>
+      ) : products.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>В выбранных отгрузках нет строк</div>
+      ) : (
+        <ProductChips products={products} />
+      )}
+    </div>
+  )
+}
+
+/** Сводка-roll-up по выбранным поступлениям: логистика + товары (информационно).
+ *  У поступлений нет товарного тарифа — в счёт идёт только их логистика. */
+export function SelectedReceiptsRollup({ receiptIds, label = 'Сводка по выбранным поступлениям' }: { receiptIds: string[]; label?: string }) {
+  const key = [...receiptIds].sort().join(',')
+  const { data, loading } = useApi(
+    (signal) => receiptIds.length
+      ? getReceiptContents(receiptIds, signal)
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, logistics_amount_kop: 0 }),
+    [key],
+  )
+  if (receiptIds.length === 0) return null
+
+  const products = data?.products ?? []
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
@@ -255,42 +298,158 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
       {data && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-          padding: '8px 10px', marginBottom: 8, borderRadius: 8,
-          background: 'var(--c-bg-sunken)',
+          padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: 'var(--c-bg-sunken)',
         }}>
-          <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Стоимость по тарифам:</span>
+          <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Логистика:</span>
           <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-accent)' }}>
-            {formatMoneyKopecks(suggested)}
+            {formatMoneyKopecks(data.logistics_amount_kop)}
           </span>
-          {data.has_missing_price && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--c-warning)' }}>
-              <Icon name="alert" size={12} />часть позиций без тарифа
-            </span>
-          )}
-          {onApplyAmount && suggested > 0 && (
-            <button type="button" className="btn ghost sm" style={{ marginLeft: 'auto' }}
-              onClick={() => onApplyAmount(suggested)}>
-              <Icon name="arrowDown" size={12} />В сумму счёта
-            </button>
-          )}
         </div>
       )}
       {loading && !data ? (
         <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Подсчёт…</div>
       ) : products.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>В выбранных отгрузках нет строк</div>
+        <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>В выбранных поступлениях нет строк</div>
       ) : (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {products.map((p) => (
-            <span key={p.product_id} style={{
-              fontSize: 12, background: 'var(--c-bg-sunken)', padding: '3px 9px', borderRadius: 99,
-              color: 'var(--c-text-muted)',
-            }}>
-              {p.name} · <span className="mono" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{p.qty.toLocaleString('ru-RU')}</span>
-            </span>
-          ))}
+        <ProductChips products={products} />
+      )}
+    </div>
+  )
+}
+
+/** Итоговая разбивка счёта по выбранным отгрузкам и поступлениям:
+ *  Товары (тарифы отгрузок) + Логистика (отгрузки + поступления) = Итого.
+ *  Единая кнопка «В сумму счёта» проставляет объединённый итог. */
+export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: {
+  shipmentIds: string[]
+  receiptIds: string[]
+  onApplyAmount?: (kopecks: number) => void
+}) {
+  const shipKey = [...shipmentIds].sort().join(',')
+  const recKey = [...receiptIds].sort().join(',')
+  const { data: ship } = useApi(
+    (s) => shipmentIds.length
+      ? getShipmentContents(shipmentIds, s)
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, has_missing_price: false }),
+    [shipKey],
+  )
+  const { data: rec } = useApi(
+    (s) => receiptIds.length
+      ? getReceiptContents(receiptIds, s)
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, logistics_amount_kop: 0 }),
+    [recKey],
+  )
+  if (shipmentIds.length === 0 && receiptIds.length === 0) return null
+
+  const goods = ship?.suggested_amount_kop ?? 0
+  const logistics = (ship?.logistics_amount_kop ?? 0) + (rec?.logistics_amount_kop ?? 0)
+  return (
+    <CostBreakdown
+      goods={goods} logistics={logistics}
+      hasMissingPrice={ship?.has_missing_price ?? false}
+      onApplyAmount={onApplyAmount}
+    />
+  )
+}
+
+/** Разбивка стоимости Товары / Логистика / Итого + опц. кнопка «В сумму счёта». */
+export function CostBreakdown({ goods, logistics, hasMissingPrice, onApplyAmount }: {
+  goods: number
+  logistics: number
+  hasMissingPrice?: boolean
+  onApplyAmount?: (kopecks: number) => void
+}) {
+  const total = goods + logistics
+  return (
+    <div style={{ padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: 'var(--c-bg-sunken)' }}>
+      {goods > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: 'var(--c-text-subtle)' }}>
+            Товары по тарифам
+            {hasMissingPrice && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6, color: 'var(--c-warning)' }}>
+                <Icon name="alert" size={11} />часть без тарифа
+              </span>
+            )}
+          </span>
+          <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(goods)}</span>
         </div>
       )}
+      {logistics > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: 'var(--c-text-subtle)' }}>Логистика</span>
+          <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(logistics)}</span>
+        </div>
+      )}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        paddingTop: goods > 0 || logistics > 0 ? 6 : 0,
+        borderTop: goods > 0 || logistics > 0 ? '1px solid var(--c-border)' : 'none',
+      }}>
+        <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Итого:</span>
+        <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-accent)' }}>
+          {formatMoneyKopecks(total)}
+        </span>
+        {onApplyAmount && total > 0 && (
+          <button type="button" className="btn ghost sm" style={{ marginLeft: 'auto' }}
+            onClick={() => onApplyAmount(total)}>
+            <Icon name="arrowDown" size={12} />В сумму счёта
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** «Сводка счёта» — единый правый-колоночный блок для создания и карточки счёта
+ *  на любом статусе: реквизиты + живой расчёт Товары/Логистика/Итого по текущему
+ *  набору отгрузок и поступлений (товары пересчитываются при смене состава). */
+export function InvoiceSummaryPanel({
+  clientName, shipmentCount, receiptCount, totalQty, dueDateText, amountKop,
+  shipmentIds, receiptIds, onApplyAmount, footer,
+}: {
+  clientName: string | null
+  shipmentCount: number
+  receiptCount: number
+  totalQty: number
+  dueDateText: string
+  amountKop: number
+  shipmentIds: string[]
+  receiptIds: string[]
+  onApplyAmount?: (kopecks: number) => void
+  footer?: ReactNode
+}) {
+  return (
+    <Panel icon="wallet" title="Сводка счёта">
+      <div style={{ padding: '0 2px' }}>
+        <ReadRow label="Клиент" strong>{clientName ?? '—'}</ReadRow>
+        <ReadRow label="Отгрузок" mono strong>{shipmentCount}</ReadRow>
+        <ReadRow label="Поступлений" mono strong>{receiptCount}</ReadRow>
+        <ReadRow label="Всего мест" mono>{totalQty.toLocaleString('ru-RU')} шт</ReadRow>
+        <ReadRow label="Срок расчёта" mono>{dueDateText}</ReadRow>
+        <ReadRow label="Сумма счёта" mono strong>{formatMoneyKopecks(amountKop)}</ReadRow>
+      </div>
+      {(shipmentIds.length > 0 || receiptIds.length > 0) && (
+        <div style={{ marginTop: 8 }}>
+          <InvoiceTotalsRollup shipmentIds={shipmentIds} receiptIds={receiptIds} onApplyAmount={onApplyAmount} />
+        </div>
+      )}
+      {footer}
+    </Panel>
+  )
+}
+
+function ProductChips({ products }: { products: { product_id: string; name: string; qty: number }[] }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {products.map((p) => (
+        <span key={p.product_id} style={{
+          fontSize: 12, background: 'var(--c-bg-sunken)', padding: '3px 9px', borderRadius: 99,
+          color: 'var(--c-text-muted)',
+        }}>
+          {p.name} · <span className="mono" style={{ fontWeight: 500, color: 'var(--c-text)' }}>{p.qty.toLocaleString('ru-RU')}</span>
+        </span>
+      ))}
     </div>
   )
 }

@@ -38,6 +38,7 @@ def dict_ids(admin_client):
         for eid in exp_ids:
             conn.execute("DELETE FROM expense_ops WHERE expense_id = ?", (eid,))
             conn.execute("DELETE FROM expense_files WHERE expense_id = ?", (eid,))
+            conn.execute("DELETE FROM expense_payments WHERE expense_id = ?", (eid,))
         conn.execute(
             "DELETE FROM material_expenses WHERE category_id = ? OR payment_source_id = ?",
             (cat, src),
@@ -244,7 +245,8 @@ def test_payment_lifecycle(admin_client, dict_ids):
     d = admin_client.get(f"/expenses/{eid}").json()
     assert d["payment_status"] == "paid" and d["paid_on"] == "2026-06-16"
     assert d["payment_source_id"] == src
-    assert "pay" in {o["op_type"] for o in d["ops"]}
+    assert d["paid_amount"] == 300000
+    assert "payment" in {o["op_type"] for o in d["ops"]}
 
     # Повторная оплата запрещена.
     assert admin_client.post(f"/expenses/{eid}/pay", json={}).status_code == 400
@@ -280,6 +282,146 @@ def test_summary_awaiting_paid(admin_client, dict_ids):
     assert s["paid_amount"] == 100000
     assert s["awaiting_amount"] == 40000
     assert s["total_amount"] == 140000
+
+
+def test_partial_payment_lifecycle(admin_client, dict_ids):
+    cat, src = dict_ids
+    eid = admin_client.post("/expenses", json={
+        "spent_on": "2026-06-15", "category_id": cat, "name": "Частичный",
+        "quantity": 1, "unit": "шт", "amount": 300000, "payment_status": "awaiting",
+    }).json()["message"]
+
+    # Частичная оплата 100 000 из 300 000 → статус «частично оплачен».
+    p1 = admin_client.post(f"/expenses/{eid}/pay", json={"payment_source_id": src, "amount": 100000})
+    assert p1.status_code == 200, p1.text
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["payment_status"] == "partially_paid"
+    assert d["paid_amount"] == 100000 and d["paid_on"] is None
+    assert len(d["payments"]) == 1
+
+    # Сводка: остаток в «Ожидает», проведённое — в «Оплачено».
+    s = admin_client.get(f"/expenses/summary?category_id={cat}").json()
+    assert s["paid_amount"] == 100000 and s["awaiting_amount"] == 200000
+
+    # Переплата остатка запрещена.
+    over = admin_client.post(f"/expenses/{eid}/pay", json={"payment_source_id": src, "amount": 250000})
+    assert over.status_code == 400 and "превышает остаток" in over.json()["detail"]
+
+    # Догашение без указания суммы → весь остаток, статус «оплачено».
+    p2 = admin_client.post(f"/expenses/{eid}/pay", json={"payment_source_id": src})
+    assert p2.status_code == 200, p2.text
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["payment_status"] == "paid" and d["paid_amount"] == 300000
+    assert len(d["payments"]) == 2
+
+    # Откат снимает все платежи → снова «ожидает оплаты».
+    assert admin_client.post(f"/expenses/{eid}/unpay").status_code == 200
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["payment_status"] == "awaiting" and d["paid_amount"] == 0
+    assert d["payments"] == []
+
+
+@pytest.fixture
+def carrier_logistics(admin_client):
+    """Перевозчик + 3 логистических расхода (заводятся напрямую — API логистику не создаёт).
+    Суммы 50/60/40 тыс. по возрастанию дат; чистит за собой."""
+    src = admin_client.post("/expenses/dict/payment-sources",
+                            json={"name": f"CarSrc-{uuid.uuid4().hex[:8]}"}).json()["message"]
+    carrier_id = str(uuid.uuid4())
+    exp_ids: list[str] = []
+    plan = [("2026-06-01", 50000), ("2026-06-05", 60000), ("2026-06-10", 40000)]
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO carriers (id, name, is_active, is_deleted, created_at) VALUES (?,?,1,0,NOW())",
+            (carrier_id, f"Перевозчик-{uuid.uuid4().hex[:6]}"),
+        )
+        for i, (day, amount) in enumerate(plan):
+            eid = str(uuid.uuid4())
+            exp_ids.append(eid)
+            conn.execute(
+                "INSERT INTO material_expenses "
+                "(id,exp_number,spent_on,name,quantity,amount,paid_amount,kind,payment_status,"
+                " carrier_id,source_kind,source_id,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())",
+                (eid, f"EXP-CT{uuid.uuid4().hex[:6]}", day, f"Логистика {i}", 1, amount, 0,
+                 "logistics", "awaiting", carrier_id, "trip", str(uuid.uuid4())),
+            )
+        conn.commit()
+    yield carrier_id, src, exp_ids
+    with get_connection() as conn:
+        for eid in exp_ids:
+            conn.execute("DELETE FROM expense_ops WHERE expense_id = ?", (eid,))
+            conn.execute("DELETE FROM expense_payments WHERE expense_id = ?", (eid,))
+        ph = ",".join("?" for _ in exp_ids)
+        conn.execute(f"DELETE FROM material_expenses WHERE id IN ({ph})", exp_ids)
+        conn.execute("DELETE FROM carriers WHERE id = ?", (carrier_id,))
+        conn.execute("DELETE FROM expense_payment_sources WHERE id = ?", (src,))
+        conn.commit()
+
+
+def test_carrier_outstanding_and_fifo(admin_client, carrier_logistics):
+    carrier_id, src, exp_ids = carrier_logistics
+
+    # Долг перевозчика — сумма остатков (150 000), 3 расхода.
+    out = admin_client.get("/expenses/carriers/outstanding").json()
+    mine = next(c for c in out if c["carrier_id"] == carrier_id)
+    assert mine["outstanding_amount"] == 150000 and mine["count"] == 3
+
+    # Переплата свыше долга запрещена.
+    over = admin_client.post("/expenses/pay-carrier", json={
+        "carrier_id": carrier_id, "amount": 150001, "payment_source_id": src,
+    })
+    assert over.status_code == 400 and "долг" in over.json()["detail"].lower()
+
+    # 50 000 → закрывает самый ранний расход целиком.
+    r1 = admin_client.post("/expenses/pay-carrier", json={
+        "carrier_id": carrier_id, "amount": 50000, "payment_source_id": src, "paid_on": "2026-06-20",
+    }).json()
+    assert r1["affected_count"] == 1 and r1["fully_paid_count"] == 1 and r1["allocated_amount"] == 50000
+
+    # 70 000 → второй (60 000) целиком + 10 000 в третий (частично).
+    r2 = admin_client.post("/expenses/pay-carrier", json={
+        "carrier_id": carrier_id, "amount": 70000, "payment_source_id": src,
+    }).json()
+    assert r2["affected_count"] == 2 and r2["fully_paid_count"] == 1 and r2["partially_paid_count"] == 1
+
+    states = {e["id"]: e for e in admin_client.get("/expenses?kind=logistics&limit=200").json()["items"]}
+    assert states[exp_ids[0]]["payment_status"] == "paid"
+    assert states[exp_ids[1]]["payment_status"] == "paid"
+    assert states[exp_ids[2]]["payment_status"] == "partially_paid"
+    assert states[exp_ids[2]]["paid_amount"] == 10000
+
+    # Остаток долга — 30 000.
+    out2 = admin_client.get("/expenses/carriers/outstanding").json()
+    assert next(c for c in out2 if c["carrier_id"] == carrier_id)["outstanding_amount"] == 30000
+
+
+def test_summary_excludes_cancelled(admin_client, dict_ids):
+    cat, src = dict_ids
+    _create_expense(admin_client, cat, src, amount=100000)  # оплачено
+    cancel_id = admin_client.post("/expenses", json={
+        "spent_on": "2026-06-15", "category_id": cat, "name": "К аннулированию",
+        "quantity": 1, "unit": "шт", "amount": 70000,
+        "payment_status": "awaiting", "payment_source_id": src,
+    }).json()["message"]
+    assert admin_client.post(f"/expenses/{cancel_id}/cancel").status_code == 200
+
+    s = admin_client.get(f"/expenses/summary?category_id={cat}").json()
+    # Аннулированный (70000) выпадает из «Итого» и разбивок; «Итого» = «Ожидает» + «Оплачено».
+    assert s["total_amount"] == 100000
+    assert s["awaiting_amount"] == 0
+    assert s["paid_amount"] == 100000
+    assert s["total_amount"] == s["awaiting_amount"] + s["paid_amount"]
+    cat_row = next(b for b in s["by_category"] if b["id"] == cat)
+    assert cat_row["amount"] == 100000
+    src_row = next(b for b in s["by_payment_source"] if b["id"] == src)
+    assert src_row["amount"] == 100000
+
+    # Но в списке аннулированный остаётся виден и фильтруется по статусу.
+    cancelled = admin_client.get(
+        f"/expenses?category_id={cat}&payment_status=cancelled&limit=200"
+    ).json()["items"]
+    assert any(it["id"] == cancel_id for it in cancelled)
 
 
 def test_admin_only_kinds_hidden_from_manager(admin_client, manager_client, dict_ids):

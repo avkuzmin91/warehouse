@@ -7,10 +7,11 @@ export type ExpenseDictKind = 'categories' | 'payment-sources'
 export type ExpenseDictItem = { id: string; name: string }
 
 export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary'
-export type ExpensePaymentStatus = 'awaiting' | 'paid' | 'cancelled'
+export type ExpensePaymentStatus = 'awaiting' | 'partially_paid' | 'paid' | 'cancelled'
 
 export type ExpenseOpType =
-  | 'create' | 'update' | 'delete' | 'restore' | 'file_add' | 'file_delete' | 'pay' | 'unpay' | 'cancel'
+  | 'create' | 'update' | 'delete' | 'restore' | 'file_add' | 'file_delete'
+  | 'pay' | 'payment' | 'unpay' | 'cancel'
 
 export type ExpenseOp = {
   id: string
@@ -30,6 +31,17 @@ export type ExpenseFile = {
   created_at: string
 }
 
+export type ExpensePayment = {
+  id: string
+  amount: number
+  paid_on: string | null
+  payment_source_id: string | null
+  payment_source_name: string | null
+  comment: string | null
+  created_at: string
+  created_by_email: string | null
+}
+
 export type ExpenseListItem = {
   id: string
   exp_number: string
@@ -40,6 +52,9 @@ export type ExpenseListItem = {
   quantity: number
   unit: string | null
   amount: number
+  paid_amount: number
+  carrier_id: string | null
+  carrier_name: string | null
   payment_source_id: string | null
   payment_source_name: string | null
   supplier: string | null
@@ -61,6 +76,7 @@ export type ExpenseListItem = {
 export type ExpenseDetail = ExpenseListItem & {
   updated_at: string | null
   source_trip_number: string | null
+  payments: ExpensePayment[]
   files: ExpenseFile[]
   ops: ExpenseOp[]
 }
@@ -110,6 +126,28 @@ export type ExpensePayload = {
 export type ExpensePayPayload = {
   paid_on?: string | null
   payment_source_id?: string | null
+  amount?: number | null
+}
+
+export type CarrierOutstanding = {
+  carrier_id: string
+  carrier_name: string
+  outstanding_amount: number
+  count: number
+}
+
+export type CarrierPayPayload = {
+  carrier_id: string
+  amount: number
+  payment_source_id: string
+  paid_on?: string | null
+}
+
+export type CarrierPayResult = {
+  allocated_amount: number
+  affected_count: number
+  fully_paid_count: number
+  partially_paid_count: number
 }
 
 export type ExpenseListParams = {
@@ -182,6 +220,17 @@ export function unpayExpense(expenseId: string) {
   return request<{ message: string }>(`/expenses/${expenseId}/unpay`, { method: 'POST' })
 }
 
+export function getCarriersOutstanding(signal?: AbortSignal) {
+  return request<CarrierOutstanding[]>('/expenses/carriers/outstanding', { signal })
+}
+
+export function payCarrier(payload: CarrierPayPayload) {
+  return request<CarrierPayResult>('/expenses/pay-carrier', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function cancelExpense(expenseId: string) {
   return request<{ message: string }>(`/expenses/${expenseId}/cancel`, { method: 'POST' })
 }
@@ -238,6 +287,7 @@ export const EXPENSE_OP_LABELS: Record<ExpenseOpType, string> = {
   file_add: 'Файл прикреплён',
   file_delete: 'Файл удалён',
   pay: 'Оплачено',
+  payment: 'Оплата',
   unpay: 'Оплата отменена',
   cancel: 'Аннулирование',
 }
@@ -251,15 +301,23 @@ export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
 
 export const EXPENSE_PAYMENT_STATUS_LABELS: Record<ExpensePaymentStatus, string> = {
   awaiting: 'Ожидает оплаты',
+  partially_paid: 'Частично оплачен',
   paid: 'Оплачен',
   cancelled: 'Аннулирован',
 }
 
-/** Тон бейджа статуса оплаты для Badge: оплачено — success, ожидает — warning, отменён — нейтральный. */
-export function expensePaymentTone(status: ExpensePaymentStatus): 'success' | 'warning' | '' {
+/** Тон бейджа статуса оплаты: оплачено — success, частично — info, ожидает — warning, отменён — нейтральный. */
+export function expensePaymentTone(status: ExpensePaymentStatus): 'success' | 'warning' | 'info' | '' {
   if (status === 'paid') return 'success'
+  if (status === 'partially_paid') return 'info'
   if (status === 'awaiting') return 'warning'
   return ''
+}
+
+/** Доля оплаты 0..1 для прогресс-бара (защищён от деления на ноль). */
+export function expensePaidFraction(amount: number, paidAmount: number): number {
+  if (!amount || amount <= 0) return 0
+  return Math.max(0, Math.min(1, paidAmount / amount))
 }
 
 /** Производная цена за единицу (копейки) — сумма ÷ количество. */

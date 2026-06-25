@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
+import { useAuth } from '../../auth/AuthContext'
 import { getShipment, SHIPMENT_STATUS_LABELS, type ShipmentDetail } from '../../api/shipmentsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
+import { canCreateDocuments } from '../../utils/access'
 import { fmtDate } from '../../utils/format'
 
 const STATUS_TONE: Record<string, string> = {
@@ -13,6 +15,8 @@ const STATUS_TONE: Record<string, string> = {
 
 export function PackingDetailScreen({ docId }: { docId: string }) {
   const { back, openPackingEdit } = useNav()
+  const { user } = useAuth()
+  const canEdit = canCreateDocuments(user?.role)
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -71,7 +75,7 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
               ))}
             </div>
 
-            {doc.status === 'draft' && (
+            {doc.status === 'draft' && canEdit && (
               <button className="btn" style={{ marginTop: 16 }} onClick={() => openPackingEdit(doc.id)}>
                 <Icon name="edit" size={15} /> Редактировать черновик
               </button>

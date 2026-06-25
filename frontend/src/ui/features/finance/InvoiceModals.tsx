@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import {
   addInvoicePayment,
+  attachInvoiceReceipts,
   attachInvoiceShipments,
+  getUninvoicedReceipts,
   getUninvoicedShipments,
   parseDueHistory,
   updateInvoiceAmount,
@@ -14,7 +16,7 @@ import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, productsPreviewText } from './financeUI'
+import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, SelectedReceiptsRollup, productsPreviewText } from './financeUI'
 
 function FieldRow({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
@@ -374,6 +376,101 @@ export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
         </div>
       )}
       <SelectedContentsRollup shipmentIds={[...selected]} />
+    </Modal>
+  )
+}
+
+// ── Привязать поступления (завершённые поступления клиента без счёта) ───────────
+export function AttachReceiptsModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const { data, loading } = useApi(
+    (s) => invoice.client_id
+      ? getUninvoicedReceipts({ client_id: invoice.client_id, limit: 200 }, s)
+      : Promise.resolve({ items: [], total: 0, page: 1, limit: 200 }),
+    [invoice.client_id],
+  )
+  const receipts = data?.items ?? []
+
+  function toggle(id: string) {
+    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleAll() {
+    setSelected((prev) => prev.size === receipts.length ? new Set() : new Set(receipts.map((r) => r.id)))
+  }
+
+  function submit() {
+    if (selected.size === 0) { toast('Выберите хотя бы одно поступление', 'error'); return }
+    setBusy(true)
+    attachInvoiceReceipts(invoice.id, [...selected])
+      .then(() => { toast('Поступления добавлены', 'success'); onDone() })
+      .catch((e) => toast(e.message, 'error'))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} title="Добавить поступления" width={560}
+      subtitle={`Завершённые поступления клиента ${invoice.client_name ?? ''} без счёта`}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, width: '100%' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Выбрано: <b>{selected.size}</b></span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn ghost" onClick={onClose}>Отмена</button>
+            <button className="btn primary" onClick={submit} disabled={busy}>
+              <Icon name="plus" size={14} />Добавить ({selected.size})
+            </button>
+          </div>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+        <Icon name="lock" size={12} />Поступления выставляются только за логистику.
+        {receipts.length > 0 && (
+          <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={toggleAll}>
+            {selected.size === receipts.length ? 'Снять все' : 'Выбрать все'}
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка…</div>
+      ) : receipts.length === 0 ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Нет доступных поступлений</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
+          {receipts.map((rec) => {
+            const on = selected.has(rec.id)
+            return (
+              <div key={rec.id} style={{
+                borderRadius: 'var(--r-md)',
+                border: `1px solid ${on ? 'var(--c-accent-border)' : 'var(--c-border)'}`,
+                background: on ? 'var(--c-accent-bg)' : 'var(--c-bg-elev)',
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', cursor: 'pointer' }}>
+                  <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {on && <Icon name="check" size={10} />}
+                  </span>
+                  <input type="checkbox" checked={on} onChange={() => toggle(rec.id)} style={{ display: 'none' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="mono" style={{ fontWeight: 500 }}>{rec.doc_number}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 2 }}>{rec.supplier_name ?? '—'} · {fmtDate(rec.arrival_date)}</div>
+                    {rec.products_preview.length > 0 && (
+                      <div style={{ fontSize: 11.5, color: 'var(--c-text-faint)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {productsPreviewText(rec.products_preview, rec.sku_count)}
+                      </div>
+                    )}
+                  </div>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>{formatMoneyKopecks(rec.logistics_cost_kop)}</span>
+                </label>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      <SelectedReceiptsRollup receiptIds={[...selected]} />
     </Modal>
   )
 }

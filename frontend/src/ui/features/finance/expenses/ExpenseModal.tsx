@@ -7,6 +7,7 @@ import {
   EXPENSE_KIND_LABELS,
   EXPENSE_OP_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
+  expensePaidFraction,
   expensePaymentTone,
   getExpense,
   payExpense,
@@ -39,6 +40,7 @@ const OP_DOT: Record<ExpenseOpType, string> = {
   file_add: 'var(--c-info)',
   file_delete: 'var(--c-text-muted)',
   pay: 'var(--c-success)',
+  payment: 'var(--c-success)',
   unpay: 'var(--c-warning)',
   cancel: 'var(--c-text-muted)',
 }
@@ -123,6 +125,7 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   const [inited, setInited] = useState(false)
 
   const [paySourceId, setPaySourceId] = useState('')
+  const [payAmount, setPayAmount] = useState('')
   const [salaryEmpId, setSalaryEmpId] = useState('')
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -214,9 +217,17 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
     if (!expenseId) return
     const srcId = paySourceId || paymentSourceId
     if (!srcId) { toast('Выберите источник оплаты', 'error'); return }
+    // Пустое поле суммы → гасим весь остаток; иначе частичная оплата с проверкой остатка.
+    const trimmed = payAmount.trim()
+    let amount: number | null = null
+    if (trimmed) {
+      amount = parseRublesToKopecks(trimmed)
+      if (amount == null || amount <= 0) { toast('Сумма оплаты — число больше нуля', 'error'); return }
+      if (amount > remaining) { toast(`Оплата превышает остаток (${formatMoneyKopecks(remaining)})`, 'error'); return }
+    }
     setBusy(true)
-    payExpense(expenseId, { payment_source_id: srcId, paid_on: localTodayYmd() })
-      .then(() => { toast('Оплачено', 'success'); onSaved() })
+    payExpense(expenseId, { payment_source_id: srcId, paid_on: localTodayYmd(), amount })
+      .then(() => { toast('Оплата проведена', 'success'); onSaved() })
       .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
       .finally(() => setBusy(false))
   }
@@ -274,10 +285,13 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
   const kindWord = EXPENSE_KIND_LABELS[kind]
   const createTitle = isRent ? 'Оплата аренды' : kind === 'salary' ? 'Выплата ЗП' : 'Новый расход'
   const isAwaiting = isEdit && detail?.payment_status === 'awaiting'
+  const isPartial = isEdit && detail?.payment_status === 'partially_paid'
   const isPaid = isEdit && detail?.payment_status === 'paid'
+  const canPay = isAwaiting || isPartial
+  const remaining = detail ? detail.amount - detail.paid_amount : 0
   const canSave = editableForm && (!isEdit || detail?.payment_status !== 'cancelled')
   // Закрывает крестик в шапке — отдельная кнопка не нужна; футер скрываем, если действий нет.
-  const hasFooterButtons = !isEdit || isAwaiting || isPaid || canSave
+  const hasFooterButtons = !isEdit || canPay || isPaid || canSave
 
   return (
     <Modal
@@ -289,19 +303,19 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
           <>
             {!isEdit && <button className="btn ghost" onClick={onClose}>Отмена</button>}
             {isAwaiting && <button className="btn ghost danger" onClick={doCancel}>Аннулировать</button>}
-            {isPaid && (
+            {(isPaid || isPartial) && (
               <button className="btn ghost" onClick={doUnpay} disabled={busy}>
                 <Icon name="clock" size={14} />Вернуть в ожидание
               </button>
             )}
             {canSave && (
-              <button className={isAwaiting ? 'btn' : 'btn primary'} onClick={submit} disabled={busy || (isEdit && loadingDetail)}>
+              <button className={canPay ? 'btn' : 'btn primary'} onClick={submit} disabled={busy || (isEdit && loadingDetail)}>
                 <Icon name="check" size={14} />{busy ? 'Сохранение…' : isEdit ? 'Сохранить' : 'Добавить'}
               </button>
             )}
-            {isAwaiting && (
+            {canPay && (
               <button className="btn primary" onClick={doPay} disabled={busy}>
-                <Icon name="wallet" size={14} />Оплатить
+                <Icon name="wallet" size={14} />{payAmount.trim() ? 'Внести оплату' : 'Оплатить полностью'}
               </button>
             )}
           </>
@@ -320,6 +334,9 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
               <span className="t-sub">{EXPENSE_KIND_LABELS[detail.kind]}</span>
               {detail.payment_status === 'paid' && detail.paid_on && (
                 <span className="t-sub">· оплачено {detail.paid_on}</span>
+              )}
+              {detail.payment_status === 'partially_paid' && (
+                <span className="t-sub">· оплачено {formatMoneyKopecks(detail.paid_amount)} из {formatMoneyKopecks(detail.amount)}</span>
               )}
             </div>
           )}
@@ -468,17 +485,58 @@ export function ExpenseModal({ expenseId, createKind = 'manual', categories, pay
             />
           )}
 
-          {isAwaiting && (
-            <div>
-              <FieldLabel>Оплатить с карты</FieldLabel>
-              <Combobox
-                value={paySourceId || null}
-                onChange={(v) => setPaySourceId(v ? String(v) : '')}
-                options={paymentSources.map((s) => ({ value: s.id, label: s.name }))}
-                placeholder="С чьей карты оплатить…"
-                prefix="wallet"
-              />
+          {canPay && detail && (
+            <div style={{ border: '1px solid var(--c-border)', borderRadius: 'var(--r-lg)', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {detail.paid_amount > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                    <span style={{ color: 'var(--c-text-muted)' }}>Оплачено {formatMoneyKopecks(detail.paid_amount)} из {formatMoneyKopecks(detail.amount)}</span>
+                    <span style={{ color: 'var(--c-text-muted)' }}>Остаток: <span className="mono">{formatMoneyKopecks(remaining)}</span></span>
+                  </div>
+                  <div className="prog" style={{ height: 6 }}>
+                    <div className="prog-fill ok" style={{ width: `${Math.round(expensePaidFraction(detail.amount, detail.paid_amount) * 100)}%` }} />
+                  </div>
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <FieldLabel>Сумма платежа, ₽</FieldLabel>
+                  <input
+                    className="input" inputMode="decimal"
+                    placeholder={`весь остаток (${formatMoneyKopecks(remaining)})`}
+                    value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
+                  />
+                  <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 4 }}>
+                    Пусто — гасим остаток полностью
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Оплатить с карты</FieldLabel>
+                  <Combobox
+                    value={paySourceId || null}
+                    onChange={(v) => setPaySourceId(v ? String(v) : '')}
+                    options={paymentSources.map((s) => ({ value: s.id, label: s.name }))}
+                    placeholder="С чьей карты…"
+                    prefix="wallet"
+                  />
+                </div>
+              </div>
             </div>
+          )}
+
+          {isEdit && detail && detail.payments.length > 0 && (
+            <Section icon="wallet" title="Платежи" count={detail.payments.length}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {detail.payments.map((p, i, arr) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--c-border)' : 'none' }}>
+                    <span className="mono" style={{ fontWeight: 600, fontSize: 13, minWidth: 96 }}>{formatMoneyKopecks(p.amount)}</span>
+                    <span style={{ flex: 1, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
+                      {p.paid_on ?? '—'}{p.payment_source_name ? ` · ${p.payment_source_name}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Section>
           )}
 
           {isEdit && detail && (
@@ -579,7 +637,7 @@ function FragmentRow({ label, value }: { label: string; value: string }) {
 }
 
 function Section({ icon, title, count, right, children }: {
-  icon: 'paperclip' | 'history'
+  icon: 'paperclip' | 'history' | 'wallet'
   title: string
   count?: number
   right?: React.ReactNode

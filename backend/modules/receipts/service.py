@@ -72,7 +72,7 @@ def next_doc_number(connection) -> str:
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 4) AS INTEGER)), 0) AS max_n
         FROM receipt_docs
-        WHERE doc_number LIKE 'WH-%'
+        WHERE doc_number LIKE 'WH-%' AND SUBSTR(doc_number, 4) ~ '^[0-9]+$'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1

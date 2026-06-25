@@ -41,7 +41,7 @@ def next_doc_number(connection) -> str:
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
         FROM dispatch_docs
-        WHERE doc_number LIKE 'DSP-%'
+        WHERE doc_number LIKE 'DSP-%' AND SUBSTR(doc_number, 5) ~ '^[0-9]+$'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1

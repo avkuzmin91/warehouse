@@ -10,8 +10,11 @@ from config import (
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_SHIPPED,
     INVOICE_ACTIVE_STATUSES,
+    INVOICE_OP_RECEIPT_LINK,
     INVOICE_OP_SHIPMENT_LINK,
     INVOICE_STATUS_LABELS,
+    RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_LABELS,
 )
 from dbconn import like_substring_param
 
@@ -65,7 +68,7 @@ def next_invoice_number(connection) -> str:
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
         FROM invoice_docs
-        WHERE doc_number LIKE 'INV-%'
+        WHERE doc_number LIKE 'INV-%' AND SUBSTR(doc_number, 5) ~ '^[0-9]+$'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1
@@ -140,6 +143,100 @@ def attach_shipments(
         )
 
 
+def attach_receipts(
+    connection,
+    *,
+    invoice_id: str,
+    client_id: str | None,
+    receipt_ids: list[str],
+    uid: str,
+    now: str,
+) -> None:
+    """Привязывает поступления к счёту с валидацией инвариантов.
+
+    Зеркало `attach_shipments`: только завершённые поступления (`done`), того же
+    клиента, ещё не входящие ни в один активный счёт. Уникальный частичный индекс
+    `idx_invoice_receipts_receipt_unique` страхует от гонок.
+    """
+    seen: set[str] = set()
+    for raw in receipt_ids:
+        rid = str(raw or "").strip()
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+
+        rec = connection.execute(
+            "SELECT id, doc_number, status, client_id FROM receipt_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (rid,),
+        ).fetchone()
+        if not rec:
+            raise HTTPException(status_code=404, detail="Поступление не найдено")
+
+        doc_number = str(rec["doc_number"])
+        if str(rec["status"]) != RECEIPT_STATUS_DONE:
+            label = RECEIPT_STATUS_LABELS.get(str(rec["status"]), str(rec["status"]))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Поступление {doc_number} нельзя включить в счёт: только завершённые (сейчас «{label}»)",
+            )
+        if str(rec["client_id"] or "") != str(client_id or ""):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Поступление {doc_number} принадлежит другому клиенту",
+            )
+
+        busy = connection.execute(
+            "SELECT 1 FROM invoice_receipts "
+            "WHERE receipt_doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (rid,),
+        ).fetchone()
+        if busy:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Поступление {doc_number} уже привязано к счёту",
+            )
+
+        connection.execute(
+            "INSERT INTO invoice_receipts "
+            "(id,invoice_id,receipt_doc_id,client_id,client_name,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, rid, rec["client_id"], None, now, uid),
+        )
+        connection.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_RECEIPT_LINK,
+             f"Привязано поступление {doc_number}", now, uid),
+        )
+
+
+def logistics_amount_for_docs(
+    connection, *, dispatch_ids: list[str] | None = None, receipt_ids: list[str] | None = None
+) -> dict:
+    """Логистика для клиента по наборам отгрузок и поступлений, копейки.
+
+    Берётся из `*.logistics_cost` (рубли) самих документов — это цена логистики
+    для клиента, не себестоимость рейса. Рубли → копейки через `round(rub*100)`."""
+    def _sum(table: str, ids: list[str] | None) -> int:
+        clean = [str(x or "").strip() for x in (ids or []) if str(x or "").strip()]
+        clean = list(dict.fromkeys(clean))
+        if not clean:
+            return 0
+        placeholders = ",".join("?" for _ in clean)
+        rows = connection.execute(
+            f"SELECT logistics_cost FROM {table} "
+            f"WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0",
+            clean,
+        ).fetchall()
+        return sum(round(float(r["logistics_cost"] or 0) * 100) for r in rows)
+
+    return {
+        "dispatch_logistics_kop": _sum("dispatch_docs", dispatch_ids),
+        "receipt_logistics_kop": _sum("receipt_docs", receipt_ids),
+    }
+
+
 def list_invoices_aggregated(
     connection,
     *,
@@ -180,7 +277,9 @@ def list_invoices_aggregated(
         f"""
         SELECT d.*,
                (SELECT COUNT(*) FROM invoice_shipments s
-                WHERE s.invoice_id = d.id AND COALESCE(s.is_deleted, 0) = 0) AS shipment_count
+                WHERE s.invoice_id = d.id AND COALESCE(s.is_deleted, 0) = 0) AS shipment_count,
+               (SELECT COUNT(*) FROM invoice_receipts r
+                WHERE r.invoice_id = d.id AND COALESCE(r.is_deleted, 0) = 0) AS receipt_count
         FROM invoice_docs d
         WHERE {where}
         ORDER BY d.due_date DESC NULLS LAST, d.created_at DESC
@@ -202,6 +301,7 @@ def list_invoices_aggregated(
             "due_date": r["due_date"],
             "overdue": is_overdue(str(r["status"]), r["due_date"]),
             "shipment_count": int(r["shipment_count"]),
+            "receipt_count": int(r["receipt_count"]),
             "created_at": str(r["created_at"]),
         }
         for r in rows
@@ -324,6 +424,136 @@ def aggregate_shipment_contents(connection, shipment_ids: list[str]) -> dict:
         WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
         GROUP BY product_id
         ORDER BY SUM(qty) DESC, MAX(product_name)
+        """,
+        ids,
+    ).fetchall()
+    products = [
+        {"product_id": str(r["product_id"]), "name": str(r["name"]),
+         "sku": r["sku"], "qty": int(r["qty"])}
+        for r in rows
+    ]
+    return {
+        "products": products,
+        "total_qty": sum(p["qty"] for p in products),
+        "sku_count": len(products),
+    }
+
+
+def list_uninvoiced_receipts(
+    connection,
+    *,
+    page: int,
+    limit: int,
+    client_id: str | None,
+    search: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[list[dict], int]:
+    """Завершённые поступления, не входящие ни в один активный счёт."""
+    conds = [
+        "COALESCE(d.is_deleted, 0) = 0",
+        "d.status = ?",
+        "NOT EXISTS (SELECT 1 FROM invoice_receipts r "
+        "WHERE r.receipt_doc_id = d.id AND COALESCE(r.is_deleted, 0) = 0)",
+    ]
+    params: list = [RECEIPT_STATUS_DONE]
+    if client_id:
+        conds.append("d.client_id = ?"); params.append(client_id.strip())
+    if search:
+        s = like_substring_param(search)
+        conds.append("(d.doc_number LIKE ? OR d.supplier_name LIKE ?)")
+        params += [s, s]
+    if date_from:
+        conds.append("d.arrival_date >= ?"); params.append(date_from)
+    if date_to:
+        conds.append("d.arrival_date <= ?"); params.append(date_to)
+    where = " AND ".join(conds)
+
+    total = int(connection.execute(
+        f"SELECT COUNT(*) AS n FROM receipt_docs d WHERE {where}", params
+    ).fetchone()["n"])
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        f"""
+        SELECT d.id, d.doc_number, d.client_id, c.name AS client_name,
+               d.supplier_name, d.arrival_date, d.logistics_cost, d.created_at,
+               (SELECT COUNT(DISTINCT rl.product_id) FROM receipt_lines rl
+                WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted, 0) = 0) AS sku_count,
+               (SELECT COALESCE(SUM(rl.accepted_qty), 0) FROM receipt_lines rl
+                WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted, 0) = 0) AS total_qty
+        FROM receipt_docs d
+        LEFT JOIN clients c ON c.id = d.client_id
+        WHERE {where}
+        ORDER BY d.arrival_date DESC NULLS LAST, d.created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        [*params, limit, offset],
+    ).fetchall()
+
+    preview_map = _receipt_products_preview_map(connection, [str(r["id"]) for r in rows], top_n=3)
+
+    items = [
+        {
+            "id": str(r["id"]),
+            "doc_number": str(r["doc_number"]),
+            "client_id": r["client_id"],
+            "client_name": r["client_name"],
+            "supplier_name": r["supplier_name"],
+            "arrival_date": r["arrival_date"],
+            "logistics_cost_kop": round(float(r["logistics_cost"] or 0) * 100),
+            "sku_count": int(r["sku_count"]),
+            "total_qty": int(r["total_qty"]),
+            "products_preview": preview_map.get(str(r["id"]), []),
+            "created_at": str(r["created_at"]),
+        }
+        for r in rows
+    ]
+    return items, total
+
+
+def _receipt_products_preview_map(connection, doc_ids: list[str], *, top_n: int) -> dict[str, list[dict]]:
+    """Для набора поступлений — топ-N товаров по принятому количеству."""
+    ids = [d for d in doc_ids if d]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"""
+        SELECT doc_id, product_id, MAX(product_name) AS name, SUM(COALESCE(accepted_qty, 0)) AS qty
+        FROM receipt_lines
+        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
+        GROUP BY doc_id, product_id
+        ORDER BY doc_id, SUM(COALESCE(accepted_qty, 0)) DESC, MAX(product_name)
+        """,
+        ids,
+    ).fetchall()
+    result: dict[str, list[dict]] = {}
+    for r in rows:
+        bucket = result.setdefault(str(r["doc_id"]), [])
+        if len(bucket) < top_n:
+            bucket.append({"name": str(r["name"]), "qty": int(r["qty"])})
+    return result
+
+
+def aggregate_receipt_contents(connection, receipt_ids: list[str]) -> dict:
+    """Сводный состав по набору поступлений: товары с суммарным принятым количеством."""
+    ids: list[str] = []
+    for raw in receipt_ids:
+        rid = str(raw or "").strip()
+        if rid and rid not in ids:
+            ids.append(rid)
+    if not ids:
+        return {"products": [], "total_qty": 0, "sku_count": 0}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"""
+        SELECT product_id, MAX(product_name) AS name, MAX(product_sku) AS sku,
+               SUM(COALESCE(accepted_qty, 0)) AS qty
+        FROM receipt_lines
+        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
+        GROUP BY product_id
+        ORDER BY SUM(COALESCE(accepted_qty, 0)) DESC, MAX(product_name)
         """,
         ids,
     ).fetchall()

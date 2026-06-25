@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   EXPENSE_KIND_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
+  expensePaidFraction,
   expensePaymentTone,
   getExpenseDict,
   getExpenses,
@@ -32,6 +33,7 @@ import { ExpenseModal } from './ExpenseModal'
 import { ExpenseDictsModal } from './ExpenseDictsModal'
 import { SalaryRosterModal } from './SalaryRosterModal'
 import { RentRosterModal } from './RentRosterModal'
+import { CarrierPaymentModal } from './CarrierPaymentModal'
 
 const PAGE_SIZE = 25
 
@@ -62,6 +64,7 @@ const OPERATIONAL_KINDS: ExpenseKind[] = ['manual', 'logistics']
 const STATUS_OPTIONS = [
   { value: '', label: 'Все статусы' },
   { value: 'awaiting', label: EXPENSE_PAYMENT_STATUS_LABELS.awaiting },
+  { value: 'partially_paid', label: EXPENSE_PAYMENT_STATUS_LABELS.partially_paid },
   { value: 'paid', label: EXPENSE_PAYMENT_STATUS_LABELS.paid },
   { value: 'cancelled', label: EXPENSE_PAYMENT_STATUS_LABELS.cancelled },
 ]
@@ -109,6 +112,7 @@ export function ExpensesListFeature() {
   const [dictsOpen, setDictsOpen] = useState(false)
   const [rosterOpen, setRosterOpen] = useState(false)
   const [rentRosterOpen, setRentRosterOpen] = useState(false)
+  const [carrierPayOpen, setCarrierPayOpen] = useState(false)
 
   const [accruing, setAccruing] = useState(false)
 
@@ -191,6 +195,9 @@ export function ExpensesListFeature() {
         <>
           <button className="btn" onClick={() => setDictsOpen(true)}>
             <Icon name="book" size={14} />Справочники
+          </button>
+          <button className="btn" onClick={() => setCarrierPayOpen(true)} title="Внести оплату перевозчику одной суммой — распределится по его логистическим расходам">
+            <Icon name="wallet" size={14} />Оплата перевозчику
           </button>
           {isSalaryMode && (
             <button className="btn" onClick={() => setRosterOpen(true)} title="Сотрудники на окладе и месячный фонд по ним">
@@ -324,7 +331,24 @@ export function ExpensesListFeature() {
                   {it.supplier && <div className="t-sub">{it.supplier}</div>}
                 </Td>
                 <Td className="num" style={{ fontWeight: 600 }}>{formatMoneyKopecks(it.amount)}</Td>
-                <Td><Badge tone={expensePaymentTone(it.payment_status)} dot>{it.payment_status_label}</Badge></Td>
+                <Td>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
+                    <Badge tone={expensePaymentTone(it.payment_status)} dot>{it.payment_status_label}</Badge>
+                    {it.payment_status === 'partially_paid' && (
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: 7 }}
+                        title={`Оплачено ${formatMoneyKopecks(it.paid_amount)} из ${formatMoneyKopecks(it.amount)}`}
+                      >
+                        <div className="prog" style={{ width: 96, height: 5 }}>
+                          <div className="prog-fill ok" style={{ width: `${Math.round(expensePaidFraction(it.amount, it.paid_amount) * 100)}%` }} />
+                        </div>
+                        <span className="mono" style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>
+                          {Math.round(expensePaidFraction(it.amount, it.paid_amount) * 100)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </Td>
                 <Td><span style={{ fontSize: 12.5 }}>{it.payment_source_name ?? '—'}</span></Td>
                 <Td><Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} /></Td>
               </tr>
@@ -357,6 +381,13 @@ export function ExpensesListFeature() {
       )}
       {rentRosterOpen && (
         <RentRosterModal warehouses={warehouseList?.items ?? []} onClose={() => setRentRosterOpen(false)} />
+      )}
+      {carrierPayOpen && (
+        <CarrierPaymentModal
+          paymentSources={srcs}
+          onClose={() => setCarrierPayOpen(false)}
+          onPaid={() => { setCarrierPayOpen(false); setDataTick((t) => t + 1) }}
+        />
       )}
     </ListPage>
   )

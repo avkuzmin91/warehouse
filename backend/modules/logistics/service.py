@@ -41,7 +41,7 @@ def next_trip_number(connection) -> str:
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(trip_number, 4) AS INTEGER)), 0) AS max_n
         FROM trip_docs
-        WHERE trip_number LIKE 'TR-%'
+        WHERE trip_number LIKE 'TR-%' AND SUBSTR(trip_number, 4) ~ '^[0-9]+$'
         """
     ).fetchone()
     n = (row["max_n"] if row else 0) + 1

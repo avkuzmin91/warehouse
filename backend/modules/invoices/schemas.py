@@ -35,6 +35,23 @@ class InvoiceShipmentItem(BaseModel):
     destination:     str | None = None
     sku_count:       int = 0
     total_qty:       int = 0
+    logistics_cost_kop: int = 0
+
+
+class InvoiceReceiptItem(BaseModel):
+    receipt_doc_id:  str
+    doc_number:      str
+    status:          str
+    status_label:    str
+    arrival_date:    str | None = None
+    supplier_name:   str | None = None
+    sku_count:       int = 0
+    total_qty:       int = 0
+    logistics_cost_kop: int = 0
+
+
+class InvoiceAttachReceipts(BaseModel):
+    receipt_ids: list[str] = []
 
 
 class InvoicePaymentItem(BaseModel):
@@ -80,7 +97,10 @@ class InvoiceDetailResponse(BaseModel):
     created_at:   str
     created_by:   str | None
     updated_at:   str | None
+    dispatch_logistics_kop: int = 0
+    receipt_logistics_kop:  int = 0
     shipments:    list[InvoiceShipmentItem]
+    receipts:     list[InvoiceReceiptItem] = []
     payments:     list[InvoicePaymentItem]
     files:        list[InvoiceFileItem]
     ops:          list[InvoiceOpItem]
@@ -98,6 +118,7 @@ class InvoiceListItem(BaseModel):
     due_date:       str | None
     overdue:        bool
     shipment_count: int
+    receipt_count:  int = 0
     created_at:     str
 
 
@@ -134,6 +155,27 @@ class UninvoicedShipmentsResponse(BaseModel):
     limit: int
 
 
+class UninvoicedReceiptItem(BaseModel):
+    id:               str           # receipt_docs.id
+    doc_number:       str
+    client_id:        str | None
+    client_name:      str | None
+    supplier_name:    str | None
+    arrival_date:     str | None
+    logistics_cost_kop: int = 0
+    sku_count:        int
+    total_qty:        int
+    products_preview: list[ProductPreviewItem] = []
+    created_at:       str
+
+
+class UninvoicedReceiptsResponse(BaseModel):
+    items: list[UninvoicedReceiptItem]
+    total: int
+    page:  int
+    limit: int
+
+
 class ShipmentContentsProduct(BaseModel):
     product_id: str
     name:       str
@@ -146,8 +188,17 @@ class ShipmentContentsResponse(BaseModel):
     products:  list[ShipmentContentsProduct] = []
     total_qty: int = 0
     sku_count: int = 0
-    suggested_amount_kop: int = 0          # Σ qty × тариф на дату отгрузки
+    suggested_amount_kop: int = 0          # Σ qty × тариф на дату отгрузки (товары)
+    logistics_amount_kop: int = 0          # Σ logistics_cost отгрузок (логистика)
     has_missing_price:    bool = False     # по части позиций тариф не заведён
+
+
+class ReceiptContentsResponse(BaseModel):
+    """Сводный состав по набору поступлений (roll-up при выборе в счёт)."""
+    products:  list[ShipmentContentsProduct] = []
+    total_qty: int = 0
+    sku_count: int = 0
+    logistics_amount_kop: int = 0          # Σ logistics_cost поступлений (логистика)
 
 
 class InvoicePaymentCreate(BaseModel):

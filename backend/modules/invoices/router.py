@@ -18,6 +18,7 @@ from config import (
     INVOICE_OP_DUE_DATE_CHANGE,
     INVOICE_OP_ISSUE,
     INVOICE_OP_PAYMENT,
+    INVOICE_OP_RECEIPT_UNLINK,
     INVOICE_OP_SHIPMENT_UNLINK,
     INVOICE_STATUS_CANCELLED,
     INVOICE_STATUS_CLOSED,
@@ -26,12 +27,14 @@ from config import (
     INVOICE_STATUS_LABELS,
     INVOICE_STATUS_PARTIALLY_PAID,
     MAX_UPLOAD_BYTES,
+    RECEIPT_STATUS_LABELS,
     UPLOADS_DIR,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_manager
 from modules.invoices.schemas import (
     InvoiceAlertsResponse,
+    InvoiceAttachReceipts,
     InvoiceAttachShipments,
     InvoiceAmountUpdate,
     InvoiceCreate,
@@ -43,22 +46,30 @@ from modules.invoices.schemas import (
     InvoiceOpItem,
     InvoicePaymentCreate,
     InvoicePaymentItem,
+    InvoiceReceiptItem,
     InvoiceShipmentItem,
     InvoiceUpdate,
+    ReceiptContentsResponse,
     ShipmentContentsResponse,
+    UninvoicedReceiptItem,
+    UninvoicedReceiptsResponse,
     UninvoicedShipmentItem,
     UninvoicedShipmentsResponse,
 )
 from modules.invoices.service import (
+    aggregate_receipt_contents,
     aggregate_shipment_contents,
     alerts_counts,
+    attach_receipts,
     attach_shipments,
     format_kopecks,
     invalidate_alerts_cache,
     is_due_reached,
     is_overdue,
     list_invoices_aggregated,
+    list_uninvoiced_receipts,
     list_uninvoiced_shipments,
+    logistics_amount_for_docs,
     next_invoice_number,
     recompute_paid,
     suggested_amount_for_dispatches,
@@ -110,7 +121,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     ship_rows = conn.execute(
         """
         SELECT s.shipment_doc_id, d.doc_number, d.cargo_type, d.status,
-               d.ship_date, d.destination,
+               d.ship_date, d.destination, d.logistics_cost,
                (SELECT COUNT(DISTINCT sl.product_id) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS sku_count,
                (SELECT COALESCE(SUM(sl.qty), 0) FROM dispatch_lines sl
@@ -133,9 +144,42 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             destination=r["destination"],
             sku_count=int(r["sku_count"]),
             total_qty=int(r["total_qty"]),
+            logistics_cost_kop=round(float(r["logistics_cost"] or 0) * 100),
         )
         for r in ship_rows
     ]
+
+    rec_rows = conn.execute(
+        """
+        SELECT s.receipt_doc_id, d.doc_number, d.status, d.arrival_date,
+               d.supplier_name, d.logistics_cost,
+               (SELECT COUNT(DISTINCT rl.product_id) FROM receipt_lines rl
+                WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted, 0) = 0) AS sku_count,
+               (SELECT COALESCE(SUM(rl.accepted_qty), 0) FROM receipt_lines rl
+                WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted, 0) = 0) AS total_qty
+        FROM invoice_receipts s
+        JOIN receipt_docs d ON d.id = s.receipt_doc_id
+        WHERE s.invoice_id = ? AND COALESCE(s.is_deleted, 0) = 0
+        ORDER BY d.doc_number
+        """,
+        (invoice_id,),
+    ).fetchall()
+    receipts = [
+        InvoiceReceiptItem(
+            receipt_doc_id=str(r["receipt_doc_id"]),
+            doc_number=str(r["doc_number"]),
+            status=str(r["status"]),
+            status_label=RECEIPT_STATUS_LABELS.get(str(r["status"]), str(r["status"])),
+            arrival_date=r["arrival_date"],
+            supplier_name=r["supplier_name"],
+            sku_count=int(r["sku_count"]),
+            total_qty=int(r["total_qty"]),
+            logistics_cost_kop=round(float(r["logistics_cost"] or 0) * 100),
+        )
+        for r in rec_rows
+    ]
+    dispatch_logistics_kop = sum(s.logistics_cost_kop for s in shipments)
+    receipt_logistics_kop = sum(r.logistics_cost_kop for r in receipts)
 
     pay_rows = conn.execute(
         """
@@ -217,7 +261,10 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
         created_at=str(doc["created_at"]),
         created_by=doc["created_by"],
         updated_at=doc["updated_at"],
+        dispatch_logistics_kop=dispatch_logistics_kop,
+        receipt_logistics_kop=receipt_logistics_kop,
         shipments=shipments,
+        receipts=receipts,
         payments=payments,
         files=files,
         ops=ops,
@@ -323,10 +370,45 @@ def shipment_contents(shipment_ids: str = Query(""), user=Depends(_get_finance))
     with get_connection() as conn:
         data = aggregate_shipment_contents(conn, ids)
         amount = suggested_amount_for_dispatches(conn, ids)
+        logistics = logistics_amount_for_docs(conn, dispatch_ids=ids)
     return ShipmentContentsResponse(
         **data,
         suggested_amount_kop=amount["amount_kop"],
+        logistics_amount_kop=logistics["dispatch_logistics_kop"],
         has_missing_price=amount["has_missing_price"],
+    )
+
+
+@router.get("/invoices/uninvoiced-receipts", response_model=UninvoicedReceiptsResponse)
+def list_uninvoiced_receipt_docs(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    client_id: str | None = Query(None),
+    search:    str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    with get_connection() as conn:
+        items, total = list_uninvoiced_receipts(
+            conn, page=page, limit=limit, client_id=client_id,
+            search=search, date_from=date_from, date_to=date_to,
+        )
+    return UninvoicedReceiptsResponse(
+        items=[UninvoicedReceiptItem(**it) for it in items], total=total, page=page, limit=limit,
+    )
+
+
+@router.get("/invoices/receipt-contents", response_model=ReceiptContentsResponse)
+def receipt_contents(receipt_ids: str = Query(""), user=Depends(_get_finance)):
+    # Сводный состав по набору поступлений + их логистика (roll-up при выборе в счёт).
+    ids = [s.strip() for s in str(receipt_ids or "").split(",") if s.strip()]
+    with get_connection() as conn:
+        data = aggregate_receipt_contents(conn, ids)
+        logistics = logistics_amount_for_docs(conn, receipt_ids=ids)
+    return ReceiptContentsResponse(
+        **data,
+        logistics_amount_kop=logistics["receipt_logistics_kop"],
     )
 
 
@@ -395,6 +477,65 @@ def detach_invoice_shipment(invoice_id: str, shipment_doc_id: str, user=Depends(
     return {"message": "ok"}
 
 
+# ── Receipts link/unlink ────────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/receipts")
+def attach_invoice_receipts(invoice_id: str, body: InvoiceAttachReceipts, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, client_id FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        if not [s for s in body.receipt_ids if str(s or "").strip()]:
+            raise HTTPException(status_code=400, detail="Не выбрано ни одного поступления")
+        attach_receipts(
+            conn,
+            invoice_id=invoice_id,
+            client_id=doc["client_id"],
+            receipt_ids=body.receipt_ids,
+            uid=uid,
+            now=now,
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/invoices/{invoice_id}/receipts/{receipt_doc_id}")
+def detach_invoice_receipt(invoice_id: str, receipt_doc_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        link = conn.execute(
+            "SELECT s.id, d.doc_number FROM invoice_receipts s "
+            "JOIN receipt_docs d ON d.id = s.receipt_doc_id "
+            "WHERE s.invoice_id = ? AND s.receipt_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0",
+            (invoice_id, receipt_doc_id),
+        ).fetchone()
+        if not link:
+            raise HTTPException(status_code=404, detail="Поступление не привязано к счёту")
+        conn.execute("UPDATE invoice_receipts SET is_deleted = 1 WHERE id = ?", (str(link["id"]),))
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_RECEIPT_UNLINK,
+             f"Отвязано поступление {link['doc_number']}", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
 # ── Draft: правка реквизитов и выставление ───────────────────────────────────────
 
 @router.patch("/invoices/{invoice_id}")
@@ -420,13 +561,15 @@ def update_invoice(invoice_id: str, body: InvoiceUpdate, user=Depends(_get_finan
                 raise HTTPException(status_code=400, detail="Укажите клиента")
             if new_client != str(doc["client_id"] or ""):
                 linked = conn.execute(
-                    "SELECT 1 FROM invoice_shipments WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
-                    (invoice_id,),
+                    "SELECT 1 FROM invoice_shipments WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 "
+                    "UNION ALL "
+                    "SELECT 1 FROM invoice_receipts WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (invoice_id, invoice_id),
                 ).fetchone()
                 if linked:
                     raise HTTPException(
                         status_code=400,
-                        detail="Сначала отвяжите отгрузки прежнего клиента",
+                        detail="Сначала отвяжите отгрузки и поступления прежнего клиента",
                     )
             sets.append("client_id = ?"); params.append(new_client)
         if "client_name" in fields:
@@ -476,8 +619,13 @@ def issue_invoice(invoice_id: str, user=Depends(_get_finance)):
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         ).fetchone()["n"])
-        if n_ship == 0:
-            raise HTTPException(status_code=400, detail="Добавьте хотя бы одну отгрузку")
+        n_rec = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM invoice_receipts "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()["n"])
+        if n_ship == 0 and n_rec == 0:
+            raise HTTPException(status_code=400, detail="Добавьте хотя бы одну отгрузку или поступление")
         n_files = int(conn.execute(
             "SELECT COUNT(*) AS n FROM invoice_files "
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -667,9 +815,14 @@ def cancel_invoice(invoice_id: str, user=Depends(_get_finance)):
         if not doc:
             raise HTTPException(status_code=404, detail="Счёт не найден")
         _require_mutable(doc)
-        # Освобождаем отгрузки — снова попадают в реестр «без счёта».
+        # Освобождаем отгрузки и поступления — снова попадают в реестр «без счёта».
         conn.execute(
             "UPDATE invoice_shipments SET is_deleted = 1 "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        )
+        conn.execute(
+            "UPDATE invoice_receipts SET is_deleted = 1 "
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         )

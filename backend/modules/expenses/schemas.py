@@ -40,9 +40,34 @@ class ExpenseCreate(BaseModel):
 
 
 class ExpensePayRequest(BaseModel):
-    """Перевод расхода в «Оплачено»: дата и опционально с чьей карты."""
+    """Оплата расхода: дата, с чьей карты и опционально сумма (копейки).
+    amount не задан → гасится весь остаток (полная оплата)."""
     paid_on:           str | None = None
     payment_source_id: str | None = None
+    amount:            int | None = Field(default=None, ge=1)
+
+
+class ExpenseCarrierPayRequest(BaseModel):
+    """Массовая оплата перевозчику: распределение суммы по его логистическим расходам
+    от ранних к поздним."""
+    carrier_id:        str
+    amount:            int = Field(ge=1)
+    payment_source_id: str
+    paid_on:           str | None = None
+
+
+class ExpenseCarrierPayResponse(BaseModel):
+    allocated_amount:     int
+    affected_count:       int
+    fully_paid_count:     int
+    partially_paid_count: int
+
+
+class CarrierOutstandingItem(BaseModel):
+    carrier_id:         str
+    carrier_name:       str
+    outstanding_amount: int
+    count:              int
 
 
 class ExpenseUpdate(BaseModel):
@@ -79,6 +104,17 @@ class ExpenseOpItem(BaseModel):
     created_by_email: str | None = None
 
 
+class ExpensePaymentItem(BaseModel):
+    id:                  str
+    amount:              int
+    paid_on:             str | None = None
+    payment_source_id:   str | None = None
+    payment_source_name: str | None = None
+    comment:             str | None = None
+    created_at:          str
+    created_by_email:    str | None = None
+
+
 class ExpenseListItem(BaseModel):
     id:                   str
     exp_number:           str
@@ -89,6 +125,9 @@ class ExpenseListItem(BaseModel):
     quantity:             float
     unit:                 str | None = None
     amount:               int
+    paid_amount:          int = 0
+    carrier_id:           str | None = None
+    carrier_name:         str | None = None
     payment_source_id:    str | None = None
     payment_source_name:  str | None = None
     supplier:             str | None = None
@@ -110,6 +149,7 @@ class ExpenseListItem(BaseModel):
 class ExpenseDetailResponse(ExpenseListItem):
     updated_at:         str | None = None
     source_trip_number: str | None = None
+    payments:           list[ExpensePaymentItem]
     files:              list[ExpenseFileItem]
     ops:                list[ExpenseOpItem]
 

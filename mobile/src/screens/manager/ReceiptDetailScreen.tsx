@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
+import { useAuth } from '../../auth/AuthContext'
 import {
   getReceiptDetail,
   RECEIPT_STATUS_LABELS,
@@ -9,10 +10,13 @@ import {
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
+import { canCreateDocuments } from '../../utils/access'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function ReceiptDetailScreen({ docId }: { docId: string }) {
   const { back } = useNav()
+  const { user } = useAuth()
+  const viewOnly = !canCreateDocuments(user?.role)
   const [detail, setDetail] = useState<ReceiptDetailFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -46,6 +50,11 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
           !error && <div className="center" style={{ padding: '32px 0' }}><div className="spin" /></div>
         ) : (
           <>
+            {viewOnly && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+                <span className="pill"><Icon name="eye" size={13} /> Просмотр</span>
+              </div>
+            )}
             <div className="summary" style={{ marginBottom: 16 }}>
               <div className="kv"><span className="k">Статус</span>
                 <span className="v">{tone ? <span className={`badge ${tone}`}><span className="dot" />{RECEIPT_STATUS_LABELS[doc.status]}</span> : RECEIPT_STATUS_LABELS[doc.status]}</span>

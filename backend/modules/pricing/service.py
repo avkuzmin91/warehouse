@@ -142,3 +142,21 @@ def add_price(
          (note or None), _now(), user_id),
     )
     return new_id
+
+
+def delete_price(connection, *, product_id: str, price_id: str) -> bool:
+    """Мягко удалить запись истории тарифа (ошибочный ввод). Без commit.
+
+    Возвращает False, если запись не найдена / уже удалена / не принадлежит товару."""
+    row = connection.execute(
+        "SELECT id FROM product_packing_prices "
+        "WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (price_id, product_id),
+    ).fetchone()
+    if not row:
+        return False
+    connection.execute(
+        "UPDATE product_packing_prices SET is_deleted = 1 WHERE id = ?",
+        (price_id,),
+    )
+    return True

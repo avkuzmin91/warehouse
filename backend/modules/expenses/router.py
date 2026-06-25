@@ -17,12 +17,11 @@ from config import (
     EXPENSE_OP_CREATE,
     EXPENSE_OP_FILE_ADD,
     EXPENSE_OP_FILE_DELETE,
-    EXPENSE_OP_PAY,
-    EXPENSE_OP_UNPAY,
     EXPENSE_OP_UPDATE,
     EXPENSE_PAYMENT_AWAITING,
     EXPENSE_PAYMENT_CANCELLED,
     EXPENSE_PAYMENT_PAID,
+    EXPENSE_PAYMENT_PARTIAL,
     MAX_UPLOAD_BYTES,
     UPLOADS_DIR,
 )
@@ -30,6 +29,9 @@ from dbconn import get_connection
 from modules.auth.service import get_current_manager
 from modules.expenses.schemas import (
     AccrualRunResponse,
+    CarrierOutstandingItem,
+    ExpenseCarrierPayRequest,
+    ExpenseCarrierPayResponse,
     ExpenseCreate,
     ExpenseDetailResponse,
     ExpenseDictCreate,
@@ -43,15 +45,19 @@ from modules.expenses.schemas import (
     MessageResponse,
 )
 from modules.expenses.service import (
+    add_expense_payment,
     build_update_diff,
+    carrier_outstanding_logistics,
     expense_summary,
     format_kopecks,
     list_expenses_aggregated,
     load_detail,
     next_expense_number,
     now_iso,
+    pay_carrier_fifo,
     resolve_category,
     resolve_payment_source,
+    revert_expense_payments,
     run_rent_accruals,
     run_salary_accruals,
     today_iso,
@@ -179,6 +185,37 @@ def expenses_summary(
             kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
         )
     return ExpenseSummaryResponse(**data)
+
+
+# ── Массовая оплата перевозчику (логистика, FIFO от ранних к поздним) ────────────
+
+@router.get("/expenses/carriers/outstanding", response_model=list[CarrierOutstandingItem])
+def carriers_outstanding(user=Depends(_get_finance)):
+    """Перевозчики с непогашенным остатком по логистическим расходам — для окна
+    массовой оплаты. Логистика видна и менеджеру, и админу."""
+    with get_connection() as conn:
+        rows = carrier_outstanding_logistics(conn)
+    return [CarrierOutstandingItem(**r) for r in rows]
+
+
+@router.post("/expenses/pay-carrier", response_model=ExpenseCarrierPayResponse)
+def pay_carrier(body: ExpenseCarrierPayRequest, user=Depends(_get_finance)):
+    """Внести оплату перевозчику одной суммой: распределяется по его логистическим
+    расходам от ранних к поздним, последний может закрыться частично. Сумма не может
+    превышать суммарный долг перевозчику."""
+    uid = str(user["id"])
+    carrier_id = (body.carrier_id or "").strip()
+    if not carrier_id:
+        raise HTTPException(status_code=400, detail="Выберите перевозчика")
+    paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
+    with get_connection() as conn:
+        src_name = resolve_payment_source(conn, (body.payment_source_id or "").strip())
+        result = pay_carrier_fifo(
+            conn, carrier_id=carrier_id, amount=int(body.amount), paid_on=paid_on,
+            payment_source_id=(body.payment_source_id or "").strip(), src_name=src_name, uid=uid,
+        )
+        conn.commit()
+    return ExpenseCarrierPayResponse(**result)
 
 
 # ── Автоначисление ЗП (оклады: 1-е и 15-е число — по 1/2) ────────────────────────
@@ -340,17 +377,28 @@ def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
         source_kind = (body.source_kind or "").strip() or None
         source_id = (body.source_id or "").strip() or None
 
+        # Заведение «оплачено» сразу гасит расход: фиксируем платёж на всю сумму,
+        # чтобы paid_amount/журнал платежей были согласованы с awaiting→partial→paid.
+        amount = int(body.amount)
+        paid_amount = amount if pay_status == EXPENSE_PAYMENT_PAID else 0
         exp_number = next_expense_number(conn)
         conn.execute(
             """INSERT INTO material_expenses
-               (id,exp_number,spent_on,category_id,name,quantity,unit,amount,
+               (id,exp_number,spent_on,category_id,name,quantity,unit,amount,paid_amount,
                 payment_source_id,supplier,comment,kind,payment_status,paid_on,
                 period_start,period_end,source_kind,source_id,created_at,created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (expense_id, exp_number, spent_on, cat_id, name, quantity, unit, int(body.amount),
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (expense_id, exp_number, spent_on, cat_id, name, quantity, unit, amount, paid_amount,
              src_id, (body.supplier or "").strip() or None, (body.comment or "").strip() or None,
              kind, pay_status, paid_on, period_start, period_end, source_kind, source_id, now, uid),
         )
+        if pay_status == EXPENSE_PAYMENT_PAID:
+            conn.execute(
+                "INSERT INTO expense_payments "
+                "(id,expense_id,amount,paid_on,payment_source_id,comment,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (str(uuid4()), expense_id, amount, paid_on, src_id, "Заведено оплаченным", now, uid),
+            )
         bits = [name, format_kopecks(int(body.amount))]
         if src_name:
             bits.append(src_name)
@@ -423,8 +471,9 @@ def update_expense(expense_id: str, body: ExpenseUpdate, user=Depends(_get_finan
 
 @router.post("/expenses/{expense_id}/pay", response_model=MessageResponse)
 def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_finance)):
-    """Перевод расхода «ожидает оплаты» → «оплачено». Опционально проставляет
-    дату оплаты и источник («с чьей карты»)."""
+    """Оплата расхода: полная (amount не задан → гасится весь остаток) или частичная.
+    Допустима из статусов «ожидает» и «частично оплачен»; переплата запрещена.
+    Каждый платёж — запись в журнал expense_payments, статус пересчитывается."""
     uid = str(user["id"])
     paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
     with get_connection() as conn:
@@ -440,18 +489,23 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
         if str(old["payment_status"]) == EXPENSE_PAYMENT_CANCELLED:
             raise HTTPException(status_code=400, detail="Аннулированный расход нельзя оплатить")
 
+        remaining = int(old["amount"]) - int(old["paid_amount"] or 0)
+        pay_amount = int(body.amount) if body.amount is not None else remaining
+        if pay_amount <= 0:
+            raise HTTPException(status_code=400, detail="Сумма оплаты должна быть больше нуля")
+        if pay_amount > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Оплата превышает остаток по расходу ({format_kopecks(max(0, remaining))})",
+            )
+
         src_id = (body.payment_source_id or "").strip() or old["payment_source_id"]
         if not src_id:
             raise HTTPException(status_code=400, detail="Выберите источник оплаты")
         src_name = resolve_payment_source(conn, src_id)
-        conn.execute(
-            "UPDATE material_expenses SET payment_status = ?, paid_on = ?, "
-            "payment_source_id = ?, updated_at = ? WHERE id = ?",
-            (EXPENSE_PAYMENT_PAID, paid_on, src_id, now_iso(), expense_id),
-        )
-        _journal(
-            conn, expense_id, EXPENSE_OP_PAY,
-            f"Оплачено: {format_kopecks(int(old['amount']))} · {src_name}", uid,
+        add_expense_payment(
+            conn, old, amount=pay_amount, paid_on=paid_on,
+            payment_source_id=src_id, src_name=src_name, uid=uid,
         )
         conn.commit()
     return MessageResponse(message="ok")
@@ -459,8 +513,8 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
 
 @router.post("/expenses/{expense_id}/unpay", response_model=MessageResponse)
 def unpay_expense(expense_id: str, user=Depends(_get_finance)):
-    """Откат ошибочной отметки об оплате: «оплачено» → «ожидает оплаты».
-    Снимает дату оплаты; источник оставляем как подсказку к повторной оплате."""
+    """Откат ошибочной оплаты: «оплачено»/«частично оплачено» → «ожидает оплаты».
+    Снимает все платежи расхода (soft-delete журнала expense_payments)."""
     uid = str(user["id"])
     with get_connection() as conn:
         old = conn.execute(
@@ -470,16 +524,9 @@ def unpay_expense(expense_id: str, user=Depends(_get_finance)):
         if not old:
             raise HTTPException(status_code=404, detail="Расход не найден")
         _assert_visible(user, old)
-        if str(old["payment_status"]) != EXPENSE_PAYMENT_PAID:
+        if str(old["payment_status"]) not in (EXPENSE_PAYMENT_PAID, EXPENSE_PAYMENT_PARTIAL):
             raise HTTPException(status_code=400, detail="Вернуть в ожидание можно только оплаченный расход")
-        conn.execute(
-            "UPDATE material_expenses SET payment_status = ?, paid_on = NULL, updated_at = ? WHERE id = ?",
-            (EXPENSE_PAYMENT_AWAITING, now_iso(), expense_id),
-        )
-        _journal(
-            conn, expense_id, EXPENSE_OP_UNPAY,
-            f"Отметка об оплате снята: {format_kopecks(int(old['amount']))} · возврат в ожидание", uid,
-        )
+        revert_expense_payments(conn, expense_id, int(old["paid_amount"] or 0), uid)
         conn.commit()
     return MessageResponse(message="ok")
 

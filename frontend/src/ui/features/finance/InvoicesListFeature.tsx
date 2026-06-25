@@ -149,7 +149,7 @@ export function InvoicesListFeature() {
             <th style={{ width: 120 }}>Срок расчёта</th>
             <th style={{ width: 140, textAlign: 'right' }}>Сумма</th>
             <th style={{ width: 175, textAlign: 'right' }}>Оплачено</th>
-            <th style={{ width: 80, textAlign: 'right' }}>Отгр.</th>
+            <th style={{ width: 80, textAlign: 'right' }} title="Отгрузки + поступления">Док.</th>
             <th style={{ width: 150 }}>Статус</th>
             <th style={{ width: 28 }} />
           </tr>
@@ -193,7 +193,7 @@ export function InvoicesListFeature() {
                 </Td>
                 <Td className="num">{formatTotal(item.total_amount)}</Td>
                 <Td><PayBar total={item.total_amount} paid={item.paid_amount} /></Td>
-                <Td className="num">{item.shipment_count}</Td>
+                <Td className="num">{item.shipment_count + item.receipt_count}</Td>
                 <Td><Badge tone={invoiceStatusTone(item.status)} dot>{item.status_label}</Badge></Td>
                 <Td><Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} /></Td>
               </tr>

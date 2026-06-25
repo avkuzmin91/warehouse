@@ -14,12 +14,12 @@ function sinceLabel(since?: string | null): string {
 }
 
 // Иконка + тон плитки по типу задачи (визуальный язык редизайна).
-function taskVisual(kind: string): { icon: IconName; tone: string } {
+function taskVisual(kind: string, direction?: string | null): { icon: IconName; tone: string } {
   if (kind === 'shipment_move_in') return { icon: 'box', tone: 'amber' }
   if (kind === 'shipment_relocate') return { icon: 'layers', tone: 'blue' }
   if (kind === 'shipment_defect_prepare') return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('shipment')) return { icon: 'box', tone: 'gray' }
-  if (kind.startsWith('trip')) return { icon: 'truckIn', tone: '' }
+  if (kind.startsWith('trip')) return direction === 'outbound' ? { icon: 'truckOut', tone: 'green' } : { icon: 'truckIn', tone: '' }
   if (kind.startsWith('receipt')) return { icon: 'truckIn', tone: '' }
   return { icon: 'list', tone: 'gray' }
 }
@@ -90,7 +90,7 @@ export function TasksScreen() {
             </div>
             {items.map((t) => {
               const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment'
-              const { icon, tone } = taskVisual(t.kind)
+              const { icon, tone } = taskVisual(t.kind, t.direction)
               const urgent = t.priority_rank != null && t.priority_rank > 0
               const open = () => {
                 if (t.doc_type === 'trip') openTrip(t.doc_id)

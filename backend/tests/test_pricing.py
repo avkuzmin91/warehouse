@@ -100,6 +100,41 @@ def test_detail_history_and_current(manager_client):
     assert body["defect_price_kop"] is None
 
 
+def test_delete_price_entry(manager_client):
+    product_id, _, _ = _seed_product()
+    manager_client.post(
+        f"/pricing/products/{product_id}/prices",
+        json={"good_price_kop": 10000, "effective_from": "2026-01-01"},
+    )
+    r2 = manager_client.post(
+        f"/pricing/products/{product_id}/prices",
+        json={"good_price_kop": 99900, "effective_from": "2026-06-01"},  # ошибочный ввод
+    )
+    assert r2.status_code == 200, r2.text
+
+    detail = manager_client.get(f"/pricing/products/{product_id}").json()
+    assert detail["good_price_kop"] == 99900
+    bad_id = next(e["id"] for e in detail["good_history"] if e["effective_from"] == "2026-06-01")
+
+    # Удаляем ошибочную запись — перестаёт учитываться.
+    dele = manager_client.delete(f"/pricing/products/{product_id}/prices/{bad_id}")
+    assert dele.status_code == 200, dele.text
+
+    detail2 = manager_client.get(f"/pricing/products/{product_id}").json()
+    assert detail2["good_price_kop"] == 10000
+    assert len(detail2["good_history"]) == 1
+
+    # Повторное удаление — 404.
+    again = manager_client.delete(f"/pricing/products/{product_id}/prices/{bad_id}")
+    assert again.status_code == 404
+
+
+def test_delete_price_forbidden_for_warehouse(warehouse_client):
+    product_id, _, _ = _seed_product()
+    resp = warehouse_client.delete(f"/pricing/products/{product_id}/prices/whatever")
+    assert resp.status_code == 403
+
+
 def test_set_price_requires_value(manager_client):
     product_id, _, _ = _seed_product()
     resp = manager_client.post(f"/pricing/products/{product_id}/prices", json={})
@@ -115,10 +150,13 @@ def _seed_dispatch(product_id: str, client_id: str, *, cargo_type: str, qty: int
     suffix = uuid.uuid4().hex[:10]
     doc_id = f"dsp-{suffix}"
     with get_connection() as conn:
+        # doc_number с НЕ-DSP префиксом: next_dispatch_number берёт MAX(CAST(SUBSTR(doc_number,5)
+        # AS INTEGER)) по 'DSP-%', и нечисловой хвост (uuid hex) ронял бы генератор для всех
+        # последующих созданий отгрузки в общей dev-БД. 'TST-' не попадает под LIKE 'DSP-%'.
         conn.execute(
             "INSERT INTO dispatch_docs (id, doc_number, cargo_type, client_id, client_name, "
             "ship_date, status, created_at, is_deleted) VALUES (?,?,?,?,?,?,?, NOW(), 0)",
-            (doc_id, f"DSP-{suffix}", cargo_type, client_id, "C", ship_date, "shipped"),
+            (doc_id, f"TST-{suffix}", cargo_type, client_id, "C", ship_date, "shipped"),
         )
         conn.execute(
             "INSERT INTO dispatch_lines (id, doc_id, product_id, product_name, product_sku, qty, "

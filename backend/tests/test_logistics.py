@@ -472,6 +472,7 @@ def test_trip_cost_creates_logistics_expense(admin_client, client_id):
             ).fetchall()]
             for eid in ids:
                 conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
+                conn.execute("DELETE FROM expense_payments WHERE expense_id=?", (eid,))
             conn.execute(
                 "DELETE FROM material_expenses WHERE source_kind='trip' AND source_id=?", (trip_id,)
             )

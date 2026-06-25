@@ -64,7 +64,7 @@ export function TripsListScreen() {
               return (
                 <button key={t.id} className="tile" onClick={() => openTrip(t.id)}>
                   <div className={`tile-ico${outbound ? ' green' : ''}`}>
-                    <Icon name="truck" size={21} />
+                    <Icon name={outbound ? 'truckOut' : 'truckIn'} size={21} />
                   </div>
                   <div className="tile-body">
                     <div className="tile-title">

@@ -22,6 +22,34 @@ function lineTitle(l: ShipmentLine): string {
   return variantTitle(l.product_name, [l.color_name, l.size_name])
 }
 
+// Сегментный прогресс упаковки: годный (зелёный) + брак (красный) к плану.
+// `left` — остаток на упаковке без решения (из available_for_pack), не plan−good−defect.
+function PackMeter({ good, defect, plan, left }: { good: number; defect: number; plan: number; left: number }) {
+  const gw = plan > 0 ? Math.min(100, (good / plan) * 100) : 0
+  const dw = plan > 0 ? Math.min(100 - gw, (defect / plan) * 100) : 0
+  const done = left === 0
+  return (
+    <div className="pmeter">
+      <div className="pmeter-track">
+        {good > 0 && <span className="seg-good" style={{ width: `${gw}%` }} />}
+        {defect > 0 && <span className="seg-defect" style={{ width: `${dw}%` }} />}
+      </div>
+      <div className="pmeter-row">
+        <div className="pmeter-counts">
+          <b className="good">{good}</b> годн <span className="faint">·</span>{' '}
+          <b className={defect > 0 ? 'defect' : 'faint'}>{defect}</b> брак{' '}
+          <span className="faint">· план {plan}</span>
+        </div>
+        {done ? (
+          <span className="badge success"><Icon name="check" size={12} /> Готово</span>
+        ) : (
+          <span className="badge warning">осталось {left}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string }) {
   const { back } = useNav()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
@@ -119,44 +147,32 @@ export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string })
             </div>
             {doc.comment && (
               <div className="tzcard">
-                <div className="tztitle">Техническое задание</div>
+                <div className="tztitle"><Icon name="file" size={12} /> Техническое задание</div>
                 <div className="tzbody">{doc.comment}</div>
               </div>
             )}
 
             {onPacking ? (
               <>
-                <div className="sec">Упаковка — годный / брак</div>
-                {doc.lines.map((l) => {
-                  const done = l.available_for_pack === 0
-                  return (
-                    <div key={l.id} className="line">
-                      <div className="line-name">{lineTitle(l)}</div>
-                      <div className="line-sub mono">{l.product_sku}</div>
-                      <div className="pack-meter">
-                        <div className="pack-meter-top">
-                          <div className="pack-meter-count">
-                            <b style={{ color: 'var(--c-success)' }}>{l.packed_good}</b>
-                            <span className="pack-meter-of"> годн</span>
-                            <span className="pack-meter-of"> · </span>
-                            <b style={{ color: l.packed_defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{l.packed_defect}</b>
-                            <span className="pack-meter-of"> брак · план {l.qty}</span>
-                          </div>
-                          {done ? (
-                            <span className="badge success">
-                              <Icon name="check" size={12} /> Готово
-                            </span>
-                          ) : (
-                            <span className="badge warning">осталось {l.available_for_pack}</span>
-                          )}
-                        </div>
-                      </div>
-                      <button className="btn sm" style={{ width: '100%', marginTop: 4 }} onClick={() => setPackLine(l)}>
-                        <Icon name="edit" size={15} /> Внести упаковку
-                      </button>
-                    </div>
-                  )
-                })}
+                <div className="sec">
+                  Упаковка — годный / брак
+                  <span className="sec-count">{doc.lines.length}</span>
+                </div>
+                {doc.lines.map((l) => (
+                  <div key={l.id} className="line">
+                    <div className="line-name">{lineTitle(l)}</div>
+                    <div className="line-sub mono">{l.product_sku}</div>
+                    <PackMeter
+                      good={l.packed_good}
+                      defect={l.packed_defect}
+                      plan={l.qty}
+                      left={l.available_for_pack}
+                    />
+                    <button className="btn sm" style={{ width: '100%', marginTop: 4 }} onClick={() => setPackLine(l)}>
+                      <Icon name="edit" size={15} /> Внести упаковку
+                    </button>
+                  </div>
+                ))}
                 <div className="actionbar">
                   {error && (
                     <div className="alert">
@@ -184,7 +200,19 @@ export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string })
               </div>
             ) : doc.status === 'relocating' ? (
               <>
-                <div className="sec">Упаковано — кладовщик раскладывает по местам</div>
+                <div className="infocard">
+                  <div className="infocard-ico">
+                    <Icon name="layers" size={20} />
+                  </div>
+                  <div className="infocard-body">
+                    <div className="infocard-title">Кладовщик раскладывает по местам</div>
+                    <div className="infocard-sub">Упаковка завершена · ваше участие не требуется</div>
+                  </div>
+                </div>
+                <div className="sec">
+                  Упаковано
+                  <span className="sec-count">{doc.lines.length}</span>
+                </div>
                 {doc.lines.map((l) => (
                   <div key={l.id} className="line">
                     <div className="line-name">{lineTitle(l)}</div>
@@ -358,11 +386,13 @@ function PackLineSheet({
           </div>
         </div>
 
+        <div className="flabel" style={{ marginTop: 4 }}>Дата упаковки</div>
         <div className="line-row" style={{ marginTop: 0 }}>
           <DateField value={date} onChange={setDate} title="Дата упаковки" />
         </div>
-        <div className="line-row">
-          <span style={{ flex: '0 0 64px', color: 'var(--c-success)', fontSize: 13 }}>Годный</span>
+
+        <div className="qrow good">
+          <span className="qlabel"><span className="qdot" /> Годный</span>
           <input
             className="input num"
             type="text"
@@ -371,8 +401,8 @@ function PackLineSheet({
             onChange={(e) => setGood(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
           />
         </div>
-        <div className="line-row">
-          <span style={{ flex: '0 0 64px', color: 'var(--c-danger)', fontSize: 13 }}>Брак</span>
+        <div className="qrow defect">
+          <span className="qlabel"><span className="qdot" /> Брак</span>
           <input
             className="input num"
             type="text"
@@ -403,14 +433,12 @@ function PackLineSheet({
           <div className="line-sub" style={{ textAlign: 'center', padding: '12px 0' }}>Записей пока нет</div>
         ) : (
           entries.map((e) => (
-            <div key={e.id} className="line-row" style={{ marginTop: 0, padding: '8px 0', borderBottom: '1px solid var(--c-border)', opacity: e.reversed ? 0.5 : 1 }}>
-              <span className="mono" style={{ fontSize: 13, textDecoration: e.reversed ? 'line-through' : 'none' }}>
-                {fmtDate(e.packed_date)}
-              </span>
-              <span style={{ flex: 1, fontSize: 13, textDecoration: e.reversed ? 'line-through' : 'none' }}>
-                {e.good > 0 && <span style={{ color: 'var(--c-success)' }}>+{e.good} годн</span>}
-                {e.good > 0 && e.defect > 0 && <span style={{ color: 'var(--c-text-faint)' }}> · </span>}
-                {e.defect > 0 && <span style={{ color: 'var(--c-danger)' }}>+{e.defect} брак</span>}
+            <div key={e.id} className={`histrow${e.reversed ? ' reversed' : ''}`}>
+              <span className="h-date">{fmtDate(e.packed_date)}</span>
+              <span className={`h-delta${e.reversed ? ' struck' : ''}`}>
+                {e.good > 0 && <span className="good">+{e.good} годн</span>}
+                {e.good > 0 && e.defect > 0 && <span className="faint"> · </span>}
+                {e.defect > 0 && <span className="defect">+{e.defect} брак</span>}
               </span>
               {e.reversed ? (
                 <span className="line-sub" style={{ fontSize: 12 }}>Отменено</span>

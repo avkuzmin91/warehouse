@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
-import { getProductPrices, setProductPrice } from '../../../../api/pricingApi'
+import { useCallback, useEffect, useState } from 'react'
+import { deleteProductPrice, getProductPrices, setProductPrice } from '../../../../api/pricingApi'
 import type { ProductPriceDetail, PriceHistoryEntry } from '../../../../api/pricingApi'
 import { Drawer } from '../../../feedback/Drawer'
 import { Icon } from '../../../primitives/Icon'
+import { DatePicker } from '../../../primitives/DatePicker'
 import { useToast } from '../../../feedback/Toast'
+import { useConfirm } from '../../../feedback/ConfirmDialog'
 import { fmtDate, formatMoneyKopecks, moscowTodayYmd, parseRublesToKopecks } from '../../../../utils/format'
 
 interface Props {
@@ -14,12 +16,19 @@ interface Props {
 
 export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
   const toast = useToast()
+  const confirm = useConfirm()
   const [detail, setDetail] = useState<ProductPriceDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [good, setGood] = useState('')
   const [defect, setDefect] = useState('')
   const [effFrom, setEffFrom] = useState(moscowTodayYmd())
   const [saving, setSaving] = useState(false)
+
+  const reload = useCallback(() => {
+    return getProductPrices(productId)
+      .then((d) => setDetail(d))
+      .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
+  }, [productId, toast])
 
   useEffect(() => {
     let alive = true
@@ -30,6 +39,24 @@ export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [productId, toast])
+
+  const deleteEntry = useCallback(async (entry: PriceHistoryEntry) => {
+    const ok = await confirm({
+      title: 'Удалить запись тарифа?',
+      body: `Запись «${formatMoneyKopecks(entry.price_kop)} с ${fmtDate(entry.effective_from)}» перестанет учитываться в расчётах. Это действие нельзя отменить.`,
+      danger: true,
+      confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    try {
+      await deleteProductPrice(productId, entry.id)
+      toast('Запись удалена', 'success')
+      await reload()
+      onSaved()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    }
+  }, [confirm, productId, reload, onSaved, toast])
 
   function save() {
     const goodKop = good.trim() ? parseRublesToKopecks(good) : null
@@ -90,11 +117,11 @@ export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
             </Field>
           </div>
           <Field label="Действует с">
-            <input type="date" className="input sm" value={effFrom} onChange={(e) => setEffFrom(e.target.value)} />
+            <DatePicker value={effFrom} onChange={setEffFrom} />
           </Field>
 
-          <HistoryBlock title="История тарифа — годный" entries={detail?.good_history ?? []} />
-          <HistoryBlock title="История тарифа — брак" entries={detail?.defect_history ?? []} />
+          <HistoryBlock title="История тарифа — годный" entries={detail?.good_history ?? []} onDelete={deleteEntry} />
+          <HistoryBlock title="История тарифа — брак" entries={detail?.defect_history ?? []} onDelete={deleteEntry} />
         </>
       )}
     </Drawer>
@@ -121,7 +148,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function HistoryBlock({ title, entries }: { title: string; entries: PriceHistoryEntry[] }) {
+function HistoryBlock({ title, entries, onDelete }: { title: string; entries: PriceHistoryEntry[]; onDelete: (entry: PriceHistoryEntry) => void }) {
   return (
     <div style={{ marginTop: 18 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-text-muted)', marginBottom: 6 }}>{title}</div>
@@ -133,6 +160,14 @@ function HistoryBlock({ title, entries }: { title: string; entries: PriceHistory
             <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5 }}>
               <span className="mono" style={{ color: 'var(--c-text-subtle)', minWidth: 92 }}>с {fmtDate(e.effective_from)}</span>
               <span style={{ fontWeight: 600 }}>{formatMoneyKopecks(e.price_kop)}</span>
+              <button
+                className="btn ghost icon sm"
+                style={{ marginLeft: 'auto', color: 'var(--c-danger)' }}
+                title="Удалить запись"
+                onClick={() => onDelete(e)}
+              >
+                <Icon name="trash" size={13} />
+              </button>
             </div>
           ))}
         </div>

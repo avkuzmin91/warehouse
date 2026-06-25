@@ -182,7 +182,7 @@ def _insert_receipt_with_cost(client_id: str, logistics_cost: float) -> str:
     with get_connection() as conn:
         n = conn.execute(
             "SELECT COALESCE(MAX(CAST(SUBSTR(doc_number,4) AS INTEGER)),0)+1 AS n"
-            " FROM receipt_docs WHERE doc_number LIKE 'WH-%'"
+            " FROM receipt_docs WHERE doc_number LIKE 'WH-%' AND SUBSTR(doc_number,4) ~ '^[0-9]+$'"
         ).fetchone()["n"]
         conn.execute(
             "INSERT INTO receipt_docs (id,doc_number,client_id,status,logistics_cost,created_at)"

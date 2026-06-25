@@ -14,6 +14,48 @@ import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
 
+// table-layout: fixed фиксирует ширины колонок одинаково для всех дат-групп
+// (иначе «Товар»/«Клиент» считаются по контенту каждой таблицы и «прыгают»);
+// длинные значения в этих колонках обрезаем многоточием.
+const ELLIP = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } as const
+
+// Вертикальный разделитель групп колонок — общий для thead, строк-итогов и
+// товарных строк, чтобы линии шли насквозь (сквозные столбцы).
+const BORDER = '1px solid var(--c-border)'
+
+type EarnMetrics = { good: number; defect: number; good_earn_kop: number; defect_earn_kop: number; earn_kop: number }
+type QtyMetrics = { good: number; defect: number; total: number }
+
+/** Числовые ячейки режима «с заработком»: упаковка (шт/₽) · брак (шт/₽) · бар · итого.
+ *  Один набор для строки-итога дня и для товарных строк — порядок колонок сквозной. */
+function EarnCells({ m }: { m: EarnMetrics }) {
+  return (
+    <>
+      <Td className="num" style={{ color: m.good > 0 ? 'var(--c-success)' : 'var(--c-text-faint)', borderLeft: BORDER }}>{m.good.toLocaleString('ru-RU')}</Td>
+      <Td className="num" style={{ fontWeight: 600, color: m.good_earn_kop > 0 ? 'var(--c-success)' : 'var(--c-text-faint)' }}>{formatMoneyKopecks(m.good_earn_kop)}</Td>
+      <Td className="num" style={{ color: m.defect > 0 ? 'var(--c-warning)' : 'var(--c-text-faint)', borderLeft: BORDER }}>{m.defect.toLocaleString('ru-RU')}</Td>
+      <Td className="num" style={{ fontWeight: 600, color: m.defect_earn_kop > 0 ? 'var(--c-warning)' : 'var(--c-text-faint)' }}>{formatMoneyKopecks(m.defect_earn_kop)}</Td>
+      <Td style={{ borderLeft: BORDER }}>
+        <span style={{ display: 'flex', justifyContent: 'center' }}>
+          <SplitBar good={m.good_earn_kop} defect={m.defect_earn_kop} total={m.earn_kop} width={56} />
+        </span>
+      </Td>
+      <Td className="num" style={{ fontWeight: 700, borderLeft: BORDER }}>{formatMoneyKopecks(m.earn_kop)}</Td>
+    </>
+  )
+}
+
+/** Числовые ячейки режима без цен: годный · брак · всего (штуки). */
+function QtyCells({ m }: { m: QtyMetrics }) {
+  return (
+    <>
+      <Td className="num" style={{ color: m.good > 0 ? 'var(--c-success)' : 'var(--c-text-faint)', borderLeft: BORDER }}>{m.good.toLocaleString('ru-RU')}</Td>
+      <Td className="num" style={{ color: m.defect > 0 ? 'var(--c-warning)' : 'var(--c-text-faint)' }}>{m.defect.toLocaleString('ru-RU')}</Td>
+      <Td className="num" style={{ fontWeight: 600 }}>{m.total.toLocaleString('ru-RU')}</Td>
+    </>
+  )
+}
+
 const today = () => moscowTodayYmd()
 
 const weekAgo = () => {
@@ -62,9 +104,6 @@ export function PackingProductivityView() {
       title="Производительность упаковки"
       subtitle={data
         ? `За период: ${data.total.toLocaleString('ru-RU')} шт (годный ${data.total_good.toLocaleString('ru-RU')} · брак ${data.total_defect.toLocaleString('ru-RU')})`
-          + (showEarn
-            ? ` · заработок ${formatMoneyKopecks(data.total_earn_kop)} (годный ${formatMoneyKopecks(data.total_good_earn_kop)} · брак ${formatMoneyKopecks(data.total_defect_earn_kop)})`
-            : '')
         : undefined}
       actions={
         <button className="btn ghost" onClick={() => navigate('/inventory/packing')}>
@@ -124,71 +163,144 @@ export function PackingProductivityView() {
           sub="Данные появляются после внесения упаковки в карточках отгрузок"
         />
       ) : (
-        days.map((day, idx) => {
-          const open = isDayOpen(day, idx)
-          return (
-            <div key={day.packed_date} className="card" style={{ marginBottom: 12, padding: 0, overflow: 'hidden' }}>
-              <button
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-                  padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                  font: 'inherit', textAlign: 'left',
-                }}
-                onClick={() => setToggled((p) => ({ ...p, [day.packed_date]: !open }))}
-              >
-                <Icon name="chev" size={13} style={{ color: 'var(--c-text-subtle)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-                <span className="mono" style={{ fontWeight: 600, fontSize: 13.5 }}>{fmtYmdAsDmy(day.packed_date)}</span>
-                <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{weekdayShort(day.packed_date)}</span>
-                <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>
-                  {day.doc_count} отгр. · {day.sku_count} SKU
-                </span>
-                <span style={{ marginLeft: 'auto', display: 'flex', gap: 14, fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-                  <span style={{ color: 'var(--c-success)' }}>годный <b>{day.good.toLocaleString('ru-RU')}</b></span>
-                  <span style={{ color: day.defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>брак <b>{day.defect.toLocaleString('ru-RU')}</b></span>
-                  <span style={{ color: 'var(--c-text)' }}>всего <b>{day.total.toLocaleString('ru-RU')}</b></span>
-                  {showEarn && (
-                    <span style={{ color: 'var(--c-accent)', borderLeft: '1px solid var(--c-border)', paddingLeft: 14 }}>
-                      ₽ <b>{formatMoneyKopecks(day.earn_kop)}</b>
-                    </span>
-                  )}
-                </span>
-              </button>
-              {open && (
-                <Table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 160 }}>SKU</th>
-                      <th>Товар</th>
-                      <th>Клиент</th>
-                      <th style={{ textAlign: 'right', width: 90 }}>Годный</th>
-                      <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
-                      <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
-                      {showEarn && <th style={{ textAlign: 'right', width: 130 }}>Стоимость</th>}
+        <>
+        {showEarn && data && (data.total_earn_kop > 0 || data.total > 0) && (
+          <EarningsSummary
+            good={data.total_good_earn_kop}
+            defect={data.total_defect_earn_kop}
+            total={data.total_earn_kop}
+          />
+        )}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <Table tableStyle={{ tableLayout: 'fixed' }}>
+            {showEarn ? (
+              <thead>
+                <tr>
+                  <th rowSpan={2} style={{ width: 150 }}>SKU</th>
+                  <th rowSpan={2}>Товар</th>
+                  <th rowSpan={2}>Клиент</th>
+                  <th colSpan={2} style={{ textAlign: 'center', color: 'var(--c-success)', borderLeft: BORDER }}>Упаковка товара</th>
+                  <th colSpan={2} style={{ textAlign: 'center', color: 'var(--c-warning)', borderLeft: BORDER }}>Брак</th>
+                  <th rowSpan={2} style={{ width: 84, borderLeft: BORDER }} />
+                  <th rowSpan={2} style={{ textAlign: 'right', width: 120, borderLeft: BORDER }}>Итого ₽</th>
+                </tr>
+                <tr>
+                  <th style={{ textAlign: 'right', width: 66, borderLeft: BORDER }}>шт</th>
+                  <th style={{ textAlign: 'right', width: 104 }}>₽</th>
+                  <th style={{ textAlign: 'right', width: 66, borderLeft: BORDER }}>шт</th>
+                  <th style={{ textAlign: 'right', width: 104 }}>₽</th>
+                </tr>
+              </thead>
+            ) : (
+              <thead>
+                <tr>
+                  <th style={{ width: 150 }}>SKU</th>
+                  <th>Товар</th>
+                  <th>Клиент</th>
+                  <th style={{ textAlign: 'right', width: 90, borderLeft: BORDER }}>Годный</th>
+                  <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
+                  <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
+                </tr>
+              </thead>
+            )}
+            {days.map((day, idx) => {
+              const open = isDayOpen(day, idx)
+              return (
+                <tbody key={day.packed_date}>
+                  <tr
+                    onClick={() => setToggled((p) => ({ ...p, [day.packed_date]: !open }))}
+                    style={{ cursor: 'pointer', fontWeight: 600, background: 'var(--c-bg-sunken)', borderTop: idx > 0 ? '2px solid var(--c-border)' : undefined }}
+                  >
+                    <Td colSpan={3}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Icon name="chev" size={13} style={{ color: 'var(--c-text-subtle)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                        <span className="mono" style={{ fontWeight: 600, fontSize: 13.5 }}>{fmtYmdAsDmy(day.packed_date)}</span>
+                        <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--c-text-subtle)' }}>{weekdayShort(day.packed_date)}</span>
+                        <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--c-text-subtle)' }}>{day.doc_count} отгр. · {day.sku_count} SKU</span>
+                      </span>
+                    </Td>
+                    {showEarn ? <EarnCells m={day} /> : <QtyCells m={day} />}
+                  </tr>
+                  {open && day.rows.map((row) => (
+                    <tr key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}`}>
+                      <Td className="mono" style={ELLIP}>{row.product_sku ?? '—'}</Td>
+                      <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
+                      <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
+                      {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
                     </tr>
-                  </thead>
-                  <tbody>
-                    {day.rows.map((row) => (
-                      <tr key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}`}>
-                        <Td className="mono">{row.product_sku ?? '—'}</Td>
-                        <Td>{row.product_name ?? '—'}</Td>
-                        <Td className="t-sub">{row.client_name ?? '—'}</Td>
-                        <Td className="num" style={{ color: 'var(--c-success)' }}>{row.good.toLocaleString('ru-RU')}</Td>
-                        <Td className="num" style={{ color: row.defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{row.defect.toLocaleString('ru-RU')}</Td>
-                        <Td className="num" style={{ fontWeight: 600 }}>{row.total.toLocaleString('ru-RU')}</Td>
-                        {showEarn && (
-                          <Td className="num" style={{ fontWeight: 600, color: 'var(--c-accent)' }} title={`Годный ${formatMoneyKopecks(row.good_earn_kop)} · Брак ${formatMoneyKopecks(row.defect_earn_kop)}`}>
-                            {formatMoneyKopecks(row.earn_kop)}
-                          </Td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              )}
-            </div>
-          )
-        })
+                  ))}
+                </tbody>
+              )
+            })}
+          </Table>
+        </div>
+        </>
       )}
     </ListPage>
+  )
+}
+
+/** Сводка заработка за период: крупный итог + раздельные метрики «товар»/«брак»
+ *  с долями и стек-баром их соотношения. */
+function EarningsSummary({ good, defect, total }: { good: number; defect: number; total: number }) {
+  const goodPct = total > 0 ? Math.round((good / total) * 100) : 0
+  const defectPct = total > 0 ? 100 - goodPct : 0
+  return (
+    <div className="card" style={{ padding: '14px 18px', marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 32, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Заработок за период</div>
+          <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+            {formatMoneyKopecks(total)}
+          </div>
+        </div>
+        <Metric color="success" label="Упаковка товара" value={good} pct={goodPct} />
+        <Metric color="warning" label="Поиск брака" value={defect} pct={defectPct} />
+      </div>
+      <SplitBar good={good} defect={defect} total={total} />
+    </div>
+  )
+}
+
+function Metric({ color, label, value, pct }: { color: 'success' | 'warning'; label: string; value: number; pct: number }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--c-text-subtle)' }}>
+        <span style={{ width: 9, height: 9, borderRadius: 3, background: `var(--c-${color})` }} />
+        {label}
+      </span>
+      <span style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+        {formatMoneyKopecks(value)}
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-text-subtle)', marginLeft: 6 }}>{pct}%</span>
+      </span>
+    </div>
+  )
+}
+
+/** Стек-бар соотношения заработка: зелёный сегмент — товар, янтарный — брак.
+ *  Ненулевой сегмент получает минимальную ширину, иначе малая доля (брак 3–4%)
+ *  на узком баре схлопывается до невидимой полоски. */
+function SplitBar({ good, defect, total, width }: { good: number; defect: number; total: number; width?: number }) {
+  if (total <= 0) {
+    return width
+      ? <span style={{ width, height: 8, borderRadius: 99, background: 'var(--c-bg-sunken)', display: 'inline-block' }} />
+      : null
+  }
+  const goodPct = (good / total) * 100
+  const both = good > 0 && defect > 0
+  const minSeg = both ? 6 : 0
+  return (
+    <div style={{
+      display: 'flex', gap: 2, height: width ? 8 : 10, marginTop: width ? 0 : 12,
+      width: width ?? undefined, borderRadius: 99, overflow: 'hidden', background: 'var(--c-bg-sunken)',
+      flexShrink: 0,
+    }}>
+      {good > 0 && (
+        <div style={{ flexGrow: goodPct, flexBasis: 0, minWidth: minSeg, background: 'var(--c-success)' }} title={`Товар: ${formatMoneyKopecks(good)}`} />
+      )}
+      {defect > 0 && (
+        <div style={{ flexGrow: 100 - goodPct, flexBasis: 0, minWidth: minSeg, background: 'var(--c-warning)' }} title={`Брак: ${formatMoneyKopecks(defect)}`} />
+      )}
+    </div>
   )
 }

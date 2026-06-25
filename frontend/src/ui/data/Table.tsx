@@ -3,12 +3,13 @@ import type { ReactNode, CSSProperties } from 'react'
 interface TableProps {
   children: ReactNode
   style?: CSSProperties
+  tableStyle?: CSSProperties
 }
 
-export function Table({ children, style }: TableProps) {
+export function Table({ children, style, tableStyle }: TableProps) {
   return (
     <div className="t-wrap" style={style}>
-      <table className="t">{children}</table>
+      <table className="t" style={tableStyle}>{children}</table>
     </div>
   )
 }

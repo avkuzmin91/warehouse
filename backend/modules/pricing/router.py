@@ -18,7 +18,7 @@ from .schemas import (
     ProductPriceDetail,
     SetPriceRequest,
 )
-from .service import add_price, current_prices_for_products, load_price_history, price_on
+from .service import add_price, current_prices_for_products, delete_price, load_price_history, price_on
 
 router = APIRouter(tags=["pricing"])
 
@@ -166,5 +166,15 @@ def set_product_price(product_id: str, body: SetPriceRequest, user=Depends(_get_
             add_price(conn, product_id=product_id, client_id=cid, quality=INV_Q_DEFECT,
                       price_kop=body.defect_price_kop, effective_from=effective_from,
                       user_id=uid, note=body.note)
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.delete("/pricing/products/{product_id}/prices/{price_id}", response_model=MessageResponse)
+def delete_product_price(product_id: str, price_id: str, user=Depends(_get_finance)):
+    _ = user
+    with get_connection() as conn:
+        if not delete_price(conn, product_id=product_id, price_id=price_id):
+            raise HTTPException(status_code=404, detail="Запись тарифа не найдена")
         conn.commit()
     return MessageResponse(message="ok")

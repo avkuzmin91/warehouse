@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { createInvoice, getUninvoicedShipments } from '../../../api/invoicesApi'
-import type { UninvoicedShipment } from '../../../api/invoicesApi'
+import { attachInvoiceReceipts, createInvoice, getUninvoicedReceipts, getUninvoicedShipments } from '../../../api/invoicesApi'
+import type { UninvoicedReceipt, UninvoicedShipment } from '../../../api/invoicesApi'
 import { FormPage } from '../../layouts/FormPage'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
-import { Panel, ReadRow } from '../shared/process/processUI'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
-import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, productsPreviewText } from './financeUI'
+import { CargoTag, ShipmentContentsPanel, SelectedContentsRollup, SelectedReceiptsRollup, InvoiceSummaryPanel, productsPreviewText } from './financeUI'
 import { InvoiceRailPanel } from './InvoiceRail'
 
 export function InvoiceCreateFeature() {
@@ -28,6 +27,7 @@ export function InvoiceCreateFeature() {
   const [comment, setComment] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [selectedRec, setSelectedRec] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [showErrors, setShowErrors] = useState(false)
 
@@ -39,11 +39,20 @@ export function InvoiceCreateFeature() {
   )
   const shipments: UninvoicedShipment[] = uninv?.items ?? []
 
-  useEffect(() => { setSelected(new Set()) }, [clientId])
+  const { data: uninvRec, loading: loadingRec } = useApi(
+    (signal) => clientId
+      ? getUninvoicedReceipts({ client_id: clientId, limit: 200 }, signal)
+      : Promise.resolve({ items: [], total: 0, page: 1, limit: 200 }),
+    [clientId],
+  )
+  const receipts: UninvoicedReceipt[] = uninvRec?.items ?? []
+
+  useEffect(() => { setSelected(new Set()); setSelectedRec(new Set()) }, [clientId])
 
   const kopecks = parseRublesToKopecks(amount)
   const clientName = clients.find((c) => c.id === clientId)?.name ?? null
   const selQty = shipments.filter((s) => selected.has(s.id)).reduce((a, s) => a + s.total_qty, 0)
+    + receipts.filter((r) => selectedRec.has(r.id)).reduce((a, r) => a + r.total_qty, 0)
 
   // Создаётся черновик — обязателен только клиент; сумма проверяется лишь на корректность числа.
   const blockReasons: string[] = [
@@ -62,6 +71,12 @@ export function InvoiceCreateFeature() {
   function toggleAll() {
     setSelected((prev) => prev.size === shipments.length ? new Set() : new Set(shipments.map((s) => s.id)))
   }
+  function toggleRec(id: string) {
+    setSelectedRec((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleAllRec() {
+    setSelectedRec((prev) => prev.size === receipts.length ? new Set() : new Set(receipts.map((r) => r.id)))
+  }
 
   function submit() {
     if (blockReasons.length) { setShowErrors(true); toast(blockReasons[0], 'error'); return }
@@ -75,7 +90,12 @@ export function InvoiceCreateFeature() {
       comment: comment.trim() || null,
       shipment_ids: [...selected],
     })
-      .then((r) => { toast('Черновик создан', 'success'); navigate(`/finance/invoices/${r.message}`) })
+      .then(async (r) => {
+        // Поступления привязываются вторым вызовом — схема создания принимает только отгрузки.
+        if (selectedRec.size > 0) await attachInvoiceReceipts(r.message, [...selectedRec])
+        toast('Черновик создан', 'success')
+        navigate(`/finance/invoices/${r.message}`)
+      })
       .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
       .finally(() => setSubmitting(false))
   }
@@ -185,9 +205,75 @@ export function InvoiceCreateFeature() {
                     )
                   })}
                 </div>
-                <SelectedContentsRollup shipmentIds={[...selected]} onApplyAmount={(kop) => setAmount(String(kop / 100))} />
+                <SelectedContentsRollup shipmentIds={[...selected]} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                   <Icon name="lock" size={12} />Привязанные отгрузки нельзя добавить в другой счёт.
+                </div>
+              </>
+            )}
+          </PhaseBlock>
+
+          <PhaseBlock
+            icon="truckIn" title="Поступления без счёта" role="manager" state="active"
+            hint={clientId ? `доступно: ${receipts.length}` : 'сначала выберите клиента'}
+            right={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {selectedRec.size > 0 && <Badge tone="info">Выбрано: {selectedRec.size}</Badge>}
+                {receipts.length > 0 && (
+                  <button className="btn ghost sm" onClick={toggleAllRec}>
+                    {selectedRec.size === receipts.length ? 'Снять все' : 'Выбрать все'}
+                  </button>
+                )}
+              </span>
+            }
+          >
+            {!clientId ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                Выберите клиента выше, чтобы увидеть его завершённые поступления.
+              </div>
+            ) : loadingRec ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>Загрузка…</div>
+            ) : receipts.length === 0 ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                У клиента нет завершённых поступлений без счёта.
+              </div>
+            ) : (
+              <>
+                <div style={{ margin: '0 -14px' }}>
+                  {receipts.map((rec) => {
+                    const on = selectedRec.has(rec.id)
+                    return (
+                      <div key={rec.id} style={{
+                        borderBottom: '1px solid var(--c-border)',
+                        background: on ? 'var(--c-accent-bg)' : undefined,
+                      }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+                          <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {on && <Icon name="check" size={10} />}
+                          </span>
+                          <input type="checkbox" checked={on} onChange={() => toggleRec(rec.id)} style={{ display: 'none' }} />
+                          <span className="mono" style={{ fontWeight: 500, minWidth: 92 }}>{rec.doc_number}</span>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ display: 'block', fontSize: 12.5, color: 'var(--c-text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {rec.supplier_name ?? '—'} · {fmtDate(rec.arrival_date)}
+                            </span>
+                            {rec.products_preview.length > 0 && (
+                              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--c-text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {productsPreviewText(rec.products_preview, rec.sku_count)}
+                              </span>
+                            )}
+                          </span>
+                          <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                            {formatMoneyKopecks(rec.logistics_cost_kop)}
+                          </span>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+                <SelectedReceiptsRollup receiptIds={[...selectedRec]} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                  <Icon name="lock" size={12} />Поступления выставляются только за логистику.
                 </div>
               </>
             )}
@@ -221,19 +307,22 @@ export function InvoiceCreateFeature() {
         {/* Правая колонка — превью жизненного цикла + сводка */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <InvoiceRailPanel phase="draft" overdue={false} dueDate={dueDate ? fmtDate(dueDate) : 'выбрать'} duePrev={null} stamps={{ draft: 'сейчас' }} />
-          <Panel icon="wallet" title="Сводка счёта">
-            <div style={{ padding: '0 2px' }}>
-              <ReadRow label="Клиент" strong>{clientName ?? '—'}</ReadRow>
-              <ReadRow label="Отгрузок выбрано" mono strong>{selected.size}</ReadRow>
-              <ReadRow label="Всего мест" mono>{selQty.toLocaleString('ru-RU')} шт</ReadRow>
-              <ReadRow label="Срок расчёта" mono>{dueDate ? fmtDate(dueDate) : '—'}</ReadRow>
-              <div style={{ borderTop: '1px solid var(--c-border)', margin: '8px 0 4px' }} />
-              <ReadRow label="Сумма счёта" mono strong>{formatMoneyKopecks(kopecks ?? 0)}</ReadRow>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-              <Icon name="edit" size={12} />Отгрузки, сумму, срок и файл можно дозаполнить в карточке черновика — счёт выставляется отдельно.
-            </div>
-          </Panel>
+          <InvoiceSummaryPanel
+            clientName={clientName}
+            shipmentCount={selected.size}
+            receiptCount={selectedRec.size}
+            totalQty={selQty}
+            dueDateText={dueDate ? fmtDate(dueDate) : '—'}
+            amountKop={kopecks ?? 0}
+            shipmentIds={[...selected]}
+            receiptIds={[...selectedRec]}
+            onApplyAmount={(kop) => setAmount(String(kop / 100))}
+            footer={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                <Icon name="edit" size={12} />Отгрузки, поступления, сумму, срок и файл можно дозаполнить в карточке черновика — счёт выставляется отдельно.
+              </div>
+            }
+          />
         </div>
       </div>
     </FormPage>
