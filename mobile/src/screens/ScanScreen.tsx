@@ -14,6 +14,7 @@ export function ScanScreen() {
   const [error, setError] = useState('')
   const [notFound, setNotFound] = useState('')
   const [scanAvailable, setScanAvailable] = useState(false)
+  const [moduleProgress, setModuleProgress] = useState<number | null>(null)
 
   useEffect(() => {
     let live = true
@@ -50,13 +51,15 @@ export function ScanScreen() {
   async function onScanCamera() {
     setError('')
     try {
-      const scanned = await scanSource.scan()
+      const scanned = await scanSource.scan((percent) => setModuleProgress(percent))
       if (scanned) {
         setCode(scanned)
         void lookup(scanned)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сканирование не удалось')
+    } finally {
+      setModuleProgress(null)
     }
   }
 
@@ -88,8 +91,19 @@ export function ScanScreen() {
           <div className="scan-grip" />
 
           {scanAvailable ? (
-            <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={() => void onScanCamera()}>
-              <Icon name="search" size={16} /> Сканировать камерой
+            <button
+              className="btn"
+              style={{ width: '100%', marginBottom: 12 }}
+              onClick={() => void onScanCamera()}
+              disabled={moduleProgress !== null}
+            >
+              {moduleProgress !== null ? (
+                `Загрузка сканера… ${Math.round(moduleProgress)}%`
+              ) : (
+                <>
+                  <Icon name="search" size={16} /> Сканировать камерой
+                </>
+              )}
             </button>
           ) : (
             <div className="alert warn" style={{ marginBottom: 4 }}>

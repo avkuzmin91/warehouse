@@ -46,6 +46,7 @@ from .service import (
     _decode_images_json,
     _encode_images_json,
     _find_variant_row_for_receipt,
+    _fill_empty_line_sku_snapshots,
     _normalize_name,
     _normalize_sku,
     _now,
@@ -389,6 +390,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
+        fill_empty_line_sku: str | None = None
         provided_sku = payload.sku_base.strip() if payload.sku_base is not None else None
         if cur_pending:
             # Товар «ожидает SKU»: дозаполнение базового SKU присваивает его товару и
@@ -401,6 +403,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
                 fields.append("sku = ?")
                 values.append(new_sku)
                 fields.append("sku_pending = 0")
+                fill_empty_line_sku = new_sku
             elif payload.sku_pending is False:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите SKU, чтобы снять ожидание")
         else:
@@ -411,6 +414,7 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
                 _rebase_variant_skus_for_new_product_base(connection, product_id=item_id, old_base_sku=cur_sku, new_base_sku=new_sku, updated_at=now, client_id=target_client_id)
                 fields.append("sku = ?")
                 values.append(new_sku)
+                fill_empty_line_sku = new_sku
             elif target_client_id is not None and target_client_id != cur_client_id:
                 if _sku_taken_for_client_except_product(connection, cur_sku, target_client_id, item_id):
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Базовый штрих-код уже занят у этого клиента")
@@ -439,6 +443,8 @@ def update_product(item_id: str, payload: ProductUpdateRequest, admin=Depends(ge
                 )
             if payload.is_deleted is True:
                 _soft_delete_variants_for_product(connection, item_id, admin["id"], now)
+            if fill_empty_line_sku:
+                _fill_empty_line_sku_snapshots(connection, product_id=item_id, sku=fill_empty_line_sku)
             connection.commit()
         except IntegrityError as exc:
             connection.rollback()

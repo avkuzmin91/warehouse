@@ -39,6 +39,15 @@ interface LocationsDictProps {
   onTotalLoaded: (total: number) => void
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
 // Печать QR-этикеток: отдельное окно, чтобы стили печати не пересекались с SPA.
 // ОДНА этикетка = ОДНА страница (разрыв страницы после каждой) — под этикеточный
 // принтер / поячеечную наклейку. На этикетке — QR (payload «wms:loc:<id>») и код.
@@ -50,34 +59,83 @@ function printLabels(labels: { code: string; qr_svg: string }[]) {
       (l) => `
       <div class="label">
         <div class="qr">${l.qr_svg}</div>
-        <div class="code">${l.code}</div>
+        <div class="code">${escapeHtml(l.code)}</div>
       </div>`,
     )
     .join('')
-  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR-этикетки мест</title>
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title></title>
     <style>
-      * { box-sizing: border-box; }
-      /* Физический размер этикетки = размер страницы, иначе драйвер масштабирует
-         лист под мелкую этикетку и QR/код становятся крошечными. */
-      @page { size: 58mm 40mm; margin: 0; }
-      body { margin: 0; font-family: system-ui, sans-serif; }
-      .toolbar { padding: 12px 16px; border-bottom: 1px solid #ddd; }
+      @page { size: 58mm 40mm; margin: 0mm; }
+      * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      html, body { margin: 0; padding: 0; font-family: Arial, system-ui, sans-serif; background: #fff; }
+      .toolbar {
+        padding: 12px 16px;
+        border-bottom: 1px solid #ddd;
+        font-family: system-ui, sans-serif;
+        color: #111;
+      }
       .toolbar button { font-size: 14px; padding: 6px 14px; cursor: pointer; }
       .label {
-        page-break-after: always; break-after: page;
-        width: 58mm; height: 40mm; padding: 1.5mm;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        text-align: center; overflow: hidden;
+        width: 58mm;
+        height: 40mm;
+        padding: 1.2mm 2mm 1.4mm;
+        display: grid;
+        grid-template-rows: 31.5mm 4.7mm;
+        row-gap: 0.9mm;
+        align-items: center;
+        justify-items: center;
+        text-align: center;
+        overflow: hidden;
+        background: #fff;
+        break-after: page;
+        page-break-after: always;
       }
       .label:last-child { page-break-after: auto; break-after: auto; }
       .label .qr { line-height: 0; }
-      .label .qr svg { width: 31mm; height: 31mm; display: block; }
-      .label .code { margin-top: 0.8mm; font-weight: 700; font-size: 5.5mm; line-height: 1; letter-spacing: 0.5px; }
-      @media screen { body { background: #f4f4f4; } .label { background: #fff; margin: 8px auto; box-shadow: 0 1px 4px rgba(0,0,0,.2); } }
-      @media print { .toolbar { display: none; } }
+      .label .qr svg {
+        width: 31.5mm !important;
+        height: 31.5mm !important;
+        display: block;
+      }
+      .label .code {
+        max-width: 54mm;
+        font-weight: 800;
+        font-size: 4.6mm;
+        line-height: 1;
+        letter-spacing: 0.35mm;
+        white-space: nowrap;
+      }
+      @media screen {
+        body { background: #f4f4f4; }
+        .label { margin: 8px auto; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+      }
+      @media print {
+        html, body {
+          width: 58mm;
+          min-width: 58mm;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #fff !important;
+          overflow: visible;
+        }
+        .toolbar { display: none !important; }
+        .label {
+          width: 58mm !important;
+          height: 40mm !important;
+          margin: 0 !important;
+          box-shadow: none !important;
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+      }
     </style></head><body>
-    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • размер 58×40 мм (по одной на этикетку). В диалоге печати выберите этот размер и масштаб 100% / «Реальный размер».</div>
+    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • размер 58×40 мм • масштаб 100% / «Реальный размер».</div>
     ${cells}
+    <script>
+      window.addEventListener('load', () => {
+        setTimeout(() => window.print(), 250)
+      })
+    </script>
     </body></html>`)
   win.document.close()
 }

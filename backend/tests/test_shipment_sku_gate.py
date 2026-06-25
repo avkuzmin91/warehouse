@@ -104,6 +104,12 @@ def test_plan_passes_after_sku_assigned(admin_client, pending_product):
     detail = admin_client.get(f"/shipments/{doc_id}").json()
     assert detail["lines"][0]["sku_pending"] is False
     assert sku_base.upper() in detail["lines"][0]["product_sku"].upper()
+    with get_connection() as conn:
+        stored_line = conn.execute(
+            "SELECT product_sku FROM shipment_lines WHERE doc_id = ? AND product_id = ?",
+            (doc_id, pid),
+        ).fetchone()
+        assert sku_base.upper() in str(stored_line["product_sku"]).upper()
 
     adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned (гейт SKU здесь)
     assert adv.status_code == 200 and adv.json()["message"] == "assigned", adv.text
@@ -133,6 +139,15 @@ def test_assigned_sku_visible_in_lines_list(admin_client, pending_product):
     found = admin_client.get(f"/shipments/lines?sku={sku_base}").json()
     assert any(it["doc_id"] == doc_id for it in found["items"])
 
+    docs = admin_client.get(f"/shipments?sku={sku_base}").json()
+    assert any(it["id"] == doc_id for it in docs["items"])
+
+    summary = admin_client.get(f"/shipments/summary?sku={sku_base}").json()
+    assert summary["all"] >= 1
+
+    plannable = admin_client.get(f"/balances/plannable?client_id={cid}&search={sku_base}").json()
+    assert any(it["product_id"] == pid for it in plannable["items"])
+
 
 def test_change_existing_sku_reflected_on_line(admin_client, pending_product):
     """Изменение базового SKU товара сразу видно в строке отгрузки (берём live products.sku)."""
@@ -150,3 +165,32 @@ def test_change_existing_sku_reflected_on_line(admin_client, pending_product):
     detail = admin_client.get(f"/shipments/{doc_id}").json()
     assert second.upper() in detail["lines"][0]["product_sku"].upper()
     assert first.upper() not in detail["lines"][0]["product_sku"].upper()
+
+
+def test_line_sku_backfills_pending_product(admin_client, pending_product):
+    """Если SKU пришёл из строки отгрузки, товар без SKU дозаполняется глобально."""
+    cid, pid = pending_product["client_id"], pending_product["product_id"]
+    line_sku = f"LINE-{pid[:8]}"
+
+    payload = _shipment_payload(cid, pid)
+    payload["lines"][0]["product_sku"] = line_sku
+    doc_id = admin_client.post("/shipments", json=payload).json()["message"]
+
+    with get_connection() as conn:
+        product = conn.execute(
+            "SELECT sku, COALESCE(sku_pending, 0) AS sku_pending FROM products WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        variants = conn.execute(
+            "SELECT sku, COALESCE(sku_pending, 0) AS sku_pending FROM product_variants WHERE product_id = ?",
+            (pid,),
+        ).fetchall()
+
+    assert product["sku"] == line_sku
+    assert int(product["sku_pending"]) == 0
+    assert variants
+    assert all(int(v["sku_pending"]) == 0 and str(v["sku"]).startswith(line_sku) for v in variants)
+
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert detail["lines"][0]["sku_pending"] is False
+    assert detail["lines"][0]["product_sku"] == line_sku

@@ -600,17 +600,20 @@ def packing_productivity(
         conds.append("zr.client_id = ?"); params.append(client_id.strip())
     if search and search.strip():
         s = like_substring_param(search)
-        conds.append("(zr.product_sku LIKE ? OR zr.product_name LIKE ?)")
-        params += [s, s]
+        conds.append("(zr.product_sku LIKE ? OR zr.product_name LIKE ? OR zr.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        params += [s, s, s]
     where = " AND ".join(conds)
 
     # client_name в QC-движениях не заполняется (record_packing пишет None) — имя из справочника.
     rows = connection.execute(
         f"""SELECT zr.packed_date, zr.client_id,
                MIN(cl.name) AS client_name,
-               zr.product_id, MIN(zr.product_sku) AS product_sku, MIN(zr.product_name) AS product_name,
+               zr.product_id,
+               COALESCE(NULLIF(TRIM(MIN(p.sku)), ''), MIN(zr.product_sku)) AS product_sku,
+               MIN(zr.product_name) AS product_name,
                {_PACKED_NET_SQL.format(p='zr.')}
            FROM zone_relocations zr
+           LEFT JOIN products p ON p.id = zr.product_id
            LEFT JOIN clients cl ON cl.id = zr.client_id
            WHERE {where}
            GROUP BY zr.packed_date, zr.client_id, zr.product_id
