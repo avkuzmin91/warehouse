@@ -861,6 +861,7 @@ def get_packing_productivity(
     with get_connection() as conn:
         return packing_productivity(
             conn, date_from=date_from, date_to=date_to, client_id=client_id, search=search,
+            with_earnings=can_view_costs(user),
         )
 
 

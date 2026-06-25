@@ -27,6 +27,7 @@ from modules.expenses.router import router as expenses_router
 from modules.timesheet.router import router as timesheet_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
+from modules.pricing.router import router as pricing_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.shipments.router import router as shipments_router
@@ -350,6 +351,31 @@ def _ensure_runtime_schema() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_kind ON material_expenses(kind)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_pay_status ON material_expenses(payment_status)")
+        # Частичная оплата + перевозчик логистического расхода (миграция 0068).
+        conn.execute("""
+            ALTER TABLE IF EXISTS material_expenses
+                ADD COLUMN IF NOT EXISTS paid_amount INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS carrier_id  TEXT
+        """)
+        conn.execute(
+            "UPDATE material_expenses SET paid_amount = amount "
+            "WHERE payment_status = 'paid' AND paid_amount = 0"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_material_expenses_carrier ON material_expenses(carrier_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expense_payments (
+                id                TEXT PRIMARY KEY,
+                expense_id        TEXT NOT NULL REFERENCES material_expenses(id),
+                amount            INTEGER NOT NULL,
+                paid_on           TEXT,
+                payment_source_id TEXT,
+                comment           TEXT,
+                created_at        TEXT NOT NULL,
+                created_by        TEXT,
+                is_deleted        INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_expense_payments_expense ON expense_payments(expense_id)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expense_ops (
                 id         TEXT PRIMARY KEY,
@@ -461,6 +487,25 @@ def _ensure_runtime_schema() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payroll_payments_period "
             "ON payroll_payments(period_start, period_end)"
+        )
+        # Тарифы упаковки (effective-dated, годный/брак, по клиенту) — для dev-старта без alembic.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS product_packing_prices (
+                id             TEXT PRIMARY KEY,
+                product_id     TEXT NOT NULL,
+                client_id      TEXT NOT NULL,
+                quality        TEXT NOT NULL,
+                price_kop      INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_packing_prices_lookup "
+            "ON product_packing_prices (product_id, client_id, quality, effective_from)"
         )
         conn.commit()
 
@@ -637,6 +682,7 @@ app.include_router(dictionaries_router)
 app.include_router(locations_router)
 app.include_router(inventory_router)
 app.include_router(products_router)
+app.include_router(pricing_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(dispatch_router)

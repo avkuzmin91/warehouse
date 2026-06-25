@@ -61,6 +61,7 @@ from modules.invoices.service import (
     list_uninvoiced_shipments,
     next_invoice_number,
     recompute_paid,
+    suggested_amount_for_dispatches,
 )
 from security import ensure_finance_access
 
@@ -321,7 +322,12 @@ def shipment_contents(shipment_ids: str = Query(""), user=Depends(_get_finance))
     ids = [s.strip() for s in str(shipment_ids or "").split(",") if s.strip()]
     with get_connection() as conn:
         data = aggregate_shipment_contents(conn, ids)
-    return ShipmentContentsResponse(**data)
+        amount = suggested_amount_for_dispatches(conn, ids)
+    return ShipmentContentsResponse(
+        **data,
+        suggested_amount_kop=amount["amount_kop"],
+        has_missing_price=amount["has_missing_price"],
+    )
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceDetailResponse)

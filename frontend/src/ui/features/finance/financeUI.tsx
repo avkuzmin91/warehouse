@@ -230,17 +230,18 @@ export function productsPreviewText(preview: ProductPreview[], skuCount: number)
 /** Сводка-roll-up по выбранным отгрузкам: товары с суммарным количеством.
  *  Грузит агрегат с бэкенда (`getShipmentContents`) при смене набора отгрузок —
  *  чтобы сверить сумму счёта с фактическим объёмом, не открывая отгрузки. */
-export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по выбранным отгрузкам' }: { shipmentIds: string[]; label?: string }) {
+export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по выбранным отгрузкам', onApplyAmount }: { shipmentIds: string[]; label?: string; onApplyAmount?: (kopecks: number) => void }) {
   const key = [...shipmentIds].sort().join(',')
   const { data, loading } = useApi(
     (signal) => shipmentIds.length
       ? getShipmentContents(shipmentIds, signal)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0 }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, has_missing_price: false }),
     [key],
   )
   if (shipmentIds.length === 0) return null
 
   const products = data?.products ?? []
+  const suggested = data?.suggested_amount_kop ?? 0
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
@@ -251,6 +252,29 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
           </span>
         )}
       </div>
+      {data && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          padding: '8px 10px', marginBottom: 8, borderRadius: 8,
+          background: 'var(--c-bg-sunken)',
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Стоимость по тарифам:</span>
+          <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-accent)' }}>
+            {formatMoneyKopecks(suggested)}
+          </span>
+          {data.has_missing_price && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--c-warning)' }}>
+              <Icon name="alert" size={12} />часть позиций без тарифа
+            </span>
+          )}
+          {onApplyAmount && suggested > 0 && (
+            <button type="button" className="btn ghost sm" style={{ marginLeft: 'auto' }}
+              onClick={() => onApplyAmount(suggested)}>
+              <Icon name="arrowDown" size={12} />В сумму счёта
+            </button>
+          )}
+        </div>
+      )}
       {loading && !data ? (
         <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Подсчёт…</div>
       ) : products.length === 0 ? (

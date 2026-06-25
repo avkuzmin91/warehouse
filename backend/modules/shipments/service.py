@@ -578,6 +578,7 @@ def packing_productivity(
     date_to: str | None = None,
     client_id: str | None = None,
     search: str | None = None,
+    with_earnings: bool = False,
 ) -> dict:
     """Производительность упаковки склада: нетто по дням в разрезе клиент × SKU.
 
@@ -585,6 +586,9 @@ def packing_productivity(
     что и карточка отгрузки (_PACKED_NET_SQL) — отмены вычитаются автоматически,
     т.к. компенсация наследует packed_date оригинала. Полностью отменённые
     записи (нетто 0) в отчёт не попадают.
+
+    with_earnings — добавить стоимость (заработок): qty × тариф упаковки на дату
+    упаковки, раздельно годный/брак. Только для ролей, видящих деньги (менеджер).
     """
     conds = ["zr.pack_entry_id IS NOT NULL", "zr.packed_date IS NOT NULL"]
     params: list = []
@@ -623,6 +627,18 @@ def packing_productivity(
     ).fetchall()
     docs_by_day = {str(r["packed_date"]): int(r["doc_count"] or 0) for r in doc_rows}
 
+    histories: dict = {}
+    if with_earnings:
+        from modules.pricing.service import load_histories
+        histories = load_histories(connection, [str(r["product_id"]) for r in rows])
+
+    def _earn(product_id, cid, quality, qty, day_iso):
+        if not with_earnings or not cid or qty <= 0:
+            return 0
+        from modules.pricing.service import price_on
+        price = price_on(histories.get((str(product_id), str(cid), quality)), day_iso)
+        return price * qty if price is not None else 0
+
     days: list[dict] = []
     by_day: dict[str, dict] = {}
     sku_by_day: dict[str, set[str]] = {}
@@ -631,22 +647,31 @@ def packing_productivity(
         if good == 0 and defect == 0:
             continue
         day_key = str(r["packed_date"])
+        cid = r["client_id"]
+        good_earn = _earn(r["product_id"], cid, INV_Q_GOOD, good, day_key)
+        defect_earn = _earn(r["product_id"], cid, INV_Q_DEFECT, defect, day_key)
         day = by_day.get(day_key)
         if day is None:
             day = {"packed_date": day_key, "good": 0, "defect": 0, "total": 0,
+                   "good_earn_kop": 0, "defect_earn_kop": 0, "earn_kop": 0,
                    "sku_count": 0, "doc_count": docs_by_day.get(day_key, 0), "rows": []}
             by_day[day_key] = day
             sku_by_day[day_key] = set()
             days.append(day)
         day["rows"].append({
-            "client_id": r["client_id"], "client_name": r["client_name"],
+            "client_id": cid, "client_name": r["client_name"],
             "product_id": str(r["product_id"]), "product_sku": r["product_sku"],
             "product_name": r["product_name"],
             "good": good, "defect": defect, "total": good + defect,
+            "good_earn_kop": good_earn, "defect_earn_kop": defect_earn,
+            "earn_kop": good_earn + defect_earn,
         })
         day["good"] += good
         day["defect"] += defect
         day["total"] += good + defect
+        day["good_earn_kop"] += good_earn
+        day["defect_earn_kop"] += defect_earn
+        day["earn_kop"] += good_earn + defect_earn
         sku_by_day[day_key].add(str(r["product_id"]))
         day["sku_count"] = len(sku_by_day[day_key])
     return {
@@ -654,6 +679,10 @@ def packing_productivity(
         "total_good": sum(d["good"] for d in days),
         "total_defect": sum(d["defect"] for d in days),
         "total": sum(d["total"] for d in days),
+        "total_good_earn_kop": sum(d["good_earn_kop"] for d in days),
+        "total_defect_earn_kop": sum(d["defect_earn_kop"] for d in days),
+        "total_earn_kop": sum(d["earn_kop"] for d in days),
+        "with_earnings": with_earnings,
     }
 
 

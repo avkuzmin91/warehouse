@@ -1,4 +1,5 @@
 import { useLookups } from '../../../../hooks/useLookups'
+import { AutoGrowTextarea } from '../../../primitives/Input'
 import { PhaseBlock } from '../components/PhaseBlock'
 import type { PhaseState } from '../components/PhaseBlock'
 import { SelectField, MoneyField, FieldLabel, DateTimeField, ReadRow } from '../components/fields'
@@ -100,8 +101,8 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
         )}
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel>Комментарий</FieldLabel>
-          <textarea className="input" rows={2} value={value.comment} placeholder="Догруз, ворота, особенности разгрузки…"
-            onChange={(e) => onChange({ comment: e.target.value })} style={{ resize: 'vertical' }} />
+          <AutoGrowTextarea minRows={2} value={value.comment} placeholder="Догруз, ворота, особенности разгрузки…"
+            onChange={(e) => onChange({ comment: e.target.value })} />
         </div>
       </div>
     </PhaseBlock>

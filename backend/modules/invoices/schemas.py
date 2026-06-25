@@ -146,6 +146,8 @@ class ShipmentContentsResponse(BaseModel):
     products:  list[ShipmentContentsProduct] = []
     total_qty: int = 0
     sku_count: int = 0
+    suggested_amount_kop: int = 0          # Σ qty × тариф на дату отгрузки
+    has_missing_price:    bool = False     # по части позиций тариф не заведён
 
 
 class InvoicePaymentCreate(BaseModel):

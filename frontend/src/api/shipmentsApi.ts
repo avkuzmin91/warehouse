@@ -385,6 +385,9 @@ export type PackingProductivityRow = {
   good:         number
   defect:       number
   total:        number
+  good_earn_kop:   number
+  defect_earn_kop: number
+  earn_kop:        number
 }
 
 export type PackingProductivityDay = {
@@ -394,6 +397,9 @@ export type PackingProductivityDay = {
   total:       number
   sku_count:   number
   doc_count:   number
+  good_earn_kop:   number
+  defect_earn_kop: number
+  earn_kop:        number
   rows:        PackingProductivityRow[]
 }
 
@@ -402,6 +408,10 @@ export type PackingProductivityResponse = {
   total_good:   number
   total_defect: number
   total:        number
+  total_good_earn_kop:   number
+  total_defect_earn_kop: number
+  total_earn_kop:        number
+  with_earnings:         boolean
 }
 
 export type PackingProductivityParams = {

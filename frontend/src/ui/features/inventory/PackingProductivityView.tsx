@@ -8,7 +8,7 @@ import { FiltersBar, FilterCombobox } from '../../data/FiltersBar'
 import { DateRange } from '../../data/DateRange'
 import { Icon } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
-import { fmtYmdAsDmy } from '../../../utils/format'
+import { fmtYmdAsDmy, formatMoneyKopecks } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
@@ -53,6 +53,7 @@ export function PackingProductivityView() {
   )
 
   const days = data?.days ?? []
+  const showEarn = data?.with_earnings ?? false
   const isDayOpen = (day: PackingProductivityDay, idx: number) =>
     toggled[day.packed_date] ?? idx === 0
 
@@ -61,6 +62,9 @@ export function PackingProductivityView() {
       title="Производительность упаковки"
       subtitle={data
         ? `За период: ${data.total.toLocaleString('ru-RU')} шт (годный ${data.total_good.toLocaleString('ru-RU')} · брак ${data.total_defect.toLocaleString('ru-RU')})`
+          + (showEarn
+            ? ` · заработок ${formatMoneyKopecks(data.total_earn_kop)} (годный ${formatMoneyKopecks(data.total_good_earn_kop)} · брак ${formatMoneyKopecks(data.total_defect_earn_kop)})`
+            : '')
         : undefined}
       actions={
         <button className="btn ghost" onClick={() => navigate('/inventory/packing')}>
@@ -142,6 +146,11 @@ export function PackingProductivityView() {
                   <span style={{ color: 'var(--c-success)' }}>годный <b>{day.good.toLocaleString('ru-RU')}</b></span>
                   <span style={{ color: day.defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>брак <b>{day.defect.toLocaleString('ru-RU')}</b></span>
                   <span style={{ color: 'var(--c-text)' }}>всего <b>{day.total.toLocaleString('ru-RU')}</b></span>
+                  {showEarn && (
+                    <span style={{ color: 'var(--c-accent)', borderLeft: '1px solid var(--c-border)', paddingLeft: 14 }}>
+                      ₽ <b>{formatMoneyKopecks(day.earn_kop)}</b>
+                    </span>
+                  )}
                 </span>
               </button>
               {open && (
@@ -154,6 +163,7 @@ export function PackingProductivityView() {
                       <th style={{ textAlign: 'right', width: 90 }}>Годный</th>
                       <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                       <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
+                      {showEarn && <th style={{ textAlign: 'right', width: 130 }}>Стоимость</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -165,6 +175,11 @@ export function PackingProductivityView() {
                         <Td className="num" style={{ color: 'var(--c-success)' }}>{row.good.toLocaleString('ru-RU')}</Td>
                         <Td className="num" style={{ color: row.defect > 0 ? 'var(--c-danger)' : 'var(--c-text-faint)' }}>{row.defect.toLocaleString('ru-RU')}</Td>
                         <Td className="num" style={{ fontWeight: 600 }}>{row.total.toLocaleString('ru-RU')}</Td>
+                        {showEarn && (
+                          <Td className="num" style={{ fontWeight: 600, color: 'var(--c-accent)' }} title={`Годный ${formatMoneyKopecks(row.good_earn_kop)} · Брак ${formatMoneyKopecks(row.defect_earn_kop)}`}>
+                            {formatMoneyKopecks(row.earn_kop)}
+                          </Td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

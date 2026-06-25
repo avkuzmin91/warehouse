@@ -339,6 +339,65 @@ def aggregate_shipment_contents(connection, shipment_ids: list[str]) -> dict:
     }
 
 
+def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict:
+    """Предлагаемая сумма счёта по набору отгрузок: Σ qty × тариф на дату отгрузки.
+
+    Качество тарифа берётся по cargo_type отгрузки (good/defect), дата — фактическая
+    дата отгрузки (или плановая). `has_missing_price` = по части позиций тариф не
+    заведён (такие позиции в сумму не вошли) — UI предупреждает менеджера."""
+    from modules.pricing.service import price_for_event
+    from modules.timesheet.service import business_today
+
+    ids: list[str] = []
+    for raw in dispatch_ids:
+        sid = str(raw or "").strip()
+        if sid and sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return {"amount_kop": 0, "has_missing_price": False, "priced_qty": 0, "unpriced_qty": 0}
+
+    today = business_today().isoformat()
+    placeholders = ",".join("?" for _ in ids)
+    docs = connection.execute(
+        f"SELECT id, cargo_type, client_id, actual_ship_date, ship_date "
+        f"FROM dispatch_docs WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0",
+        ids,
+    ).fetchall()
+
+    amount = 0
+    priced_qty = 0
+    unpriced_qty = 0
+    for doc in docs:
+        doc_id = str(doc["id"])
+        client_id = doc["client_id"]
+        quality = str(doc["cargo_type"] or "good")
+        day = str(doc["actual_ship_date"] or doc["ship_date"] or today)[:10]
+        lines = connection.execute(
+            "SELECT product_id, qty FROM dispatch_lines "
+            "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (doc_id,),
+        ).fetchall()
+        for line in lines:
+            qty = int(line["qty"] or 0)
+            if qty <= 0:
+                continue
+            price = None
+            if client_id:
+                price = price_for_event(connection, str(line["product_id"]), str(client_id), quality, day)
+            if price is None:
+                unpriced_qty += qty
+            else:
+                amount += price * qty
+                priced_qty += qty
+
+    return {
+        "amount_kop": amount,
+        "has_missing_price": unpriced_qty > 0,
+        "priced_qty": priced_qty,
+        "unpriced_qty": unpriced_qty,
+    }
+
+
 # Лёгкий in-process кеш счётчика алёрта: бейдж опрашивается часто, а сам запрос
 # хоть и индексируемый, не нужно гонять на каждый рендер главной. TTL короткий —
 # точность «к оплате/просрочено» в пределах десятка секунд достаточна.

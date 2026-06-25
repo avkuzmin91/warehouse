@@ -53,6 +53,9 @@ class ShipmentPackingProductivityRow(BaseModel):
     good:         int
     defect:       int
     total:        int
+    good_earn_kop:   int = 0
+    defect_earn_kop: int = 0
+    earn_kop:        int = 0
 
 
 class ShipmentPackingProductivityDay(BaseModel):
@@ -62,6 +65,9 @@ class ShipmentPackingProductivityDay(BaseModel):
     total:       int
     sku_count:   int
     doc_count:   int
+    good_earn_kop:   int = 0
+    defect_earn_kop: int = 0
+    earn_kop:        int = 0
     rows:        list[ShipmentPackingProductivityRow]
 
 
@@ -70,6 +76,10 @@ class ShipmentPackingProductivityResponse(BaseModel):
     total_good:   int
     total_defect: int
     total:        int
+    total_good_earn_kop:   int = 0
+    total_defect_earn_kop: int = 0
+    total_earn_kop:        int = 0
+    with_earnings:         bool = False
 
 
 class ShipmentMoveAllocation(BaseModel):

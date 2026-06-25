@@ -300,6 +300,8 @@ export function createProduct(payload: {
       items_per_pallet?: number | null
       client_id: string
       is_active: boolean
+      packing_price_good_kop?: number | null
+      packing_price_defect_kop?: number | null
     }
     colors: string[]
     dimensions: { length: number; width: number; height: number; sizes: string[] }[]

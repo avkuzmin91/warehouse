@@ -323,6 +323,17 @@ async def create_product(
                     """,
                     (str(uuid4()), pid, cid, vr["color_id"], vr["size_id"], vr["length"], vr["width"], vr["height"], vr["sku"], 1 if sku_pending else 0, vr["images_json"], now),
                 )
+            if inner.packing_price_good_kop is not None or inner.packing_price_defect_kop is not None:
+                from config import INV_Q_DEFECT, INV_Q_GOOD
+                from modules.pricing.service import add_price
+                from modules.timesheet.service import business_today
+                eff = business_today().isoformat()
+                if inner.packing_price_good_kop is not None:
+                    add_price(connection, product_id=pid, client_id=cid, quality=INV_Q_GOOD,
+                              price_kop=inner.packing_price_good_kop, effective_from=eff, user_id=str(admin["id"]))
+                if inner.packing_price_defect_kop is not None:
+                    add_price(connection, product_id=pid, client_id=cid, quality=INV_Q_DEFECT,
+                              price_kop=inner.packing_price_defect_kop, effective_from=eff, user_id=str(admin["id"]))
             connection.commit()
         except IntegrityError as exc:
             connection.rollback()

@@ -610,6 +610,7 @@ EXPENSE_OP_RESTORE     = "restore"
 EXPENSE_OP_FILE_ADD    = "file_add"
 EXPENSE_OP_FILE_DELETE = "file_delete"
 EXPENSE_OP_PAY         = "pay"
+EXPENSE_OP_PAYMENT     = "payment"   # частичная/полная оплата (запись в expense_payments)
 EXPENSE_OP_UNPAY       = "unpay"
 EXPENSE_OP_CANCEL      = "cancel"
 
@@ -621,6 +622,7 @@ EXPENSE_OP_LABELS: dict[str, str] = {
     EXPENSE_OP_FILE_ADD:    "Файл прикреплён",
     EXPENSE_OP_FILE_DELETE: "Файл удалён",
     EXPENSE_OP_PAY:         "Оплачено",
+    EXPENSE_OP_PAYMENT:     "Оплата",
     EXPENSE_OP_UNPAY:       "Оплата отменена",
     EXPENSE_OP_CANCEL:      "Аннулирование",
 }
@@ -659,14 +661,16 @@ EXPENSE_SOURCE_PAYROLL   = "payroll"    # выплата по табелю (ЗП
 # Статус оплаты расхода. Рейсовая логистика создаётся «ожидает оплаты»; ручной
 # хозрасход по умолчанию «оплачено» (фиксация постфактум), но может быть и «ожидает».
 EXPENSE_PAYMENT_AWAITING  = "awaiting"
+EXPENSE_PAYMENT_PARTIAL   = "partially_paid"
 EXPENSE_PAYMENT_PAID      = "paid"
 EXPENSE_PAYMENT_CANCELLED = "cancelled"
 
 EXPENSE_PAYMENT_STATUSES_ALL: tuple[str, ...] = (
-    EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PAID, EXPENSE_PAYMENT_CANCELLED,
+    EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PARTIAL, EXPENSE_PAYMENT_PAID, EXPENSE_PAYMENT_CANCELLED,
 )
 EXPENSE_PAYMENT_STATUS_LABELS: dict[str, str] = {
     EXPENSE_PAYMENT_AWAITING:  "Ожидает оплаты",
+    EXPENSE_PAYMENT_PARTIAL:   "Частично оплачен",
     EXPENSE_PAYMENT_PAID:      "Оплачен",
     EXPENSE_PAYMENT_CANCELLED: "Аннулирован",
 }

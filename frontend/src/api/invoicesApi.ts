@@ -117,7 +117,13 @@ export type UninvoicedShipment = {
 }
 
 export type ShipmentContentsProduct = { product_id: string; name: string; sku: string | null; qty: number }
-export type ShipmentContents = { products: ShipmentContentsProduct[]; total_qty: number; sku_count: number }
+export type ShipmentContents = {
+  products: ShipmentContentsProduct[]
+  total_qty: number
+  sku_count: number
+  suggested_amount_kop: number
+  has_missing_price: boolean
+}
 
 export type UninvoicedShipmentsResponse = {
   items: UninvoicedShipment[]

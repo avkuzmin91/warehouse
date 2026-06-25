@@ -185,7 +185,7 @@ export function InvoiceCreateFeature() {
                     )
                   })}
                 </div>
-                <SelectedContentsRollup shipmentIds={[...selected]} />
+                <SelectedContentsRollup shipmentIds={[...selected]} onApplyAmount={(kop) => setAmount(String(kop / 100))} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                   <Icon name="lock" size={12} />Привязанные отгрузки нельзя добавить в другой счёт.
                 </div>

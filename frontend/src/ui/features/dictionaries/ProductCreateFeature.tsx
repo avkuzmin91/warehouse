@@ -17,6 +17,7 @@ import type { ComboboxOption } from '../../data/Combobox'
 import { MultiSelect } from '../../data/MultiSelect'
 import { Icon } from '../../primitives/Icon'
 import { parseNum, parseOptionalWeight, parseOptionalInteger } from '../../../utils/parseNumbers'
+import { parseRublesToKopecks } from '../../../utils/format'
 
 type DimBlock = { length: string; width: string; height: string; sizes: string[] }
 type FieldKey = 'name' | 'type_id' | 'sku_base' | 'client_id' | 'colors' | 'dimensions'
@@ -75,6 +76,8 @@ export function ProductCreateFeature() {
   const [skuPending, setSkuPending] = useState(false)
   const [weightGrams, setWeightGrams] = useState('')
   const [itemsPerPallet, setItemsPerPallet] = useState('')
+  const [priceGood, setPriceGood] = useState('')
+  const [priceDefect, setPriceDefect] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [colorIds, setColorIds] = useState<string[]>([])
   const [dims, setDims] = useState<DimBlock[]>([{ length: '', width: '', height: '', sizes: [] }])
@@ -187,6 +190,8 @@ export function ProductCreateFeature() {
             items_per_pallet: parseOptionalInteger(itemsPerPallet),
             client_id: clientId!,
             is_active: isActive,
+            packing_price_good_kop: priceGood.trim() ? parseRublesToKopecks(priceGood) : undefined,
+            packing_price_defect_kop: priceDefect.trim() ? parseRublesToKopecks(priceDefect) : undefined,
           },
           colors: colorIds,
           dimensions: dims.map((d) => ({
@@ -373,6 +378,24 @@ export function ProductCreateFeature() {
                     onChange={(e) => setItemsPerPallet(e.target.value)}
                     style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                   />
+                </Field>
+              </div>
+            </div>
+
+            {/* Стоимость упаковки (необязательно при заведении; ведётся в «Финансы → Стоимость упаковки») */}
+            <div className="card">
+              <div className="card-head">
+                <div className="card-head-title">Стоимость упаковки, ₽ за ед.</div>
+                <div style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>необязательно · далее ведётся в «Финансы → Стоимость упаковки»</div>
+              </div>
+              <div className="card-body">
+                <Field label="Годный">
+                  <Input inputMode="decimal" placeholder="напр. 12,50"
+                    value={priceGood} onChange={(e) => setPriceGood(e.target.value)} />
+                </Field>
+                <Field label="Брак">
+                  <Input inputMode="decimal" placeholder="напр. 5,00"
+                    value={priceDefect} onChange={(e) => setPriceDefect(e.target.value)} />
                 </Field>
               </div>
             </div>

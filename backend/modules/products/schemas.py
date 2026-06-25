@@ -46,6 +46,10 @@ class ProductCreateInner(BaseModel):
     weight_grams: int | None = Field(default=None, ge=0)
     items_per_pallet: int | None = Field(default=None, ge=0)
     is_active: bool = True
+    # Первичный тариф упаковки (удобный ввод при заведении; источник истины — справочник
+    # «Финансы → Стоимость упаковки»). Пишется записью с effective_from = сегодня.
+    packing_price_good_kop: int | None = Field(default=None, ge=0)
+    packing_price_defect_kop: int | None = Field(default=None, ge=0)
 
 
 class ProductCreateMeta(BaseModel):
