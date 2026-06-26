@@ -185,7 +185,7 @@ function AnalyticsBody({
   setHoverDay: (n: number | null) => void
   tipX: number
   setTipX: (n: number) => void
-  plotRef: React.RefObject<HTMLDivElement>
+  plotRef: React.RefObject<HTMLDivElement | null>
 }) {
   // Цвет закреплён за категорией по её позиции в ответе (бэкенд сортирует по сумме убыв.).
   const colorByName = useMemo(() => {
