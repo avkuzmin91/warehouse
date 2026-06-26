@@ -308,7 +308,7 @@ export function ProductCreateFeature() {
                 <div className="row gap-8" style={{ flexWrap: 'wrap', marginBottom: 8, alignItems: 'flex-start' }}>
                   {imagePreviews.map((src, i) => (
                     <div
-                      key={i}
+                      key={src}
                       draggable
                       onDragStart={(e) => handlePhotoDragStart(e, i)}
                       onDragOver={(e) => handlePhotoDragOver(e, i)}

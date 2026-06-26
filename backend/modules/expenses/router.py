@@ -30,6 +30,7 @@ from modules.auth.service import get_current_manager
 from modules.expenses.schemas import (
     AccrualRunResponse,
     CarrierOutstandingItem,
+    ExpenseAnalyticsResponse,
     ExpenseCarrierPayRequest,
     ExpenseCarrierPayResponse,
     ExpenseCreate,
@@ -48,6 +49,7 @@ from modules.expenses.service import (
     add_expense_payment,
     build_update_diff,
     carrier_outstanding_logistics,
+    expense_analytics,
     expense_summary,
     format_kopecks,
     list_expenses_aggregated,
@@ -185,6 +187,27 @@ def expenses_summary(
             kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
         )
     return ExpenseSummaryResponse(**data)
+
+
+# ── Аналитика расходов (ежедневная динамика, разбивка по типам и статусу) ────────
+
+@router.get("/expenses/analytics", response_model=ExpenseAnalyticsResponse)
+def expenses_analytics(
+    date_from: str = Query(...),
+    date_to:   str = Query(...),
+    kinds:     str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Ежедневная аналитика расходов: динамика по дням, распределение по типам и статусу
+    оплаты. ЗП учитывается начислением по дням из табеля, аренда размазана по дням периода.
+    Область типов ограничена ролью (менеджер — без аренды и ЗП)."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    with get_connection() as conn:
+        data = expense_analytics(
+            conn, date_from=df, date_to=dt, kinds=_resolve_kinds_scope(user, kinds),
+        )
+    return ExpenseAnalyticsResponse(**data)
 
 
 # ── Массовая оплата перевозчику (логистика, FIFO от ранних к поздним) ────────────
@@ -478,7 +501,7 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
     paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
     with get_connection() as conn:
         old = conn.execute(
-            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
             (expense_id,),
         ).fetchone()
         if not old:

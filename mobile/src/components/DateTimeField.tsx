@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Icon } from './Icon'
 import { moscowNowIso } from '../utils/format'
 
@@ -15,15 +15,16 @@ const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 const pad = (n: number) => String(n).padStart(2, '0')
 
 /** value/onChange используют формат <input type="datetime-local">: YYYY-MM-DDTHH:mm */
-function parse(value: string): { y: number; m: number; d: number; hh: number; mm: number } | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
+function parse(value: string): { y: number; m: number; d: number; hh: number; mm: number; hasTime: boolean } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(value)
   if (!match) return null
   return {
     y: Number(match[1]),
     m: Number(match[2]) - 1,
     d: Number(match[3]),
-    hh: Number(match[4]),
-    mm: Number(match[5]),
+    hh: Number(match[4] ?? 0),
+    mm: Number(match[5] ?? 0),
+    hasTime: match[4] != null && match[5] != null,
   }
 }
 
@@ -31,9 +32,18 @@ function build(y: number, m: number, d: number, hh: number, mm: number): string 
   return `${y}-${pad(m + 1)}-${pad(d)}T${pad(hh)}:${pad(mm)}`
 }
 
+export function isDateTimeComplete(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
+}
+
+export function isDateTimeBefore(end: string, start: string): boolean {
+  return isDateTimeComplete(end) && isDateTimeComplete(start) && end < start
+}
+
 function label(value: string): string {
   const p = parse(value)
   if (!p) return ''
+  if (!p.hasTime) return `${p.d} ${MONTHS_GEN[p.m]} ${p.y}`
   return `${p.d} ${MONTHS_GEN[p.m]} ${p.y}, ${pad(p.hh)}:${pad(p.mm)}`
 }
 
@@ -64,12 +74,14 @@ export function DateTimeField({
 }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(value)
+  const [minText, setMinText] = useState('')
   const [view, setView] = useState(() => {
     const p = parse(value) ?? parse(initialNow())!
     return { y: p.y, m: p.m }
   })
 
   const sel = useMemo(() => parse(draft), [draft])
+  useEffect(() => { setMinText(sel ? pad(sel.mm) : '00') }, [open])
   const today = useMemo(() => {
     const t = parse(initialNow())!
     return { y: t.y, m: t.m, d: t.d }
@@ -77,8 +89,9 @@ export function DateTimeField({
 
   function start() {
     const base = value || initialNow()
-    setDraft(base)
-    const p = parse(base)!
+    const p = parse(base) ?? parse(initialNow())!
+    setDraft(build(p.y, p.m, p.d, p.hh, p.mm))
+    setMinText(pad(p.mm))
     setView({ y: p.y, m: p.m })
     setOpen(true)
   }
@@ -169,15 +182,18 @@ export function DateTimeField({
                 ))}
               </select>
               <span className="dtf-colon">:</span>
-              <select
-                className="selectish dtf-tsel"
-                value={sel ? pad(sel.mm) : '00'}
-                onChange={(e) => pickTime(sel?.hh ?? 0, Number(e.target.value))}
-              >
-                {Array.from({ length: 60 }, (_, mn) => (
-                  <option key={mn} value={pad(mn)}>{pad(mn)}</option>
-                ))}
-              </select>
+              <input
+                className="dtf-min"
+                inputMode="numeric"
+                maxLength={2}
+                value={minText}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/\D/g, '').slice(0, 2)
+                  setMinText(raw)
+                  pickTime(sel?.hh ?? 0, Math.min(59, Number(raw || 0)))
+                }}
+                onBlur={() => setMinText(sel ? pad(sel.mm) : '00')}
+              />
             </div>
 
             <div className="dtf-actions">

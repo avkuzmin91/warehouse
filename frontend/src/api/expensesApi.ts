@@ -6,7 +6,7 @@ export type ExpenseDictKind = 'categories' | 'payment-sources'
 
 export type ExpenseDictItem = { id: string; name: string }
 
-export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary'
+export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring'
 export type ExpensePaymentStatus = 'awaiting' | 'partially_paid' | 'paid' | 'cancelled'
 
 export type ExpenseOpType =
@@ -104,6 +104,26 @@ export type ExpenseSummary = {
   by_payment_source: ExpenseSummaryBreakdown[]
 }
 
+export type ExpenseAnalyticsPoint = { date: string; amount: number }
+export type ExpenseAnalyticsCategory = { id: string | null; name: string; kind: ExpenseKind; series: number[] }
+export type ExpenseAnalyticsKind = { kind: ExpenseKind; kind_label: string; amount: number; count: number }
+export type ExpenseAnalyticsStatus = { payment_status: ExpensePaymentStatus; label: string; amount: number; count: number }
+export type ExpenseAnalytics = {
+  date_from: string
+  date_to: string
+  days: number
+  total_amount: number
+  avg_per_day: number
+  max_day_amount: number
+  series: ExpenseAnalyticsPoint[]
+  categories: ExpenseAnalyticsCategory[]
+  by_kind: ExpenseAnalyticsKind[]
+  by_category: ExpenseSummaryBreakdown[]
+  by_status: ExpenseAnalyticsStatus[]
+}
+
+export type ExpenseAnalyticsParams = { date_from: string; date_to: string; kinds?: string }
+
 export type ExpensePayload = {
   spent_on: string
   category_id?: string | null
@@ -189,6 +209,14 @@ export function getExpenses(params: ExpenseListParams = {}, signal?: AbortSignal
 
 export function getExpensesSummary(params: ExpenseSummaryParams = {}, signal?: AbortSignal) {
   return request<ExpenseSummary>(`/expenses/summary${expenseQuery(params)}`, { signal })
+}
+
+export function getExpenseAnalytics(params: ExpenseAnalyticsParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.kinds) sp.set('kinds', params.kinds)
+  return request<ExpenseAnalytics>(`/expenses/analytics?${sp.toString()}`, { signal })
 }
 
 export function getExpense(expenseId: string, signal?: AbortSignal) {
@@ -297,6 +325,7 @@ export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
   logistics: 'Логистика',
   rent: 'Аренда',
   salary: 'Зарплата',
+  recurring: 'Регулярный',
 }
 
 export const EXPENSE_PAYMENT_STATUS_LABELS: Record<ExpensePaymentStatus, string> = {

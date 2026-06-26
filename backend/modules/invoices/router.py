@@ -72,6 +72,7 @@ from modules.invoices.service import (
     logistics_amount_for_docs,
     next_invoice_number,
     recompute_paid,
+    rub_to_kop,
     suggested_amount_for_dispatches,
 )
 from security import ensure_finance_access
@@ -144,7 +145,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             destination=r["destination"],
             sku_count=int(r["sku_count"]),
             total_qty=int(r["total_qty"]),
-            logistics_cost_kop=round(float(r["logistics_cost"] or 0) * 100),
+            logistics_cost_kop=rub_to_kop(r["logistics_cost"]),
         )
         for r in ship_rows
     ]
@@ -174,7 +175,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             supplier_name=r["supplier_name"],
             sku_count=int(r["sku_count"]),
             total_qty=int(r["total_qty"]),
-            logistics_cost_kop=round(float(r["logistics_cost"] or 0) * 100),
+            logistics_cost_kop=rub_to_kop(r["logistics_cost"]),
         )
         for r in rec_rows
     ]
@@ -659,7 +660,7 @@ def add_payment(invoice_id: str, body: InvoicePaymentCreate, user=Depends(_get_f
     with get_connection() as conn:
         doc = conn.execute(
             "SELECT status, total_amount, paid_amount FROM invoice_docs "
-            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
             (invoice_id,),
         ).fetchone()
         if not doc:
@@ -680,10 +681,16 @@ def add_payment(invoice_id: str, body: InvoicePaymentCreate, user=Depends(_get_f
             (str(uuid4()), invoice_id, int(body.amount),
              paid_on, (body.comment or "").strip() or None, now, uid),
         )
+        # Полностью оплаченный счёт остаётся «частично оплачен» до явного POST /close
+        # (ручное подтверждение менеджером) — это намеренный гейт, см. test_payment_then_close.
         paid = recompute_paid(conn, invoice_id)
+        # Полная оплата сразу закрывает счёт — иначе он остаётся «частично оплачен»
+        # (активный) до ручного /close и попадает в просрочку по due_date.
+        fully_paid = paid >= int(doc["total_amount"])
+        new_status = INVOICE_STATUS_CLOSED if fully_paid else INVOICE_STATUS_PARTIALLY_PAID
         conn.execute(
             "UPDATE invoice_docs SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ?",
-            (paid, INVOICE_STATUS_PARTIALLY_PAID, now, invoice_id),
+            (paid, new_status, now, invoice_id),
         )
         conn.execute(
             "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
@@ -691,6 +698,13 @@ def add_payment(invoice_id: str, body: InvoicePaymentCreate, user=Depends(_get_f
             (str(uuid4()), invoice_id, INVOICE_OP_PAYMENT,
              f"Оплата {format_kopecks(int(body.amount))}", now, uid),
         )
+        if fully_paid:
+            conn.execute(
+                "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), invoice_id, INVOICE_OP_CLOSE,
+                 "Счёт завершён (оплачен полностью)", now, uid),
+            )
         conn.commit()
     invalidate_alerts_cache()
     return {"message": "ok"}
@@ -771,6 +785,19 @@ def update_amount(invoice_id: str, body: InvoiceAmountUpdate, user=Depends(_get_
              f"Сумма: {format_kopecks(old_amount)} → {format_kopecks(new_amount)}. Причина: {reason}",
              now, uid),
         )
+        # Если коррекция опустила сумму ровно до уже оплаченной — счёт полностью
+        # оплачен и должен закрыться (иначе остался бы активным и попал в просрочку).
+        if new_amount > 0 and paid >= new_amount:
+            conn.execute(
+                "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+                (INVOICE_STATUS_CLOSED, now, invoice_id),
+            )
+            conn.execute(
+                "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), invoice_id, INVOICE_OP_CLOSE,
+                 "Счёт завершён (оплачен полностью)", now, uid),
+            )
         conn.commit()
     invalidate_alerts_cache()
     return {"message": "ok"}
@@ -811,12 +838,19 @@ def cancel_invoice(invoice_id: str, user=Depends(_get_finance)):
     now = _now()
     with get_connection() as conn:
         doc = conn.execute(
-            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
             (invoice_id,),
         ).fetchone()
         if not doc:
             raise HTTPException(status_code=404, detail="Счёт не найден")
         _require_mutable(doc)
+        # Сторнируем платежи, иначе деньги «повиснут» оплаченными на аннулированном счёте.
+        reversed_paid = recompute_paid(conn, invoice_id)
+        conn.execute(
+            "UPDATE invoice_payments SET is_deleted = 1 "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        )
         # Освобождаем отгрузки и поступления — снова попадают в реестр «без счёта».
         conn.execute(
             "UPDATE invoice_shipments SET is_deleted = 1 "
@@ -829,13 +863,16 @@ def cancel_invoice(invoice_id: str, user=Depends(_get_finance)):
             (invoice_id,),
         )
         conn.execute(
-            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE invoice_docs SET status = ?, paid_amount = 0, updated_at = ? WHERE id = ?",
             (INVOICE_STATUS_CANCELLED, now, invoice_id),
         )
+        cancel_comment = "Счёт аннулирован"
+        if reversed_paid > 0:
+            cancel_comment += f". Сторнированы платежи на {format_kopecks(reversed_paid)}"
         conn.execute(
             "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
             "VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), invoice_id, INVOICE_OP_CANCEL, "Счёт аннулирован", now, uid),
+            (str(uuid4()), invoice_id, INVOICE_OP_CANCEL, cancel_comment, now, uid),
         )
         conn.commit()
     invalidate_alerts_cache()

@@ -177,6 +177,46 @@ class ExpenseSummaryResponse(BaseModel):
     by_payment_source:  list[ExpenseSummaryBreakdown]
 
 
+class ExpenseAnalyticsPoint(BaseModel):
+    date:   str
+    amount: int
+
+
+class ExpenseAnalyticsKind(BaseModel):
+    kind:       str
+    kind_label: str
+    amount:     int
+    count:      int
+
+
+class ExpenseAnalyticsStatus(BaseModel):
+    payment_status: str
+    label:          str
+    amount:         int
+    count:          int
+
+
+class ExpenseAnalyticsCategory(BaseModel):
+    id:     str | None = None
+    name:   str
+    kind:   str
+    series: list[int]
+
+
+class ExpenseAnalyticsResponse(BaseModel):
+    date_from:      str
+    date_to:        str
+    days:           int
+    total_amount:   int
+    avg_per_day:    int
+    max_day_amount: int
+    series:         list[ExpenseAnalyticsPoint]
+    categories:     list[ExpenseAnalyticsCategory]
+    by_kind:        list[ExpenseAnalyticsKind]
+    by_category:    list[ExpenseSummaryBreakdown]
+    by_status:      list[ExpenseAnalyticsStatus]
+
+
 class MessageResponse(BaseModel):
     message: str
 

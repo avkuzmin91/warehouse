@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -28,6 +29,18 @@ def format_kopecks(kopecks: int) -> str:
     rub, kop = divmod(int(kopecks), 100)
     grouped = f"{rub:,}".replace(",", " ")
     return f"{grouped},{kop:02d} ₽"
+
+
+def rub_to_kop(value) -> int:
+    """Рубли → копейки без потерь на float (половина округляется вверх).
+
+    `round(float(rub) * 100)` теряет копейку на значениях вроде 1.115 (их float-
+    репрезентация чуть меньше) и использует банковское округление (round(2.5)→2).
+    Через Decimal результат точный и предсказуемый.
+    """
+    if value is None:
+        return 0
+    return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def is_overdue(status: str, due_date) -> bool:
@@ -64,6 +77,9 @@ def recompute_paid(connection, invoice_id: str) -> int:
 
 def next_invoice_number(connection) -> str:
     """Следующий номер счёта `INV-NNNN` (MAX, не COUNT — без дублей при дырках)."""
+    # Advisory-lock сериализует генерацию номера внутри транзакции — иначе два
+    # параллельных создания получат один MAX+1.
+    connection.execute("SELECT pg_advisory_xact_lock(hashtext('invoice_doc_number'))")
     row = connection.execute(
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
@@ -229,7 +245,7 @@ def logistics_amount_for_docs(
             f"WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0",
             clean,
         ).fetchall()
-        return sum(round(float(r["logistics_cost"] or 0) * 100) for r in rows)
+        return sum(rub_to_kop(r["logistics_cost"]) for r in rows)
 
     return {
         "dispatch_logistics_kop": _sum("dispatch_docs", dispatch_ids),
@@ -501,7 +517,7 @@ def list_uninvoiced_receipts(
             "client_name": r["client_name"],
             "supplier_name": r["supplier_name"],
             "arrival_date": r["arrival_date"],
-            "logistics_cost_kop": round(float(r["logistics_cost"] or 0) * 100),
+            "logistics_cost_kop": rub_to_kop(r["logistics_cost"]),
             "sku_count": int(r["sku_count"]),
             "total_qty": int(r["total_qty"]),
             "products_preview": preview_map.get(str(r["id"]), []),

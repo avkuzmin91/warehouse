@@ -141,7 +141,7 @@ def list_products(
             GROUP BY product_id
         ) bal ON bal.product_id = p.id
     """
-    order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "p.created_at DESC"
+    order_sql = _order_sql_from_sort_param(sort, PRODUCT_LIST_SORT_COLUMNS) or "LOWER(p.name) ASC, LOWER(p.sku) ASC"
     with get_connection() as connection:
         ia = _resolve_actuality_filter(connection, actuality_id)
         if ia is not None:

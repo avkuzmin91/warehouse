@@ -312,7 +312,7 @@ export function PlannedView({ docId, detail, onReload, onCancel, advancing }: Pr
         open={showAddLine}
         existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
-        onAdded={async () => { setShowAddLine(false); await onReload() }}
+        onAdded={() => { void onReload() }}
       />
     </div>
   )

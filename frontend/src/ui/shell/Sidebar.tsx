@@ -27,6 +27,7 @@ const OPS_NAV: NavItem[] = [
 const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
   { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
+  { to: '/finance/recurring', icon: 'refresh', label: 'Регулярные расходы' },
   { to: '/finance/pricing', icon: 'tag', label: 'Стоимость упаковки' },
   { to: '/finance/pallet-pricing', icon: 'layers', label: 'Стоимость палета' },
 ]
@@ -43,8 +44,13 @@ const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
 ]
 
-const ADMIN_NAV: NavItem[] = [
+// Аналитика расходов включает ЗП и аренду (admin-only данные) и гейтится по
+// финансовому доступу (admin/manager), а не по общему «управлению».
+const ANALYTICS_NAV: NavItem[] = [
   { to: '/analytics', icon: 'chart', label: 'Аналитика' },
+]
+
+const ADMIN_NAV: NavItem[] = [
   { to: '/dictionaries', icon: 'book', label: 'Справочники' },
 ]
 
@@ -184,7 +190,7 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
             {hasAdminAccess && (
               <>
                 {!collapsed && <div className="sidebar-section">Управление</div>}
-                {[...ADMIN_NAV, ...(canManageUsers(user) ? USERS_NAV : [])].map((item) => (
+                {[...(hasFinanceAccess ? ANALYTICS_NAV : []), ...ADMIN_NAV, ...(canManageUsers(user) ? USERS_NAV : [])].map((item) => (
                   <NavItem key={item.to} {...item} collapsed={collapsed} />
                 ))}
               </>

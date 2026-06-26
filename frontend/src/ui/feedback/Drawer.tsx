@@ -8,10 +8,11 @@ interface DrawerProps {
   subtitle?: string
   width?: number
   footer?: ReactNode
+  closeOnBackdrop?: boolean
   children: ReactNode
 }
 
-export function Drawer({ open, onClose, title, subtitle, width = 480, footer, children }: DrawerProps) {
+export function Drawer({ open, onClose, title, subtitle, width = 480, footer, closeOnBackdrop = false, children }: DrawerProps) {
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -21,6 +22,10 @@ export function Drawer({ open, onClose, title, subtitle, width = 480, footer, ch
 
   if (!open) return null
 
+  const handleBackdropClick = () => {
+    if (closeOnBackdrop) onClose()
+  }
+
   return (
     <div
       style={{
@@ -29,7 +34,7 @@ export function Drawer({ open, onClose, title, subtitle, width = 480, footer, ch
         display: 'flex', alignItems: 'stretch', justifyContent: 'flex-end',
         backdropFilter: 'blur(2px)',
       }}
-      onClick={onClose}
+      onClick={handleBackdropClick}
     >
       <div
         style={{

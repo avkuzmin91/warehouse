@@ -136,7 +136,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 400 }} onClick={onClose} />
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 400 }} />
       <div
         style={{
           position: 'fixed',

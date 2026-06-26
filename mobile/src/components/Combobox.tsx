@@ -58,7 +58,6 @@ export function Combobox({
             <div className="input search-wrap" style={{ marginBottom: 12 }}>
               <Icon name="search" size={18} />
               <input
-                autoFocus
                 type="search"
                 inputMode="search"
                 autoCapitalize="none"

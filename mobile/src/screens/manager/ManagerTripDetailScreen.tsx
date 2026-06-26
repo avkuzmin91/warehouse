@@ -21,6 +21,7 @@ import { getCarriers, getVehicleTypes, getWarehouses, type DictionaryItem } from
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
+import { isDateTimeBefore, isDateTimeComplete } from '../../components/DateTimeField'
 import { MOSCOW_TZ, parseMoscow, variantTitle, fmtDateTime } from '../../utils/format'
 import { TripDocPickerSheet, type TripPickDoc } from './TripDocPickerSheet'
 import { TripPlanningFields, type PlanningValue } from './TripPlanningFields'
@@ -160,7 +161,7 @@ export function ManagerTripDetailScreen({ tripId }: { tripId: string }) {
 
   const onField = (patch: Partial<PlanningValue>) => setForm((f) => (f ? { ...f, ...patch } : f))
   const dirty = form != null && JSON.stringify(form) !== initialForm
-  const etaBeforeOrder = !!form && !!form.orderedAt && !!form.eta && form.eta < form.orderedAt
+  const etaBeforeOrder = !!form && isDateTimeBefore(form.eta, form.orderedAt)
 
   const costNum = (s: string) => (s.trim() === '' ? null : Number(s))
 
@@ -173,8 +174,8 @@ export function ManagerTripDetailScreen({ tripId }: { tripId: string }) {
     if (!form.vehicleTypeId) r.push('Не выбран тип кузова')
     if (form.vehicleNumber.trim() === '') r.push('Не указан гос. номер')
     if (form.costEstimate.trim() === '') r.push('Не указана стоимость логистики (план)')
-    if (!form.orderedAt) r.push('Не указано «Транспорт заказан»')
-    if (!form.eta) r.push('Не указано плановое прибытие')
+    if (!isDateTimeComplete(form.orderedAt)) r.push('Не указано «Транспорт заказан»')
+    if (!isDateTimeComplete(form.eta)) r.push('Не указано плановое прибытие')
     if (etaBeforeOrder) r.push('Плановое прибытие раньше заказа транспорта')
     const linkedCount = outbound ? detail.dispatches.length : detail.receipts.length
     if (linkedCount === 0) r.push(outbound ? 'Привяжите хотя бы одну отгрузку' : 'Привяжите хотя бы одно поступление')

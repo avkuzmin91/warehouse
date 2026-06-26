@@ -186,6 +186,7 @@ export type ShipmentLinesListItem = {
   size_name:         string | null
   qty:               number
   shipped_qty:       number
+  packed_good?:      number
   storage_zone_name: string | null
   store_name:        string | null
 }
@@ -304,8 +305,8 @@ export function listShipmentLines(params: ShipmentListParams = {}, signal?: Abor
   return request<ShipmentLinesResponse>(`/shipments/lines${q ? `?${q}` : ''}`, { signal })
 }
 
-export function getShipment(id: string) {
-  return request<ShipmentDetail>(`/shipments/${id}`)
+export function getShipment(id: string, signal?: AbortSignal) {
+  return request<ShipmentDetail>(`/shipments/${id}`, { signal })
 }
 
 export function createShipment(body: ShipmentDocCreate) {

@@ -43,14 +43,18 @@ const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
 
 function shipmentProgress(item: ShipmentListItem) {
   const totalQty = item.total_qty || 0
-  const shippedQty = item.total_shipped_qty ?? 0
+  const packedQty = shipmentPackedQty(item)
   const pct = totalQty > 0
-    ? Math.min(100, Math.floor(shippedQty / totalQty * 100))
+    ? Math.min(100, Math.floor(packedQty / totalQty * 100))
     : 0
   const linesCount = item.sku_count || 0
-  const qtyReady = linesCount > 0 && (item.lines_with_shipped_qty ?? 0) === linesCount
+  const qtyReady = totalQty > 0 && packedQty >= totalQty
   const zoneReady = item.cargo_type !== 'good' || (linesCount > 0 && (item.lines_with_zone ?? 0) === linesCount)
-  return { pct, shippedQty, totalQty, qtyReady, zoneReady }
+  return { pct, packedQty, totalQty, qtyReady, zoneReady }
+}
+
+function shipmentPackedQty(item: ShipmentListItem) {
+  return item.total_packed_qty ?? 0
 }
 
 /** Группировка строк списка по дате отгрузки с сохранением порядка выдачи backend. */
@@ -378,7 +382,7 @@ export function PackingTasksFeature() {
                         {fmtDate(item.ship_date)}
                       </Td>
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
-                      <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
+                      <Td className="num">{shipmentPackedQty(item).toLocaleString('ru-RU')}</Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
@@ -398,7 +402,7 @@ export function PackingTasksFeature() {
                       </Td>
                       <Td>
                         {(() => {
-                          const isActive = item.status === 'packing' || item.status === 'shipped'
+                          const isActive = !['draft', 'assigned', 'cancelled'].includes(item.status)
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           const progress = shipmentProgress(item)
                           const complete = progress.pct >= 100

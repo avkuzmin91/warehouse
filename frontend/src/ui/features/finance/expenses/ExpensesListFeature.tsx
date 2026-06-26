@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import {
   EXPENSE_KIND_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
@@ -9,10 +9,10 @@ import {
   getExpensesSummary,
   runSalaryAccruals,
 } from '../../../../api/expensesApi'
-import type { ExpenseKind, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
+import type { ExpenseKind, ExpenseListItem, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
 import { getEmployees } from '../../../../api/timesheetApi'
 import { fetchSimpleDictionaryPage } from '../../../../api/adminApi'
-import { moscowTodayYmd } from '../../../../utils/format'
+import { moscowTodayYmd, parseMoscow, MOSCOW_TZ } from '../../../../utils/format'
 import { ListPage } from '../../../layouts/ListPage'
 import { Table, Td } from '../../../data/Table'
 import { Pagination } from '../../../data/Pagination'
@@ -27,13 +27,14 @@ import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useToast } from '../../../feedback/Toast'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../../hooks/useFilterParams'
 import { canManageAdminFinance } from '../../../../utils/access'
-import { fmtDate, formatMoneyKopecks } from '../../../../utils/format'
+import { formatMoneyKopecks } from '../../../../utils/format'
 import { Kpi, kpiMoney } from '../financeUI'
 import { ExpenseModal } from './ExpenseModal'
 import { ExpenseDictsModal } from './ExpenseDictsModal'
 import { SalaryRosterModal } from './SalaryRosterModal'
 import { RentRosterModal } from './RentRosterModal'
 import { CarrierPaymentModal } from './CarrierPaymentModal'
+import { RecurringPaymentModal } from './RecurringPaymentModal'
 
 const PAGE_SIZE = 25
 
@@ -69,14 +70,63 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: EXPENSE_PAYMENT_STATUS_LABELS.cancelled },
 ]
 
+type ExpenseDayGroup = {
+  key: string
+  label: string
+  count: number
+  total: number
+  rows: ExpenseListItem[]
+}
+
+function pluralRecords(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'запись'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'записи'
+  return 'записей'
+}
+
+function ymdUtcMs(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return Date.UTC(y, m - 1, d)
+}
+
+/** spent_on — литеральная дата YYYY-MM-DD; день берём из неё без сдвига по поясу. */
+function dayLabelOf(ymd: string, todayYmd: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return 'Без даты'
+  const diffDays = Math.round((ymdUtcMs(ymd) - ymdUtcMs(todayYmd)) / 86_400_000)
+  const rel = diffDays === 0 ? 'Сегодня' : diffDays === 1 ? 'Завтра' : diffDays === -1 ? 'Вчера' : null
+  const d = parseMoscow(ymd)
+  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', timeZone: MOSCOW_TZ })
+  const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long', timeZone: MOSCOW_TZ })
+  return rel ? `${rel} · ${date} · ${weekday}` : `${date} · ${weekday}`
+}
+
+/** Группировка расходов по дню оплаты. Порядок дней наследуется из выдачи backend (spent_on DESC). */
+function groupExpensesByDay(items: ExpenseListItem[], todayYmd: string): ExpenseDayGroup[] {
+  const map = new Map<string, ExpenseDayGroup>()
+  for (const it of items) {
+    const key = /^\d{4}-\d{2}-\d{2}$/.test(it.spent_on) ? it.spent_on : 'no-date'
+    let g = map.get(key)
+    if (!g) {
+      g = { key, label: dayLabelOf(it.spent_on, todayYmd), count: 0, total: 0, rows: [] }
+      map.set(key, g)
+    }
+    g.count += 1
+    g.total += it.amount
+    g.rows.push(it)
+  }
+  return [...map.values()]
+}
+
 export function ExpensesListFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const isAdmin = canManageAdminFinance(user)
   // Типы, доступные роли: админ — все 4, менеджер — только хозрасходы и логистика.
   const kindOptions: ExpenseKind[] = isAdmin
-    ? ['manual', 'logistics', 'rent', 'salary']
-    : OPERATIONAL_KINDS
+    ? ['manual', 'logistics', 'rent', 'salary', 'recurring']
+    : ['manual', 'logistics', 'recurring']
   const monthMeta = useMemo(() => currentMonthMeta(), [])
 
   const [search, setSearch] = useFilterParam('search', '')
@@ -95,11 +145,14 @@ export function ExpensesListFeature() {
     kindOptions.includes(kindF as ExpenseKind) ? (kindF as ExpenseKind) : ''
   const isSalaryMode = selectedKind === 'salary'
   const isRentMode = selectedKind === 'rent'
+  // Логистика заводится из рейса, регулярный — из справочника «Регулярные расходы»;
+  // вручную в реестре их не создают.
   const createKind: ExpenseKind | null =
     selectedKind === 'logistics' ? null
-      : selectedKind === 'rent' ? 'rent'
-        : selectedKind === 'salary' ? 'salary'
-          : 'manual'
+      : selectedKind === 'recurring' ? null
+        : selectedKind === 'rent' ? 'rent'
+          : selectedKind === 'salary' ? 'salary'
+            : 'manual'
   const canCreate = createKind != null
   const createLabel =
     createKind === 'rent' ? 'Добавить оплату аренды'
@@ -113,6 +166,7 @@ export function ExpensesListFeature() {
   const [rosterOpen, setRosterOpen] = useState(false)
   const [rentRosterOpen, setRentRosterOpen] = useState(false)
   const [carrierPayOpen, setCarrierPayOpen] = useState(false)
+  const [recurringPayOpen, setRecurringPayOpen] = useState(false)
 
   const [accruing, setAccruing] = useState(false)
 
@@ -179,8 +233,9 @@ export function ExpensesListFeature() {
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
+  const dayGroups = useMemo(() => groupExpensesByDay(items, moscowTodayYmd()), [items])
   const hasFilters = !!(search || categoryF || sourceF || statusF || kindF || dateFrom || dateTo)
-  const colCount = 8
+  const colCount = 7
 
   function afterSave() {
     setEdit(null)
@@ -198,6 +253,9 @@ export function ExpensesListFeature() {
           </button>
           <button className="btn" onClick={() => setCarrierPayOpen(true)} title="Внести оплату перевозчику одной суммой — распределится по его логистическим расходам">
             <Icon name="wallet" size={14} />Оплата перевозчику
+          </button>
+          <button className="btn" onClick={() => setRecurringPayOpen(true)} title="Оплатить регулярный расход одной суммой — распределится по его начислениям от ранних к поздним">
+            <Icon name="refresh" size={14} />Оплата регулярного
           </button>
           {isSalaryMode && (
             <button className="btn" onClick={() => setRosterOpen(true)} title="Сотрудники на окладе и месячный фонд по ним">
@@ -290,7 +348,6 @@ export function ExpensesListFeature() {
       <Table>
         <thead>
           <tr>
-            <th style={{ width: 96 }}>Дата</th>
             <th style={{ width: 96 }}>№</th>
             <th style={{ width: 120 }}>Тип</th>
             <th>Наименование</th>
@@ -318,9 +375,22 @@ export function ExpensesListFeature() {
               />
             </td></tr>
           ) : (
-            items.map((it) => (
-              <tr key={it.id} onClick={() => setEdit({ id: it.id })}>
-                <Td><span className="mono" style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>{fmtDate(it.spent_on)}</span></Td>
+            dayGroups.map((g) => (
+              <Fragment key={g.key}>
+                <tr className="list-day-row">
+                  <td colSpan={colCount}>
+                    <div className="list-day-head">
+                      <span className="list-day-title"><Icon name="calendar" size={14} />{g.label}</span>
+                      <span className="list-day-counts">
+                        <span className="t-sub">{g.count} {pluralRecords(g.count)}</span>
+                        <span className="t-sub">·</span>
+                        <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(g.total)}</span>
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+                {g.rows.map((it) => (
+              <tr key={it.id} style={{ cursor: 'pointer' }} onClick={() => setEdit({ id: it.id })}>
                 <Td><span className="mono" style={{ fontSize: 12 }}>{it.exp_number}</span></Td>
                 <Td><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{it.kind_label}</span></Td>
                 <Td>
@@ -352,6 +422,8 @@ export function ExpensesListFeature() {
                 <Td><span style={{ fontSize: 12.5 }}>{it.payment_source_name ?? '—'}</span></Td>
                 <Td><Icon name="chev" size={14} style={{ color: 'var(--c-text-faint)' }} /></Td>
               </tr>
+                ))}
+              </Fragment>
             ))
           )}
         </tbody>
@@ -387,6 +459,13 @@ export function ExpensesListFeature() {
           paymentSources={srcs}
           onClose={() => setCarrierPayOpen(false)}
           onPaid={() => { setCarrierPayOpen(false); setDataTick((t) => t + 1) }}
+        />
+      )}
+      {recurringPayOpen && (
+        <RecurringPaymentModal
+          paymentSources={srcs}
+          onClose={() => setRecurringPayOpen(false)}
+          onPaid={() => { setRecurringPayOpen(false); setDataTick((t) => t + 1) }}
         />
       )}
     </ListPage>

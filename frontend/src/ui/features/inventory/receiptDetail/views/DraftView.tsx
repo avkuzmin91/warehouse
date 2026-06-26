@@ -292,7 +292,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         open={showAddLine}
         existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
-        onAdded={async () => { setShowAddLine(false); await onReload() }}
+        onAdded={() => { void onReload() }}
       />
 
       <Drawer

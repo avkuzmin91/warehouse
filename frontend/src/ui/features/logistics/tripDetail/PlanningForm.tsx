@@ -82,16 +82,12 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
             value={value.vehicle_number}
             placeholder="А123ВС 77"
             onChange={(e) => onChange({ vehicle_number: e.target.value })}
-            style={invalid?.vehicle_number ? { borderColor: 'var(--c-danger)' } : undefined}
+            style={{ height: 34, ...(invalid?.vehicle_number ? { borderColor: 'var(--c-danger)' } : null) }}
           />
         </div>
         <div>
           <FieldLabel required>Транспорт заказан</FieldLabel>
           <DateTimeField value={value.transport_ordered_at} invalid={invalid?.transport_ordered_at} onChange={(v) => onChange({ transport_ordered_at: v })} />
-        </div>
-        <div>
-          <FieldLabel required>{etaLabel}</FieldLabel>
-          <DateTimeField value={value.eta} invalid={invalid?.eta} onChange={(v) => onChange({ eta: v })} />
         </div>
         {showCosts && (
           <div>
@@ -99,6 +95,11 @@ export function PlanningForm({ value, onChange, state = 'active', invalid, showC
             <MoneyField value={value.cost_estimate} invalid={invalid?.cost_estimate} onChange={(v) => onChange({ cost_estimate: v })} />
           </div>
         )}
+        <div>
+          <FieldLabel required>{etaLabel}</FieldLabel>
+          <DateTimeField value={value.eta} invalid={invalid?.eta} onChange={(v) => onChange({ eta: v })}
+            hourPresets={[1, 2, 3, 4, 5]} presetBase={value.transport_ordered_at} />
+        </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel>Комментарий</FieldLabel>
           <AutoGrowTextarea minRows={2} value={value.comment} placeholder="Догруз, ворота, особенности разгрузки…"

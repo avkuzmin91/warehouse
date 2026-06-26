@@ -23,20 +23,23 @@ export function AddLineDrawer({ docId, clientId, open, existingKeys = [], onClos
       title="Добавить товары к приёмке"
       existingKeys={existingKeys}
       onClose={onClose}
-      onSubmit={async (product, cells) => {
-        for (const c of cells) {
-          await addReceiptLine(docId, {
-            product_id: product.id,
-            product_name: product.name,
-            product_sku: product.sku,
-            color_id: c.color_id,
-            color_name: c.color_name,
-            size_id: c.size_id,
-            size_name: c.size_name,
-            planned_qty: c.qty,
-          })
+      onSubmit={async (entries) => {
+        for (const { product, cells } of entries) {
+          for (const c of cells) {
+            await addReceiptLine(docId, {
+              product_id: product.id,
+              product_name: product.name,
+              product_sku: product.sku,
+              color_id: c.color_id,
+              color_name: c.color_name,
+              size_id: c.size_id,
+              size_name: c.size_name,
+              planned_qty: c.qty,
+            })
+          }
         }
         onAdded()
+        onClose()
       }}
     />
   )

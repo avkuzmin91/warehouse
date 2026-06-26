@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+import calendar
 from datetime import UTC, date, datetime, timedelta
 
 from config import (
+    EMPLOYEE_COMP_FIXED,
+    EMPLOYEE_COMP_HOURLY,
     EMPLOYEE_STATUS_ACTIVE,
     PAYROLL_KIND_ADVANCE,
     PAYROLL_KIND_SETTLEMENT,
@@ -339,6 +342,69 @@ def week_stats(
         "overpaid": max(0, advances - earned),
         "settled": settled,
     }
+
+
+# ── Начисление ЗП по дням (для аналитики расходов) ────────────────────────────
+
+def daily_payroll_accruals(connection, date_from: str, date_to: str) -> dict[str, int]:
+    """Начисленная ЗП по дням (дата YYYY-MM-DD → копейки) за диапазон [date_from..date_to] вкл.
+
+    Управленческое начисление по дням труда, а не факт выплат: реальные выплаты по табелю
+    ложатся в реестр расходов одной суммой в день расчёта (пятница / 15-е / конец месяца),
+    а здесь ЗП распределяется на отработанные дни — чтобы ежедневная аналитика расходов не
+    пульсировала редкими пиками выплат.
+
+    Почасовики (comp_type=hourly): за каждый отработанный день — часы по табелю × ставка,
+    действовавшая в этот день (effective-dated). Окладники (comp_type=fixed): дневная доля
+    оклада (оклад ÷ число дней месяца) за каждый день начиная с даты приёма; только активные
+    (дата увольнения в модели не хранится — архивные окладники в дневной разбивке не учтены)."""
+    out: dict[str, int] = {}
+    try:
+        df = date.fromisoformat(date_from[:10])
+        dt = date.fromisoformat(date_to[:10])
+    except ValueError:
+        return out
+    if dt < df:
+        return out
+
+    emp_rows = connection.execute(
+        "SELECT id, comp_type, fixed_salary_kopecks, status, "
+        "COALESCE(hired_on, SUBSTR(created_at, 1, 10)) AS start_on "
+        "FROM employees WHERE COALESCE(is_deleted, 0) = 0"
+    ).fetchall()
+    comp = {str(r["id"]): str(r["comp_type"] or EMPLOYEE_COMP_HOURLY) for r in emp_rows}
+
+    # Почасовики: часы по табелю × ставка дня.
+    hourly_ids = [eid for eid, c in comp.items() if c == EMPLOYEE_COMP_HOURLY]
+    if hourly_ids:
+        entries = load_entries_range(connection, df.isoformat(), dt.isoformat())
+        rates = load_rates(connection, hourly_ids)
+        for (emp_id, day_iso), entry in entries.items():
+            if comp.get(emp_id) != EMPLOYEE_COMP_HOURLY:
+                continue
+            h = entry_hours(entry)
+            if h <= 0:
+                continue
+            r = rate_on(rates.get(emp_id), day_iso)
+            if r:
+                out[day_iso] = out.get(day_iso, 0) + round(h * r)
+
+    # Окладники: дневная доля оклада за каждый день периода работы (активные).
+    for r in emp_rows:
+        if str(r["comp_type"] or "") != EMPLOYEE_COMP_FIXED or str(r["status"]) != EMPLOYEE_STATUS_ACTIVE:
+            continue
+        fixed = int(r["fixed_salary_kopecks"] or 0)
+        if fixed <= 0:
+            continue
+        start_on = str(r["start_on"] or "")[:10]
+        d = df
+        while d <= dt:
+            day_iso = d.isoformat()
+            if not start_on or day_iso >= start_on:
+                dim = calendar.monthrange(d.year, d.month)[1]
+                out[day_iso] = out.get(day_iso, 0) + fixed // dim
+            d += timedelta(days=1)
+    return out
 
 
 # ── Сборка сетки недели ───────────────────────────────────────────────────────

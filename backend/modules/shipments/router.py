@@ -316,14 +316,12 @@ def list_shipments(
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                     COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
+                    -- «Факт» документа = упакованный годный (что реально едет). Найденный
+                    -- брак возвращается на хранение и в факт выполнения плана не входит.
                     COALESCE((
                         SELECT SUM(CASE
-                            WHEN zr.to_op='packed' AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
-                            WHEN zr.from_op='packed' AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
-                            ELSE 0 END)
-                        + SUM(CASE
-                            WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
-                            WHEN zr.from_quality='defect' AND COALESCE(zr.to_quality,'')<>'defect'   THEN -zr.qty
+                            WHEN zr.to_op IN ('packed','ready') AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                            WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
                             ELSE 0 END)
                         FROM zone_relocations zr
                         JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -453,7 +451,18 @@ def list_shipment_lines(
                     l.product_id, l.product_name,
                     COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
                     l.color_name, l.size_name, l.qty,
-                    COALESCE(l.shipped_qty, 0) AS shipped_qty, l.storage_zone_name, l.store_name,
+                    COALESCE(l.shipped_qty, 0) AS shipped_qty,
+                    -- «Факт» строки = упакованный годный (что реально едет). Найденный брак
+                    -- возвращается на хранение и в факт выполнения плана не входит.
+                    COALESCE((
+                        SELECT SUM(CASE
+                            WHEN zr.to_op IN ('packed','ready') AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                            WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
+                            ELSE 0 END)
+                        FROM zone_relocations zr
+                        WHERE zr.shipment_line_id = l.id
+                    ), 0) AS packed_good,
+                    l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
                 FROM shipment_lines l
@@ -484,6 +493,7 @@ def list_shipment_lines(
             size_name=r["size_name"],
             qty=int(r["qty"] or 0),
             shipped_qty=int(r["shipped_qty"] or 0),
+            packed_good=int(r["packed_good"] or 0),
             storage_zone_name=r["storage_zone_name"],
             store_name=r["store_name"],
         )
@@ -525,8 +535,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
-                                    WHEN from_op='packed' AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_op IN ('packed','ready')   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
+                                    WHEN from_op IN ('packed','ready') AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
                   COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
                                     WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
                FROM zone_relocations

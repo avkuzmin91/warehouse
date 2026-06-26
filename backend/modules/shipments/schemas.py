@@ -259,6 +259,7 @@ class ShipmentLinesListItem(BaseModel):
     size_name:         str | None
     qty:               int
     shipped_qty:       int
+    packed_good:       int = 0
     storage_zone_name: str | None
     store_name:        str | None
 

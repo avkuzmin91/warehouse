@@ -181,7 +181,7 @@ export function ModalShell({
   onClose: () => void; footer: React.ReactNode; children: React.ReactNode
 }) {
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(20,20,15,0.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(20,20,15,0.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: '100%', maxHeight: '90vh', overflow: 'auto', background: 'var(--c-bg-elev)', borderRadius: 'var(--r-xl)', boxShadow: 'var(--sh-3)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '16px 18px 14px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', gap: 12 }}>
           {lead}

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 
 import pytest
 
@@ -345,14 +346,34 @@ def test_payment_then_close(admin_client, client_id):
     assert early.status_code == 400, early.text
     assert "не полностью" in early.json()["detail"]
 
-    admin_client.post(f"/invoices/{invoice_id}/payments", json={"amount": 600, "paid_on": "2026-07-03"})
-    closed = admin_client.post(f"/invoices/{invoice_id}/close")
-    assert closed.status_code == 200, closed.text
-    assert closed.json()["message"] == "closed"
+    # Полная оплата сразу закрывает счёт — отдельный /close не нужен.
+    p2 = admin_client.post(f"/invoices/{invoice_id}/payments", json={"amount": 600, "paid_on": "2026-07-03"})
+    assert p2.status_code == 200, p2.text
+    d = admin_client.get(f"/invoices/{invoice_id}").json()
+    assert d["paid_amount"] == 1000
+    assert d["status"] == "closed"
 
     # Закрытый счёт изменять нельзя.
     locked = admin_client.post(f"/invoices/{invoice_id}/payments", json={"amount": 1})
     assert locked.status_code == 400, locked.text
+
+
+def test_full_payment_auto_closes_and_clears_overdue(admin_client, client_id):
+    # Счёт с уже прошедшим сроком: полная оплата должна закрыть его, а не оставить
+    # «частично оплачен» (активным) — иначе он висел бы в просрочке до ручного /close.
+    ship = _shipped_shipment(admin_client, client_id)
+    invoice_id = _issued_invoice(
+        admin_client, client_id, ship, total_amount=1000, due_date="2020-01-01"
+    )
+    pay = admin_client.post(
+        f"/invoices/{invoice_id}/payments", json={"amount": 1000, "paid_on": "2026-07-02"}
+    )
+    assert pay.status_code == 200, pay.text
+    d = admin_client.get(f"/invoices/{invoice_id}").json()
+    assert d["status"] == "closed"
+    assert d["paid_amount"] == 1000
+    # Закрытый счёт не считается просроченным.
+    assert d.get("overdue") in (False, None)
 
 
 def test_overpayment_rejected(admin_client, client_id):
@@ -495,11 +516,14 @@ def test_amount_correction_below_paid_blocked(admin_client, client_id):
     assert "оплаченной" in below.json()["detail"]
     assert admin_client.get(f"/invoices/{invoice_id}").json()["total_amount"] == 1000
 
-    # Ровно до оплаченной — можно, после чего счёт закрывается.
+    # Ровно до оплаченной — можно, и счёт сразу закрывается (полностью оплачен).
     exact = admin_client.patch(f"/invoices/{invoice_id}/amount", json={"total_amount": 600, "reason": "спор"})
     assert exact.status_code == 200, exact.text
-    closed = admin_client.post(f"/invoices/{invoice_id}/close")
-    assert closed.status_code == 200, closed.text
+    d = admin_client.get(f"/invoices/{invoice_id}").json()
+    assert d["status"] == "closed"
+    assert d["paid_amount"] == 600
+    # Закрытый счёт повторно закрыть нельзя — отдельный /close не нужен.
+    assert admin_client.post(f"/invoices/{invoice_id}/close").status_code == 400
 
 
 def test_amount_correction_rejected_on_draft(admin_client, client_id):
@@ -719,3 +743,23 @@ def test_receipt_of_other_client_rejected(admin_client, client_id):
     finally:
         _cleanup_invoices_and_shipments(other)
         cleanup_client(other)
+
+
+def test_rub_to_kop_precise_conversion():
+    """Конвертация рублей в копейки без потерь на банковском округлении round().
+
+    `round(rub*100)` округляет половину к чётному (round(0.5)→0, round(2.5)→2),
+    из-за чего точная половина копейки систематически терялась. rub_to_kop через
+    Decimal округляет половину вверх — копейка не пропадает.
+    """
+    from modules.invoices.service import rub_to_kop
+
+    assert rub_to_kop(None) == 0
+    assert rub_to_kop(0) == 0
+    assert rub_to_kop(1000) == 100_000
+    assert rub_to_kop("1.99") == 199
+    # Точная половина копейки: round(0.005*100)=round(0.5)=0, здесь → 1.
+    assert rub_to_kop(0.005) == 1
+    # round(2.5)=2 (к чётному); половина вверх → 3.
+    assert rub_to_kop(0.025) == 3
+    assert rub_to_kop(Decimal("0.025")) == 3

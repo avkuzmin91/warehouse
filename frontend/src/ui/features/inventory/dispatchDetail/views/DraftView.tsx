@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
 import { recommendedPallets } from '../../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../../api/balancesApi'
@@ -63,12 +63,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
 
+  // Не затираем несохранённые правки «Основной информации» при перезагрузке doc
+  // (например, после сохранения строки товара) — синхронизируемся только когда нет dirty.
   useEffect(() => {
+    if (infoDirty) return
     setShipDate(doc.ship_date ?? '')
     setLogisticsCost(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
     setComment(doc.comment ?? '')
-    setInfoDirty(false)
-  }, [doc])
+  }, [doc, infoDirty])
 
   useEffect(() => {
     setDrafts((prev) => {
@@ -150,11 +152,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
 
   // Пробрасываем сохранение «Основной информации» наверх: «Передать в подготовку»
   // сначала закоммитит незакоммиченные правки (в т.ч. ТЗ), иначе бэк отклонит переход.
+  // Стабильная обёртка над ref — регистрируем один раз, а не на каждый рендер.
+  const infoFlushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true))
+  infoFlushRef.current = () => (infoDirty ? handleInfoSave() : Promise.resolve(true))
   useEffect(() => {
     if (!registerInfoFlush) return
-    registerInfoFlush(() => (infoDirty ? handleInfoSave() : Promise.resolve(true)))
+    registerInfoFlush(() => infoFlushRef.current())
     return () => registerInfoFlush(null)
-  })
+  }, [registerInfoFlush])
 
   async function handleAssignSku(line: DispatchLine, skuBase: string) {
     await updateProduct(line.product_id, { sku_base: skuBase })

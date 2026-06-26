@@ -4,7 +4,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { DatePicker } from '../../../primitives/DatePicker'
-import { datePart, timePart, combineDateTime } from './dateTimeValue'
+import { datePart, timePart, combineDateTime, shiftHours } from './dateTimeValue'
 
 function ctrlStyle(empty: boolean, invalid?: boolean): CSSProperties {
   return {
@@ -142,40 +142,70 @@ export function TimeField({ value, placeholder = 'Выбрать дату', onCl
   )
 }
 
-/** Поле «дата + время»: DatePicker + ручной ввод чч:мм. Значение — `YYYY-MM-DD[THH:mm]`. */
-export function DateTimeField({ value, invalid, onChange }: {
+function dtfChipStyle(active: boolean): CSSProperties {
+  return {
+    padding: '3px 9px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+    border: `1px solid ${active ? 'var(--c-accent)' : 'var(--c-border-strong)'}`,
+    background: active ? 'var(--c-accent)' : 'var(--c-bg-elev)',
+    color: active ? '#fff' : 'var(--c-text-muted)',
+    fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', lineHeight: 1.4,
+  }
+}
+
+/**
+ * Поле «дата + время»: DatePicker + ручной ввод чч:мм. Значение — `YYYY-MM-DD[THH:mm]`.
+ * `hourPresets` рисует чипы «+N ч» от `presetBase` (или от текущего момента, если он пуст).
+ */
+export function DateTimeField({ value, invalid, onChange, hourPresets, presetBase }: {
   value: string
   invalid?: boolean
   onChange: (value: string) => void
+  hourPresets?: number[]
+  presetBase?: string
 }) {
   const date = datePart(value)
   const time = timePart(value)
   return (
-    <div style={{
-      display: 'grid', gridTemplateColumns: '1fr 88px', gap: 8,
+    <div className="dtf-field" style={{
       ...(invalid ? { padding: 2, margin: -2, borderRadius: 'var(--r-md)', border: '1px solid var(--c-danger)', background: 'var(--c-danger-bg)' } : null),
     }}>
-      <DatePicker value={date} onChange={(v) => onChange(combineDateTime(v, time))} />
-      <input
-        className="input sm mono"
-        value={time}
-        placeholder="чч:мм"
-        inputMode="numeric"
-        maxLength={5}
-        onChange={(e) => {
-          const raw = e.target.value.replace(/[^\d:]/g, '').slice(0, 5)
-          const normalized = raw.length === 2 && !raw.includes(':') ? `${raw}:` : raw
-          onChange(combineDateTime(date, normalized))
-        }}
-        onBlur={(e) => {
-          const m = e.target.value.match(/^(\d{1,2}):?(\d{2})$/)
-          if (!m || !date) return
-          const hh = Math.min(23, Number(m[1]))
-          const mm = Math.min(59, Number(m[2]))
-          onChange(combineDateTime(date, `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`))
-        }}
-        style={{ width: '100%', textAlign: 'center' }}
-      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 88px', gap: 8 }}>
+        <DatePicker value={date} onChange={(v) => onChange(combineDateTime(v, time))} />
+        <input
+          className="input sm mono"
+          value={time}
+          placeholder="чч:мм"
+          inputMode="numeric"
+          maxLength={5}
+          onChange={(e) => {
+            const raw = e.target.value.replace(/[^\d:]/g, '').slice(0, 5)
+            const normalized = raw.length === 2 && !raw.includes(':') ? `${raw}:` : raw
+            onChange(combineDateTime(date, normalized))
+          }}
+          onBlur={(e) => {
+            const m = e.target.value.match(/^(\d{1,2}):?(\d{2})$/)
+            if (!m || !date) return
+            const hh = Math.min(23, Number(m[1]))
+            const mm = Math.min(59, Number(m[2]))
+            onChange(combineDateTime(date, `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`))
+          }}
+          style={{ width: '100%', textAlign: 'center' }}
+        />
+      </div>
+      {hourPresets && hourPresets.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+          {hourPresets.map((h) => (
+            <button
+              key={`h${h}`}
+              type="button"
+              style={dtfChipStyle(false)}
+              onClick={() => onChange(shiftHours(presetBase ?? '', h))}
+            >
+              +{h} ч
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -200,7 +230,7 @@ export function MoneyField({ value, onChange, placeholder = '0', invalid }: {
         onChange={(e) => onChange?.(e.target.value.replace(/[^\d]/g, ''))}
         style={{
           flex: 1, border: 0, outline: 'none', background: 'transparent', fontFamily: 'var(--font-num)',
-          fontSize: 13.5, fontWeight: 500, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0,
+          fontSize: 13, fontWeight: 400, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1", minWidth: 0,
           color: 'var(--c-text)',
         }}
       />

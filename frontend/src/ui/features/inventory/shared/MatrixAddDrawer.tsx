@@ -5,10 +5,11 @@ import {
 } from '../../../../api/inventoryLookupsApi'
 import type { ProductVariantPair } from '../../../../api/inventoryLookupsApi'
 import type { InventoryProductLookup } from '../../../../api/domainTypes'
-import { Combobox } from '../../../data/Combobox'
 import { Drawer } from '../../../feedback/Drawer'
+import { Checkbox } from '../../../primitives/Checkbox'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { Icon } from '../../../primitives/Icon'
+import { foldCiSearch } from '../../../../utils/foldCiSearch'
 
 export type MatrixCell = {
   color_id: string | null
@@ -18,6 +19,11 @@ export type MatrixCell = {
   qty: number
 }
 
+export type ProductMatrixEntry = {
+  product: InventoryProductLookup
+  cells: MatrixCell[]
+}
+
 type Props = {
   open: boolean
   clientId: string
@@ -25,7 +31,7 @@ type Props = {
   existingKeys?: string[]
   title?: string
   onClose: () => void
-  onSubmit: (product: InventoryProductLookup, cells: MatrixCell[]) => void | Promise<void>
+  onSubmit: (entries: ProductMatrixEntry[]) => void | Promise<void>
 }
 
 type Axis = { id: string | null; name: string | null }
@@ -37,21 +43,42 @@ function axisKey(id: string | null): string {
 function cellKey(colorId: string | null, sizeId: string | null): string {
   return `${axisKey(colorId)}|${axisKey(sizeId)}`
 }
+function existKey(productId: string, colorId: string | null, sizeId: string | null): string {
+  return [productId, colorId ?? '', sizeId ?? ''].join('|')
+}
+
+function axesFromVariants(variants: ProductVariantPair[]) {
+  const colors = new Map<string, Axis>()
+  const sizes = new Map<string, Axis>()
+  const valid = new Set<string>()
+  let hasColor = false
+  let hasSize = false
+  for (const v of variants) {
+    if (v.color_id) hasColor = true
+    if (v.size_id) hasSize = true
+    colors.set(axisKey(v.color_id), { id: v.color_id, name: v.color_name })
+    sizes.set(axisKey(v.size_id), { id: v.size_id, name: v.size_name })
+    valid.add(cellKey(v.color_id, v.size_id))
+  }
+  return { colorAxis: [...colors.values()], sizeAxis: [...sizes.values()], validSet: valid, hasColor, hasSize }
+}
 
 /**
- * Массовый ввод строк через матрицу «цвет × размер»: товар выбирается один раз,
- * количества проставляются по всей сетке сразу. Источник сетки — реально
- * существующие варианты товара (product_variants), несуществующие пары недоступны.
+ * Массовый ввод строк сразу по нескольким товарам: список товаров клиента с чекбоксами,
+ * у отмеченного прямо под строкой разворачивается сетка «цвет × размер». Несуществующие пары
+ * недоступны, уже добавленные варианты помечены. Один сабмит отдаёт пачку по всем отмеченным.
  */
 export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Добавить товары', onClose, onSubmit }: Props) {
   const [products, setProducts] = useState<InventoryProductLookup[]>([])
-  const [productId, setProductId] = useState('')
-  const [variants, setVariants] = useState<ProductVariantPair[]>([])
-  const [loadingVariants, setLoadingVariants] = useState(false)
-  const [qty, setQty] = useState<Record<string, number>>({})
-  const [fillValue, setFillValue] = useState('')
+  const [filter, setFilter] = useState('')
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+  const [variantsByProduct, setVariantsByProduct] = useState<Record<string, ProductVariantPair[]>>({})
+  const [loadingIds, setLoadingIds] = useState<Record<string, boolean>>({})
+  const [qtyByProduct, setQtyByProduct] = useState<Record<string, Record<string, number>>>({})
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [sessionLines, setSessionLines] = useState(0)
+  const [sessionQty, setSessionQty] = useState(0)
 
   useEffect(() => {
     if (open && clientId) {
@@ -59,274 +86,286 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
     }
   }, [open, clientId])
 
-  const selectedProduct = products.find((p) => p.id === productId)
-
-  useEffect(() => {
-    setQty({})
-    setError('')
-    setVariants([])
-    if (!productId) return
-    const ctrl = new AbortController()
-    setLoadingVariants(true)
-    getInventoryProductVariants(productId, ctrl.signal)
-      .then((res) => { if (!ctrl.signal.aborted) setVariants(res) })
-      .catch(() => { /* aborted or error */ })
-      .finally(() => { if (!ctrl.signal.aborted) setLoadingVariants(false) })
-    return () => ctrl.abort()
-  }, [productId])
-
-  const { colorAxis, sizeAxis, validSet, hasColor, hasSize } = useMemo(() => {
-    const colors = new Map<string, Axis>()
-    const sizes = new Map<string, Axis>()
-    const valid = new Set<string>()
-    let anyColor = false
-    let anySize = false
-    for (const v of variants) {
-      if (v.color_id) anyColor = true
-      if (v.size_id) anySize = true
-      colors.set(axisKey(v.color_id), { id: v.color_id, name: v.color_name })
-      sizes.set(axisKey(v.size_id), { id: v.size_id, name: v.size_name })
-      valid.add(cellKey(v.color_id, v.size_id))
-    }
-    return {
-      colorAxis: [...colors.values()],
-      sizeAxis: [...sizes.values()],
-      validSet: valid,
-      hasColor: anyColor,
-      hasSize: anySize,
-    }
-  }, [variants])
-
   const existing = useMemo(() => new Set(existingKeys), [existingKeys])
-  function isExisting(colorId: string | null, sizeId: string | null): boolean {
-    if (!selectedProduct) return false
-    return existing.has([selectedProduct.id, colorId ?? '', sizeId ?? ''].join('|'))
+
+  const filtered = useMemo(() => {
+    const q = foldCiSearch(filter.trim())
+    if (!q) return products
+    return products.filter((p) => foldCiSearch(`${p.name} ${p.sku}`).includes(q))
+  }, [products, filter])
+
+  function ensureVariants(productId: string) {
+    if (variantsByProduct[productId] || loadingIds[productId]) return
+    setLoadingIds((m) => ({ ...m, [productId]: true }))
+    getInventoryProductVariants(productId)
+      .then((res) => setVariantsByProduct((m) => ({ ...m, [productId]: res })))
+      .catch(() => { /* ignore */ })
+      .finally(() => setLoadingIds((m) => ({ ...m, [productId]: false })))
   }
 
-  function setCell(colorId: string | null, sizeId: string | null, raw: string) {
+  function toggle(productId: string) {
+    setError('')
+    setChecked((m) => {
+      const next = { ...m, [productId]: !m[productId] }
+      if (next[productId]) ensureVariants(productId)
+      else setQtyByProduct((q) => { const c = { ...q }; delete c[productId]; return c })
+      return next
+    })
+  }
+
+  function setCell(productId: string, colorId: string | null, sizeId: string | null, raw: string) {
     const k = cellKey(colorId, sizeId)
     const n = parseInt(raw.replace(/\D/g, ''), 10)
-    setQty((prev) => {
-      const next = { ...prev }
-      if (!raw || !Number.isFinite(n) || n <= 0) delete next[k]
-      else next[k] = n
-      return next
+    setQtyByProduct((prev) => {
+      const cur = { ...(prev[productId] ?? {}) }
+      if (!raw || !Number.isFinite(n) || n <= 0) delete cur[k]
+      else cur[k] = n
+      return { ...prev, [productId]: cur }
     })
   }
 
-  function fillCells(predicate: (c: Axis, s: Axis) => boolean) {
-    const n = parseInt(fillValue.replace(/\D/g, ''), 10)
-    if (!Number.isFinite(n) || n <= 0) return
-    setQty((prev) => {
-      const next = { ...prev }
-      for (const c of colorAxis) {
-        for (const s of sizeAxis) {
-          if (!validSet.has(cellKey(c.id, s.id))) continue
-          if (isExisting(c.id, s.id)) continue
-          if (!predicate(c, s)) continue
-          next[cellKey(c.id, s.id)] = n
-        }
-      }
-      return next
-    })
-  }
-
-  const cells = useMemo<MatrixCell[]>(() => {
+  function cellsForProduct(product: InventoryProductLookup): MatrixCell[] {
+    const variants = variantsByProduct[product.id]
+    if (!variants) return []
+    const q = qtyByProduct[product.id] ?? {}
     const out: MatrixCell[] = []
-    for (const c of colorAxis) {
-      for (const s of sizeAxis) {
-        const v = qty[cellKey(c.id, s.id)]
-        if (!v || v <= 0) continue
-        if (!validSet.has(cellKey(c.id, s.id))) continue
-        if (isExisting(c.id, s.id)) continue
-        out.push({ color_id: c.id, color_name: c.name, size_id: s.id, size_name: s.name, qty: v })
-      }
+    for (const v of variants) {
+      const val = q[cellKey(v.color_id, v.size_id)]
+      if (!val || val <= 0) continue
+      if (existing.has(existKey(product.id, v.color_id, v.size_id))) continue
+      out.push({ color_id: v.color_id, color_name: v.color_name, size_id: v.size_id, size_name: v.size_name, qty: val })
     }
     return out
-  }, [qty, colorAxis, sizeAxis, validSet, selectedProduct, existing])
-
-  const totalQty = cells.reduce((s, c) => s + c.qty, 0)
-
-  function rowSum(colorId: string | null): number {
-    let s = 0
-    for (const sz of sizeAxis) s += qty[cellKey(colorId, sz.id)] ?? 0
-    return s
   }
-  function colSum(sizeId: string | null): number {
-    let s = 0
-    for (const c of colorAxis) s += qty[cellKey(c.id, sizeId)] ?? 0
-    return s
-  }
+
+  const entries = useMemo<ProductMatrixEntry[]>(() => {
+    const out: ProductMatrixEntry[] = []
+    for (const p of products) {
+      if (!checked[p.id]) continue
+      const cells = cellsForProduct(p)
+      if (cells.length > 0) out.push({ product: p, cells })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, checked, qtyByProduct, variantsByProduct, existing])
+
+  const totalLines = entries.reduce((s, e) => s + e.cells.length, 0)
+  const totalQty = entries.reduce((s, e) => s + e.cells.reduce((a, c) => a + c.qty, 0), 0)
+  const checkedCount = Object.values(checked).filter(Boolean).length
 
   async function handleSubmit() {
-    if (!selectedProduct) { setError('Выберите товар'); return }
-    if (cells.length === 0) { setError('Проставьте количество хотя бы для одного варианта'); return }
+    if (entries.length === 0) { setError('Проставьте количество хотя бы для одного товара'); return }
     setError('')
     setSubmitting(true)
     try {
-      await onSubmit(selectedProduct, cells)
+      await onSubmit(entries)
+      setSessionLines((n) => n + totalLines)
+      setSessionQty((n) => n + totalQty)
+      // Не закрываем шторку: чистим выбор для следующей пачки.
+      setChecked({})
+      setQtyByProduct({})
+      setSubmitting(false)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
       setSubmitting(false)
     }
   }
 
-  const showGrid = !!selectedProduct && !loadingVariants && variants.length > 0
-  const singleCell = !hasColor && !hasSize
-
   return (
     <Drawer
       open={open}
       onClose={onClose}
       title={title}
-      subtitle="Выберите товар и проставьте количество по всей сетке"
+      subtitle="Отметьте товары галочкой и проставьте количество — за один раз можно добавить несколько"
       width={760}
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={submitting}>Отмена</button>
-          <button className="btn primary" disabled={cells.length === 0 || submitting} onClick={() => void handleSubmit()}>
+          {sessionLines > 0 && (
+            <span style={{ marginRight: 'auto', fontSize: 12, color: 'var(--c-text-subtle)', alignSelf: 'center' }}>
+              Добавлено: <b style={{ color: 'var(--c-text)' }}>{sessionLines}</b> строк · {sessionQty} шт
+            </span>
+          )}
+          <button className="btn" onClick={onClose} disabled={submitting}>
+            {sessionLines > 0 ? 'Готово' : 'Отмена'}
+          </button>
+          <button className="btn primary" disabled={entries.length === 0 || submitting} onClick={() => void handleSubmit()}>
             <Icon name="plus" size={13} />
-            {submitting ? 'Добавление…' : `Добавить${cells.length > 0 ? ` · ${cells.length} строк · ${totalQty} шт` : ''}`}
+            {submitting
+              ? 'Добавление…'
+              : `Добавить${entries.length > 0 ? ` · ${entries.length} тов · ${totalLines} строк · ${totalQty} шт` : ''}`}
           </button>
         </>
       }
     >
       {error && <div style={{ color: 'var(--c-danger)', fontSize: 12.5, marginBottom: 10 }}>{error}</div>}
 
-      <div>
-        <label className="field-label">
-          <span>Товар (SKU) <span style={{ color: 'var(--c-danger)' }}>*</span></span>
-        </label>
-        <Combobox
-          value={productId}
-          placeholder="Поиск по SKU или названию…"
-          options={products.map((p) => ({ value: p.id, label: p.name, sub: p.sku_pending ? 'Без SKU' : p.sku }))}
-          onChange={(v) => setProductId(String(v ?? ''))}
-          prefix="search"
-        />
-      </div>
+      <input
+        className="input sm"
+        placeholder="Поиск товара по названию или SKU…"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        style={{ width: '100%', marginBottom: 12 }}
+      />
 
-      {loadingVariants && (
-        <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: '20px 0' }}>Загрузка вариантов…</div>
-      )}
-
-      {!loadingVariants && selectedProduct && variants.length === 0 && (
+      {products.length === 0 ? (
         <div style={{ padding: '24px 0' }}>
-          <EmptyState title="Нет вариантов" sub="У товара не заведены складские варианты (цвет/размер)" />
+          <EmptyState title="Нет товаров" sub="У клиента не заведены товары" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: '24px 0' }}>
+          <EmptyState title="Ничего не найдено" sub="Измените запрос поиска" />
+        </div>
+      ) : (
+        <div style={{ border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+          {filtered.map((p, i) => {
+            const isChecked = !!checked[p.id]
+            const variants = variantsByProduct[p.id]
+            const loading = !!loadingIds[p.id]
+            const cnt = cellsForProduct(p).length
+            return (
+              <div key={p.id} style={{ borderTop: i === 0 ? undefined : '1px solid var(--c-border)' }}>
+                <div
+                  role="checkbox"
+                  aria-checked={isChecked}
+                  tabIndex={0}
+                  onClick={() => toggle(p.id)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault()
+                    toggle(p.id)
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', cursor: 'pointer',
+                    background: isChecked ? 'var(--c-accent-bg)' : undefined,
+                  }}
+                >
+                  <Checkbox checked={isChecked} onChange={() => toggle(p.id)} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 450, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {p.name}
+                    </div>
+                    <div className="t-sub mono" style={{ fontSize: 11.5 }}>{p.sku_pending ? 'Без SKU' : p.sku}</div>
+                  </div>
+                  {isChecked && cnt > 0 && (
+                    <span style={{ fontSize: 11.5, color: 'var(--c-accent)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                      {cnt} строк
+                    </span>
+                  )}
+                </div>
+
+                {isChecked && (
+                  <div style={{ padding: '0 12px 12px 38px' }}>
+                    {loading && <div style={{ color: 'var(--c-text-muted)', fontSize: 12.5, padding: '4px 0' }}>Загрузка вариантов…</div>}
+                    {!loading && variants && variants.length === 0 && (
+                      <div style={{ color: 'var(--c-text-subtle)', fontSize: 12.5, padding: '4px 0' }}>
+                        У товара не заведены складские варианты (цвет/размер)
+                      </div>
+                    )}
+                    {!loading && variants && variants.length > 0 && (
+                      <ProductMatrix
+                        productId={p.id}
+                        variants={variants}
+                        qty={qtyByProduct[p.id] ?? {}}
+                        isExisting={(c, s) => existing.has(existKey(p.id, c, s))}
+                        onCell={(c, s, raw) => setCell(p.id, c, s, raw)}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {showGrid && (
-        <>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-            margin: '14px 0 12px', padding: '8px 10px',
-            background: 'var(--c-bg-sunken)', borderRadius: 'var(--r-md)',
-          }}>
-            <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Быстрое заполнение:</span>
-            <input
-              className="input sm"
-              inputMode="numeric"
-              placeholder="кол-во"
-              value={fillValue}
-              onChange={(e) => setFillValue(e.target.value.replace(/\D/g, ''))}
-              style={{ width: 78 }}
-            />
-            <button className="btn sm" disabled={!fillValue} onClick={() => fillCells(() => true)}>Заполнить всё</button>
-            <button className="btn sm" disabled={Object.keys(qty).length === 0} onClick={() => setQty({})}>Очистить</button>
-          </div>
-
-          {singleCell ? (
-            <SingleCellInput
-              value={qty[cellKey(null, null)] ?? 0}
-              disabled={isExisting(null, null)}
-              onChange={(raw) => setCell(null, null, raw)}
-            />
-          ) : (
-            <div style={{ overflowX: 'auto', border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)' }}>
-              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
-                <thead>
-                  <tr>
-                    <th style={thStyle('left', true)}>{hasColor ? 'Цвет \\ Размер' : 'Размер'}</th>
-                    {sizeAxis.map((s) => (
-                      <th key={axisKey(s.id)} style={thStyle('center')}>
-                        <div>{s.name ?? '—'}</div>
-                        <button
-                          className="btn ghost icon sm"
-                          title="Заполнить столбец"
-                          disabled={!fillValue}
-                          onClick={() => fillCells((_c, sz) => sz.id === s.id)}
-                          style={{ height: 18, width: 18 }}
-                        >
-                          <Icon name="arrowDown" size={11} />
-                        </button>
-                      </th>
-                    ))}
-                    <th style={thStyle('right')}>Σ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {colorAxis.map((c) => (
-                    <tr key={axisKey(c.id)}>
-                      <td style={rowHeadStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ flex: 1, minWidth: 0 }}>{c.name ?? '—'}</span>
-                          {hasColor && (
-                            <button
-                              className="btn ghost icon sm"
-                              title="Заполнить строку"
-                              disabled={!fillValue}
-                              onClick={() => fillCells((col) => col.id === c.id)}
-                              style={{ height: 18, width: 18 }}
-                            >
-                              <Icon name="arrowRight" size={11} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                      {sizeAxis.map((s) => {
-                        const valid = validSet.has(cellKey(c.id, s.id))
-                        const taken = isExisting(c.id, s.id)
-                        const k = cellKey(c.id, s.id)
-                        return (
-                          <td key={axisKey(s.id)} style={{ padding: 3, textAlign: 'center', background: !valid ? 'var(--c-bg-sunken)' : undefined }}>
-                            {!valid ? (
-                              <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
-                            ) : taken ? (
-                              <span title="Вариант уже добавлен" style={{ color: 'var(--c-text-subtle)' }}>
-                                <Icon name="check" size={12} />
-                              </span>
-                            ) : (
-                              <input
-                                inputMode="numeric"
-                                value={qty[k] ? String(qty[k]) : ''}
-                                placeholder="0"
-                                onChange={(e) => setCell(c.id, s.id, e.target.value)}
-                                style={cellInputStyle(!!qty[k])}
-                              />
-                            )}
-                          </td>
-                        )
-                      })}
-                      <td style={sumCellStyle}>{rowSum(c.id) || ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr style={{ borderTop: '1px solid var(--c-border-strong)' }}>
-                    <td style={{ ...rowHeadStyle, fontWeight: 600 }}>Итого</td>
-                    {sizeAxis.map((s) => (
-                      <td key={axisKey(s.id)} style={sumCellStyle}>{colSum(s.id) || ''}</td>
-                    ))}
-                    <td style={{ ...sumCellStyle, fontWeight: 600, color: 'var(--c-text)' }}>{totalQty || ''}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          )}
-        </>
+      {checkedCount > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--c-text-subtle)' }}>
+          Выбрано товаров: <b style={{ color: 'var(--c-text)' }}>{checkedCount}</b>
+        </div>
       )}
     </Drawer>
+  )
+}
+
+function ProductMatrix({
+  variants,
+  qty,
+  isExisting,
+  onCell,
+}: {
+  productId: string
+  variants: ProductVariantPair[]
+  qty: Record<string, number>
+  isExisting: (colorId: string | null, sizeId: string | null) => boolean
+  onCell: (colorId: string | null, sizeId: string | null, raw: string) => void
+}) {
+  const { colorAxis, sizeAxis, validSet, hasColor, hasSize } = useMemo(() => axesFromVariants(variants), [variants])
+  const singleCell = !hasColor && !hasSize
+
+  if (singleCell) {
+    const taken = isExisting(null, null)
+    const k = cellKey(null, null)
+    return taken ? (
+      <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)', padding: '4px 0' }}>Этот товар уже добавлен</div>
+    ) : (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+        <span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Количество</span>
+        <input
+          className="input sm"
+          inputMode="numeric"
+          placeholder="0"
+          value={qty[k] ? String(qty[k]) : ''}
+          onChange={(e) => onCell(null, null, e.target.value)}
+          style={{ width: 120 }}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ overflowX: 'auto', border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)', marginTop: 4 }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+        <thead>
+          <tr>
+            <th style={thStyle('left', true)}>{hasColor ? 'Цвет \\ Размер' : 'Размер'}</th>
+            {sizeAxis.map((s) => (
+              <th key={axisKey(s.id)} style={thStyle('center')}>{s.name ?? '—'}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {colorAxis.map((c) => (
+            <tr key={axisKey(c.id)}>
+              <td style={rowHeadStyle}>{c.name ?? '—'}</td>
+              {sizeAxis.map((s) => {
+                const valid = validSet.has(cellKey(c.id, s.id))
+                const taken = isExisting(c.id, s.id)
+                const k = cellKey(c.id, s.id)
+                return (
+                  <td key={axisKey(s.id)} style={{ padding: 3, textAlign: 'center', background: !valid ? 'var(--c-bg-sunken)' : undefined }}>
+                    {!valid ? (
+                      <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
+                    ) : taken ? (
+                      <span title="Вариант уже добавлен" style={{ color: 'var(--c-text-subtle)' }}>
+                        <Icon name="check" size={12} />
+                      </span>
+                    ) : (
+                      <input
+                        inputMode="numeric"
+                        value={qty[k] ? String(qty[k]) : ''}
+                        placeholder="0"
+                        onChange={(e) => onCell(c.id, s.id, e.target.value)}
+                        style={cellInputStyle(!!qty[k])}
+                      />
+                    )}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -352,14 +391,6 @@ const rowHeadStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const sumCellStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  textAlign: 'right',
-  color: 'var(--c-text-subtle)',
-  fontFamily: 'var(--font-num)',
-  fontVariantNumeric: 'tabular-nums',
-}
-
 function cellInputStyle(filled: boolean): React.CSSProperties {
   return {
     width: 44,
@@ -374,24 +405,4 @@ function cellInputStyle(filled: boolean): React.CSSProperties {
     fontSize: 13,
     color: filled ? 'var(--c-text)' : 'var(--c-text-subtle)',
   }
-}
-
-function SingleCellInput({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (raw: string) => void }) {
-  return (
-    <div style={{ marginTop: 14 }}>
-      <label className="field-label"><span>Количество <span style={{ color: 'var(--c-danger)' }}>*</span></span></label>
-      {disabled ? (
-        <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Этот товар уже добавлен</div>
-      ) : (
-        <input
-          className="input sm"
-          inputMode="numeric"
-          placeholder="0"
-          value={value ? String(value) : ''}
-          onChange={(e) => onChange(e.target.value)}
-          style={{ width: 160 }}
-        />
-      )}
-    </div>
-  )
 }

@@ -4,7 +4,8 @@ import { createTrip, handoffTrip, tripLexicon, type TripCargoType, type TripDire
 import { getCarriers, getVehicleTypes, getWarehouses, type DictionaryItem } from '../../api/lookupsApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
-import { fmtDate, moscowNowIso, moscowTodayYmd } from '../../utils/format'
+import { isDateTimeBefore, isDateTimeComplete } from '../../components/DateTimeField'
+import { fmtDate, moscowNowIso } from '../../utils/format'
 import { TripDocPickerSheet, type TripPickDoc } from './TripDocPickerSheet'
 import { TripPlanningFields, EMPTY_PLANNING, type PlanningValue } from './TripPlanningFields'
 
@@ -16,10 +17,10 @@ function modeToParams(mode: Mode): { direction: TripDirection; cargoType: TripCa
   return { direction: 'outbound', cargoType: mode === 'out_defect' ? 'defect' : 'good' }
 }
 
-// «Транспорт заказан» — момент создания карточки (МСК, дата+время); «Плановое прибытие»
-// — та же дата без времени (время кладовщик уточняет позже).
+// «Транспорт заказан» и «Плановое прибытие» — оба дата+время по МСК (менеджер
+// корректирует). Дефолт eta полный, чтобы проходить гейт isDateTimeComplete.
 function initialPlanning(): PlanningValue {
-  return { ...EMPTY_PLANNING, orderedAt: moscowNowIso().slice(0, 16), eta: moscowTodayYmd() }
+  return { ...EMPTY_PLANNING, orderedAt: moscowNowIso().slice(0, 16), eta: moscowNowIso().slice(0, 16) }
 }
 
 export function TripFormScreen() {
@@ -63,7 +64,7 @@ export function TripFormScreen() {
 
   const costNum = Number(form.costEstimate)
   const costFilled = form.costEstimate.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
-  const etaBeforeOrder = !!form.orderedAt && !!form.eta && form.eta < form.orderedAt
+  const etaBeforeOrder = isDateTimeBefore(form.eta, form.orderedAt)
 
   const blockReasons: string[] = []
   if (!form.originId) blockReasons.push(`Не указано «${lex.routeLabel}»`)
@@ -71,8 +72,8 @@ export function TripFormScreen() {
   if (!form.vehicleTypeId) blockReasons.push('Не выбран тип кузова')
   if (form.vehicleNumber.trim() === '') blockReasons.push('Не указан гос. номер')
   if (!costFilled) blockReasons.push('Не указана стоимость логистики (план)')
-  if (!form.orderedAt) blockReasons.push('Не указано «Транспорт заказан»')
-  if (!form.eta) blockReasons.push('Не указано плановое прибытие')
+  if (!isDateTimeComplete(form.orderedAt)) blockReasons.push('Не указано «Транспорт заказан»')
+  if (!isDateTimeComplete(form.eta)) blockReasons.push('Не указано плановое прибытие')
   if (etaBeforeOrder) blockReasons.push('Плановое прибытие раньше заказа транспорта')
   if (docs.length === 0) blockReasons.push(outbound ? 'Не выбрано ни одной отгрузки' : 'Не выбрано ни одного поступления')
 

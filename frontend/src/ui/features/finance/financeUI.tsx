@@ -180,7 +180,7 @@ export function CargoTag({ cargoType }: { cargoType: string }) {
  *  Переиспользуется при выборе отгрузок (создание/привязка) и в карточке счёта —
  *  чтобы видеть содержимое, не уходя со страницы. */
 export function ShipmentContentsPanel({ shipmentId }: { shipmentId: string }) {
-  const { data, loading, error } = useApi(() => getShipment(shipmentId), [shipmentId])
+  const { data, loading, error } = useApi((signal) => getShipment(shipmentId, signal), [shipmentId])
 
   if (loading) {
     return <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', padding: '4px 0' }}>Загрузка состава…</div>

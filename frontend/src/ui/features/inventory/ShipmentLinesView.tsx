@@ -26,6 +26,19 @@ function groupLinesByDay(items: ShipmentLinesListItem[]) {
   return groups
 }
 
+// «Факт» = упакованный годный. Найденный при упаковке брак возвращается на
+// хранение (packed/defect → storage/defect) и в этой товарной отгрузке не едет,
+// поэтому в факт выполнения плана он не входит.
+function linePackedQty(item: ShipmentLinesListItem) {
+  return item.packed_good ?? 0
+}
+
+function lineProgress(item: ShipmentLinesListItem) {
+  const totalQty = item.qty || 0
+  const packedQty = linePackedQty(item)
+  return totalQty > 0 ? Math.min(100, Math.floor(packedQty / totalQty * 100)) : 0
+}
+
 type Props = {
   search?:    string
   sku?:       string
@@ -74,8 +87,8 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, carg
             <th style={{ width: 110 }}>Дата упаковки</th>
             <th style={{ textAlign: 'right', width: 80 }}>План</th>
             <th style={{ textAlign: 'right', width: 80 }}>Факт</th>
-            <th style={{ width: 140 }}>Место</th>
             <th style={{ width: 130 }}>Статус</th>
+            <th style={{ width: 150 }}>Выполнение</th>
           </tr>
         </thead>
         <tbody>
@@ -119,12 +132,34 @@ export function ShipmentLinesView({ search, sku, clientId, status, overdue, carg
                 </Td>
                 <Td className="mono">{fmtDate(it.ship_date)}</Td>
                 <Td className="num">{it.qty.toLocaleString('ru-RU')}</Td>
-                <Td className="num">{it.shipped_qty.toLocaleString('ru-RU')}</Td>
-                <Td className="t-sub">{it.storage_zone_name ?? '—'}</Td>
+                <Td className="num">{linePackedQty(it).toLocaleString('ru-RU')}</Td>
                 <Td>
                   <Badge tone={SHIPMENT_STATUS_TONES[it.status] as BadgeTone} dot>
                     {it.status_label}
                   </Badge>
+                </Td>
+                <Td>
+                  {(() => {
+                    const pct = lineProgress(it)
+                    const complete = pct >= 100
+                    return (
+                      <div style={{ minWidth: 120 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-border-strong)', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%', borderRadius: 3,
+                              width: `${pct}%`,
+                              background: complete ? 'var(--c-success)' : 'var(--c-accent)',
+                              transition: 'width 0.3s',
+                            }} />
+                          </div>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: complete ? 'var(--c-success)' : 'var(--c-text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>
+                            {pct}%
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </Td>
               </tr>
                 ))}

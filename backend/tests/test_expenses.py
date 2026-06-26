@@ -396,6 +396,104 @@ def test_carrier_outstanding_and_fifo(admin_client, carrier_logistics):
     assert next(c for c in out2 if c["carrier_id"] == carrier_id)["outstanding_amount"] == 30000
 
 
+def test_analytics_daily_series_and_kinds(admin_client, dict_ids):
+    cat, src = dict_ids
+    # Дальние даты 2099 — изоляция от прочих данных общей тестовой БД.
+    _create_expense(admin_client, cat, src, spent_on="2099-06-10", amount=100000)
+    _create_expense(admin_client, cat, src, spent_on="2099-06-12", amount=40000)
+
+    a = admin_client.get("/expenses/analytics?date_from=2099-06-10&date_to=2099-06-12&kinds=manual").json()
+    assert a["days"] == 3
+    by_day = {p["date"]: p["amount"] for p in a["series"]}
+    assert by_day["2099-06-10"] == 100000
+    assert by_day["2099-06-11"] == 0
+    assert by_day["2099-06-12"] == 40000
+    assert a["total_amount"] == 140000
+    assert a["max_day_amount"] == 100000
+    manual = next(k for k in a["by_kind"] if k["kind"] == "manual")
+    assert manual["amount"] == 140000 and manual["count"] == 2
+    by_cat = next(c for c in a["by_category"] if c["id"] == cat)
+    assert by_cat["amount"] == 140000 and by_cat["count"] == 2  # распределение по категории
+    paid = next(s for s in a["by_status"] if s["payment_status"] == "paid")
+    assert paid["amount"] == 140000  # оба расхода оплачены по умолчанию
+
+
+def test_analytics_category_matrix(admin_client, dict_ids):
+    # Матрица «категория × день»: серия категории выровнена с series по дням,
+    # сумма категорий по каждому дню сходится с дневным итогом.
+    cat, src = dict_ids
+    _create_expense(admin_client, cat, src, spent_on="2099-09-10", amount=100000)
+    _create_expense(admin_client, cat, src, spent_on="2099-09-12", amount=40000)
+
+    a = admin_client.get("/expenses/analytics?date_from=2099-09-10&date_to=2099-09-12&kinds=manual").json()
+    assert len(a["series"]) == 3
+    row = next(c for c in a["categories"] if c["id"] == cat)
+    assert row["series"] == [100000, 0, 40000]
+    assert row["kind"] == "manual"
+    day_from_cats = [sum(c["series"][i] for c in a["categories"]) for i in range(len(a["series"]))]
+    assert day_from_cats == [p["amount"] for p in a["series"]]
+
+
+def test_analytics_excludes_cancelled(admin_client, dict_ids):
+    # Аннулированный расход не входит ни в один срез отчёта.
+    cat, src = dict_ids
+    keep = _create_expense(admin_client, cat, src, spent_on="2099-08-10", amount=70000)
+    drop = admin_client.post("/expenses", json={
+        "spent_on": "2099-08-10", "category_id": cat, "name": "Отменённый",
+        "quantity": 1, "unit": "шт", "amount": 50000, "kind": "manual", "payment_status": "awaiting",
+    }).json()["message"]
+    assert admin_client.post(f"/expenses/{drop}/cancel").status_code == 200
+    _ = keep
+
+    a = admin_client.get("/expenses/analytics?date_from=2099-08-01&date_to=2099-08-31&kinds=manual").json()
+    assert a["total_amount"] == 70000  # только не-аннулированный
+    assert all(s["payment_status"] != "cancelled" for s in a["by_status"])  # аннулированных нет
+    by_cat = next(c for c in a["by_category"] if c["id"] == cat)
+    assert by_cat["amount"] == 70000
+    # by_category в сумме сходится с total.
+    assert sum(c["amount"] for c in a["by_category"]) == a["total_amount"]
+
+
+def test_analytics_spreads_rent_over_period(admin_client):
+    # Аренда за месяц размазывается ровно по дням периода (а не пиком в день начисления).
+    rent_id = admin_client.post("/expenses", json={
+        "spent_on": "2099-04-01", "name": "Аренда тест", "amount": 300000,
+        "kind": "rent", "payment_status": "awaiting",
+        "period_start": "2099-04-01", "period_end": "2099-04-30",
+    }).json()["message"]
+    try:
+        a = admin_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-30&kinds=rent").json()
+        assert a["total_amount"] == 300000  # вся сумма внутри окна
+        by_day = {p["date"]: p["amount"] for p in a["series"]}
+        assert by_day["2099-04-15"] == 10000  # 300000 / 30 дней
+        rent = next(k for k in a["by_kind"] if k["kind"] == "rent")
+        assert rent["amount"] == 300000 and rent["count"] == 1
+        # Частичное окно (первые 10 дней) — учитывается только попавшая доля.
+        half = admin_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-10&kinds=rent").json()
+        assert half["total_amount"] == 100000
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM expense_ops WHERE expense_id = ?", (rent_id,))
+            conn.execute("DELETE FROM material_expenses WHERE id = ?", (rent_id,))
+            conn.commit()
+
+
+def test_analytics_manager_scope_excludes_admin_kinds(manager_client):
+    # Менеджер не может явно запросить аренду/ЗП.
+    assert manager_client.get(
+        "/expenses/analytics?date_from=2099-04-01&date_to=2099-04-02&kinds=rent"
+    ).status_code == 403
+    # Без явных типов — область менеджера: аренда и ЗП в разбивке не появляются.
+    a = manager_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-02").json()
+    assert all(k["kind"] not in ("rent", "salary") for k in a["by_kind"])
+
+
+def test_analytics_rbac_forbids_warehouse(warehouse_client):
+    assert warehouse_client.get(
+        "/expenses/analytics?date_from=2099-04-01&date_to=2099-04-02"
+    ).status_code == 403
+
+
 def test_summary_excludes_cancelled(admin_client, dict_ids):
     cat, src = dict_ids
     _create_expense(admin_client, cat, src, amount=100000)  # оплачено

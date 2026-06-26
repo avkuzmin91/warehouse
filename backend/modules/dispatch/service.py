@@ -203,11 +203,27 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     quality = _doc_quality(connection, doc_id)
 
     lines = connection.execute(
-        "SELECT id, product_id, color_id, size_id "
+        "SELECT id, product_id, color_id, size_id, qty, COALESCE(shipped_qty, 0) AS shipped_qty "
         "FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 "
         "ORDER BY created_at, id",
         (doc_id,),
     ).fetchall()
+
+    # Распределённое в активные ещё-не-уехавшие рейсы — одним агрегатом по всем строкам.
+    pending_rows = connection.execute(
+        """SELECT ta.dispatch_line_id AS lid, COALESCE(SUM(ta.qty), 0) AS q
+           FROM trip_alloc ta
+           JOIN trip_lines tl ON tl.id = ta.trip_line_id
+           JOIN trip_docs td ON td.id = tl.trip_id
+           JOIN dispatch_lines dl ON dl.id = ta.dispatch_line_id
+           WHERE dl.doc_id = ?
+             AND COALESCE(ta.is_deleted, 0) = 0
+             AND COALESCE(tl.is_deleted, 0) = 0
+             AND td.status IN (?, ?, ?)
+           GROUP BY ta.dispatch_line_id""",
+        (doc_id, TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING),
+    ).fetchall()
+    pending_by_line = {str(r["lid"]): int(r["q"] or 0) for r in pending_rows}
 
     variant_ready_left: dict[tuple, int] = {}
     for ln in lines:
@@ -228,21 +244,7 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     result: dict[str, int] = {}
     for ln in lines:
         line_id = str(ln["id"])
-        full = connection.execute(
-            "SELECT qty, COALESCE(shipped_qty, 0) AS shipped_qty FROM dispatch_lines WHERE id = ?",
-            (line_id,),
-        ).fetchone()
-        pending = connection.execute(
-            """SELECT COALESCE(SUM(ta.qty), 0) AS q FROM trip_alloc ta
-               JOIN trip_lines tl ON tl.id = ta.trip_line_id
-               JOIN trip_docs td ON td.id = tl.trip_id
-               WHERE ta.dispatch_line_id = ?
-                 AND COALESCE(ta.is_deleted, 0) = 0
-                 AND COALESCE(tl.is_deleted, 0) = 0
-                 AND td.status IN (?, ?, ?)""",
-            (line_id, TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING),
-        ).fetchone()
-        base = max(0, int(full["qty"] or 0) - int(full["shipped_qty"] or 0) - int(pending["q"] or 0))
+        base = max(0, int(ln["qty"] or 0) - int(ln["shipped_qty"] or 0) - pending_by_line.get(line_id, 0))
         key = (str(ln["product_id"]), ln["color_id"], ln["size_id"])
         give = min(base, variant_ready_left.get(key, 0))
         variant_ready_left[key] = variant_ready_left.get(key, 0) - give

@@ -8,10 +8,11 @@ interface ModalProps {
   subtitle?: string
   width?: number
   footer?: ReactNode
+  closeOnBackdrop?: boolean
   children: ReactNode
 }
 
-export function Modal({ open, onClose, title, subtitle, width = 480, footer, children }: ModalProps) {
+export function Modal({ open, onClose, title, subtitle, width = 480, footer, closeOnBackdrop = false, children }: ModalProps) {
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -20,6 +21,10 @@ export function Modal({ open, onClose, title, subtitle, width = 480, footer, chi
   }, [open, onClose])
 
   if (!open) return null
+
+  const handleBackdropClick = () => {
+    if (closeOnBackdrop) onClose()
+  }
 
   return (
     <div
@@ -30,7 +35,7 @@ export function Modal({ open, onClose, title, subtitle, width = 480, footer, chi
         backdropFilter: 'blur(2px)',
         padding: 16,
       }}
-      onClick={onClose}
+      onClick={handleBackdropClick}
     >
       <div
         style={{

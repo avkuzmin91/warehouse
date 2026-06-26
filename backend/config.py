@@ -645,20 +645,23 @@ EXPENSE_KIND_MANUAL    = "manual"      # ручная разовая закуп�
 EXPENSE_KIND_LOGISTICS = "logistics"   # автоматически из рейса (стоимость логистики)
 EXPENSE_KIND_RENT      = "rent"        # оплата склада (аренда)
 EXPENSE_KIND_SALARY    = "salary"      # выплата ЗП сотруднику
+EXPENSE_KIND_RECURRING = "recurring"   # авто из шаблона регулярного расхода (погрузчик и т.п.)
 
 EXPENSE_KINDS_ALL: tuple[str, ...] = (
     EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
+    EXPENSE_KIND_RECURRING,
 )
 EXPENSE_KIND_LABELS: dict[str, str] = {
     EXPENSE_KIND_MANUAL:    "Хозрасход",
     EXPENSE_KIND_LOGISTICS: "Логистика",
     EXPENSE_KIND_RENT:      "Аренда",
     EXPENSE_KIND_SALARY:    "Зарплата",
+    EXPENSE_KIND_RECURRING: "Регулярный",
 }
-# Видимость по ролям: менеджер видит только хозрасходы и логистику; аренда и ЗП —
-# только админ. Реестр-список и сводка фильтруются этим набором (см. security).
+# Видимость по ролям: менеджер видит хозрасходы, логистику и регулярные расходы;
+# аренда и ЗП — только админ. Реестр-список и сводка фильтруются этим набором (см. security).
 EXPENSE_KINDS_MANAGER_VISIBLE: frozenset[str] = frozenset({
-    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS,
+    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RECURRING,
 })
 EXPENSE_KINDS_ADMIN_ONLY: frozenset[str] = frozenset({
     EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
@@ -669,6 +672,16 @@ EXPENSE_SOURCE_TRIP      = "trip"       # рейс (логистика)
 EXPENSE_SOURCE_EMPLOYEE  = "employee"   # сотрудник (ЗП-оклад, авто-начисление)
 EXPENSE_SOURCE_WAREHOUSE = "warehouse"  # склад (аренда)
 EXPENSE_SOURCE_PAYROLL   = "payroll"    # выплата по табелю (ЗП почасовика), source_id = payroll_payments.id
+EXPENSE_SOURCE_RECURRING = "recurring"  # шаблон регулярного расхода, source_id = recurring_expenses.id
+
+# Периодичность регулярного расхода: ежедневно или раз в месяц в заданное число.
+RECURRING_FREQ_DAILY   = "daily"
+RECURRING_FREQ_MONTHLY = "monthly"
+RECURRING_FREQ_ALL: tuple[str, ...] = (RECURRING_FREQ_DAILY, RECURRING_FREQ_MONTHLY)
+RECURRING_FREQ_LABELS: dict[str, str] = {
+    RECURRING_FREQ_DAILY:   "Ежедневно",
+    RECURRING_FREQ_MONTHLY: "Ежемесячно",
+}
 
 # Статус оплаты расхода. Рейсовая логистика создаётся «ожидает оплаты»; ручной
 # хозрасход по умолчанию «оплачено» (фиксация постфактум), но может быть и «ожидает».

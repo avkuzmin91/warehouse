@@ -401,8 +401,8 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
 #   defect = конвертации качества good→defect минус обратные. Раскладка брака
 #           (packed→storage с тем же качеством) и списание факт не меняют.
 _PACKED_NET_SQL = """
-    COALESCE(SUM(CASE WHEN {p}to_op='packed'   AND {p}to_quality='good'   AND COALESCE({p}from_op,'') NOT IN ('packed','ready') THEN {p}qty
-                      WHEN {p}from_op='packed' AND {p}from_quality='good' AND {p}to_op='packing'                              THEN -{p}qty
+    COALESCE(SUM(CASE WHEN {p}to_op IN ('packed','ready')   AND {p}to_quality='good'   AND COALESCE({p}from_op,'') NOT IN ('packed','ready') THEN {p}qty
+                      WHEN {p}from_op IN ('packed','ready') AND {p}from_quality='good' AND {p}to_op='packing'                              THEN -{p}qty
                       ELSE 0 END), 0) AS good,
     COALESCE(SUM(CASE WHEN {p}to_quality='defect'   AND COALESCE({p}from_quality,'')<>'defect' THEN {p}qty
                       WHEN {p}from_quality='defect' AND COALESCE({p}to_quality,'')<>'defect'   THEN -{p}qty

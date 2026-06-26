@@ -100,7 +100,6 @@ export function DayCardDrawer({ employeeId, employeeName, workDate, today, onClo
 
   return (
     <div
-      onClick={onClose}
       style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(20,20,15,0.32)', display: 'flex', justifyContent: 'flex-end' }}
     >
       <div

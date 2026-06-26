@@ -313,20 +313,22 @@ export function ReceiptCreateFeature() {
         title="Добавить товары к приёмке"
         existingKeys={lines.map((l) => receiptLineVariantKey(l))}
         onClose={() => setShowAddLine(false)}
-        onSubmit={(product, cells) => {
+        onSubmit={(entries) => {
           setLines((ls) => [
             ...ls,
-            ...cells.map((c: MatrixCell) => ({
-              _id: genId(),
-              product_id: product.id,
-              product_name: product.name,
-              product_sku: product.sku,
-              color_id: c.color_id,
-              color_name: c.color_name,
-              size_id: c.size_id,
-              size_name: c.size_name,
-              planned_qty: c.qty,
-            })),
+            ...entries.flatMap(({ product, cells }) =>
+              cells.map((c: MatrixCell) => ({
+                _id: genId(),
+                product_id: product.id,
+                product_name: product.name,
+                product_sku: product.sku,
+                color_id: c.color_id,
+                color_name: c.color_name,
+                size_id: c.size_id,
+                size_name: c.size_name,
+                planned_qty: c.qty,
+              })),
+            ),
           ])
           setShowAddLine(false)
         }}

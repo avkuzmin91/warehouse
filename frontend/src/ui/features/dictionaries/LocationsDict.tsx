@@ -167,25 +167,28 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
   const toggleAll = () =>
     setSelected((prev) => (items.every((l) => prev.has(l.id)) ? new Set() : new Set(items.map((l) => l.id))))
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     try {
-      const res = await getLocations({ room: room.trim() || undefined, rack: rack.trim() || undefined, limit: 500 })
+      const res = await getLocations({ room: room.trim() || undefined, rack: rack.trim() || undefined, limit: 500 }, signal)
+      if (signal?.aborted) return
       setItems(res.items)
       setTotal(res.total)
       setSelected(new Set())
       onTotalLoaded(res.total)
       setLoadedOnce(true)
     } catch {
+      if (signal?.aborted) return
       setItems(EMPTY)
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [room, rack, onTotalLoaded])
 
   useEffect(() => {
-    const t = setTimeout(load, 250)
-    return () => clearTimeout(t)
+    const ctrl = new AbortController()
+    const t = setTimeout(() => void load(ctrl.signal), 250)
+    return () => { clearTimeout(t); ctrl.abort() }
   }, [load, refreshKey])
 
   const onDelete = async (loc: LocationItem) => {

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import calendar
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -14,6 +15,7 @@ from config import (
     EXPENSE_KIND_LOGISTICS,
     EXPENSE_KIND_RENT,
     EXPENSE_KIND_SALARY,
+    EXPENSE_KINDS_ALL,
     EXPENSE_OP_CREATE,
     EXPENSE_OP_DELETE,
     EXPENSE_OP_LABELS,
@@ -25,6 +27,7 @@ from config import (
     EXPENSE_PAYMENT_PAID,
     EXPENSE_PAYMENT_PARTIAL,
     EXPENSE_PAYMENT_STATUS_LABELS,
+    EXPENSE_PAYMENT_STATUSES_ALL,
     EXPENSE_SOURCE_EMPLOYEE,
     EXPENSE_SOURCE_PAYROLL,
     EXPENSE_SOURCE_TRIP,
@@ -35,6 +38,7 @@ from config import (
     PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
+from modules.timesheet.service import daily_payroll_accruals
 
 
 def now_iso() -> str:
@@ -50,6 +54,17 @@ def format_kopecks(kopecks: int) -> str:
     rub, kop = divmod(int(kopecks), 100)
     grouped = f"{rub:,}".replace(",", " ")
     return f"{grouped},{kop:02d} ₽"
+
+
+def rub_to_kop(value) -> int:
+    """Рубли → копейки без потерь на float (половина округляется вверх).
+
+    `round(float(rub) * 100)` теряет копейку на значениях вроде 1.115 и использует
+    банковское округление (round(2.5)→2). Через Decimal результат точный.
+    """
+    if value is None:
+        return 0
+    return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def format_qty(quantity) -> str:
@@ -77,6 +92,9 @@ def validate_date(raw: str | None) -> str:
 
 def next_expense_number(connection) -> str:
     """Следующий номер расхода `EXP-NNNN` (MAX, не COUNT — без дублей при дырках)."""
+    # Advisory-lock сериализует генерацию номера внутри транзакции — иначе два
+    # параллельных создания получат один MAX+1.
+    connection.execute("SELECT pg_advisory_xact_lock(hashtext('material_expense_number'))")
     row = connection.execute(
         """
         SELECT COALESCE(MAX(CAST(SUBSTR(exp_number, 5) AS INTEGER)), 0) AS max_n
@@ -249,6 +267,7 @@ def pay_carrier_fifo(
           AND payment_status != ?
           AND (amount - COALESCE(paid_amount, 0)) > 0
         ORDER BY spent_on ASC, created_at ASC
+        FOR UPDATE
         """,
         (EXPENSE_KIND_LOGISTICS, carrier_id, EXPENSE_PAYMENT_CANCELLED),
     ).fetchall()
@@ -491,6 +510,219 @@ def expense_summary(
     }
 
 
+def expense_analytics(
+    connection,
+    *,
+    date_from: str,
+    date_to: str,
+    kinds: list[str] | None,
+) -> dict:
+    """Ежедневная аналитика расходов за [date_from..date_to] (вкл.):
+      • series      — начислено по дням (динамика, непрерывная шкала с нулями),
+      • by_kind     — распределение начислений по типам,
+      • by_category — распределение начислений по категориям,
+      • by_status   — состояние оплаты обязательств реестра за период.
+
+    Сумма дня — «начислено» (обязательство по дате операции); аннулированные исключены
+    из всех срезов отчёта. Аренда размазывается ровно по дням своего периода, а не пиком
+    в день начисления. ЗП берётся из табеля начислением по дням (часы × ставка / доля
+    оклада), а не из реестровых выплат, — поэтому реестровый kind=salary из динамики и
+    by_kind исключён (иначе двойной учёт).
+
+    `kinds=None` — все типы (админ); список — ограниченная роли область (менеджер не видит
+    аренду и ЗП, для него эти срезы пустые). Срез by_status считается по реестровым строкам
+    (выплаты ЗП и аренда — по их дате), это состояние долгов, а не дневная атрибуция,
+    поэтому его итог может отличаться от «начислено». by_category сходится с total_amount."""
+    try:
+        df = date.fromisoformat(date_from[:10])
+        dt = date.fromisoformat(date_to[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Укажите период в формате ГГГГ-ММ-ДД") from exc
+    if dt < df:
+        df, dt = dt, df
+
+    scope = list(EXPENSE_KINDS_ALL) if kinds is None else list(kinds)
+    salary_in_scope = EXPENSE_KIND_SALARY in scope
+    rent_in_scope = EXPENSE_KIND_RENT in scope
+    registry_kinds = [k for k in scope if k != EXPENSE_KIND_SALARY]      # salary — из табеля
+    point_kinds = [k for k in registry_kinds if k != EXPENSE_KIND_RENT]  # rent размазываем
+
+    days: list[str] = []
+    d = df
+    while d <= dt:
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+    series: dict[str, int] = {k: 0 for k in days}
+    by_kind: dict[str, dict] = {}
+    by_category: dict[str, dict] = {}
+    # Матрица «категория × день» для стопочного графика: имя → {id, kind, days:{день→сумма}}.
+    # Ключ — имя категории (как в by_category); системные ЗП/«Без категории» с id=None
+    # не сливаются, т.к. имена различны.
+    cat_matrix: dict[str, dict] = {}
+
+    def _accumulate(day_iso: str, kind: str, amount: int, count: int) -> None:
+        if day_iso in series:
+            series[day_iso] += amount
+        bk = by_kind.setdefault(kind, {"amount": 0, "count": 0})
+        bk["amount"] += amount
+        bk["count"] += count
+
+    def _add_category(name: str, cat_id: str | None, amount: int, count: int) -> None:
+        if not amount:
+            return
+        ce = by_category.setdefault(name, {"id": cat_id, "amount": 0, "count": 0})
+        ce["amount"] += amount
+        ce["count"] += count
+
+    def _add_matrix(name: str, cat_id: str | None, kind: str, day_iso: str, amount: int) -> None:
+        if not amount or day_iso not in series:
+            return
+        e = cat_matrix.setdefault(name, {"id": cat_id, "kind": kind, "days": {}})
+        if e["id"] is None and cat_id is not None:
+            e["id"] = cat_id
+        e["days"][day_iso] = e["days"].get(day_iso, 0) + amount
+
+    # 1) Точечные расходы (всё, кроме аренды и ЗП) — по дате операции spent_on.
+    if point_kinds:
+        placeholders = ",".join("?" for _ in point_kinds)
+        rows = connection.execute(
+            f"""
+            SELECT e.kind, e.spent_on, e.category_id, c.name AS category_name,
+                   COALESCE(SUM(e.amount), 0) AS amount, COUNT(*) AS count
+            FROM material_expenses e
+            LEFT JOIN expense_categories c ON c.id = e.category_id
+            WHERE COALESCE(e.is_deleted, 0) = 0
+              AND e.payment_status != ?
+              AND e.kind IN ({placeholders})
+              AND e.spent_on >= ? AND e.spent_on <= ?
+            GROUP BY e.kind, e.spent_on, e.category_id, c.name
+            """,
+            [EXPENSE_PAYMENT_CANCELLED, *point_kinds, df.isoformat(), dt.isoformat()],
+        ).fetchall()
+        for r in rows:
+            amount, count = int(r["amount"]), int(r["count"])
+            cat_name = str(r["category_name"] or "Без категории")
+            _accumulate(str(r["spent_on"]), str(r["kind"]), amount, count)
+            _add_category(cat_name, r["category_id"], amount, count)
+            _add_matrix(cat_name, r["category_id"], str(r["kind"]), str(r["spent_on"]), amount)
+
+    # 2) Аренда — размазываем сумму по дням периода (period_start..period_end).
+    if rent_in_scope:
+        rent_rows = connection.execute(
+            """
+            SELECT e.amount, e.period_start, e.period_end, e.spent_on,
+                   e.category_id, c.name AS category_name
+            FROM material_expenses e
+            LEFT JOIN expense_categories c ON c.id = e.category_id
+            WHERE COALESCE(e.is_deleted, 0) = 0
+              AND e.payment_status != ?
+              AND e.kind = ?
+              AND COALESCE(e.period_end, e.spent_on) >= ?
+              AND COALESCE(e.period_start, e.spent_on) <= ?
+            """,
+            [EXPENSE_PAYMENT_CANCELLED, EXPENSE_KIND_RENT, df.isoformat(), dt.isoformat()],
+        ).fetchall()
+        for r in rent_rows:
+            total = int(r["amount"])
+            try:
+                pstart = date.fromisoformat(str(r["period_start"] or r["spent_on"])[:10])
+                pend = date.fromisoformat(str(r["period_end"] or r["spent_on"])[:10])
+            except ValueError:
+                continue
+            if pend < pstart:
+                pstart, pend = pend, pstart
+            n_days = (pend - pstart).days + 1
+            if n_days <= 0:
+                continue
+            base, rem = divmod(total, n_days)  # остаток целочисленного деления — на первые дни
+            in_window = 0  # сумма долей, попавших в окно отчёта — для by_category
+            rent_name = str(r["category_name"] or "Без категории")
+            dd, idx = pstart, 0
+            while dd <= pend:
+                share = base + (1 if idx < rem else 0)
+                day_iso = dd.isoformat()
+                if day_iso in series and share:
+                    series[day_iso] += share
+                    by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["amount"] += share
+                    in_window += share
+                    _add_matrix(rent_name, r["category_id"], EXPENSE_KIND_RENT, day_iso, share)
+                dd += timedelta(days=1)
+                idx += 1
+            if in_window:
+                by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["count"] += 1
+                _add_category(rent_name, r["category_id"], in_window, 1)
+
+    # 3) ЗП — начисление по дням из табеля (часы × ставка / доля оклада).
+    if salary_in_scope:
+        sal_amount = sal_days = 0
+        for day_iso, amount in daily_payroll_accruals(connection, df.isoformat(), dt.isoformat()).items():
+            if amount and day_iso in series:
+                series[day_iso] += amount
+                sal_amount += amount
+                sal_days += 1
+                _add_matrix(EXPENSE_SYSTEM_CATEGORY_SALARY, None, EXPENSE_KIND_SALARY, day_iso, amount)
+        if sal_amount:
+            bk = by_kind.setdefault(EXPENSE_KIND_SALARY, {"amount": 0, "count": 0})
+            bk["amount"] += sal_amount
+            bk["count"] += sal_days
+            _add_category(EXPENSE_SYSTEM_CATEGORY_SALARY, None, sal_amount, sal_days)
+
+    # 4) Статус оплаты — по реестровым строкам области; аннулированные в отчёт не входят.
+    by_status: dict[str, dict] = {}
+    if scope:
+        placeholders = ",".join("?" for _ in scope)
+        st_rows = connection.execute(
+            f"""
+            SELECT payment_status, COALESCE(SUM(amount), 0) AS amount, COUNT(*) AS count
+            FROM material_expenses
+            WHERE COALESCE(is_deleted, 0) = 0
+              AND payment_status != ?
+              AND kind IN ({placeholders})
+              AND spent_on >= ? AND spent_on <= ?
+            GROUP BY payment_status
+            """,
+            [EXPENSE_PAYMENT_CANCELLED, *scope, df.isoformat(), dt.isoformat()],
+        ).fetchall()
+        for r in st_rows:
+            by_status[str(r["payment_status"])] = {"amount": int(r["amount"]), "count": int(r["count"])}
+
+    total_amount = sum(series.values())
+    n_days = len(days)
+    return {
+        "date_from": df.isoformat(),
+        "date_to": dt.isoformat(),
+        "days": n_days,
+        "total_amount": total_amount,
+        "avg_per_day": round(total_amount / n_days) if n_days else 0,
+        "max_day_amount": max(series.values()) if series else 0,
+        "series": [{"date": k, "amount": series[k]} for k in days],
+        "categories": [
+            {"id": e["id"], "name": name, "kind": e["kind"],
+             "series": [e["days"].get(d, 0) for d in days]}
+            for name, e in sorted(
+                cat_matrix.items(), key=lambda kv: sum(kv[1]["days"].values()), reverse=True
+            )
+            if any(v != 0 for v in e["days"].values())
+        ],
+        "by_kind": [
+            {"kind": k, "kind_label": EXPENSE_KIND_LABELS.get(k, k),
+             "amount": v["amount"], "count": v["count"]}
+            for k, v in sorted(by_kind.items(), key=lambda kv: kv[1]["amount"], reverse=True)
+            if v["amount"] != 0
+        ],
+        "by_category": [
+            {"id": v["id"], "name": name, "amount": v["amount"], "count": v["count"]}
+            for name, v in sorted(by_category.items(), key=lambda kv: kv[1]["amount"], reverse=True)
+            if v["amount"] != 0
+        ],
+        "by_status": [
+            {"payment_status": s, "label": EXPENSE_PAYMENT_STATUS_LABELS.get(s, s),
+             "amount": by_status[s]["amount"], "count": by_status[s]["count"]}
+            for s in EXPENSE_PAYMENT_STATUSES_ALL if s in by_status
+        ],
+    }
+
+
 def load_detail(connection, expense_id: str) -> dict:
     row = connection.execute(
         f"{_LIST_SELECT} WHERE e.id = ? AND COALESCE(e.is_deleted, 0) = 0",
@@ -662,8 +894,8 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     не перетираем. Сумма рейса хранится в рублях (float) → конвертируем ×100 в копейки.
     """
     trip_id = str(trip_row["id"])
-    rub = float(trip_row["logistics_cost_actual"] or 0) + float(trip_row["waiting_cost"] or 0)
-    amount = round(rub * 100)
+    rub = Decimal(str(trip_row["logistics_cost_actual"] or 0)) + Decimal(str(trip_row["waiting_cost"] or 0))
+    amount = rub_to_kop(rub)
 
     existing = connection.execute(
         "SELECT * FROM material_expenses "

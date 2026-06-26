@@ -1208,6 +1208,21 @@ button {
 }
 .dtf-tsel { flex: 0 0 auto; width: 84px; text-align: center; }
 .dtf-colon { font-size: 18px; font-weight: 600; color: var(--c-text-muted); margin: 0 -2px; }
+.dtf-min {
+  flex: 0 0 auto;
+  width: 70px;
+  height: 50px;
+  padding: 0;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  background: var(--c-bg-elev);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  color: var(--c-text);
+  outline: none;
+}
+.dtf-min:focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-bg); }
 
 .dtf-actions {
   display: flex;

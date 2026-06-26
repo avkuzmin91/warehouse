@@ -2,7 +2,6 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   cancelInvoice,
-  closeInvoice,
   deleteInvoiceFile,
   detachInvoiceReceipt,
   detachInvoiceShipment,
@@ -116,8 +115,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   ]
   // Причины блокировки перехода — те же гейты, что и на сервере (см. router.issue_invoice).
   const issueReasons = issueChecklist.filter((c) => !c.ok).map((c) => c.label)
-  const closeReasons = fullyPaid ? [] : [`Счёт оплачен не полностью — остаток ${formatMoneyKopecks(remaining)}`]
-  const headerReasons = showReasons ? (draft ? issueReasons : active ? closeReasons : []) : []
+  const headerReasons = showReasons && draft ? issueReasons : []
 
   async function handleIssue() {
     if (!inv) return
@@ -140,15 +138,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     if (reasons.length) { setShowReasons(true); toast(`Нельзя выставить счёт: ${reasons[0]}`, 'error'); return }
     setShowReasons(false)
     issueInvoice(inv.id).then(() => { toast('Счёт выставлен', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
-  }
-
-  async function handleClose() {
-    if (!inv) return
-    if (!fullyPaid) { setShowReasons(true); toast(`Счёт оплачен не полностью — остаток ${formatMoneyKopecks(remaining)}`, 'error'); return }
-    setShowReasons(false)
-    const ok = await confirm({ title: 'Завершить счёт?', body: `Счёт ${inv.doc_number} будет помечен как полностью оплаченный.`, confirmLabel: 'Завершить' })
-    if (!ok) return
-    closeInvoice(inv.id).then(() => { toast('Счёт завершён', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
   }
 
   async function handleCancel() {
@@ -230,9 +219,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             <>
               <button className="btn ghost" onClick={() => setAmountOpen(true)}><Icon name="edit" size={14} />Скорректировать сумму</button>
               <button className="btn ghost" onClick={() => setDueOpen(true)}><Icon name="calendar" size={14} />Перенести срок</button>
-              <button className="btn primary" onClick={handleClose}>
-                <Icon name="check" size={14} />Завершить
-              </button>
               <button className="btn ghost danger" onClick={handleCancel}><Icon name="x" size={14} />Аннулировать</button>
             </>
           ) : undefined

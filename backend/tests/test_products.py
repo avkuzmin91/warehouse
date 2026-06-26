@@ -66,6 +66,56 @@ def test_products_search_filters_by_name_and_sku(admin_client):
             conn.commit()
 
 
+def test_products_default_order_is_by_name(admin_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-sort-{suffix}"
+    client_id = f"client-sort-{suffix}"
+    alpha_id = f"product-alpha-{suffix}"
+    bravo_id = f"product-bravo-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type Sort {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Sort {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, ?)
+            """,
+            (bravo_id, f"Bravo Sort {suffix}", type_id, client_id, f"BRAVO-SORT-{suffix}", "2026-01-02T00:00:00+00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, ?)
+            """,
+            (alpha_id, f"Alpha Sort {suffix}", type_id, client_id, f"ALPHA-SORT-{suffix}", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    try:
+        res = admin_client.get(f"/products?client_id={client_id}&limit=100")
+        assert res.status_code == 200, res.text
+        assert [item["id"] for item in res.json()["items"]] == [alpha_id, bravo_id]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM products WHERE id IN (?, ?)", (alpha_id, bravo_id))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
 def test_product_sku_can_repeat_for_different_clients(admin_client):
     suffix = uuid.uuid4().hex[:10]
     type_id = f"ptype-sku-client-{suffix}"
