@@ -9,6 +9,7 @@ import {
   getExpenses,
   getExpensesSummary,
   runSalaryAccruals,
+  runRentAccruals,
 } from '../../../../api/expensesApi'
 import type { ExpenseKind, ExpenseListItem, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
 import { getEmployees } from '../../../../api/timesheetApi'
@@ -196,6 +197,14 @@ export function ExpensesListFeature() {
       .finally(() => setAccruing(false))
   }
 
+  function runRent() {
+    setAccruing(true)
+    runRentAccruals()
+      .then((r) => { toast(`Начислено оплат: ${r.created}`, 'success'); setDataTick((t) => t + 1) })
+      .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
+      .finally(() => setAccruing(false))
+  }
+
   const filters = {
     search: search.trim() || undefined,
     category_id: categoryF || undefined,
@@ -273,6 +282,11 @@ export function ExpensesListFeature() {
           {isSalaryMode && (
             <button className="btn" onClick={runAccruals} disabled={accruing} title="Начислить оклады за сегодня (15-е / последний день месяца)">
               <Icon name={accruing ? 'refresh' : 'calendar'} size={14} />Начислить
+            </button>
+          )}
+          {isRentMode && (
+            <button className="btn" onClick={runRent} disabled={accruing} title="Доначислить аренду складов за текущий месяц (по складам со ставкой аренды)">
+              <Icon name={accruing ? 'refresh' : 'calendar'} size={14} />Доначислить
             </button>
           )}
           {canCreate && (

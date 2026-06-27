@@ -37,6 +37,7 @@ from modules.dispatch.router import router as dispatch_router
 from modules.tasks.router import router as tasks_router
 from modules.scan.router import router as scan_router
 from modules.users.router import router as users_router
+from modules.warehouse_rent.router import router as warehouse_rent_router
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -742,6 +743,7 @@ app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(pricing_router)
 app.include_router(pallet_pricing_router)
+app.include_router(warehouse_rent_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(dispatch_router)

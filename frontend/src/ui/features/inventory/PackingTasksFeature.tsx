@@ -25,7 +25,7 @@ import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../ut
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
-import { canAcceptPackingTask, canCreateDocuments, canEditShipmentPlanning, canEditShipments } from '../../../utils/access'
+import { canCreateDocuments, canEditShipmentPlanning, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -37,8 +37,7 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
 ]
 
 const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
-  draft:    'Поставить задачу',
-  assigned: 'Принять в работу',
+  draft: 'Поставить задачу',
 }
 
 function shipmentProgress(item: ShipmentListItem) {
@@ -75,11 +74,10 @@ export function PackingTasksFeature() {
   const canEdit = canEditShipments(user)
   const canCreate = canCreateDocuments(user)
   const canPlanShipment = canEditShipmentPlanning(user)
-  const canAcceptTask = canAcceptPackingTask(user)
-  // Инлайн-переход из списка: постановку (draft) делает менеджер, приёмку (assigned) —
-  // начальник склада/менеджер. Прочие статусы продвигаются из деталки.
+  // Инлайн-переход из списка: постановку (draft) делает менеджер. Приёмку (assigned)
+  // и прочие статусы продвигают только из карточки — с проверкой информации.
   const canAdvanceRow = (s: ShipmentStatus) =>
-    (s === 'draft' && canPlanShipment) || (s === 'assigned' && canAcceptTask)
+    s === 'draft' && canPlanShipment
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')

@@ -45,6 +45,7 @@ from config import (
 )
 from dbconn import like_substring_param
 from modules.timesheet.service import daily_payroll_accruals_split
+from modules.warehouse_rent.service import current_rent_rates
 
 
 def now_iso() -> str:
@@ -1137,10 +1138,11 @@ def reverse_payroll_expense(connection, *, payment_id: str, uid: str | None = No
 
 def run_rent_accruals(connection, on_date: date, uid: str | None = None, *, force: bool = False) -> int:
     """Идемпотентно заводит аренду складов: по записи в едином реестре на каждый активный
-    склад с заданной ставкой (rent_monthly_kopecks > 0). Авто-прогон — только 1-го числа
-    месяца; force=True (ручной бэкафилл) заводит аренду за месяц on_date в любой день.
-    Дедуп по (kind=rent, source_kind=warehouse, source_id, period_start) делает повторные
-    прогоны и рестарты безопасными. Не коммитит — это делает вызывающий."""
+    склад с действующей на 1-е число ставкой. Ставка — effective-dated (warehouse_rent_rates,
+    правило pricing.price_on), а не из колонки-кэша own_warehouses.rent_monthly_kopecks.
+    Авто-прогон — только 1-го числа месяца; force=True (ручной бэкафилл) заводит аренду за
+    месяц on_date в любой день. Дедуп по (kind=rent, source_kind=warehouse, source_id,
+    period_start) делает повторные прогоны и рестарты безопасными. Не коммитит — это делает вызывающий."""
     if not force and on_date.day != 1:
         return 0
     y, m = on_date.year, on_date.month
@@ -1149,27 +1151,27 @@ def run_rent_accruals(connection, on_date: date, uid: str | None = None, *, forc
     period_end = date(y, m, last_day).isoformat()
 
     rows = connection.execute(
-        "SELECT id, name, rent_monthly_kopecks FROM own_warehouses "
-        "WHERE COALESCE(is_active, 0) = 1 AND COALESCE(is_deleted, 0) = 0 "
-        "AND COALESCE(rent_monthly_kopecks, 0) > 0"
+        "SELECT id, name FROM own_warehouses "
+        "WHERE COALESCE(is_active, 0) = 1 AND COALESCE(is_deleted, 0) = 0"
     ).fetchall()
     if not rows:
         return 0
 
+    rates = current_rent_rates(connection, [str(r["id"]) for r in rows], period_start)
     cat_id = resolve_system_category_id(connection, EXPENSE_SYSTEM_CATEGORY_RENT)
     title_month = f"{m:02d}.{y}"
     created = 0
     for r in rows:
         wh_id = str(r["id"])
+        amount = int(rates.get(wh_id, 0))
+        if amount <= 0:
+            continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
             "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
             (EXPENSE_KIND_RENT, EXPENSE_SOURCE_WAREHOUSE, wh_id, period_start),
         ).fetchone()
         if exists:
-            continue
-        amount = int(r["rent_monthly_kopecks"])
-        if amount <= 0:
             continue
         expense_id = str(uuid4())
         exp_number = next_expense_number(connection)

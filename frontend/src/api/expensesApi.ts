@@ -274,6 +274,11 @@ export function runSalaryAccruals(onDate?: string) {
   return request<{ created: number; on_date: string }>(`/expenses/salary/accruals/run${q}`, { method: 'POST' })
 }
 
+export function runRentAccruals(onDate?: string) {
+  const q = onDate ? `?on_date=${onDate}` : ''
+  return request<{ created: number; on_date: string }>(`/expenses/rent/accruals/run${q}`, { method: 'POST' })
+}
+
 export function uploadExpenseFile(expenseId: string, file: File) {
   const form = new FormData()
   form.append('file', file)

@@ -225,10 +225,20 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                     (item_id, name, color_hex, 1 if payload.is_active else 0, _now(), creator_id),
                 )
             elif table_name == "own_warehouses":
+                now = _now()
                 connection.execute(
                     "INSERT INTO own_warehouses (id, name, rent_monthly_kopecks, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, _now(), creator_id),
+                    (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, now, creator_id),
                 )
+                # Стартовая ставка → запись в effective-dated истории (источник правды
+                # для начислений аренды); колонка выше остаётся кэшем «на сегодня».
+                if payload.rent_monthly_kopecks and int(payload.rent_monthly_kopecks) > 0:
+                    connection.execute(
+                        "INSERT INTO warehouse_rent_rates "
+                        "(id, warehouse_id, rent_monthly_kopecks, effective_from, note, created_at, created_by) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (str(uuid4()), item_id, int(payload.rent_monthly_kopecks), now[:10], None, now, creator_id),
+                    )
             else:
                 connection.execute(
                     f"INSERT INTO {table_name} (id, name, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?)",

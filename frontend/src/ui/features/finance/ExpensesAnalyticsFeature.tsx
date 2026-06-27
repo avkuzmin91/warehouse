@@ -72,6 +72,7 @@ type RenderCat = { key: string; name: string; color: string; isRest: boolean; at
 export function ExpensesAnalyticsFeature() {
   const { user } = useCurrentUser()
   const isFinance = user?.role === 'admin' || user?.role === 'manager'
+  const isAdmin = user?.role === 'admin'
 
   const [periodRaw, setPeriodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
   const period = PRESETS.includes(Number(periodRaw) as 7 | 14 | 30) ? Number(periodRaw) : DEFAULT_PERIOD
@@ -129,9 +130,11 @@ export function ExpensesAnalyticsFeature() {
             onClick={() => { setPeriodRaw(String(p)); setHoverDay(null) }}>{p} дн.</button>
         ))}
       </div>
-      <button className="btn" onClick={exportCsv} disabled={!data || data.categories.length === 0}>
-        <Icon name="download" size={14} />Выгрузить
-      </button>
+      {isAdmin && (
+        <button className="btn" onClick={exportCsv} disabled={!data || data.categories.length === 0}>
+          <Icon name="download" size={14} />Выгрузить
+        </button>
+      )}
     </>
   )
 
