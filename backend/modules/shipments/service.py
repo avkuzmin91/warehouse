@@ -12,8 +12,6 @@ from config import (
     INV_OP_STORAGE,
     INV_Q_DEFECT,
     INV_Q_GOOD,
-    RECEIPT_STATUS_DONE,
-    RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_OP_MOVE_RETURN,
@@ -178,64 +176,31 @@ def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
         )
 
 
-def _line_pos_conds(line, prefix: str, client_col: str, client_id):
-    """Условия позиции (product/color/size/client) для SQL по строке отгрузки."""
-    conds = [f"{prefix}product_id = ?"]
-    params: list = [line["product_id"]]
-    for col, val in ((f"{prefix}color_id", line["color_id"]), (f"{prefix}size_id", line["size_id"]), (client_col, client_id)):
-        if val is not None:
-            conds.append(f"{col} = ?"); params.append(val)
-        else:
-            conds.append(f"{col} IS NULL")
-    return " AND ".join(conds), params
-
-
 def _move_one_to_packing(
     connection, line, *, packing_id, packing_name, client_id,
     qty: int, from_zone_id: str | None, user_id: str, comment: str,
 ) -> None:
     """Одна аллокация передачи на упаковку: (storage, good) → (packing, good). Без commit.
 
-    from_zone_id задан — берём только из этой зоны; None — FIFO по местам приёмки.
+    Источник берётся по ЖУРНАЛЬНОМУ остатку storage/good (по факту, где товар лежит),
+    а не по местам приёмки: товар cross-dock, который положили сразу в процессную зону
+    (упаковки/отгрузки), тоже доступен к передаче. from_zone_id задан — берём только из
+    этой зоны; None — по местам с остатком, по убыванию объёма (как при отгрузке).
     """
-    from modules.balances.service import get_available_in_zone, insert_inventory_move
+    from modules.balances.service import insert_inventory_move, ready_zones_for_variant
 
     if qty <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
 
-    pos_sql, pos_params = _line_pos_conds(line, "l.", "d.client_id", client_id)
-    # Источник зон — поступления с проведённым приходом: done (принято полностью) и
-    # partially_received (часть уже лежит в storage). Якорь совпадает с остатками
-    # (_ANCHOR_STATUSES в balances): товар частично приехавшего поступления уже на
-    # складе и доступен к передаче на упаковку.
-    anchor_sql = f"d.status IN ('{RECEIPT_STATUS_DONE}', '{RECEIPT_STATUS_PARTIALLY_RECEIVED}')"
-    src_conds = ["l.is_deleted = 0", "d.is_deleted = 0", anchor_sql, pos_sql]
-    src_params = list(pos_params)
+    zones = ready_zones_for_variant(
+        connection, product_id=str(line["product_id"]), color_id=line["color_id"],
+        size_id=line["size_id"], client_id=client_id, quality=INV_Q_GOOD, op=INV_OP_STORAGE,
+    )
     if from_zone_id:
-        src_conds.append("l.storage_zone_id = ?"); src_params.append(from_zone_id)
-    else:
-        src_conds.append("l.storage_zone_id IS DISTINCT FROM ?"); src_params.append(packing_id)
-    candidates = connection.execute(
-        f"""SELECT l.storage_zone_id AS zone_id, MIN(l.storage_zone_name) AS zone_name,
-                   MIN(d.actual_arrival_date) AS arr
-            FROM receipt_lines l JOIN receipt_docs d ON d.id = l.doc_id
-            WHERE {" AND ".join(src_conds)}
-            GROUP BY l.storage_zone_id
-            ORDER BY MIN(d.actual_arrival_date) IS NULL, MIN(d.actual_arrival_date)""",
-        src_params,
-    ).fetchall()
+        zones = [z for z in zones if str(z["zone_id"]) == str(from_zone_id)]
 
-    plan = []
-    total_avail = 0
-    for r in candidates:
-        avail = get_available_in_zone(
-            connection, product_id=str(line["product_id"]), color_id=line["color_id"],
-            size_id=line["size_id"], client_id=client_id, zone_id=r["zone_id"],
-            op=INV_OP_STORAGE, quality=INV_Q_GOOD,
-        )
-        if avail > 0:
-            plan.append((r["zone_id"], r["zone_name"], avail))
-            total_avail += avail
+    plan = [(z["zone_id"], z["zone_name"], z["net"]) for z in zones]
+    total_avail = sum(z["net"] for z in zones)
     if total_avail < qty:
         raise HTTPException(
             status_code=400,

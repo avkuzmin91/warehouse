@@ -672,6 +672,39 @@ def test_move_to_packing_from_partially_received_receipt(api, client_id):
     assert _balance(client_id, pos) == (0, 0, 0, 20)
 
 
+def test_move_to_packing_from_process_zone_crossdock(api, client_id):
+    """Cross-dock: товар сразу отнесли в зону упаковки (storage/good в процессной зоне).
+
+    Передача на упаковку должна брать товар по фактическому остатку, а не по местам
+    приёмки — иначе «доступно 0», хотя товар физически лежит в зоне упаковки.
+    """
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    with get_connection() as c:
+        packing_id, packing_name = get_packing_zone(c)
+
+    _receive(api, client_id, pos, 30, intake_zone)
+    # Кладовщик переносит весь товар сразу в зону упаковки (остаётся storage/good).
+    _as(_ADMIN)
+    rel = api.post("/balances/relocations", json={
+        "product_id": pos["product_id"], "color_id": pos["color_id"], "size_id": pos["size_id"],
+        "client_id": client_id, "quality": "good",
+        "from_zone_id": intake_zone, "to_zone_id": packing_id, "qty": 30,
+    })
+    assert rel.status_code == 200, rel.text
+    assert _zone_qty(client_id, pos, packing_id, "on_review") == 30  # storage/good в зоне упаковки
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 0
+
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 30)
+    _as(_WH)
+    mv = api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing",
+                  json={"qty": 30, "from_zone_id": packing_id})
+    assert mv.status_code == 200, mv.text
+    assert _zone_qty(client_id, pos, packing_id, "on_packing") == 30
+    assert _zone_qty(client_id, pos, packing_id, "on_review") == 0
+    assert _balance(client_id, pos) == (0, 0, 0, 30)
+
+
 def test_move_to_packing_requires_warehouse_role(api, client_id):
     pos = _position()
     intake_zone = str(uuid.uuid4())
