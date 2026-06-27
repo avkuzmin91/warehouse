@@ -163,7 +163,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (comment.trim() === '') blockReasons.push('Заполните техническое задание')
   if (lines.length === 0) blockReasons.push('Добавьте хотя бы одну позицию')
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
-  if (lines.some((l) => (l.pallets ?? 0) < 1)) blockReasons.push('Укажите количество палет для каждой позиции')
+  if (lines.some((l) => l.pallets == null)) blockReasons.push('Укажите количество палет для каждой позиции (можно 0)')
   if (!allReady) blockReasons.push(
     isDefect
       ? 'Часть брака недоступна на складе — уменьшите количество'
@@ -445,7 +445,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     value={l.pallets != null ? String(l.pallets) : ''}
                     placeholder="Палеты"
                     aria-label="Количество палет"
-                    style={(l.pallets ?? 0) < 1 ? { borderColor: 'var(--c-warning)' } : undefined}
+                    style={l.pallets == null ? { borderColor: 'var(--c-warning)' } : undefined}
                     onChange={(e) => {
                       const raw = e.target.value.replace(/\D/g, '')
                       setPallets(l._uid, raw === '' ? null : parseInt(raw, 10))

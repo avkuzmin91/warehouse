@@ -219,6 +219,30 @@ def test_advance_succeeds_with_ready(admin_client, client_id):
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "preparing"
 
 
+def test_advance_allows_zero_pallets(admin_client, client_id):
+    """0 палет — валидное осознанное значение, гейт пропускает."""
+    pid = _make_product(client_id, sku="DSP-P0")
+    _seed_ready(client_id, product_id=pid, sku="DSP-P0", qty=5)
+    payload = _payload(client_id, pid, "DSP-P0", 5)
+    payload["lines"][0]["pallets_qty"] = 0
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "preparing"
+
+
+def test_advance_blocked_without_pallets(admin_client, client_id):
+    """Пустое (NULL) количество палет блокирует передачу в подготовку."""
+    pid = _make_product(client_id, sku="DSP-PN")
+    _seed_ready(client_id, product_id=pid, sku="DSP-PN", qty=5)
+    payload = _payload(client_id, pid, "DSP-PN", 5)
+    payload["lines"][0]["pallets_qty"] = None
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+    assert "палет" in r.json()["detail"].lower()
+
+
 def test_advance_blocked_without_comment(admin_client, client_id):
     """ТЗ (comment) обязательно при передаче отгрузки в подготовку — для товара и брака."""
     pid = _make_product(client_id, sku="DSP-TZ1")

@@ -75,7 +75,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const isDefectCargo = cargoType === 'defect'
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
-  const allPallets = lines.every((l) => (l.pallets ?? 0) >= 1)
+  const allPallets = lines.every((l) => l.pallets != null)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
   // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
   // не упакованный, и товар в пути можно сохранить черновиком, но не передать в подготовку.
@@ -95,7 +95,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     { ok: lines.length > 0, label: 'Добавлены строки', error: 'Добавьте хотя бы одну позицию в отгрузку' },
     { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
-    { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет (≥ 1) для каждой позиции' },
+    { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет для каждой позиции (можно 0)' },
     { ok: allReady, label: isDefectCargo ? 'Брак доступен на складе' : 'Товар упакован', error: isDefectCargo ? 'Часть брака недоступна на складе — уменьшите количество' : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
@@ -428,7 +428,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                                 const raw = e.target.value.replace(/\D/g, '')
                                 setPallets(l._uid, raw === '' ? null : parseInt(raw, 10))
                               }}
-                              style={{ width: 70, textAlign: 'right', borderColor: (l.pallets ?? 0) < 1 ? 'var(--c-warning)' : undefined }}
+                              style={{ width: 70, textAlign: 'right', borderColor: l.pallets == null ? 'var(--c-warning)' : undefined }}
                             />
                           </div>
                           <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>

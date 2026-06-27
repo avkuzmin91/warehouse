@@ -334,7 +334,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                               const raw = e.target.value.replace(/\D/g, '')
                               setDraft(l.id, { pallets: raw === '' ? null : Math.max(0, parseInt(raw, 10)), palletsTouched: true })
                             }}
-                            style={{ width: 64, textAlign: 'right', borderColor: (d.pallets ?? 0) < 1 ? 'var(--c-warning)' : undefined }}
+                            style={{ width: 64, textAlign: 'right', borderColor: d.pallets == null ? 'var(--c-warning)' : undefined }}
                           />
                         </div>
                         <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>

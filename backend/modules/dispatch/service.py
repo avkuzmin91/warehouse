@@ -108,16 +108,17 @@ def check_lines_have_sku(connection, doc_id: str) -> None:
 
 
 def check_lines_have_pallets(connection, doc_id: str) -> None:
-    """Гейт перевода в подготовку: у каждой строки указано количество палет (>= 1).
+    """Гейт перевода в подготовку: у каждой строки задано количество палет.
 
-    Менеджер обязан задать число палет при создании отгрузки — это основа тарификации
-    палет клиенту. Рекомендация считается из `products.items_per_pallet`, но финальное
-    число вводит менеджер.
+    Менеджер обязан осознанно указать число палет при создании отгрузки — это основа
+    тарификации палет клиенту. Рекомендация считается из `products.items_per_pallet`, но
+    финальное число вводит менеджер. Допустим и 0 (например, догруз без отдельного палета);
+    блокирует только пустое значение (NULL — поле не заполнено).
     """
     rows = connection.execute(
         "SELECT DISTINCT product_name FROM dispatch_lines "
         "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 "
-        "AND COALESCE(pallets_qty, 0) < 1 ORDER BY product_name",
+        "AND pallets_qty IS NULL ORDER BY product_name",
         (doc_id,),
     ).fetchall()
     if rows:
