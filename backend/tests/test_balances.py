@@ -96,6 +96,7 @@ def _insert_move(
     conn, client_id: str, product_ids, qty: int,
     *, from_op: str, to_op: str, from_quality: str, to_quality: str,
     from_zone_id: str | None = None, to_zone_id: str | None = None,
+    product_sku: str = "TST-SKU",
 ) -> None:
     """Произвольное движение в журнале (две оси статуса)."""
     pid, color_id, size_id = product_ids
@@ -103,9 +104,9 @@ def _insert_move(
         """INSERT INTO zone_relocations
            (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
             client_id, from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty, created_at)
-           VALUES (?, ?, 'Test Product', 'TST-SKU', ?, 'Red', ?, NULL,
+           VALUES (?, ?, 'Test Product', ?, ?, 'Red', ?, NULL,
                    ?, ?, ?, ?, ?, ?, ?, ?, NOW())""",
-        (str(uuid.uuid4()), pid, color_id, size_id, client_id,
+        (str(uuid.uuid4()), pid, product_sku, color_id, size_id, client_id,
          from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty),
     )
 
@@ -237,6 +238,42 @@ def test_balance_increases_after_receipt_accepted(admin_client, client_id, produ
         assert matched[0]["storage_defect"] == 0
         assert matched[0]["packing_good"] == 0
         assert matched[0]["ready_good"] == 0
+    finally:
+        _cleanup_test_docs(client_id)
+
+
+def test_balance_no_duplicate_on_mixed_product_sku(admin_client, client_id, product_ids):
+    """Один product_id с разными product_sku в истории = одна строка остатка.
+
+    Регрессия: до бэкфилла SKU (0072) приёмка «ожидает SKU» писала пустой
+    product_sku, а поздние журнальные движения — реальный. Позиционный агрегат
+    группировал по product_sku и разбивал одну позицию на две строки с
+    одинаковыми количествами (оба джойнились к одному журнальному нетто)."""
+    pid, color_id, size_id = product_ids
+    qty = 30
+
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, qty)
+        # Журнальное движение того же product_id с ДРУГИМ product_sku
+        # (нетто не меняет: storage→storage в пределах одного места).
+        _insert_move(
+            conn, client_id, product_ids, 5,
+            from_op="storage", to_op="storage", from_quality="good", to_quality="good",
+            product_sku="OZN-ALT-SKU",
+        )
+        conn.commit()
+
+    try:
+        r = admin_client.get(f"/balances?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        matched = [i for i in r.json()["items"] if i["product_id"] == pid]
+        assert len(matched) == 1, f"Ожидалась одна строка, получено {len(matched)}: {matched}"
+        assert matched[0]["storage_good"] == qty
+        assert matched[0]["total"] == qty
+
+        s = admin_client.get(f"/balances/summary?client_id={client_id}")
+        assert s.status_code == 200, s.text
+        assert s.json()["total"] == qty  # итог не задвоен
     finally:
         _cleanup_test_docs(client_id)
 

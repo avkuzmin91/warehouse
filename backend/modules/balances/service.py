@@ -138,13 +138,14 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             WHERE to_op NOT IN ({_SINKS_SQL})
         ),
         accepted AS (
-            SELECT product_id, product_sku, client_id, color_id, size_id,
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(product_sku)  AS product_sku,
                    MAX(product_name) AS product_name, MAX(client_name) AS client_name,
                    MAX(color_name)   AS color_name, MAX(size_name) AS size_name,
                    COUNT(DISTINCT done_doc) AS docs_count
             FROM (SELECT * FROM receipt_pos UNION ALL SELECT * FROM journal_pos) u
             {pos_where}
-            GROUP BY product_id, product_sku, client_id, color_id, size_id
+            GROUP BY product_id, client_id, color_id, size_id
         ),
         conv AS (
             SELECT product_id, client_id, color_id, size_id,
