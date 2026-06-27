@@ -245,6 +245,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>{e.full_name}</span>
               {e.status === 'archived' ? <Badge>В архиве</Badge> : <Badge tone="success" dot>Активен</Badge>}
+              {e.comp_label && <Badge tone={e.comp_type === 'fixed' ? 'info' : ''}>{e.comp_label}</Badge>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, fontSize: 13, color: 'var(--c-text-muted)' }}>
               <Icon name="briefcase" size={13} style={{ color: 'var(--c-text-subtle)' }} />{e.position ?? '—'}

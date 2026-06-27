@@ -674,6 +674,21 @@ EXPENSE_SOURCE_WAREHOUSE = "warehouse"  # склад (аренда)
 EXPENSE_SOURCE_PAYROLL   = "payroll"    # выплата по табелю (ЗП почасовика), source_id = payroll_payments.id
 EXPENSE_SOURCE_RECURRING = "recurring"  # шаблон регулярного расхода, source_id = recurring_expenses.id
 
+# Подтип ЗП (производный, не хранится): оклад vs табель. На витринах ЗП разносится на
+# две строки, чтобы фикс и почасовая не смешивались. Оклад — авто-начисление по сотруднику
+# (source_kind=employee), табель — зеркало выплаты по табелю (source_kind=payroll).
+EXPENSE_SALARY_SUBTYPE_FIXED     = "fixed"
+EXPENSE_SALARY_SUBTYPE_TIMESHEET = "timesheet"
+EXPENSE_SALARY_SUBTYPE_LABELS: dict[str, str] = {
+    EXPENSE_SALARY_SUBTYPE_FIXED:     "Оклад (фикс)",
+    EXPENSE_SALARY_SUBTYPE_TIMESHEET: "Табель (почасовая)",
+}
+# source_kind расхода-ЗП → подтип.
+EXPENSE_SALARY_SOURCE_SUBTYPE: dict[str, str] = {
+    EXPENSE_SOURCE_EMPLOYEE: EXPENSE_SALARY_SUBTYPE_FIXED,
+    EXPENSE_SOURCE_PAYROLL:  EXPENSE_SALARY_SUBTYPE_TIMESHEET,
+}
+
 # Периодичность регулярного расхода: ежедневно или раз в месяц в заданное число.
 RECURRING_FREQ_DAILY   = "daily"
 RECURRING_FREQ_MONTHLY = "monthly"
@@ -705,6 +720,10 @@ EXPENSE_PAYMENT_STATUS_LABELS: dict[str, str] = {
 EXPENSE_SYSTEM_CATEGORY_LOGISTICS = "Логистика"
 EXPENSE_SYSTEM_CATEGORY_RENT      = "Аренда склада"
 EXPENSE_SYSTEM_CATEGORY_SALARY    = "Зарплата"
+# Виртуальные категории аналитики для разнесения ЗП на оклад/табель (в справочнике
+# категорий их нет, id=None — как и у общей «Зарплата»).
+EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED     = "Оклад (фикс)"
+EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET = "Табель (почасовая)"
 EXPENSE_SYSTEM_CATEGORY_SEED: tuple[str, ...] = (
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,

@@ -346,26 +346,28 @@ def week_stats(
 
 # ── Начисление ЗП по дням (для аналитики расходов) ────────────────────────────
 
-def daily_payroll_accruals(connection, date_from: str, date_to: str) -> dict[str, int]:
-    """Начисленная ЗП по дням (дата YYYY-MM-DD → копейки) за диапазон [date_from..date_to] вкл.
+def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> dict[str, dict[str, int]]:
+    """Начисленная ЗП по дням, разнесённая на оклад и табель (почасовую).
 
+    Возвращает {"fixed": {день→копейки}, "timesheet": {день→копейки}} за [date_from..date_to] вкл.
     Управленческое начисление по дням труда, а не факт выплат: реальные выплаты по табелю
     ложатся в реестр расходов одной суммой в день расчёта (пятница / 15-е / конец месяца),
     а здесь ЗП распределяется на отработанные дни — чтобы ежедневная аналитика расходов не
     пульсировала редкими пиками выплат.
 
-    Почасовики (comp_type=hourly): за каждый отработанный день — часы по табелю × ставка,
-    действовавшая в этот день (effective-dated). Окладники (comp_type=fixed): дневная доля
+    Табель (comp_type=hourly): за каждый отработанный день — часы по табелю × ставка,
+    действовавшая в этот день (effective-dated). Оклад (comp_type=fixed): дневная доля
     оклада (оклад ÷ число дней месяца) за каждый день начиная с даты приёма; только активные
     (дата увольнения в модели не хранится — архивные окладники в дневной разбивке не учтены)."""
-    out: dict[str, int] = {}
+    timesheet: dict[str, int] = {}
+    fixed_out: dict[str, int] = {}
     try:
         df = date.fromisoformat(date_from[:10])
         dt = date.fromisoformat(date_to[:10])
     except ValueError:
-        return out
+        return {"fixed": fixed_out, "timesheet": timesheet}
     if dt < df:
-        return out
+        return {"fixed": fixed_out, "timesheet": timesheet}
 
     emp_rows = connection.execute(
         "SELECT id, comp_type, fixed_salary_kopecks, status, "
@@ -374,7 +376,7 @@ def daily_payroll_accruals(connection, date_from: str, date_to: str) -> dict[str
     ).fetchall()
     comp = {str(r["id"]): str(r["comp_type"] or EMPLOYEE_COMP_HOURLY) for r in emp_rows}
 
-    # Почасовики: часы по табелю × ставка дня.
+    # Почасовики (табель): часы по табелю × ставка дня.
     hourly_ids = [eid for eid, c in comp.items() if c == EMPLOYEE_COMP_HOURLY]
     if hourly_ids:
         entries = load_entries_range(connection, df.isoformat(), dt.isoformat())
@@ -387,7 +389,7 @@ def daily_payroll_accruals(connection, date_from: str, date_to: str) -> dict[str
                 continue
             r = rate_on(rates.get(emp_id), day_iso)
             if r:
-                out[day_iso] = out.get(day_iso, 0) + round(h * r)
+                timesheet[day_iso] = timesheet.get(day_iso, 0) + round(h * r)
 
     # Окладники: дневная доля оклада за каждый день периода работы (активные).
     for r in emp_rows:
@@ -402,9 +404,9 @@ def daily_payroll_accruals(connection, date_from: str, date_to: str) -> dict[str
             day_iso = d.isoformat()
             if not start_on or day_iso >= start_on:
                 dim = calendar.monthrange(d.year, d.month)[1]
-                out[day_iso] = out.get(day_iso, 0) + fixed // dim
+                fixed_out[day_iso] = fixed_out.get(day_iso, 0) + fixed // dim
             d += timedelta(days=1)
-    return out
+    return {"fixed": fixed_out, "timesheet": timesheet}
 
 
 # ── Сборка сетки недели ───────────────────────────────────────────────────────

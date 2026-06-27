@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from 'react'
 import {
   EXPENSE_KIND_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
+  SALARY_SUBTYPE_LABELS,
   expensePaidFraction,
   expensePaymentTone,
   getExpenseDict,
@@ -134,6 +135,7 @@ export function ExpensesListFeature() {
   const [sourceF, setSourceF] = useFilterParam('source', '')
   const [statusF, setStatusF] = useFilterParam('pstatus', '')
   const [kindF, setKindF] = useFilterParam('kind', '')
+  const [salSubF, setSalSubF] = useFilterParam('salsub', '')
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [page, setPage] = usePageParam()
@@ -200,10 +202,11 @@ export function ExpensesListFeature() {
     payment_source_id: sourceF || undefined,
     payment_status: statusF || undefined,
     kind: selectedKind || undefined,
+    salary_subtype: (isSalaryMode && salSubF) || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
   }
-  const filterDeps = [search, categoryF, sourceF, statusF, kindF, dateFrom, dateTo, dataTick]
+  const filterDeps = [search, categoryF, sourceF, statusF, kindF, salSubF, dateFrom, dateTo, dataTick]
 
   const { data, loading, error } = useApi(
     (s) => getExpenses({ ...filters, page, limit: PAGE_SIZE }, s),
@@ -234,7 +237,7 @@ export function ExpensesListFeature() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const dayGroups = useMemo(() => groupExpensesByDay(items, moscowTodayYmd()), [items])
-  const hasFilters = !!(search || categoryF || sourceF || statusF || kindF || dateFrom || dateTo)
+  const hasFilters = !!(search || categoryF || sourceF || statusF || kindF || salSubF || dateFrom || dateTo)
   const colCount = 7
 
   function afterSave() {
@@ -320,6 +323,17 @@ export function ExpensesListFeature() {
               onChange={setKindF}
             />
           )}
+          {isSalaryMode && (
+            <FilterSelect
+              label="Тип ЗП" value={salSubF}
+              options={[
+                { value: '', label: 'Оклад и табель' },
+                { value: 'fixed', label: SALARY_SUBTYPE_LABELS.fixed },
+                { value: 'timesheet', label: SALARY_SUBTYPE_LABELS.timesheet },
+              ]}
+              onChange={setSalSubF}
+            />
+          )}
           <FilterSelect label="Статус" value={statusF} options={STATUS_OPTIONS} onChange={setStatusF} />
           <FilterCombobox
             label="Категория" value={categoryF}
@@ -338,7 +352,7 @@ export function ExpensesListFeature() {
             onClear={() => setMany({ from: '', to: '' })}
           />
           {hasFilters && (
-            <button className="btn ghost sm" onClick={() => setMany({ search: '', category: '', source: '', pstatus: '', kind: '', from: '', to: '' })}>
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', category: '', source: '', pstatus: '', kind: '', salsub: '', from: '', to: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -392,7 +406,10 @@ export function ExpensesListFeature() {
                 {g.rows.map((it) => (
               <tr key={it.id} style={{ cursor: 'pointer' }} onClick={() => setEdit({ id: it.id })}>
                 <Td><span className="mono" style={{ fontSize: 12 }}>{it.exp_number}</span></Td>
-                <Td><span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{it.kind_label}</span></Td>
+                <Td>
+                  <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{it.kind_label}</span>
+                  {it.salary_subtype_label && <div className="t-sub">{it.salary_subtype_label}</div>}
+                </Td>
                 <Td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     {it.name}

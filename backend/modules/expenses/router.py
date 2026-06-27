@@ -153,6 +153,7 @@ def list_expenses(
     kind:              str | None = Query(None),
     kinds:             str | None = Query(None),
     payment_status:    str | None = Query(None),
+    salary_subtype:    str | None = Query(None),
     user=Depends(_get_finance),
 ):
     kind = _resolve_kind_filter(user, kind)
@@ -161,6 +162,7 @@ def list_expenses(
             conn, page=page, limit=limit, search=search, category_id=category_id,
             payment_source_id=payment_source_id, date_from=date_from, date_to=date_to,
             kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
+            salary_subtype=salary_subtype,
         )
     return ExpenseListResponse(
         items=[ExpenseListItem(**it) for it in items], total=total, page=page, limit=limit,
@@ -177,6 +179,7 @@ def expenses_summary(
     kind:              str | None = Query(None),
     kinds:             str | None = Query(None),
     payment_status:    str | None = Query(None),
+    salary_subtype:    str | None = Query(None),
     user=Depends(_get_finance),
 ):
     kind = _resolve_kind_filter(user, kind)
@@ -185,6 +188,7 @@ def expenses_summary(
             conn, search=search, category_id=category_id,
             payment_source_id=payment_source_id, date_from=date_from, date_to=date_to,
             kind=kind, payment_status=payment_status, kinds=_resolve_kinds_scope(user, kinds),
+            salary_subtype=salary_subtype,
         )
     return ExpenseSummaryResponse(**data)
 

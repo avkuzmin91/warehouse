@@ -28,6 +28,10 @@ from config import (
     EXPENSE_PAYMENT_PARTIAL,
     EXPENSE_PAYMENT_STATUS_LABELS,
     EXPENSE_PAYMENT_STATUSES_ALL,
+    EXPENSE_SALARY_SOURCE_SUBTYPE,
+    EXPENSE_SALARY_SUBTYPE_FIXED,
+    EXPENSE_SALARY_SUBTYPE_LABELS,
+    EXPENSE_SALARY_SUBTYPE_TIMESHEET,
     EXPENSE_SOURCE_EMPLOYEE,
     EXPENSE_SOURCE_PAYROLL,
     EXPENSE_SOURCE_TRIP,
@@ -35,10 +39,12 @@ from config import (
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,
     EXPENSE_SYSTEM_CATEGORY_SALARY,
+    EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED,
+    EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET,
     PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
-from modules.timesheet.service import daily_payroll_accruals
+from modules.timesheet.service import daily_payroll_accruals_split
 
 
 def now_iso() -> str:
@@ -317,9 +323,17 @@ def _expense_filter_sql(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> tuple[str, list]:
     conds = ["COALESCE(e.is_deleted, 0) = 0"]
     params: list = []
+    if salary_subtype:
+        src = {
+            EXPENSE_SALARY_SUBTYPE_FIXED:     EXPENSE_SOURCE_EMPLOYEE,
+            EXPENSE_SALARY_SUBTYPE_TIMESHEET: EXPENSE_SOURCE_PAYROLL,
+        }.get(salary_subtype)
+        if src:
+            conds.append("e.source_kind = ?"); params.append(src)
     if kinds is not None:
         if kinds:
             placeholders = ",".join("?" for _ in kinds)
@@ -346,6 +360,11 @@ def _expense_filter_sql(
 
 
 def _row_to_list_item(r) -> dict:
+    kind = str(r["kind"] or "manual")
+    salary_subtype = (
+        EXPENSE_SALARY_SOURCE_SUBTYPE.get(str(r["source_kind"] or ""))
+        if kind == EXPENSE_KIND_SALARY else None
+    )
     return {
         "id": str(r["id"]),
         "exp_number": str(r["exp_number"]),
@@ -363,8 +382,8 @@ def _row_to_list_item(r) -> dict:
         "payment_source_name": r["payment_source_name"],
         "supplier": r["supplier"],
         "comment": r["comment"],
-        "kind": str(r["kind"] or "manual"),
-        "kind_label": EXPENSE_KIND_LABELS.get(str(r["kind"] or "manual"), str(r["kind"] or "")),
+        "kind": kind,
+        "kind_label": EXPENSE_KIND_LABELS.get(kind, str(r["kind"] or "")),
         "payment_status": str(r["payment_status"] or "paid"),
         "payment_status_label": EXPENSE_PAYMENT_STATUS_LABELS.get(
             str(r["payment_status"] or "paid"), str(r["payment_status"] or "")
@@ -374,6 +393,8 @@ def _row_to_list_item(r) -> dict:
         "period_end": r["period_end"],
         "source_kind": r["source_kind"],
         "source_id": r["source_id"],
+        "salary_subtype": salary_subtype,
+        "salary_subtype_label": EXPENSE_SALARY_SUBTYPE_LABELS.get(salary_subtype) if salary_subtype else None,
         "file_count": int(r["file_count"]),
         "created_at": str(r["created_at"]),
         "created_by_email": r["created_by_email"],
@@ -409,11 +430,12 @@ def list_expenses_aggregated(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> tuple[list[dict], int]:
     where, params = _expense_filter_sql(
         search=search, category_id=category_id, payment_source_id=payment_source_id,
         date_from=date_from, date_to=date_to,
-        kind=kind, payment_status=payment_status, kinds=kinds,
+        kind=kind, payment_status=payment_status, kinds=kinds, salary_subtype=salary_subtype,
     )
     total = int(connection.execute(
         f"SELECT COUNT(*) AS n FROM material_expenses e WHERE {where}", params
@@ -438,11 +460,12 @@ def expense_summary(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> dict:
     where, params = _expense_filter_sql(
         search=search, category_id=category_id, payment_source_id=payment_source_id,
         date_from=date_from, date_to=date_to,
-        kind=kind, payment_status=payment_status, kinds=kinds,
+        kind=kind, payment_status=payment_status, kinds=kinds, salary_subtype=salary_subtype,
     )
     # «Оплачено» — фактически проведённые деньги (paid_amount), «Ожидает» — остаток
     # к оплате (amount − paid_amount) по неаннулированным; частично оплаченные дают
@@ -652,20 +675,26 @@ def expense_analytics(
                 by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["count"] += 1
                 _add_category(rent_name, r["category_id"], in_window, 1)
 
-    # 3) ЗП — начисление по дням из табеля (часы × ставка / доля оклада).
+    # 3) ЗП — начисление по дням из табеля (часы × ставка / доля оклада), разнесённое
+    # на оклад (фикс) и табель (почасовую) двумя категориями, чтобы они не смешивались.
     if salary_in_scope:
-        sal_amount = sal_days = 0
-        for day_iso, amount in daily_payroll_accruals(connection, df.isoformat(), dt.isoformat()).items():
-            if amount and day_iso in series:
-                series[day_iso] += amount
-                sal_amount += amount
-                sal_days += 1
-                _add_matrix(EXPENSE_SYSTEM_CATEGORY_SALARY, None, EXPENSE_KIND_SALARY, day_iso, amount)
-        if sal_amount:
-            bk = by_kind.setdefault(EXPENSE_KIND_SALARY, {"amount": 0, "count": 0})
-            bk["amount"] += sal_amount
-            bk["count"] += sal_days
-            _add_category(EXPENSE_SYSTEM_CATEGORY_SALARY, None, sal_amount, sal_days)
+        split = daily_payroll_accruals_split(connection, df.isoformat(), dt.isoformat())
+        for subtype, cat_name in (
+            (EXPENSE_SALARY_SUBTYPE_FIXED, EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED),
+            (EXPENSE_SALARY_SUBTYPE_TIMESHEET, EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET),
+        ):
+            sal_amount = sal_days = 0
+            for day_iso, amount in split[subtype].items():
+                if amount and day_iso in series:
+                    series[day_iso] += amount
+                    sal_amount += amount
+                    sal_days += 1
+                    _add_matrix(cat_name, None, EXPENSE_KIND_SALARY, day_iso, amount)
+            if sal_amount:
+                bk = by_kind.setdefault(EXPENSE_KIND_SALARY, {"amount": 0, "count": 0})
+                bk["amount"] += sal_amount
+                bk["count"] += sal_days
+                _add_category(cat_name, None, sal_amount, sal_days)
 
     # 4) Статус оплаты — по реестровым строкам области; аннулированные в отчёт не входят.
     by_status: dict[str, dict] = {}
