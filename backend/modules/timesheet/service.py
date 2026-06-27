@@ -26,6 +26,7 @@ from config import (
     TIMESHEET_LUNCH_HOURS,
 )
 from dbconn import like_substring_param
+from modules.production_calendar.service import load_overrides, working_days_of_month
 
 RU_MON = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 RU_DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]  # date.weekday(): Mon=0..Sun=6
@@ -357,8 +358,10 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
 
     Табель (comp_type=hourly): за каждый отработанный день — часы по табелю × ставка,
     действовавшая в этот день (effective-dated). Оклад (comp_type=fixed): дневная доля
-    оклада (оклад ÷ число дней месяца) за каждый день начиная с даты приёма; только активные
-    (дата увольнения в модели не хранится — архивные окладники в дневной разбивке не учтены)."""
+    оклада (оклад ÷ число РАБОЧИХ дней месяца по производственному календарю, дефолт 6/1)
+    за каждый рабочий день начиная с даты приёма; остаток целочисленного деления — на первые
+    рабочие дни месяца, так что сумма за полный месяц равна окладу. Только активные (дата
+    увольнения в модели не хранится — архивные окладники в дневной разбивке не учтены)."""
     timesheet: dict[str, int] = {}
     fixed_out: dict[str, int] = {}
     try:
@@ -391,21 +394,51 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
             if r:
                 timesheet[day_iso] = timesheet.get(day_iso, 0) + round(h * r)
 
-    # Окладники: дневная доля оклада за каждый день периода работы (активные).
-    for r in emp_rows:
-        if str(r["comp_type"] or "") != EMPLOYEE_COMP_FIXED or str(r["status"]) != EMPLOYEE_STATUS_ACTIVE:
-            continue
-        fixed = int(r["fixed_salary_kopecks"] or 0)
-        if fixed <= 0:
-            continue
-        start_on = str(r["start_on"] or "")[:10]
-        d = df
-        while d <= dt:
-            day_iso = d.isoformat()
-            if not start_on or day_iso >= start_on:
-                dim = calendar.monthrange(d.year, d.month)[1]
-                fixed_out[day_iso] = fixed_out.get(day_iso, 0) + fixed // dim
-            d += timedelta(days=1)
+    # Окладники: дневная доля оклада, размазанная по РАБОЧИМ дням месяца
+    # (производственный календарь, дефолт 6/1), остаток — на первые рабочие дни,
+    # чтобы сумма за месяц равнялась окладу. Серединный приём прорастает в пропорцию
+    # естественно: доли за рабочие дни до даты приёма просто не начисляются.
+    fixed_emps = [
+        r for r in emp_rows
+        if str(r["comp_type"] or "") == EMPLOYEE_COMP_FIXED
+        and str(r["status"]) == EMPLOYEE_STATUS_ACTIVE
+        and int(r["fixed_salary_kopecks"] or 0) > 0
+    ]
+    if fixed_emps:
+        month_first = date(df.year, df.month, 1)
+        month_last = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
+        overrides = load_overrides(connection, month_first.isoformat(), month_last.isoformat())
+        wd_cache: dict[tuple[int, int], list[date]] = {}
+
+        def _wd(y: int, m: int) -> list[date]:
+            if (y, m) not in wd_cache:
+                wd_cache[(y, m)] = working_days_of_month(connection, y, m, overrides=overrides)
+            return wd_cache[(y, m)]
+
+        months: list[tuple[int, int]] = []
+        cur = month_first
+        while cur <= month_last:
+            months.append((cur.year, cur.month))
+            cur = date(cur.year + cur.month // 12, cur.month % 12 + 1, 1)
+
+        for r in fixed_emps:
+            fixed = int(r["fixed_salary_kopecks"])
+            start_on = str(r["start_on"] or "")[:10]
+            for y, m in months:
+                wd = _wd(y, m)
+                n = len(wd)
+                if n == 0:
+                    continue
+                base, rem = divmod(fixed, n)
+                for idx, day in enumerate(wd):
+                    if not (df <= day <= dt):
+                        continue
+                    day_iso = day.isoformat()
+                    if start_on and day_iso < start_on:
+                        continue
+                    share = base + (1 if idx < rem else 0)
+                    if share:
+                        fixed_out[day_iso] = fixed_out.get(day_iso, 0) + share
     return {"fixed": fixed_out, "timesheet": timesheet}
 
 

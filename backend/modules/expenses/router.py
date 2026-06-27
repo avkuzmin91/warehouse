@@ -131,6 +131,24 @@ def _assert_visible(user, row) -> None:
         raise HTTPException(status_code=404, detail="Расход не найден")
 
 
+def _resolve_kinds_analytics(kinds_csv: str | None) -> list[str] | None:
+    """Область типов для аналитики — целиком, без изъятий по роли. Реестр расходов
+    скрывает аренду и ЗП от менеджера, но дневная динамика и итоги аналитики обязаны
+    отражать ВСЕ расходы: иначе менеджер видит заниженную картину затрат. Валидируем
+    CSV, но не режем по видимости и не отдаём 403 на админский тип. Пусто → None (все)."""
+    if not kinds_csv:
+        return None
+    requested: list[str] = []
+    for raw in kinds_csv.split(","):
+        k = raw.strip()
+        if not k:
+            continue
+        if k not in EXPENSE_KINDS_ALL:
+            raise HTTPException(status_code=400, detail="Неизвестный тип расхода")
+        requested.append(k)
+    return requested
+
+
 def _journal(conn, expense_id: str, op_type: str, comment: str, uid: str) -> None:
     conn.execute(
         "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
@@ -204,12 +222,13 @@ def expenses_analytics(
 ):
     """Ежедневная аналитика расходов: динамика по дням, распределение по типам и статусу
     оплаты. ЗП учитывается начислением по дням из табеля, аренда размазана по дням периода.
-    Область типов ограничена ролью (менеджер — без аренды и ЗП)."""
+    Видна целиком всем финансовым ролям, включая аренду и ЗП: аналитика не скрывает
+    расходы от менеджера (в отличие от реестра)."""
     df = validate_date(date_from)
     dt = validate_date(date_to)
     with get_connection() as conn:
         data = expense_analytics(
-            conn, date_from=df, date_to=dt, kinds=_resolve_kinds_scope(user, kinds),
+            conn, date_from=df, date_to=dt, kinds=_resolve_kinds_analytics(kinds),
         )
     return ExpenseAnalyticsResponse(**data)
 
@@ -245,12 +264,12 @@ def pay_carrier(body: ExpenseCarrierPayRequest, user=Depends(_get_finance)):
     return ExpenseCarrierPayResponse(**result)
 
 
-# ── Автоначисление ЗП (оклады: 1-е и 15-е число — по 1/2) ────────────────────────
+# ── Автоначисление ЗП (оклад: одна проводка на месяц, 1-го числа / в день приёма) ─
 
 @router.post("/expenses/salary/accruals/run", response_model=AccrualRunResponse)
 def run_salary_accruals_endpoint(on_date: str | None = Query(None), user=Depends(_get_finance)):
-    """Ручной запуск начисления ЗП-окладов на дату (по умолчанию — сегодня).
-    Идемпотентно: повторный вызов в ту же дату ничего не дублирует. Только админ."""
+    """Ручной запуск начисления ЗП-окладов за месяц даты (по умолчанию — сегодня).
+    Идемпотентно: повторный вызов ничего не дублирует. Только админ."""
     ensure_admin_finance(user)
     target = validate_date(on_date) if on_date else business_today().isoformat()
     with get_connection() as conn:

@@ -44,6 +44,7 @@ from config import (
     PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
+from modules.production_calendar.service import working_days_of_month
 from modules.timesheet.service import daily_payroll_accruals_split
 from modules.warehouse_rent.service import current_rent_rates
 
@@ -553,8 +554,8 @@ def expense_analytics(
     оклада), а не из реестровых выплат, — поэтому реестровый kind=salary из динамики и
     by_kind исключён (иначе двойной учёт).
 
-    `kinds=None` — все типы (админ); список — ограниченная роли область (менеджер не видит
-    аренду и ЗП, для него эти срезы пустые). Срез by_status считается по реестровым строкам
+    `kinds=None` — все типы; список — явно запрошенная область. Аналитика не скрывает типы
+    по роли: менеджер видит аренду и ЗП наравне с админом. Срез by_status считается по реестровым строкам
     (выплаты ЗП и аренда — по их дате), это состояние долгов, а не дневная атрибуция,
     поэтому его итог может отличаться от «начислено». by_category сходится с total_amount."""
     try:
@@ -981,31 +982,43 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     )
 
 
-def _salary_accrual_plan(on_date: date) -> tuple[str, str, str, bool] | None:
-    """(period_start, period_end, title, first_half) для даты начисления, либо None.
-    Начисляем 15-го (первая половина оклада) и в последний день месяца (вторая)."""
-    y, m = on_date.year, on_date.month
-    last_day = calendar.monthrange(y, m)[1]
-    if on_date.day == 15:
-        return (date(y, m, 1).isoformat(), date(y, m, 15).isoformat(), f"Аванс ЗП {m:02d}.{y}", True)
-    if on_date.day == last_day:
-        return (date(y, m, 16).isoformat(), date(y, m, last_day).isoformat(), f"Расчёт ЗП {m:02d}.{y}", False)
-    return None
+def _fixed_month_accrual(connection, fixed: int, year: int, month: int, effective_start: date) -> int:
+    """Сумма оклада за месяц, пропорциональная рабочим дням с даты effective_start.
+    Считается так же, как дневная разбивка в аналитике (оклад ÷ рабочие дни месяца,
+    остаток на первые рабочие дни), поэтому начисление в реестр и аналитика по дням
+    сходятся копейка-в-копейку; для полного месяца сумма равна окладу."""
+    wd = working_days_of_month(connection, year, month)
+    n = len(wd)
+    if n == 0:
+        return 0
+    base, rem = divmod(fixed, n)
+    total = 0
+    for idx, day in enumerate(wd):
+        if day < effective_start:
+            continue
+        total += base + (1 if idx < rem else 0)
+    return total
 
 
 def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> int:
-    """Идемпотентно начисляет ЗП-оклады по датам: 15-е число — первая половина оклада,
-    последний день месяца — вторая. Только сотрудники с окладом (comp_type=fixed, fixed_salary>0).
-    Дедуп по (source_id, period_start) — повторный прогон в тот же день не плодит дубли.
+    """Идемпотентно начисляет ЗП-оклады: ОДНА проводка на (сотрудник, месяц) за полный
+    месяц, статус «ожидает оплаты». Заводится 1-го числа (или в день приёма для серединного
+    приёма); аванс/расчёт гасят её частичной оплатой — отдельных проводок 15-го/последнего
+    дня больше нет. Сумма пропорциональна рабочим дням с даты приёма (производственный
+    календарь), сходится с дневной разбивкой в аналитике. Только окладники (comp_type=fixed,
+    fixed_salary>0). Дедуп по (source_id, period_start) — повторный прогон не плодит дубли.
     Возвращает число созданных начислений. Не коммитит — это делает вызывающий."""
-    plan = _salary_accrual_plan(on_date)
-    if plan is None:
-        return 0
-    period_start, period_end, title, first_half = plan
+    year, month = on_date.year, on_date.month
+    last_day = calendar.monthrange(year, month)[1]
+    month_start = date(year, month, 1)
+    period_start = month_start.isoformat()
+    period_end = date(year, month, last_day).isoformat()
+    title = f"Оклад {month:02d}.{year}"
 
     rows = connection.execute(
-        "SELECT id, full_name, fixed_salary_kopecks FROM employees "
-        "WHERE comp_type = ? AND status = ? AND COALESCE(is_deleted, 0) = 0 "
+        "SELECT id, full_name, fixed_salary_kopecks, "
+        "COALESCE(hired_on, SUBSTR(created_at, 1, 10)) AS start_on "
+        "FROM employees WHERE comp_type = ? AND status = ? AND COALESCE(is_deleted, 0) = 0 "
         "AND COALESCE(fixed_salary_kopecks, 0) > 0",
         (EMPLOYEE_COMP_FIXED, EMPLOYEE_STATUS_ACTIVE),
     ).fetchall()
@@ -1017,6 +1030,14 @@ def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> in
     created = 0
     for r in rows:
         emp_id = str(r["id"])
+        try:
+            hired = date.fromisoformat(str(r["start_on"])[:10])
+        except (ValueError, TypeError):
+            hired = month_start
+        effective_start = max(month_start, hired)
+        # Приём в этом месяце ещё не наступил — ждём дня выхода (заведём проводку тогда).
+        if on_date < effective_start:
+            continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
             "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
@@ -1025,7 +1046,7 @@ def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> in
         if exists:
             continue
         fixed = int(r["fixed_salary_kopecks"])
-        amount = fixed // 2 if first_half else fixed - fixed // 2
+        amount = _fixed_month_accrual(connection, fixed, year, month, effective_start)
         if amount <= 0:
             continue
         expense_id = str(uuid4())
