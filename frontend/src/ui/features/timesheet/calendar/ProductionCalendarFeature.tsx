@@ -88,15 +88,8 @@ export function ProductionCalendarFeature() {
       return
     }
     // Нерабочий → вернуть в рабочий режим.
-    if (ov && !def) {
-      // Воскресенье, которое уже сделали рабочим/нерабочим вручную — переключаем напрямую.
-    }
-    if (ov && ov.is_working === def) {
-      // совпадает с дефолтом — нечего делать
-      return
-    }
     if (!def) {
-      // Дефолтное воскресенье → сделать рабочим (override is_working=true).
+      // Воскресенье (нерабочее по умолчанию) → сделать рабочим (override is_working=true).
       setBusy(true)
       try {
         await setCalendarDay({ cal_date: iso, is_working: true, reason: null })

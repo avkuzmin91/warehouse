@@ -37,6 +37,7 @@ const TIMESHEET_NAV: NavItem[] = [
   { to: '/timesheet/planning', icon: 'calendar', label: 'Планирование' },
   { to: '/timesheet/payroll', icon: 'wallet', label: 'Выплаты' },
   { to: '/timesheet/employees', icon: 'users', label: 'Сотрудники' },
+  { to: '/timesheet/calendar', icon: 'calendar', label: 'Производственный календарь' },
 ]
 
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
