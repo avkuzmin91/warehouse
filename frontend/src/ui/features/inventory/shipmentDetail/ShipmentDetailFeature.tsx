@@ -50,6 +50,7 @@ import { lineAvailable } from './shared/opLabels'
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
+import { PlacePackedDrawer } from './components/PlacePackedDrawer'
 import { RelocationPanel } from './components/RelocationPanel'
 import { DefectPreparePanel } from './components/DefectPreparePanel'
 import { CompositionTable } from './components/CompositionTable'
@@ -92,6 +93,7 @@ export function ShipmentDetailFeature() {
   const [reviewZoneBalances, setReviewZoneBalances] = useState<BalanceZoneItem[]>([])
   const [moveDrawer, setMoveDrawer] = useState<{ line: ShipmentLine; mode: 'transfer' | 'replenish' } | null>(null)
   const [packingLine, setPackingLine] = useState<ShipmentLine | null>(null)
+  const [placeLine, setPlaceLine] = useState<ShipmentLine | null>(null)
   const [savingLine, setSavingLine] = useState<string | null>(null)
 
   const [infoClientId, setInfoClientId] = useState<string | null>(null)
@@ -179,6 +181,9 @@ export function ShipmentDetailFeature() {
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
   const canReturnPacking = canMovePacking
+  // Размещение упакованного по местам прямо на упаковке (отгрузка из упаковки до её
+  // завершения) — то же право, что у раскладки: кладовщик (canEdit).
+  const canPlacePacked = canEdit && isOnPacking
   // «Готово к рейсу» — кладовщик (canEdit = warehouse_manager) в статусе «Перемещение».
   const canRelocate = canEdit && isRelocating
 
@@ -944,11 +949,13 @@ export function ShipmentDetailFeature() {
                   canMove={canMovePacking}
                   canPack={canPack && isOnPacking}
                   canReturn={canReturnPacking}
+                  canPlace={canPlacePacked}
                   acting={acting}
                   savingLine={savingLine}
                   onOpenMove={(line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' })}
                   onReturn={handleReturnFromPacking}
                   onOpenPacking={setPackingLine}
+                  onOpenPlace={setPlaceLine}
                 />
               )}
             </PhaseBlock>
@@ -1181,6 +1188,16 @@ export function ShipmentDetailFeature() {
           docId={docId!}
           line={packingLine}
           onClose={() => setPackingLine(null)}
+          onDone={refreshAfterLineChange}
+        />
+      )}
+
+      {placeLine && (
+        <PlacePackedDrawer
+          docId={docId!}
+          line={placeLine}
+          zoneOptions={unloadingZones}
+          onClose={() => setPlaceLine(null)}
           onDone={refreshAfterLineChange}
         />
       )}

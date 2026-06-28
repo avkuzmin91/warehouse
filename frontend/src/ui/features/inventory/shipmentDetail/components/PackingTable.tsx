@@ -11,17 +11,20 @@ type PackingTableProps = {
   canMove:       boolean
   canPack:       boolean
   canReturn:     boolean
+  // Размещение упакованного по местам прямо на упаковке (отгрузка из упаковки до её конца).
+  canPlace:      boolean
   acting:        boolean
   savingLine:    string | null
   onOpenMove:    (line: ShipmentLine) => void
   onReturn:      (line: ShipmentLine) => void
   onOpenPacking: (line: ShipmentLine) => void
+  onOpenPlace:   (line: ShipmentLine) => void
 }
 
 /** Упаковка: план-цель + на упаковке + (годный/брак) + действия передачи/упаковки. */
 export function PackingTable({
-  mode, lines, canMove, canPack, canReturn, acting, savingLine,
-  onOpenMove, onReturn, onOpenPacking,
+  mode, lines, canMove, canPack, canReturn, canPlace, acting, savingLine,
+  onOpenMove, onReturn, onOpenPacking, onOpenPlace,
 }: PackingTableProps) {
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
@@ -70,6 +73,11 @@ export function PackingTable({
                     {mode === 'packing' && canPack && (
                       <button className="btn primary sm" disabled={busy} title="Внести годный/брак с датой упаковки" onClick={() => onOpenPacking(line)}>
                         <Icon name="check" size={12} />Внести упаковку
+                      </button>
+                    )}
+                    {mode === 'packing' && canPlace && line.packed_pending_good > 0 && (
+                      <button className="btn ghost sm" disabled={busy} title="Разместить упакованное по местам — станет доступно к отгрузке" onClick={() => onOpenPlace(line)}>
+                        <Icon name="archive" size={12} />Разместить ({line.packed_pending_good})
                       </button>
                     )}
                     {canMove && (

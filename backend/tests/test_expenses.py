@@ -626,8 +626,78 @@ def test_salary_accruals_monthly_idempotent(admin_client, manager_client):
                 conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
             conn.execute("DELETE FROM material_expenses WHERE source_kind='employee' AND source_id=?", (emp_id,))
             conn.execute("DELETE FROM employee_rates WHERE employee_id=?", (emp_id,))
+            conn.execute("DELETE FROM employee_salaries WHERE employee_id=?", (emp_id,))
             conn.execute("DELETE FROM employees WHERE id=?", (emp_id,))
             conn.commit()
+
+
+def test_salary_effective_dated_accrual_and_history(admin_client):
+    tag = uuid.uuid4().hex[:8]
+    # Оклад 150 000 ₽ с серединой месяца (27.06) → начисление пропорционально рабочим дням
+    # от даты начала оклада, а не за весь месяц.
+    emp = admin_client.post("/employees", json={
+        "full_name": f"Окл2-{tag}", "comp_type": "fixed",
+        "fixed_salary_kopecks": 15000000, "salary_from": "2026-06-27",
+    })
+    assert emp.status_code == 200, emp.text
+    emp_id = emp.json()["message"]
+    try:
+        # Стартовый оклад лёг одной записью истории с датой начала 27.06.
+        detail = admin_client.get(f"/employees/{emp_id}").json()
+        assert len(detail["salary_history"]) == 1
+        assert detail["salary_history"][0]["effective_from"] == "2026-06-27"
+        assert detail["salary_history"][0]["salary_kopecks"] == 15000000
+        wrong_id = detail["salary_history"][0]["id"]
+
+        # Начисление за июнь = доля за рабочие дни с 27.06 (3 рабочих дня из 26) = 1 730 769 коп.
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-30").status_code == 200
+        items = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        mine = [e for e in items if e.get("source_id") == emp_id and e["period_start"] == "2026-06-01"]
+        assert len(mine) == 1
+        assert mine[0]["amount"] == 1730769
+
+        # Исправление даты начала оклада: добавляем запись с 01.06, удаляем ошибочную с 27.06.
+        assert admin_client.post(f"/employees/{emp_id}/salaries", json={
+            "salary_kopecks": 15000000, "effective_from": "2026-06-01",
+        }).status_code == 200
+        assert admin_client.delete(f"/employees/{emp_id}/salaries/{wrong_id}").status_code == 200
+        assert admin_client.delete(f"/employees/{emp_id}/salaries/{wrong_id}").status_code == 404
+
+        d2 = admin_client.get(f"/employees/{emp_id}").json()
+        assert len(d2["salary_history"]) == 1
+        assert d2["salary_history"][0]["effective_from"] == "2026-06-01"
+        assert d2["fixed_salary_kopecks"] == 15000000   # кэш «оклад на сегодня» пересчитан
+
+        # Свежий окладник с датой начала 01.06 → полный месяц = оклад (1-е число).
+        emp2 = admin_client.post("/employees", json={
+            "full_name": f"Окл3-{tag}", "comp_type": "fixed",
+            "fixed_salary_kopecks": 15000000, "salary_from": "2026-06-01",
+        }).json()["message"]
+        try:
+            assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-01").status_code == 200
+            it2 = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+            full = [e for e in it2 if e.get("source_id") == emp2 and e["period_start"] == "2026-06-01"]
+            assert len(full) == 1
+            assert full[0]["amount"] == 15000000
+        finally:
+            _purge_employee(emp2)
+    finally:
+        _purge_employee(emp_id)
+
+
+def _purge_employee(emp_id: str) -> None:
+    with get_connection() as conn:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM material_expenses WHERE source_kind='employee' AND source_id=?",
+            (emp_id,),
+        ).fetchall()]
+        for eid in ids:
+            conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
+        conn.execute("DELETE FROM material_expenses WHERE source_kind='employee' AND source_id=?", (emp_id,))
+        conn.execute("DELETE FROM employee_rates WHERE employee_id=?", (emp_id,))
+        conn.execute("DELETE FROM employee_salaries WHERE employee_id=?", (emp_id,))
+        conn.execute("DELETE FROM employees WHERE id=?", (emp_id,))
+        conn.commit()
 
 
 def test_rent_accruals_per_warehouse_idempotent(admin_client, manager_client):

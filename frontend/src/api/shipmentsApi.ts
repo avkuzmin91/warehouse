@@ -112,6 +112,10 @@ export type ShipmentLine = {
   shipped_qty:       number
   packed_good:       number
   packed_defect:     number
+  // Упаковано, но ещё не размещено по местам (корзина packed). Размещённое в ready
+  // частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
+  packed_pending_good:   number
+  packed_pending_defect: number
   available_for_pack: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
@@ -475,6 +479,15 @@ export type ShipmentRelocateLine = {
 
 export function finishShipmentRelocation(id: string, lines: ShipmentRelocateLine[]) {
   return request<{ message: string }>(`/shipments/${id}/finish-relocation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+  })
+}
+
+// Частичное размещение упакованного годного по местам, не завершая упаковку: делает
+// упакованное доступным к отгрузке (ready) во время многодневной упаковки. Нужны только good.
+export function placePackedShipment(id: string, lines: ShipmentRelocateLine[]) {
+  return request<{ message: string; moved: number }>(`/shipments/${id}/place-packed`, {
     method: 'POST',
     body: JSON.stringify({ lines }),
   })

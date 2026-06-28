@@ -385,6 +385,72 @@ def line_packed_breakdown(connection, line_id: str) -> dict:
     return {"good": int(row["good"] or 0), "defect": int(row["defect"] or 0)}
 
 
+def line_packed_pending(connection, line_id: str) -> dict:
+    """Упаковано, но ещё НЕ размещено по местам: чистый остаток корзины `packed` строки.
+
+    В отличие от line_packed_breakdown (факт упаковки = packed+ready, держится после
+    размещения), это то, что физически лежит на столе «Упаковано» и ждёт раскладки.
+    Размещение good (packed→ready) и defect (packed→storage) его уменьшает; возврат на
+    упаковку (ready→packed) — увеличивает. На этом считается частичное и финальное
+    размещение, чтобы повторная раскладка не задваивала уже размещённое."""
+    row = connection.execute(
+        """SELECT
+              COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   THEN qty
+                                WHEN from_op='packed' AND from_quality='good' THEN -qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='defect'   THEN qty
+                                WHEN from_op='packed' AND from_quality='defect' THEN -qty ELSE 0 END), 0) AS defect
+           FROM zone_relocations WHERE shipment_line_id = ?""",
+        (line_id,),
+    ).fetchone()
+    return {"good": int(row["good"] or 0), "defect": int(row["defect"] or 0)}
+
+
+def _relocate_alloc_zone(a) -> tuple[str, str | None, int]:
+    """Одна аллокация раскладки → (zone_id, zone_name, qty) с валидацией."""
+    zone_id = (a.zone_id or "").strip()
+    qty = int(a.qty or 0)
+    if not zone_id:
+        raise HTTPException(status_code=400, detail="Выберите место для каждой строки перемещения")
+    if qty <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+    return zone_id, (a.zone_name or None), qty
+
+
+def _emit_packed_placement(
+    connection, line, *, client_id, packing_id, packing_name,
+    good_allocs, defect_allocs, user_id, comment_prefix: str,
+) -> int:
+    """Перенос упакованного по местам: good packed→ready, defect packed→storage. Без commit.
+
+    Возвращает суммарно перемещённое. Общий код частичного (on_packing) и финального
+    (relocating → packed) размещения."""
+    from modules.balances.service import insert_inventory_move
+
+    label = line["product_sku"] or line["product_name"]
+    total = 0
+    for kind, allocs, to_op in (
+        (INV_Q_GOOD, good_allocs, INV_OP_READY),
+        (INV_Q_DEFECT, defect_allocs, INV_OP_STORAGE),
+    ):
+        kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
+        for zone_id, zone_name, qty in allocs:
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=None,
+                from_op=INV_OP_PACKED, to_op=to_op,
+                from_quality=kind, to_quality=kind,
+                from_zone_id=packing_id, from_zone_name=packing_name,
+                to_zone_id=zone_id, to_zone_name=zone_name,
+                qty=qty, user_id=user_id, shipment_line_id=str(line["id"]),
+                comment=f"{comment_prefix} ({kind_ru}): {qty} шт → {zone_name or 'без места'} — {label}",
+            )
+            total += qty
+    return total
+
+
 def line_on_packing_qty(connection, line_id: str) -> int:
     """Нерешённый пул строки на упаковочном столе: net (packing, good) по журналу."""
     row = connection.execute(
@@ -743,7 +809,9 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
     упаковки» packed → ready по реальным местам (становится доступен для отгрузки);
     брак возвращается на хранение свободным (packed,defect → storage,defect). Не
     списывает — отгрузку к рейсу далее возит домен dispatch. Гейт: по каждой строке
-    суммы аллокаций должны точно покрыть весь упакованный годный и весь брак.
+    суммы аллокаций должны точно покрыть весь ещё не размещённый упакованный годный и
+    брак (корзина `packed`). Часть могла быть размещена раньше через `relocate_packed`
+    (частичная отгрузка из упаковки) — её повторно раскладывать не нужно.
     Переводит relocating → packed.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
@@ -765,23 +833,13 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
     packing_id, packing_name = get_packing_zone(connection)
     client_id = doc["client_id"]
 
-    def _alloc_zone(a) -> tuple[str, str | None, int]:
-        zone_id = (a.zone_id or "").strip()
-        qty = int(a.qty or 0)
-        if not zone_id:
-            raise HTTPException(status_code=400, detail="Выберите место для каждой строки перемещения")
-        if qty <= 0:
-            raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
-        return zone_id, (a.zone_name or None), qty
-
     total_moved = 0
     for line_id, line in by_id.items():
-        packed = line_packed_breakdown(connection, line_id)
-        good, defect = packed["good"], packed["defect"]
+        pending = line_packed_pending(connection, line_id)
+        good, defect = pending["good"], pending["defect"]
         li = inputs_by_id.get(line_id)
-        good_allocs = [_alloc_zone(a) for a in (li.good if li else [])]
-        defect_allocs = [_alloc_zone(a) for a in (li.defect if li else [])]
-        label = line["product_sku"] or line["product_name"]
+        good_allocs = [_relocate_alloc_zone(a) for a in (li.good if li else [])]
+        defect_allocs = [_relocate_alloc_zone(a) for a in (li.defect if li else [])]
 
         if sum(q for *_, q in good_allocs) != good:
             raise HTTPException(
@@ -794,26 +852,11 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
                 detail=f"Разложите весь брак по местам для «{line['product_name']}» (нужно {defect} шт.)",
             )
 
-        for kind, allocs, from_op, to_op in (
-            (INV_Q_GOOD, good_allocs, INV_OP_PACKED, INV_OP_READY),
-            (INV_Q_DEFECT, defect_allocs, INV_OP_PACKED, INV_OP_STORAGE),
-        ):
-            kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
-            for zone_id, zone_name, qty in allocs:
-                insert_inventory_move(
-                    connection,
-                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                    color_id=line["color_id"], color_name=line["color_name"],
-                    size_id=line["size_id"], size_name=line["size_name"],
-                    client_id=client_id, client_name=None,
-                    from_op=from_op, to_op=to_op,
-                    from_quality=kind, to_quality=kind,
-                    from_zone_id=packing_id, from_zone_name=packing_name,
-                    to_zone_id=zone_id, to_zone_name=zone_name,
-                    qty=qty, user_id=user_id, shipment_line_id=line_id,
-                    comment=f"Перемещение к рейсу ({kind_ru}): {qty} шт → {zone_name or 'без места'} — {label}",
-                )
-                total_moved += qty
+        total_moved += _emit_packed_placement(
+            connection, line, client_id=client_id, packing_id=packing_id, packing_name=packing_name,
+            good_allocs=good_allocs, defect_allocs=defect_allocs, user_id=user_id,
+            comment_prefix="Перемещение к рейсу",
+        )
 
         # Нерешённый пул (подвезли, но не упаковали) возвращаем на хранение,
         # чтобы товар не завис на упаковочном столе и баланс не утекал.
@@ -833,9 +876,6 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
                 comment=f"Возврат нерешённого пула на хранение: {leftover} шт.",
             )
 
-    if total_moved <= 0:
-        raise HTTPException(status_code=400, detail="Нет упакованного товара для перемещения")
-
     now = _now()
     connection.execute(
         "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
@@ -848,6 +888,73 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
     )
     connection.commit()
     return SHIPMENT_STATUS_PACKED
+
+
+def relocate_packed(connection, doc_id: str, line_inputs, user_id: str) -> int:
+    """Частичное размещение упакованного годного по местам ПРЯМО на упаковке.
+
+    Большая задача упаковывается несколько дней; чтобы отгружать из уже упакованного, не
+    дожидаясь конца, кладовщик размещает упакованный годный packed → ready по реальным
+    местам — он становится «Готов к отгрузке» и доступен домену dispatch. Статус остаётся
+    «На упаковке» (упаковка продолжается), нерешённый пул со стола НЕ трогаем. Брак на этом
+    шаге не размещаем — он уезжает на хранение при финальном «Готово к рейсу».
+    Гейт по строке: размещаемый годный не больше ещё не размещённого упакованного (`packed`).
+    """
+    from modules.balances.service import get_packing_zone
+
+    doc = connection.execute(
+        "SELECT status, cargo_type, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if normalize_cargo_type(doc["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
+        raise HTTPException(status_code=400, detail="Брак-отгрузка размещается одним шагом при подготовке")
+    if str(doc["status"]) != SHIPMENT_STATUS_ON_PACKING:
+        raise HTTPException(status_code=400, detail="Размещать готовое к отгрузке можно только в статусе «На упаковке»")
+
+    lines = connection.execute(
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchall()
+    by_id = {str(l["id"]): l for l in lines}
+    inputs_by_id = {str(li.line_id): li for li in (line_inputs or [])}
+
+    packing_id, packing_name = get_packing_zone(connection)
+    client_id = doc["client_id"]
+
+    total_moved = 0
+    for line_id, li in inputs_by_id.items():
+        line = by_id.get(line_id)
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        good_allocs = [_relocate_alloc_zone(a) for a in (li.good or [])]
+        if not good_allocs:
+            continue
+        pending_good = line_packed_pending(connection, line_id)["good"]
+        if sum(q for *_, q in good_allocs) > pending_good:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Нельзя разместить больше упакованного для «{line['product_name']}» "
+                    f"(упаковано и не размещено {pending_good} шт.)"
+                ),
+            )
+        total_moved += _emit_packed_placement(
+            connection, line, client_id=client_id, packing_id=packing_id, packing_name=packing_name,
+            good_allocs=good_allocs, defect_allocs=[], user_id=user_id,
+            comment_prefix="Размещено готового к отгрузке",
+        )
+
+    if total_moved <= 0:
+        raise HTTPException(status_code=400, detail="Укажите, что и куда разместить")
+
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
+         f"Размещено готового к отгрузке: {total_moved} шт.", _now(), user_id),
+    )
+    connection.commit()
+    return total_moved
 
 
 def _check_defect_lines_ready(connection, doc_id: str, client_id) -> None:

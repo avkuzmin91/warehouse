@@ -438,6 +438,22 @@ def _ensure_runtime_schema() -> None:
             "ON employee_rates(employee_id, effective_from)"
         )
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS employee_salaries (
+                id             TEXT PRIMARY KEY,
+                employee_id    TEXT NOT NULL REFERENCES employees(id),
+                salary_kopecks INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_employee_salaries_emp "
+            "ON employee_salaries(employee_id, effective_from)"
+        )
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS timesheet_entries (
                 id            TEXT PRIMARY KEY,
                 employee_id   TEXT NOT NULL REFERENCES employees(id),
@@ -585,10 +601,10 @@ def _ensure_runtime_schema() -> None:
 
 async def _accrual_loop() -> None:
     """Фоновое автоначисление: ЗП-оклады (одна проводка на месяц, 1-го числа / в день
-    приёма), аренда складов (1-е число) и регулярные расходы по шаблонам (ежедневно /
-    в число месяца). Будится раз в час; дедуп по периоду делает повторные прогоны и
-    рестарты безопасными. Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в
-    тестовую БД."""
+    приёма), аренда складов (за текущий месяц, в любой день — самовосстановление при
+    пропущенном 1-м числе) и регулярные расходы по шаблонам (ежедневно / в число месяца).
+    Будится раз в час; дедуп по периоду делает повторные прогоны и рестарты безопасными.
+    Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
     from idempotency import purge_expired_idempotency_keys
     from modules.expenses.service import run_rent_accruals, run_salary_accruals
     from modules.recurring_expenses.service import run_recurring_accruals

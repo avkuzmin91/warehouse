@@ -76,6 +76,7 @@ from modules.shipments.service import (
     normalize_cargo_type,
     packing_productivity,
     record_packing,
+    relocate_packed,
     return_defect_to_storage,
     return_line_from_packing,
     return_packing_pool_to_storage,
@@ -538,13 +539,20 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
                   COALESCE(SUM(CASE WHEN to_op IN ('packed','ready')   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
                                     WHEN from_op IN ('packed','ready') AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
                   COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
-                                    WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect
+                                    WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect,
+                  -- «Ещё не размещено» = чистый остаток корзины packed (ждёт раскладки):
+                  -- размещение good (packed→ready) и defect (packed→storage) его уменьшает.
+                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   THEN qty
+                                    WHEN from_op='packed' AND from_quality='good' THEN -qty ELSE 0 END), 0) AS pending_good,
+                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='defect'   THEN qty
+                                    WHEN from_op='packed' AND from_quality='defect' THEN -qty ELSE 0 END), 0) AS pending_defect
                FROM zone_relocations
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
                GROUP BY shipment_line_id""",
             (doc_id,),
         ).fetchall()
         packed_by_line = {str(r["shipment_line_id"]): (int(r["good"] or 0), int(r["defect"] or 0)) for r in packed_rows}
+        pending_by_line = {str(r["shipment_line_id"]): (int(r["pending_good"] or 0), int(r["pending_defect"] or 0)) for r in packed_rows}
 
         # Раскладка по местам = ЧИСТЫЙ остаток нужной корзины по месту (вошло − вышло),
         # а не валовая сумма размещений: иначе возврат на упаковку (откат раскладки
@@ -623,6 +631,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             shipped_qty=int(l["shipped_qty"] or 0),
             packed_good=packed_by_line.get(str(l["id"]), (0, 0))[0],
             packed_defect=packed_by_line.get(str(l["id"]), (0, 0))[1],
+            packed_pending_good=pending_by_line.get(str(l["id"]), (0, 0))[0],
+            packed_pending_defect=pending_by_line.get(str(l["id"]), (0, 0))[1],
             available_for_pack=available_for_pack.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
@@ -1004,6 +1014,29 @@ def finish_shipment_relocation(
             return stored
         next_status = finish_relocation(conn, doc_id, body.lines, uid)
         result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/place-packed")
+def place_shipment_packed(
+    doc_id: str,
+    body: ShipmentFinishRelocationPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_warehouse),
+):
+    """Частичное размещение упакованного годного по местам, не завершая упаковку.
+
+    Делает упакованное доступным к отгрузке (ready) во время многодневной упаковки —
+    статус остаётся «На упаковке». Переиспользует payload раскладки (нужны только good)."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_place_packed")
+        if not proceed:
+            return stored
+        moved = relocate_packed(conn, doc_id, body.lines, uid)
+        result = {"message": "ok", "moved": moved}
         finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return result

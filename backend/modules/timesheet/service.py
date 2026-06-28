@@ -130,7 +130,7 @@ def load_rates(connection, employee_ids: list[str] | None = None) -> dict[str, l
     if employee_ids is not None and not employee_ids:
         return {}
     sql = (
-        "SELECT employee_id, rate_kopecks, effective_from, note "
+        "SELECT id, employee_id, rate_kopecks, effective_from, note "
         "FROM employee_rates WHERE COALESCE(is_deleted, 0) = 0"
     )
     params: list = []
@@ -142,6 +142,7 @@ def load_rates(connection, employee_ids: list[str] | None = None) -> dict[str, l
     for r in connection.execute(sql, params).fetchall():
         out.setdefault(str(r["employee_id"]), []).append(
             {
+                "id": str(r["id"]),
                 "rate_kopecks": int(r["rate_kopecks"]),
                 "effective_from": str(r["effective_from"]),
                 "note": r["note"],
@@ -169,6 +170,53 @@ def rate_on(rates_desc: list[dict] | None, day_iso: str) -> int | None:
 
 def current_rate(rates_desc: list[dict] | None) -> int | None:
     return rate_on(rates_desc, business_today().isoformat())
+
+
+# ── Оклад (effective-dated) ──────────────────────────────────────────────────
+
+def load_salaries(connection, employee_ids: list[str] | None = None) -> dict[str, list[dict]]:
+    """employee_id → список окладов, отсортированный по дате убыв. (свежий первым)."""
+    if employee_ids is not None and not employee_ids:
+        return {}
+    sql = (
+        "SELECT id, employee_id, salary_kopecks, effective_from, note "
+        "FROM employee_salaries WHERE COALESCE(is_deleted, 0) = 0"
+    )
+    params: list = []
+    if employee_ids:
+        sql += f" AND employee_id IN ({','.join('?' for _ in employee_ids)})"
+        params += employee_ids
+    sql += " ORDER BY employee_id, effective_from DESC, created_at DESC"
+    out: dict[str, list[dict]] = {}
+    for r in connection.execute(sql, params).fetchall():
+        out.setdefault(str(r["employee_id"]), []).append(
+            {
+                "id": str(r["id"]),
+                "salary_kopecks": int(r["salary_kopecks"]),
+                "effective_from": str(r["effective_from"]),
+                "note": r["note"],
+            }
+        )
+    return out
+
+
+def salary_on(salaries_desc: list[dict] | None, day_iso: str) -> int | None:
+    """Оклад, действовавший на дату: последняя запись с effective_from <= day.
+
+    В отличие от ставки (rate_on), оклад НЕ тянется назад: дни до самой ранней записи
+    окладом не считаются — дата первой записи и есть «дата начала оклада», что чинит
+    пропорцию серединного приёма (доли за дни до старта оклада не начисляются)."""
+    if not salaries_desc:
+        return None
+    day = day_iso[:10]
+    for r in salaries_desc:  # отсортированы по убыванию effective_from
+        if str(r["effective_from"])[:10] <= day:
+            return int(r["salary_kopecks"])
+    return None
+
+
+def current_salary(salaries_desc: list[dict] | None) -> int | None:
+    return salary_on(salaries_desc, business_today().isoformat())
 
 
 # ── Статус дня и часы по записи ───────────────────────────────────────────────
@@ -396,15 +444,17 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
 
     # Окладники: дневная доля оклада, размазанная по РАБОЧИМ дням месяца
     # (производственный календарь, дефолт 6/1), остаток — на первые рабочие дни,
-    # чтобы сумма за месяц равнялась окладу. Серединный приём прорастает в пропорцию
-    # естественно: доли за рабочие дни до даты приёма просто не начисляются.
+    # чтобы сумма за месяц равнялась окладу. Оклад берётся на каждый день из истории
+    # (effective-dated): дни до даты начала оклада не начисляются (серединный приём/старт
+    # оклада прорастает в пропорцию естественно), смена оклада среди месяца отражается с
+    # её даты.
     fixed_emps = [
         r for r in emp_rows
         if str(r["comp_type"] or "") == EMPLOYEE_COMP_FIXED
         and str(r["status"]) == EMPLOYEE_STATUS_ACTIVE
-        and int(r["fixed_salary_kopecks"] or 0) > 0
     ]
     if fixed_emps:
+        salaries = load_salaries(connection, [str(r["id"]) for r in fixed_emps])
         month_first = date(df.year, df.month, 1)
         month_last = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
         overrides = load_overrides(connection, month_first.isoformat(), month_last.isoformat())
@@ -422,22 +472,24 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
             cur = date(cur.year + cur.month // 12, cur.month % 12 + 1, 1)
 
         for r in fixed_emps:
-            fixed = int(r["fixed_salary_kopecks"])
-            start_on = str(r["start_on"] or "")[:10]
+            sal = salaries.get(str(r["id"]))
+            if not sal:
+                continue
             for y, m in months:
                 wd = _wd(y, m)
                 n = len(wd)
                 if n == 0:
                     continue
-                base, rem = divmod(fixed, n)
                 for idx, day in enumerate(wd):
                     if not (df <= day <= dt):
                         continue
-                    day_iso = day.isoformat()
-                    if start_on and day_iso < start_on:
+                    s = salary_on(sal, day.isoformat())
+                    if not s:
                         continue
+                    base, rem = divmod(s, n)
                     share = base + (1 if idx < rem else 0)
                     if share:
+                        day_iso = day.isoformat()
                         fixed_out[day_iso] = fixed_out.get(day_iso, 0) + share
     return {"fixed": fixed_out, "timesheet": timesheet}
 

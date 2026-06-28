@@ -102,13 +102,15 @@ def test_calendar_crud_endpoints(admin_client, shift_supervisor_client):
 def test_fixed_month_accrual_sums_to_salary_and_prorates():
     with get_connection() as conn:
         # Полный месяц = оклад точно (независимо от числа рабочих дней).
-        full = _fixed_month_accrual(conn, 100000, 2099, 6, date(2099, 6, 1))
+        full = _fixed_month_accrual(conn, [{"salary_kopecks": 100000, "effective_from": "2099-06-01"}], 2099, 6)
         assert full == 100000
 
-        # Серединный приём прорастает в пропорцию: 0 < доля < полный оклад.
+        # Старт оклада в середине месяца прорастает в пропорцию: 0 < доля < полный оклад.
         wd = working_days_of_month(conn, 2099, 6)
         mid_day = wd[len(wd) // 2]
-        partial = _fixed_month_accrual(conn, 100000, 2099, 6, mid_day)
+        partial = _fixed_month_accrual(
+            conn, [{"salary_kopecks": 100000, "effective_from": mid_day.isoformat()}], 2099, 6
+        )
         assert 0 < partial < 100000
 
         # Доли «до» и «с» серединного дня в сумме дают полный оклад (без потери копеек).
@@ -129,7 +131,9 @@ def test_salary_accrual_prorated_for_midmonth_hire(admin_client):
     emp_id = emp.json()["message"]
     try:
         with get_connection() as conn:
-            expected = _fixed_month_accrual(conn, 100000, 2099, 6, date(2099, 6, 16))
+            expected = _fixed_month_accrual(
+                conn, [{"salary_kopecks": 100000, "effective_from": "2099-06-16"}], 2099, 6
+            )
 
         # До выхода (1-е число) — не начисляем.
         admin_client.post("/expenses/salary/accruals/run?on_date=2099-06-01")
@@ -153,5 +157,6 @@ def test_salary_accrual_prorated_for_midmonth_hire(admin_client):
                 conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
             conn.execute("DELETE FROM material_expenses WHERE source_kind='employee' AND source_id=?", (emp_id,))
             conn.execute("DELETE FROM employee_rates WHERE employee_id=?", (emp_id,))
+            conn.execute("DELETE FROM employee_salaries WHERE employee_id=?", (emp_id,))
             conn.execute("DELETE FROM employees WHERE id=?", (emp_id,))
             conn.commit()

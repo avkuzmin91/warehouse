@@ -117,6 +117,26 @@ def test_accrual_uses_effective_rate(admin_client):  # noqa: F811
         _cleanup(wid)
 
 
+def test_accrual_self_heals_mid_month(admin_client):  # noqa: F811
+    """Фоновый прогон не в 1-е число всё равно заводит аренду за текущий месяц:
+    при пропущенном 1-м числе (рестарт backend / ставку завели позже) месяц добирается."""
+    from datetime import date
+
+    wid = _make_warehouse(admin_client, rent=11000000)
+    try:
+        with get_connection() as conn:
+            from modules.expenses.service import run_rent_accruals
+            created = run_rent_accruals(conn, date(2026, 6, 17))
+            conn.commit()
+        assert created >= 1
+        items = admin_client.get("/expenses?kind=rent&limit=200").json()["items"]
+        by_period = {e["period_start"]: e for e in items if e["source_id"] == wid}
+        assert by_period["2026-06-01"]["amount"] == 11000000
+        assert by_period["2026-06-01"]["period_end"] == "2026-06-30"
+    finally:
+        _cleanup(wid)
+
+
 def test_manager_forbidden(admin_client, manager_client, warehouse_id):  # noqa: F811
     assert manager_client.get(f"/own-warehouses/{warehouse_id}/rent-rates").status_code == 403
     assert manager_client.post(f"/own-warehouses/{warehouse_id}/rent-rates",

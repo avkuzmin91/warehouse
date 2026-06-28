@@ -288,7 +288,7 @@ def run_rent_accruals_endpoint(on_date: str | None = Query(None), user=Depends(_
     ensure_admin_finance(user)
     target = validate_date(on_date) if on_date else business_today().isoformat()
     with get_connection() as conn:
-        created = run_rent_accruals(conn, date.fromisoformat(target), uid=str(user["id"]), force=True)
+        created = run_rent_accruals(conn, date.fromisoformat(target), uid=str(user["id"]))
         if created:
             conn.commit()
     return AccrualRunResponse(created=created, on_date=target)

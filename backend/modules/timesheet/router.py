@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import (
+    EMPLOYEE_COMP_FIXED,
     EMPLOYEE_COMP_HOURLY,
     EMPLOYEE_COMP_LABELS,
     EMPLOYEE_COMP_TYPES_ALL,
@@ -52,6 +53,8 @@ from .schemas import (
     PayrollTotals,
     RateCreate,
     RateHistoryItem,
+    SalaryCreate,
+    SalaryHistoryItem,
     SettleAllRequest,
     WeekResponse,
 )
@@ -61,6 +64,7 @@ from .service import (
     build_week,
     business_today,
     current_rate,
+    current_salary,
     day_status,
     entry_hours,
     fmt_date_ru,
@@ -68,6 +72,7 @@ from .service import (
     list_employees,
     load_entries_range,
     load_rates,
+    load_salaries,
     now_iso,
     parse_week_param,
     settled_employee_ids,
@@ -132,6 +137,17 @@ def _emp_or_404(conn, emp_id: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Сотрудник не найден")
     return dict(row)
+
+
+def _recalc_salary_cache(conn, emp_id: str) -> None:
+    """Пересчитывает денормализованный кэш employees.fixed_salary_kopecks из истории оклада
+    (оклад на сегодня). Дёргается после любого изменения employee_salaries, чтобы шапка
+    карточки и lookups показывали актуальную ставку; источник правды — сама история."""
+    cur = current_salary(load_salaries(conn, [emp_id]).get(emp_id))
+    conn.execute(
+        "UPDATE employees SET fixed_salary_kopecks = ?, updated_at = ? WHERE id = ?",
+        (cur, _now(), emp_id),
+    )
 
 
 def _record_payment(
@@ -298,6 +314,15 @@ def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
                 "VALUES (?,?,?,?,?,?,?)",
                 (str(uuid4()), emp_id, int(body.rate_kopecks), eff, "стартовая ставка", now, uid),
             )
+        # Стартовый оклад — первая запись истории (effective-dated). Дата начала оклада:
+        # явная salary_from, иначе дата приёма, иначе сегодня.
+        if fixed_salary is not None and comp_type == EMPLOYEE_COMP_FIXED:
+            eff = _clean(body.salary_from) or _clean(body.hired_on) or business_today().isoformat()
+            conn.execute(
+                "INSERT INTO employee_salaries (id,employee_id,salary_kopecks,effective_from,note,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (str(uuid4()), emp_id, int(fixed_salary), eff, "стартовый оклад", now, uid),
+            )
         conn.commit()
     return {"message": emp_id}
 
@@ -321,10 +346,12 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         ).fetchone()
         entries = load_entries_range(conn, sat.isoformat(), fri.isoformat())
         rates = load_rates(conn, [emp_id]).get(emp_id) if with_money else None
+        salaries = load_salaries(conn, [emp_id]).get(emp_id) if with_money else None
         attendance = build_attendance(conn, emp_id, emp["hired_on"])
 
         pays_period = None
         rate_history: list[RateHistoryItem] = []
+        salary_history: list[SalaryHistoryItem] = []
         pay_history: list[PayHistoryItem] = []
         if with_money:
             period_rows = conn.execute(
@@ -335,7 +362,16 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
             pays_period = [dict(r) for r in period_rows]
             for i, r in enumerate(rates or []):
                 rate_history.append(RateHistoryItem(
+                    id=str(r["id"]),
                     rate_kopecks=int(r["rate_kopecks"]),
+                    effective_from=str(r["effective_from"]),
+                    note=r["note"],
+                    current=(i == 0),
+                ))
+            for i, r in enumerate(salaries or []):
+                salary_history.append(SalaryHistoryItem(
+                    id=str(r["id"]),
+                    salary_kopecks=int(r["salary_kopecks"]),
                     effective_from=str(r["effective_from"]),
                     note=r["note"],
                     current=(i == 0),
@@ -396,6 +432,7 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         ),
         attendance=AttendanceBlock(**attendance),
         rate_history=rate_history,
+        salary_history=salary_history,
         pay_history=pay_history,
     )
 
@@ -419,19 +456,30 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
             sets.append("hired_on = ?"); params.append(_clean(body.hired_on))
         if "comp_type" in fields:
             sets.append("comp_type = ?"); params.append(_validate_comp_type(body.comp_type))
-        # Оклад — деньги: меняет только тот, кто их видит.
-        if "fixed_salary_kopecks" in fields and can_view_payroll(user):
-            fs = body.fixed_salary_kopecks
-            sets.append("fixed_salary_kopecks = ?")
-            params.append(int(fs) if fs is not None else None)
         # Связь с учётной записью меняет только администратор.
         if "user_id" in fields and _is_admin(user):
             sets.append("user_id = ?"); params.append(_validate_user_link(conn, body.user_id, emp_id))
-        if not sets:
+        # Оклад — деньги и effective-dated история: правка суммы заводит новую запись с датой
+        # «сегодня» (а не молча перетирает кэш), чтобы прошлые месяцы считались по своему окладу.
+        add_salary = (
+            "fixed_salary_kopecks" in fields
+            and body.fixed_salary_kopecks is not None
+            and can_view_payroll(user)
+        )
+        if sets:
+            sets.append("updated_at = ?"); params.append(now)
+            params.append(emp_id)
+            conn.execute(f"UPDATE employees SET {', '.join(sets)} WHERE id = ?", params)
+        if add_salary:
+            conn.execute(
+                "INSERT INTO employee_salaries (id,employee_id,salary_kopecks,effective_from,note,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (str(uuid4()), emp_id, int(body.fixed_salary_kopecks),
+                 business_today().isoformat(), None, now, str(user["id"])),
+            )
+            _recalc_salary_cache(conn, emp_id)
+        if not sets and not add_salary:
             return {"message": "ok"}
-        sets.append("updated_at = ?"); params.append(now)
-        params.append(emp_id)
-        conn.execute(f"UPDATE employees SET {', '.join(sets)} WHERE id = ?", params)
         conn.commit()
     return {"message": "ok"}
 
@@ -476,6 +524,63 @@ def add_rate(emp_id: str, body: RateCreate, user=Depends(_get_payroll)):
             "VALUES (?,?,?,?,?,?,?)",
             (str(uuid4()), emp_id, int(body.rate_kopecks), eff, _clean(body.note), now, uid),
         )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/employees/{emp_id}/rates/{rate_id}")
+def delete_rate(emp_id: str, rate_id: str, user=Depends(_get_payroll)):
+    """Удаляет (soft-delete) запись истории ставки — для исправления ошибочно заведённой
+    ставки/даты. Прошлые недели после этого считаются по оставшейся истории."""
+    with get_connection() as conn:
+        _emp_or_404(conn, emp_id)
+        row = conn.execute(
+            "SELECT id FROM employee_rates WHERE id = ? AND employee_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (rate_id, emp_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Запись ставки не найдена")
+        conn.execute("UPDATE employee_rates SET is_deleted = 1 WHERE id = ?", (rate_id,))
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.post("/employees/{emp_id}/salaries")
+def add_salary(emp_id: str, body: SalaryCreate, user=Depends(_get_payroll)):
+    eff = str(body.effective_from or "").strip()
+    if not eff:
+        raise HTTPException(status_code=400, detail="Укажите дату, с которой действует оклад")
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        _emp_or_404(conn, emp_id)
+        conn.execute(
+            "INSERT INTO employee_salaries (id,employee_id,salary_kopecks,effective_from,note,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), emp_id, int(body.salary_kopecks), eff, _clean(body.note), now, uid),
+        )
+        _recalc_salary_cache(conn, emp_id)
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/employees/{emp_id}/salaries/{salary_id}")
+def delete_salary(emp_id: str, salary_id: str, user=Depends(_get_payroll)):
+    """Удаляет (soft-delete) запись истории оклада — для исправления ошибочно заведённого
+    оклада/даты. Кэш «оклад на сегодня» пересчитывается из оставшейся истории.
+
+    Это НЕ трогает уже начисленные проводки ЗП в реестре расходов: их пересчёт/отмена —
+    отдельная операция в «Финансы → Расходы»."""
+    with get_connection() as conn:
+        _emp_or_404(conn, emp_id)
+        row = conn.execute(
+            "SELECT id FROM employee_salaries WHERE id = ? AND employee_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (salary_id, emp_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Запись оклада не найдена")
+        conn.execute("UPDATE employee_salaries SET is_deleted = 1 WHERE id = ?", (salary_id,))
+        _recalc_salary_cache(conn, emp_id)
         conn.commit()
     return {"message": "ok"}
 

@@ -201,6 +201,10 @@ class ShipmentLineItem(BaseModel):
     shipped_qty:       int
     packed_good:       int = 0
     packed_defect:     int = 0
+    # Упаковано, но ещё не размещено по местам (корзина packed). Размещённое в ready
+    # частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
+    packed_pending_good:   int = 0
+    packed_pending_defect: int = 0
     available_for_pack: int = 0
     storage_zone_id:   str | None
     storage_zone_name: str | None

@@ -24,7 +24,15 @@ export type EmployeeListResponse = { items: EmployeeListItem[]; total: number }
 export type EmployeeLookupItem = { id: string; name: string; position: string | null }
 
 export type RateHistoryItem = {
+  id: string
   rate_kopecks: number
+  effective_from: string
+  note: string | null
+  current: boolean
+}
+export type SalaryHistoryItem = {
+  id: string
+  salary_kopecks: number
   effective_from: string
   note: string | null
   current: boolean
@@ -88,6 +96,7 @@ export type EmployeeDetail = {
   this_week: EmployeeWeekSummary
   attendance: AttendanceBlock
   rate_history: RateHistoryItem[]
+  salary_history: SalaryHistoryItem[]
   pay_history: PayHistoryItem[]
 }
 
@@ -231,6 +240,7 @@ export type EmployeeCreatePayload = {
   effective_from?: string | null
   comp_type?: CompType
   fixed_salary_kopecks?: number | null
+  salary_from?: string | null
 }
 export type EmployeeUpdatePayload = {
   full_name?: string
@@ -301,6 +311,24 @@ export function addEmployeeRate(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function deleteEmployeeRate(id: string, rateId: string) {
+  return request<{ message: string }>(`/employees/${id}/rates/${rateId}`, { method: 'DELETE' })
+}
+
+export function addEmployeeSalary(
+  id: string,
+  payload: { salary_kopecks: number; effective_from: string; note?: string | null },
+) {
+  return request<{ message: string }>(`/employees/${id}/salaries`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteEmployeeSalary(id: string, salaryId: string) {
+  return request<{ message: string }>(`/employees/${id}/salaries/${salaryId}`, { method: 'DELETE' })
 }
 
 export function getTimesheetWeek(week: string | undefined, signal?: AbortSignal) {
@@ -407,6 +435,12 @@ export function fmtMoneyShort(kopecks: number | null | undefined): string {
 export function fmtRate(kopecks: number | null | undefined): string {
   if (kopecks == null) return '—'
   return `${Math.round(kopecks / 100).toLocaleString('ru-RU')} ₽/ч`
+}
+
+/** Оклад в копейках/мес → «150 000 ₽/мес». */
+export function fmtSalary(kopecks: number | null | undefined): string {
+  if (kopecks == null) return '—'
+  return `${Math.round(kopecks / 100).toLocaleString('ru-RU')} ₽/мес`
 }
 
 export function fmtHours(h: number | null | undefined): string {

@@ -3,6 +3,7 @@ import { request, requestForm, requestIdHeaders } from './http'
 // --- Types --- (зеркало backend/modules/shipments/schemas.py)
 export type ShipmentStatus =
   | 'draft'
+  | 'assigned'
   | 'packing'
   | 'on_packing'
   | 'relocating'
@@ -27,6 +28,10 @@ export type ShipmentLine = {
   shipped_qty: number
   packed_good: number
   packed_defect: number
+  // Упаковано, но ещё не размещено по местам (корзина packed). Размещённое в ready
+  // частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
+  packed_pending_good: number
+  packed_pending_defect: number
   available_for_pack: number
   store_id: string | null
   store_name: string | null
@@ -175,11 +180,20 @@ export function returnLineFromPacking(docId: string, lineId: string, qty?: numbe
   })
 }
 
-// packing → on_packing (передать начальнику смены).
+// Продвижение по плановому переходу: assigned → packing (начальник склада принимает
+// задачу в работу), packing → on_packing (передать начальнику смены) и т.д.
 export function advanceShipment(id: string, requestId: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, {
     method: 'POST',
     headers: requestIdHeaders(requestId),
+  })
+}
+
+// Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.
+export function rejectShipment(id: string, reason: string) {
+  return request<{ message: string }>(`/shipments/${id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
   })
 }
 
@@ -189,6 +203,17 @@ export type RelocateLine = { line_id: string; good: RelocateAllocation[]; defect
 // relocating → awaiting_trip (раскладка годного/брака по местам).
 export function finishRelocation(id: string, lines: RelocateLine[], requestId: string) {
   return request<{ message: string }>(`/shipments/${id}/finish-relocation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+// Частичное размещение упакованного годного по местам, не завершая упаковку (отгрузка
+// из ещё не упакованной до конца задачи): packed→ready, статус остаётся on_packing.
+// Нужны только аллокации good.
+export function placePackedShipment(id: string, lines: RelocateLine[], requestId: string) {
+  return request<{ message: string; moved: number }>(`/shipments/${id}/place-packed`, {
     method: 'POST',
     body: JSON.stringify({ lines }),
     headers: requestIdHeaders(requestId),
@@ -240,6 +265,7 @@ export function reversePackingEntry(docId: string, lineId: string, entryId: stri
 // --- Labels ---
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft: 'Черновик',
+  assigned: 'Ожидает принятия',
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
