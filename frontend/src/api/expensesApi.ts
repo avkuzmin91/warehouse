@@ -103,6 +103,7 @@ export type ExpenseSummary = {
   total_amount: number
   total_count: number
   awaiting_amount: number
+  awaiting_count: number
   paid_amount: number
   by_category: ExpenseSummaryBreakdown[]
   by_payment_source: ExpenseSummaryBreakdown[]

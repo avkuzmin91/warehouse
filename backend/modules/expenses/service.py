@@ -483,9 +483,11 @@ def expense_summary(
         f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
         f"     ELSE GREATEST(e.amount - COALESCE(e.paid_amount, 0), 0) END), 0) AS awaiting, "
         f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
-        f"     ELSE COALESCE(e.paid_amount, 0) END), 0) AS paid "
+        f"     ELSE COALESCE(e.paid_amount, 0) END), 0) AS paid, "
+        f"COALESCE(SUM(CASE WHEN e.payment_status IN (?, ?) THEN 1 ELSE 0 END), 0) AS awaiting_count "
         f"FROM material_expenses e WHERE {where}",
-        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, *params],
+        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED,
+         EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PARTIAL, *params],
     ).fetchone()
 
     by_cat = connection.execute(
@@ -529,6 +531,7 @@ def expense_summary(
         "total_amount": int(head["total"]),
         "total_count": int(head["n"]),
         "awaiting_amount": int(head["awaiting"]),
+        "awaiting_count": int(head["awaiting_count"]),
         "paid_amount": int(head["paid"]),
         "by_category": _bd(by_cat),
         "by_payment_source": _bd(by_src),

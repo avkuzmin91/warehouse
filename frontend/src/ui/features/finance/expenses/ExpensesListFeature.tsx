@@ -11,7 +11,7 @@ import {
   runSalaryAccruals,
   runRentAccruals,
 } from '../../../../api/expensesApi'
-import type { ExpenseKind, ExpenseListItem, ExpenseSummaryBreakdown } from '../../../../api/expensesApi'
+import type { ExpenseKind, ExpenseListItem } from '../../../../api/expensesApi'
 import { getEmployees } from '../../../../api/timesheetApi'
 import { fetchSimpleDictionaryPage } from '../../../../api/adminApi'
 import { moscowTodayYmd, parseMoscow, MOSCOW_TZ } from '../../../../utils/format'
@@ -39,30 +39,6 @@ import { CarrierPaymentModal } from './CarrierPaymentModal'
 import { RecurringPaymentModal } from './RecurringPaymentModal'
 
 const PAGE_SIZE = 25
-
-/** Метаданные текущего календарного месяца для плашки средних трат.
- *  Рабочий день — любой день, кроме воскресенья (в неделе 6 рабочих дней),
- *  поэтому делитель меняется по месяцам (июнь 2026 — 26, июль 2026 — 27). */
-function currentMonthMeta() {
-  const [y, m1] = moscowTodayYmd().split('-').map(Number)
-  const m = m1 - 1
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const lastDay = new Date(y, m + 1, 0).getDate()
-  let workingDays = 0
-  for (let d = 1; d <= lastDay; d++) {
-    if (new Date(y, m, d).getDay() !== 0) workingDays++
-  }
-  return {
-    start: `${y}-${pad(m + 1)}-01`,
-    end: `${y}-${pad(m + 1)}-${pad(lastDay)}`,
-    workingDays,
-    monthLabel: new Date(y, m, 1).toLocaleString('ru-RU', { month: 'long' }),
-  }
-}
-
-// Операционная область расходов — для плашки «средние траты за рабочий день».
-// Аренда и ЗП в среднесуточную трату не входят (это периодические фиксы).
-const OPERATIONAL_KINDS: ExpenseKind[] = ['manual', 'logistics']
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Все статусы' },
@@ -129,7 +105,6 @@ export function ExpensesListFeature() {
   const kindOptions: ExpenseKind[] = isAdmin
     ? ['manual', 'logistics', 'rent', 'salary', 'recurring']
     : ['manual', 'logistics', 'recurring']
-  const monthMeta = useMemo(() => currentMonthMeta(), [])
 
   const [search, setSearch] = useFilterParam('search', '')
   const [categoryF, setCategoryF] = useFilterParam('category', '')
@@ -223,26 +198,6 @@ export function ExpensesListFeature() {
   )
   const { data: summary } = useApi((s) => getExpensesSummary(filters, s), filterDeps)
 
-  // Плашка «за рабочий день»: область = выбранный тип, иначе операционные
-  // (хозрасходы + логистика). Так аренда/ЗП дают суточную трату только под своим фильтром.
-  const dailyKinds: ExpenseKind[] = selectedKind ? [selectedKind] : OPERATIONAL_KINDS
-  const dailyKindsKey = dailyKinds.join(',')
-  const dailyLabel =
-    selectedKind === 'salary' ? 'ЗП за раб. день'
-      : selectedKind === 'rent' ? 'Аренда за раб. день'
-        : selectedKind === 'logistics' ? 'Логистика за день'
-          : selectedKind === 'manual' ? 'Хозрасходы за день'
-            : 'Операц. за раб. день'
-  const { data: monthSummary } = useApi(
-    (s) => getExpensesSummary(
-      { kinds: dailyKindsKey, date_from: monthMeta.start, date_to: monthMeta.end },
-      s,
-    ),
-    [dailyKindsKey, monthMeta.start, monthMeta.end, dataTick],
-  )
-  const monthActive = monthSummary ? monthSummary.awaiting_amount + monthSummary.paid_amount : 0
-  const perWorkingDay = monthMeta.workingDays > 0 ? Math.round(monthActive / monthMeta.workingDays) : 0
-
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const dayGroups = useMemo(() => groupExpensesByDay(items, moscowTodayYmd()), [items])
@@ -298,17 +253,17 @@ export function ExpensesListFeature() {
       }
     >
       {summary && (
-        <div style={{ display: 'grid', gridTemplateColumns: '200px 170px 170px 180px 1fr', gap: 14, marginBottom: 14, alignItems: 'stretch' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, marginBottom: 14, alignItems: 'stretch' }}>
           <Kpi icon="coins" label="Итого за период" value={kpiMoney(summary.total_amount)} sub={hasFilters ? 'по текущему фильтру' : 'за всё время'} />
           <Kpi icon="clock" label="Ожидает оплаты" value={kpiMoney(summary.awaiting_amount)} sub="к оплате" tone={summary.awaiting_amount > 0 ? 'warning' : 'default'} />
-          <Kpi icon="check" label="Оплачено" value={kpiMoney(summary.paid_amount)} sub="проведено" />
           <Kpi
-            icon="calendar"
-            label={dailyLabel}
-            value={kpiMoney(perWorkingDay)}
-            sub={`${monthMeta.monthLabel} · ${monthMeta.workingDays} раб. дн.`}
+            icon="list"
+            label="Записей ждёт оплаты"
+            value={summary.awaiting_count.toLocaleString('ru-RU')}
+            sub={`${pluralRecords(summary.awaiting_count)} с остатком`}
+            tone={summary.awaiting_count > 0 ? 'warning' : 'default'}
           />
-          <BreakdownCard title="По категориям" rows={summary.by_category} total={summary.total_amount} />
+          <Kpi icon="check" label="Оплачено" value={kpiMoney(summary.paid_amount)} sub="проведено" />
         </div>
       )}
 
@@ -500,28 +455,5 @@ export function ExpensesListFeature() {
         />
       )}
     </ListPage>
-  )
-}
-
-function BreakdownCard({ title, rows, total }: { title: string; rows: ExpenseSummaryBreakdown[]; total: number }) {
-  const top = rows.slice(0, 4)
-  return (
-    <div className="kpi" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <span className="kpi-label">{title}</span>
-      {top.length === 0 ? (
-        <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>—</span>
-      ) : top.map((r, i) => {
-        const pct = total > 0 ? Math.round((r.amount / total) * 100) : 0
-        return (
-          <div key={r.id ?? `none-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-            <div className="prog" style={{ width: 40, height: 5, flexShrink: 0 }}>
-              <div className="prog-fill warn" style={{ width: `${pct}%` }} />
-            </div>
-            <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-muted)', minWidth: 64, textAlign: 'right' }}>{formatMoneyKopecks(r.amount)}</span>
-          </div>
-        )
-      })}
-    </div>
   )
 }
