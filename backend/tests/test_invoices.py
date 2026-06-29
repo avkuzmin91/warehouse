@@ -147,6 +147,34 @@ def _issued_invoice(admin_client, client_id, ship, *, total_amount=1000, due_dat
     return iid
 
 
+def test_invoiced_dispatch_blocks_pallet_edit(admin_client, client_id):
+    """Палеты отгрузки правятся, пока счёт не выставлен; черновик не блокирует, issued — да."""
+    ship = _shipped_shipment(admin_client, client_id)
+    line_id = f"{ship}-l0"
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO dispatch_lines "
+            "(id,doc_id,product_id,product_name,product_sku,color_id,color_name,"
+            "size_id,size_name,qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (line_id, ship, "p-0", "Товар", "P0", None, None, None, None, 10, 2, 10,
+             None, None, None, "2026-06-10T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    # Черновик счёта НЕ блокирует правку палет (сумма пересчитается при выставлении).
+    iid = _draft_invoice(admin_client, client_id, ship=ship)
+    ok = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 4})
+    assert ok.status_code == 200, ok.text
+
+    # После выставления счёта — палеты заблокированы.
+    _attach_file(admin_client, iid)
+    assert admin_client.post(f"/invoices/{iid}/issue").status_code == 200
+    blocked = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
+    assert blocked.status_code == 400, blocked.text
+    assert "счёт" in blocked.json()["detail"].lower()
+
+
 def test_create_invoice_lands_in_draft_then_issues(admin_client, client_id):
     ship = _shipped_shipment(admin_client, client_id)
     r = admin_client.post("/invoices", json={

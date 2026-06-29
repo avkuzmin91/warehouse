@@ -10,9 +10,10 @@ import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 type Props = {
   doc: DispatchDetail
   onOpenTrip: (id: string) => void
+  onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
 }
 
-export function FinalView({ doc, onOpenTrip }: Props) {
+export function FinalView({ doc, onOpenTrip, onSavePallets }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const isCancelled = doc.status === 'cancelled'
@@ -47,7 +48,7 @@ export function FinalView({ doc, onOpenTrip }: Props) {
           </Panel>
 
           <Panel icon="boxes" title="Состав отгрузки">
-            <LinesTable lines={doc.lines} />
+            <LinesTable lines={doc.lines} onSavePallets={onSavePallets} />
           </Panel>
         </div>
 

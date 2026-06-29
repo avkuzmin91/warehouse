@@ -8,6 +8,7 @@ import {
   deleteDispatchLine,
   advanceDispatch,
   getDispatch,
+  getDispatchReservations,
   recommendedPallets,
   type DispatchLineIn,
   type DispatchCargoType,
@@ -52,6 +53,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   const [logisticsCost, setLogisticsCost] = useState('')
   const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
+  const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
   const [loadingDoc, setLoadingDoc] = useState(editing)
@@ -110,7 +112,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             size_id: l.size_id,
             size_name: l.size_name,
             qty: l.qty,
-            ready: d.cargo_type === 'defect' ? 0 : (p?.ready_good ?? 0),
+            ready: d.cargo_type === 'defect' ? 0 : ((p?.ready_good ?? 0) + (p?.packed_good ?? 0)),
             onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
             inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
             sku_pending: !!p?.sku_pending,
@@ -146,12 +148,30 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
     return () => ac.abort()
   }, [clientId])
 
+  // Резервы по вариантам — строки показывают свободный остаток (минус обещанное другим
+  // незакрытым отгрузкам), совпадая с серверным гейтом «В ожидание рейса».
+  useEffect(() => {
+    if (!clientId) { setReservedMap({}); return }
+    const ac = new AbortController()
+    getDispatchReservations({ client_id: clientId, cargo_type: cargoType }, ac.signal)
+      .then((r) => {
+        if (ac.signal.aborted) return
+        const map: Record<string, number> = {}
+        for (const rv of r.items) map[balanceKey(rv)] = rv.reserved
+        setReservedMap(map)
+      })
+      .catch(() => setReservedMap({}))
+    return () => ac.abort()
+  }, [clientId, cargoType])
+
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
-  // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
-  // не упакованный, и товар в пути можно сохранить черновиком, но не передать в рейс.
-  const srcAvail = (l: DraftLine) => (isDefect ? l.onHand : l.ready)
+  // отгрузке» (ready), брак — со склада (storage_defect = onHand), минус остаток, уже
+  // обещанный другим незакрытым отгрузкам (резерв). Склад/в пути/зарезервированное
+  // можно сохранить черновиком, но не передать в рейс.
+  const reservedFor = (l: DraftLine) => reservedMap[l._key] ?? 0
+  const srcAvail = (l: DraftLine) => Math.max(0, (isDefect ? l.onHand : l.ready) - reservedFor(l))
   const allReady = lines.every((l) => l.qty <= srcAvail(l))
   const costNum = Number(logisticsCost)
   const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
@@ -166,8 +186,8 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (lines.some((l) => l.pallets == null)) blockReasons.push('Укажите количество палет для каждой позиции (можно 0)')
   if (!allReady) blockReasons.push(
     isDefect
-      ? 'Часть брака недоступна на складе — уменьшите количество'
-      : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик',
+      ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество'
+      : 'Часть запрошенного недоступна: товар не упакован, ещё в пути или в резерве у других отгрузок — отгрузить можно только свободный упакованный остаток, сохраните черновик',
   )
 
   function changeClient(id: string, name: string | null) {
@@ -196,7 +216,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         size_id: b.size_id,
         size_name: b.size_name,
         qty,
-        ready: cargoType === 'defect' ? 0 : b.ready_good,
+        ready: cargoType === 'defect' ? 0 : b.ready_good + (b.packed_good ?? 0),
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
         inTransit: cargoType === 'defect' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
@@ -396,9 +416,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           </div>
         ) : (
           lines.map((l) => {
+            const reserved = reservedFor(l)
+            const freeQ = srcAvail(l)
             const overCap = l.qty > l.ready + l.onHand + l.inTransit
-            const inTransit = !isDefect && !overCap && l.qty > l.ready + l.onHand
-            const notPacked = !isDefect && !overCap && !inTransit && l.qty > l.ready
+            const waiting = !overCap && l.qty > freeQ
             return (
               <div key={l._uid} className="formline">
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
@@ -406,11 +427,11 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
                     <div className="tile-meta">{lineSub(l)}</div>
                     <div className="tile-meta">
-                      {isDefect
-                        ? `брак ${l.onHand}`
-                        : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
+                      {`свободно ${freeQ}`}
+                      {reserved > 0 ? ` · ${isDefect ? 'брак' : 'упаковано'} ${isDefect ? l.onHand : l.ready}, в резерве ${reserved}` : ''}
+                      {!isDefect && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
                       {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
-                      {overCap ? <> · <span className="hint-danger">превышение</span></> : inTransit ? <> · <span className="hint-warn">ждёт прихода</span></> : notPacked ? <> · <span className="hint-warn">не упаковано</span></> : ''}
+                      {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">сверх свободного</span></> : ''}
                     </div>
                   </div>
                   <button className="icon-btn danger" onClick={() => removeLine(l._uid)} aria-label="Удалить">

@@ -258,7 +258,9 @@ def get_plannable_items(
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
                              - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS ready_good,
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_READY}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)
-                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS ready_defect
+                             - SUM(CASE WHEN from_op='{INV_OP_READY}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END)) AS ready_defect,
+                   GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_PACKED}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
+                             - SUM(CASE WHEN from_op='{INV_OP_PACKED}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS packed_good
             FROM zone_relocations
             GROUP BY product_id, client_id, color_id, size_id
         ),
@@ -289,6 +291,7 @@ def get_plannable_items(
                COALESCE(s.storage_defect, 0) AS storage_defect,
                COALESCE(s.ready_good, 0)     AS ready_good,
                COALESCE(s.ready_defect, 0)   AS ready_defect,
+               COALESCE(s.packed_good, 0)    AS packed_good,
                COALESCE(i.in_transit, 0)     AS in_transit
         FROM keys k
         LEFT JOIN stock s
@@ -314,7 +317,7 @@ def get_plannable_items(
         params += [s, s, s]
     conds.append(
         "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
-        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.in_transit > 0)"
+        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.packed_good > 0 OR p.in_transit > 0)"
     )
     where = "WHERE " + " AND ".join(conds)
 
@@ -346,6 +349,7 @@ def get_plannable_items(
             size_name=r["size_name"],
             ready_good=int(r["ready_good"] or 0),
             ready_defect=int(r["ready_defect"] or 0),
+            packed_good=0 if is_defect else int(r["packed_good"] or 0),
             storage_good=int(r["storage_good"] or 0),
             storage_defect=int(r["storage_defect"] or 0),
             in_transit=0 if is_defect else int(r["in_transit"] or 0),

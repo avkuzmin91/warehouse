@@ -11,10 +11,14 @@ from config import (
     DISPATCH_OP_PREPARE,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_LABELS,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
     DISPATCH_TRIP_SELECTABLE_STATUSES,
+    INVOICE_STATUS_CANCELLED,
+    INVOICE_STATUS_DRAFT,
+    INV_OP_PACKED,
     INV_OP_READY,
     INV_OP_SHIPPED,
     INV_OP_STORAGE,
@@ -67,21 +71,95 @@ def _source_ops(quality: str) -> list[str]:
     """Корзины-источники для ГЕЙТА доступности (можно ли вообще подготовить отгрузку).
 
     Проверяется на шаге «Передать в подготовку»: хватит ли товара там, где он сейчас
-    лежит. Годный после упаковки лежит «Готов к отгрузке» (`ready`), брак — «На
-    хранении» (`storage`). Совпадает с корзиной, из которой кладовщик заберёт товар
-    при подготовке (см. `_prep_source_op`).
+    лежит. Годный отгружается из «Готов к отгрузке» (`ready`, разложен по ячейкам) ИЛИ
+    прямо из «Упаковано» (`packed`, со стола упаковки — отгрузка из ещё не завершённой
+    задачи упаковки). Брак — «На хранении» (`storage`). Совпадает с корзинами, из
+    которых кладовщик заберёт товар при подготовке (см. `_prep_source_ops`).
     """
-    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY]
+    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_PACKED]
 
 
-def _prep_source_op(quality: str) -> str:
-    """Корзина, ИЗ которой кладовщик забирает товар при подготовке к отгрузке.
+def _prep_source_ops(quality: str) -> list[str]:
+    """Корзины, ИЗ которых кладовщик забирает товар при подготовке к отгрузке.
 
-    Годный уже разложен «Готов к отгрузке» (`ready`) при упаковке — кладовщик берёт
-    его из ячеек хранения готового. Брак лежит «На хранении» (`storage`). В обоих
-    случаях подготовка переносит выбранное в `ready` в «Зону отгрузки».
+    Годный берётся из ячеек «Готов к отгрузке» (`ready`) либо прямо из «Упаковано»
+    (`packed`, зона упаковки). Брак — «На хранении» (`storage`). Подготовка переносит
+    выбранное в `ready` в «Зону отгрузки». Порядок задаёт приоритет при выборе корзины
+    источника в конкретной ячейке (сначала ready, затем packed).
     """
-    return INV_OP_STORAGE if quality == INV_Q_DEFECT else INV_OP_READY
+    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_PACKED]
+
+
+def _packed_lines_for_variant(
+    connection, *, product_id: str, color_id, size_id, client_id,
+) -> list[tuple[str, int]]:
+    """[(shipment_line_id, net_packed_good)] варианта×клиента в корзине `packed`, FIFO.
+
+    Нужен, чтобы при отгрузке прямо из «Упаковано» атрибутировать списание к строкам
+    задачи упаковки (shipment_line_id). Иначе `line_packed_pending` (по shipment_line_id)
+    не уменьшится, и финальное «Готово к рейсу» переразложит уже отгруженное → отрицательный
+    остаток. `packed` физически лежит только в зоне упаковки, поэтому зону не фильтруем.
+    """
+    rows = connection.execute(
+        """SELECT shipment_line_id AS sl,
+              COALESCE(SUM(CASE WHEN to_op = ?   AND to_quality = ?   THEN qty
+                                WHEN from_op = ? AND from_quality = ? THEN -qty ELSE 0 END), 0) AS net,
+              MIN(created_at) AS first_at
+           FROM zone_relocations
+           WHERE product_id = ?
+             AND color_id  IS NOT DISTINCT FROM ?
+             AND size_id   IS NOT DISTINCT FROM ?
+             AND client_id IS NOT DISTINCT FROM ?
+             AND shipment_line_id IS NOT NULL
+           GROUP BY shipment_line_id
+           HAVING COALESCE(SUM(CASE WHEN to_op = ?   AND to_quality = ?   THEN qty
+                                    WHEN from_op = ? AND from_quality = ? THEN -qty ELSE 0 END), 0) > 0
+           ORDER BY MIN(created_at)""",
+        (INV_OP_PACKED, INV_Q_GOOD, INV_OP_PACKED, INV_Q_GOOD,
+         product_id, color_id, size_id, client_id,
+         INV_OP_PACKED, INV_Q_GOOD, INV_OP_PACKED, INV_Q_GOOD),
+    ).fetchall()
+    return [(str(r["sl"]), int(r["net"])) for r in rows]
+
+
+def reserved_by_variant(connection, *, client_id: str | None, cargo_type: str | None) -> list[dict]:
+    """Зарезервированный остаток-источник по вариантам у незакрытых отгрузок клиента.
+
+    Зеркалит вычет резерва в `ready_available_for_dispatch`: спрос (qty − shipped_qty)
+    отгрузок, которые ещё держат остаток-источник. Годный держат preparing/awaiting_trip/
+    partially_shipped (источник `ready`); брак — только preparing (подготовка уже увезла
+    его из `storage`, повторно вычитать нельзя). Витрина выбора вычитает это из валового
+    «упаковано», чтобы не предлагать к отгрузке уже обещанное другим документам.
+    """
+    cargo = normalize_cargo_type(cargo_type)
+    statuses = (
+        [DISPATCH_STATUS_PREPARING] if cargo == DISPATCH_CARGO_DEFECT
+        else [DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED]
+    )
+    status_ph = ",".join("?" for _ in statuses)
+    rows = connection.execute(
+        f"""SELECT dl.product_id, dl.color_id, dl.size_id,
+                   COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) AS reserved
+            FROM dispatch_lines dl
+            JOIN dispatch_docs dd ON dd.id = dl.doc_id
+            WHERE dd.cargo_type = ?
+              AND dd.client_id IS NOT DISTINCT FROM ?
+              AND COALESCE(dl.is_deleted, 0) = 0
+              AND COALESCE(dd.is_deleted, 0) = 0
+              AND dd.status IN ({status_ph})
+            GROUP BY dl.product_id, dl.color_id, dl.size_id
+            HAVING COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) > 0""",
+        [cargo, client_id, *statuses],
+    ).fetchall()
+    return [
+        {
+            "product_id": str(r["product_id"]),
+            "color_id": r["color_id"],
+            "size_id": r["size_id"],
+            "reserved": int(r["reserved"] or 0),
+        }
+        for r in rows
+    ]
 
 
 def check_lines_have_sku(connection, doc_id: str) -> None:
@@ -127,6 +205,25 @@ def check_lines_have_pallets(connection, doc_id: str) -> None:
             status_code=400,
             detail=f"Укажите количество палет для позиций: {names}",
         )
+
+
+def dispatch_is_invoiced(connection, doc_id: str) -> bool:
+    """True, если по отгрузке уже выставлен счёт (привязка к не-черновому счёту).
+
+    Палеты входят в тариф клиенту (см. `pallets_amount_kop` в счёте), поэтому после
+    выставления счёта их менять нельзя — сумма уже зафиксирована и отправлена клиенту.
+    Черновик счёта НЕ блокирует: при выставлении сумма пересчитывается из текущих палет.
+    Аннулированный счёт снимает привязку (`invoice_shipments.is_deleted=1`), но статус
+    фильтруем явно — на случай гонок.
+    """
+    row = connection.execute(
+        "SELECT 1 FROM invoice_shipments s "
+        "JOIN invoice_docs i ON i.id = s.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
+        "WHERE s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0 "
+        "AND i.status NOT IN (?, ?) LIMIT 1",
+        (doc_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
+    ).fetchone()
+    return row is not None
 
 
 def check_lines_have_ready(connection, doc_id: str) -> None:
@@ -183,7 +280,7 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
     if short:
         head = (
             "Недостаточно брака на хранении для отгрузки. " if quality == INV_Q_DEFECT
-            else "Недостаточно товара (готового и на хранении) для отгрузки. "
+            else "Недостаточно готового к отгрузке товара (свободного, не в резерве). "
         )
         raise HTTPException(status_code=400, detail=head + "; ".join(short))
 
@@ -291,6 +388,7 @@ def _insert_prep_move(
     to_zone_id: str | None, to_zone_name: str | None,
     qty: int, user_id: str | None, dispatch_line_id: str,
     comment: str | None, reverses_id: str | None = None,
+    shipment_line_id: str | None = None,
 ) -> None:
     """Журнальное движение подготовки к отгрузке (`from_op` → `to_op`) с атрибуцией к строке.
 
@@ -311,7 +409,7 @@ def _insert_prep_move(
          line["color_id"], line["color_name"], line["size_id"], line["size_name"],
          client_id, client_name, from_op, to_op, quality, quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
-         _now(), user_id, None,
+         _now(), user_id, shipment_line_id,
          None, None, reverses_id, None, None, None, dispatch_line_id),
     )
 
@@ -337,7 +435,7 @@ def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
         raise HTTPException(status_code=400, detail="Отметить подготовку можно только в статусе «Подготовка отгрузки»")
 
     quality = _doc_quality(connection, doc_id)
-    source_op = _prep_source_op(quality)
+    source_ops = _prep_source_ops(quality)
     is_defect = quality == INV_Q_DEFECT
     client_id = doc["client_id"]
 
@@ -372,35 +470,70 @@ def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
                 raise HTTPException(status_code=400, detail="Выберите ячейку хранения, а не зону отгрузки")
             if src_qty <= 0:
                 raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
-            available = get_available_in_zone(
-                connection,
-                product_id=str(line["product_id"]),
-                color_id=line["color_id"],
-                size_id=line["size_id"],
-                client_id=client_id,
-                zone_id=zone_id,
-                op=source_op,
-                quality=quality,
-            )
-            if available < src_qty:
+            # Корзина-источник в этой ячейке: годный лежит либо «Готов к отгрузке»
+            # (ready@ячейка), либо «Упаковано» (packed@зона упаковки) — берём ту, что
+            # покрывает количество (одна ячейка держит один бакет варианта).
+            avail_by_op = {
+                op: get_available_in_zone(
+                    connection,
+                    product_id=str(line["product_id"]),
+                    color_id=line["color_id"],
+                    size_id=line["size_id"],
+                    client_id=client_id,
+                    zone_id=zone_id,
+                    op=op,
+                    quality=quality,
+                )
+                for op in source_ops
+            }
+            chosen_op = next((op for op in source_ops if avail_by_op[op] >= src_qty), None)
+            if chosen_op is None:
                 zone_label = src.zone_name or "Без места"
                 avail_word = "брака" if is_defect else "товара"
                 raise HTTPException(
                     status_code=409,
                     detail=(
                         f"Недостаточно {avail_word} в ячейке «{zone_label}» для «{line['product_name']}» "
-                        f"(нужно {src_qty}, доступно {available})"
+                        f"(нужно {src_qty}, доступно {sum(avail_by_op.values())})"
                     ),
                 )
-            _insert_prep_move(
-                connection,
-                line=line, client_id=client_id, client_name=doc["client_name"], quality=quality,
-                from_op=source_op, to_op=INV_OP_READY,
-                from_zone_id=zone_id, from_zone_name=src.zone_name,
-                to_zone_id=shipping_id, to_zone_name=shipping_name,
-                qty=src_qty, user_id=user_id, dispatch_line_id=line_id,
-                comment=f"Подготовка к отгрузке: {src_qty} шт → {shipping_name} — {label}",
-            )
+            if chosen_op == INV_OP_PACKED:
+                # Отгрузка прямо из «Упаковано»: атрибутируем списание к строкам задачи
+                # упаковки (shipment_line_id) FIFO, иначе финальное «Готово к рейсу»
+                # переразложит уже отгруженное (см. _packed_lines_for_variant).
+                remaining = src_qty
+                for sl_id, net in _packed_lines_for_variant(
+                    connection, product_id=str(line["product_id"]),
+                    color_id=line["color_id"], size_id=line["size_id"], client_id=client_id,
+                ):
+                    if remaining <= 0:
+                        break
+                    take = min(remaining, net)
+                    _insert_prep_move(
+                        connection,
+                        line=line, client_id=client_id, client_name=doc["client_name"], quality=quality,
+                        from_op=INV_OP_PACKED, to_op=INV_OP_READY,
+                        from_zone_id=zone_id, from_zone_name=src.zone_name,
+                        to_zone_id=shipping_id, to_zone_name=shipping_name,
+                        qty=take, user_id=user_id, dispatch_line_id=line_id, shipment_line_id=sl_id,
+                        comment=f"Подготовка к отгрузке (из упаковки): {take} шт → {shipping_name} — {label}",
+                    )
+                    remaining -= take
+                if remaining > 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Недостаточно упакованного товара для «{line['product_name']}» (не хватает {remaining})",
+                    )
+            else:
+                _insert_prep_move(
+                    connection,
+                    line=line, client_id=client_id, client_name=doc["client_name"], quality=quality,
+                    from_op=chosen_op, to_op=INV_OP_READY,
+                    from_zone_id=zone_id, from_zone_name=src.zone_name,
+                    to_zone_id=shipping_id, to_zone_name=shipping_name,
+                    qty=src_qty, user_id=user_id, dispatch_line_id=line_id,
+                    comment=f"Подготовка к отгрузке: {src_qty} шт → {shipping_name} — {label}",
+                )
             total_moved += src_qty
 
     if total_moved <= 0:
@@ -449,6 +582,9 @@ def return_prepared_stock(connection, doc_id: str, user_id: str) -> None:
             qty=int(mv["qty"]), user_id=user_id, dispatch_line_id=str(mv["dispatch_line_id"]),
             comment=f"Возврат подготовки при аннулировании: {int(mv['qty'])} шт.",
             reverses_id=str(mv["id"]),
+            # Источник из «Упаковано» был атрибутирован к строке упаковки — восстанавливаем,
+            # чтобы packed-остаток строки (line_packed_pending) вернулся.
+            shipment_line_id=mv["shipment_line_id"],
         )
 
 
@@ -749,6 +885,7 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
         "comment": row["comment"],
         "status": str(row["status"]),
         "status_label": DISPATCH_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
+        "invoiced": dispatch_is_invoiced(connection, doc_id),
         "trips": trips,
         "created_at": str(row["created_at"]),
         "created_by": row["created_by"],

@@ -51,6 +51,10 @@ class DispatchLineUpdate(BaseModel):
     store_name:  str | None = None
 
 
+class DispatchLinePalletsUpdate(BaseModel):
+    pallets_qty: int | None = Field(default=None, ge=0)
+
+
 class DispatchPriorityUpdate(BaseModel):
     priority_rank: int | None = Field(default=None, ge=1, le=2)
 
@@ -88,6 +92,17 @@ class DispatchLineItem(BaseModel):
     store_id:     str | None
     store_name:   str | None
     remaining:    int = 0
+
+
+class DispatchReservationItem(BaseModel):
+    product_id: str
+    color_id:   str | None
+    size_id:    str | None
+    reserved:   int
+
+
+class DispatchReservationsResponse(BaseModel):
+    items: list[DispatchReservationItem]
 
 
 class DispatchListItem(BaseModel):
@@ -173,6 +188,7 @@ class DispatchDetailResponse(BaseModel):
     comment:          str | None
     status:           str
     status_label:     str
+    invoiced:         bool = False
     trips:            list[TripRef] = []
     created_at:       str
     created_by:       str | None

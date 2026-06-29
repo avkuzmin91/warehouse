@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createDispatch, advanceDispatch, recommendedPallets } from '../../../api/dispatchApi'
+import { createDispatch, advanceDispatch, recommendedPallets, getDispatchReservations } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchLineIn } from '../../../api/dispatchApi'
 import type { PlannableItem } from '../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
@@ -26,8 +26,12 @@ import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
 type DraftLine = DispatchLineIn & {
-  _uid: string; ready: number; onHand: number; inTransit: number; sku_pending: boolean
+  _uid: string; ready: number; onHand: number; inTransit: number; reserved: number; sku_pending: boolean
   itemsPerPallet: number | null; pallets: number | null; palletsTouched: boolean
+}
+
+function variantKey(productId: string, colorId: string | null | undefined, sizeId: string | null | undefined): string {
+  return `${productId}|${colorId ?? ''}|${sizeId ?? ''}`
 }
 
 export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoType }) {
@@ -39,6 +43,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const [shipDate, setShipDate] = useState('')
   const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
+  const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
@@ -70,6 +75,24 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     return () => controller.abort()
   }, [clientId])
 
+  // Резервы по вариантам — чтобы строки показывали свободный остаток (минус обещанное
+  // другим незакрытым отгрузкам), совпадая с серверным гейтом «Передать на подготовку».
+  useEffect(() => {
+    if (!clientId) {
+      setReservedMap({})
+      return
+    }
+    const controller = new AbortController()
+    getDispatchReservations({ client_id: clientId, cargo_type: cargoType }, controller.signal)
+      .then((r) => {
+        const map: Record<string, number> = {}
+        for (const rv of r.items) map[variantKey(rv.product_id, rv.color_id, rv.size_id)] = rv.reserved
+        setReservedMap(map)
+      })
+      .catch(() => setReservedMap({}))
+    return () => controller.abort()
+  }, [clientId, cargoType])
+
   useEffect(() => { createdIdRef.current = null }, [lines, clientId, cargoType, shipDate, logisticsCost, comment])
 
   const isDefectCargo = cargoType === 'defect'
@@ -77,9 +100,10 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
   const allPallets = lines.every((l) => l.pallets != null)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
-  // отгрузке» (ready), брак — со склада (storage_defect = onHand). Товар на складе, но
-  // не упакованный, и товар в пути можно сохранить черновиком, но не передать в подготовку.
-  const srcAvail = (l: DraftLine) => (isDefectCargo ? l.onHand : l.ready)
+  // отгрузке» (ready), брак — со склада (storage_defect = onHand), минус остаток, уже
+  // обещанный другим незакрытым отгрузкам (резерв). Товар на складе/в пути и зарезер-
+  // вированный можно сохранить черновиком, но не передать в подготовку.
+  const srcAvail = (l: DraftLine) => Math.max(0, (isDefectCargo ? l.onHand : l.ready) - l.reserved)
   const hasNotPacked = lines.some((l) => !isDefectCargo && l.qty > l.ready && l.qty <= l.ready + l.onHand)
   const hasInTransit = lines.some((l) => l.qty > l.ready + l.onHand && l.qty <= l.ready + l.onHand + l.inTransit)
   const hasOverCap = lines.some((l) => l.qty > l.ready + l.onHand + l.inTransit)
@@ -96,7 +120,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     { ok: lines.every((l) => !l.sku_pending), label: 'У всех товаров указан SKU', error: 'Укажите SKU для товаров без артикула (кнопка «Указать SKU» в строке)' },
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
     { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет для каждой позиции (можно 0)' },
-    { ok: allReady, label: isDefectCargo ? 'Брак доступен на складе' : 'Товар упакован', error: isDefectCargo ? 'Часть брака недоступна на складе — уменьшите количество' : 'Часть товара не упакована или ещё в пути — отгрузить можно только упакованный товар, сохраните черновик' },
+    { ok: allReady, label: isDefectCargo ? 'Брак свободен на складе' : 'Товар свободен к отгрузке', error: isDefectCargo ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество' : 'Часть запрошенного недоступна: товар не упакован, ещё в пути или в резерве у других отгрузок — отгрузить можно только свободный упакованный остаток, сохраните черновик' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -147,9 +171,12 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       size_id:      b.size_id,
       size_name:    b.size_name,
       qty,
-      ready:        isDefectCargo ? 0 : b.ready_good,
+      // «Готов к отгрузке» = разложенное ready + упакованное на столе (packed) — оба
+      // можно передать в подготовку и отгрузить (совпадает с бэк-гейтом _source_ops).
+      ready:        isDefectCargo ? 0 : b.ready_good + (b.packed_good ?? 0),
       onHand:       isDefectCargo ? b.storage_defect : b.storage_good,
       inTransit:    isDefectCargo ? 0 : b.in_transit,
+      reserved:     reservedMap[variantKey(b.product_id, b.color_id, b.size_id)] ?? 0,
       sku_pending:  !!b.sku_pending,
       itemsPerPallet: b.items_per_pallet,
       pallets:      recommendedPallets(qty, b.items_per_pallet),
@@ -410,9 +437,9 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                             ) : null}
                           </div>
                           <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
-                            {isDefectCargo
-                              ? `брак ${l.onHand}`
-                              : `упаковано ${l.ready}${l.onHand > 0 ? ` · склад ${l.onHand}` : ''}`}
+                            {`свободно ${srcAvail(l)}`}
+                            {l.reserved > 0 ? ` · ${isDefectCargo ? 'брак' : 'упаковано'} ${isDefectCargo ? l.onHand : l.ready}, в резерве ${l.reserved}` : ''}
+                            {!isDefectCargo && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
                             {!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
                           </div>
                         </td>
