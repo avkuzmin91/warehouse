@@ -7,6 +7,7 @@ import {
   updateDispatch,
   addDispatchLine,
   updateDispatchLine,
+  updateDispatchLinePallets,
   deleteDispatchLine,
   recommendedPallets,
 } from '../../../../api/dispatchApi'
@@ -133,6 +134,17 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     }
   }
 
+  async function handleUpdatePallets(lineId: string, pallets: number | null): Promise<boolean> {
+    try {
+      await updateDispatchLinePallets(docId, lineId, pallets)
+      await load()
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка сохранения палет', 'error')
+      return false
+    }
+  }
+
   async function handleDeleteLine(lineId: string) {
     const ok = await confirm({
       title: 'Удалить товар из отгрузки?',
@@ -179,6 +191,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const isPreparing = status === 'preparing'
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
+  // Палеты менеджер правит на любом статусе, пока по отгрузке не выставлен счёт
+  // (после выставления сумма зафиксирована) и пока отгрузка не аннулирована.
+  const canEditPallets = canEditPlanning && !doc.invoiced && status !== 'cancelled'
 
   const actions = (
     <>
@@ -245,9 +260,17 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       ) : (isPreparing && showPrepareTask) ? (
         <PreparePanel doc={doc} canEdit={canPrepare} onDone={load} />
       ) : (isPreparing || isAwaiting || isPartially) ? (
-        <ReadyView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />
+        <ReadyView
+          doc={doc}
+          onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
+          onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
+        />
       ) : (
-        <FinalView doc={doc} onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)} />
+        <FinalView
+          doc={doc}
+          onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
+          onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
+        />
       )}
 
       <Drawer

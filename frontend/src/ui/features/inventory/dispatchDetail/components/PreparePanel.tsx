@@ -27,9 +27,12 @@ type Props = {
 export function PreparePanel({ doc, canEdit, onDone }: Props) {
   const toast = useToast()
   const isDefect = doc.cargo_type === 'defect'
-  // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready),
-  // брак — «На хранении» (storage). Оба переезжают в «Зону отгрузки».
-  const srcOp = isDefect ? 'storage' : 'ready'
+  // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready,
+  // разложен по ячейкам) ИЛИ прямо из «Упаковано» (packed, зона упаковки — отгрузка из
+  // ещё не завершённой задачи упаковки); брак — «На хранении» (storage). Всё переезжает
+  // в «Зону отгрузки».
+  const srcOps = isDefect ? ['storage'] : ['ready', 'packed']
+  const srcOpsKey = srcOps.join(',')
   const srcQuality = isDefect ? 'defect' : 'good'
 
   const lines = doc.lines
@@ -50,21 +53,29 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
       .then((res) => {
         if (ctrl.signal.aborted) return
         setZoneBalances(res.items.filter(
-          (z) => z.op_status === srcOp && z.quality === srcQuality && z.qty > 0 && z.location_id,
+          (z) => srcOps.includes(z.op_status) && z.quality === srcQuality && z.qty > 0 && z.location_id,
         ))
       })
       .catch(() => {})
       .finally(() => { if (!ctrl.signal.aborted) setLoadingZones(false) })
     return () => ctrl.abort()
-  }, [doc.client_id, srcOp, srcQuality])
+  }, [doc.client_id, srcOpsKey, srcQuality])
 
   const sourcesByLine = useMemo(() => {
     const map = new Map<string, ZoneSource[]>()
     for (const line of lines) {
       const key = balanceKey(line)
-      map.set(line.id, zoneBalances
-        .filter((z) => balanceKey(z) === key)
-        .map((z) => ({ id: z.location_id!, name: z.location_name ?? z.location_id!, available: z.qty })))
+      // Одна ячейка может встретиться в нескольких корзинах (ready/packed) — объединяем
+      // по zone_id, суммируя доступное, чтобы не было дублей в выпадающем списке.
+      const byZone = new Map<string, ZoneSource>()
+      for (const z of zoneBalances) {
+        if (balanceKey(z) !== key) continue
+        const id = z.location_id!
+        const prev = byZone.get(id)
+        if (prev) prev.available += z.qty
+        else byZone.set(id, { id, name: z.location_name ?? id, available: z.qty })
+      }
+      map.set(line.id, [...byZone.values()])
     }
     return map
   }, [lines, zoneBalances])

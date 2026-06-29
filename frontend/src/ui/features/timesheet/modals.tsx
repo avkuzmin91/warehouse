@@ -3,11 +3,11 @@ import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canManageUsers } from '../../../utils/access'
+import { canManageUsers, canViewSalary } from '../../../utils/access'
 import { getUsers } from '../../../api/adminApi'
 import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
-import { addPayment, addEmployeeRate, createEmployee, updateEmployee, type CompType, type EmployeeDetail } from '../../../api/timesheetApi'
+import { addPayment, addEmployeeRate, addEmployeeSalary, createEmployee, updateEmployee, type CompType, type EmployeeDetail } from '../../../api/timesheetApi'
 import { moscowTodayYmd } from '../../../utils/format'
 
 /** Загружает учётки для связи сотрудника с учётной записью (только для админа). */
@@ -183,11 +183,51 @@ export function RateModal({
   )
 }
 
+// ── Изменить оклад ─────────────────────────────────────────────────────────────
+
+export function SalaryModal({
+  employeeId, employeeName, onClose, onSaved,
+}: { employeeId: string; employeeName: string; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
+  const [salary, setSalary] = useState('')
+  const [from, setFrom] = useState(todayIso())
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    const kop = rublesToKopecks(salary)
+    if (kop <= 0) { toast('Укажите оклад', 'error'); return }
+    if (!from) { toast('Укажите дату действия', 'error'); return }
+    setBusy(true)
+    try {
+      await addEmployeeSalary(employeeId, { salary_kopecks: kop, effective_from: from, note: note || null })
+      toast('Оклад обновлён', 'success')
+      onSaved(); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <ModalShell
+      title="Изменить оклад" subtitle={`${employeeName} · действует с даты`} lead={lead('ruble', 'accent')} width={440} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Сохранить</button></>}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        <div><FieldLabel required>Оклад, ₽/мес</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0" /></div>
+        <div><FieldLabel required>Действует с</FieldLabel><input className="input sm" type="date" style={input} value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+      </div>
+      <div><FieldLabel>Примечание</FieldLabel><input className="input sm" style={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Напр. «индексация»" /></div>
+      <div style={{ marginTop: 12, fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', gap: 6 }}>
+        <Icon name="history" size={12} style={{ flexShrink: 0, marginTop: 1 }} />Дни до даты начала оклада не начисляются; прошлые месяцы считаются по окладу, действовавшему тогда.
+      </div>
+    </ModalShell>
+  )
+}
+
 // ── Добавить сотрудника ───────────────────────────────────────────────────────
 
 export function AddEmployeeModal({
-  canSetRate, onClose, onSaved,
-}: { canSetRate: boolean; onClose: () => void; onSaved: () => void }) {
+  canSetRate, canSetSalary, onClose, onSaved,
+}: { canSetRate: boolean; canSetSalary: boolean; onClose: () => void; onSaved: () => void }) {
   const toast = useToast()
   const { positions } = useLookups()
   const { user } = useCurrentUser()
@@ -199,6 +239,7 @@ export function AddEmployeeModal({
   const [rate, setRate] = useState('')
   const [compType, setCompType] = useState<CompType>('hourly')
   const [fixedSalary, setFixedSalary] = useState('')
+  const [salaryFrom, setSalaryFrom] = useState(todayIso())
   const [busy, setBusy] = useState(false)
 
   const submit = async () => {
@@ -210,9 +251,10 @@ export function AddEmployeeModal({
         position_id: positionId || null,
         user_id: isAdmin ? (userId || null) : undefined,
         rate_kopecks: canSetRate && compType === 'hourly' && rate ? rublesToKopecks(rate) : null,
-        ...(canSetRate ? {
+        ...(canSetSalary ? {
           comp_type: compType,
           fixed_salary_kopecks: compType === 'fixed' && fixedSalary ? rublesToKopecks(fixedSalary) : null,
+          salary_from: compType === 'fixed' ? salaryFrom : undefined,
         } : {}),
       })
       toast('Сотрудник добавлен', 'success')
@@ -234,7 +276,7 @@ export function AddEmployeeModal({
             {positions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
-        {canSetRate && (
+        {canSetSalary && (
           <div>
             <FieldLabel>Тип оплаты</FieldLabel>
             <select className="input sm" style={input} value={compType} onChange={(e) => setCompType(e.target.value as CompType)}>
@@ -244,7 +286,8 @@ export function AddEmployeeModal({
           </div>
         )}
         {canSetRate && compType === 'hourly' && <div><FieldLabel>Ставка, ₽/ч</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" /></div>}
-        {canSetRate && compType === 'fixed' && <div><FieldLabel>Оклад, ₽/мес</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={fixedSalary} onChange={(e) => setFixedSalary(e.target.value)} placeholder="0" /></div>}
+        {canSetSalary && compType === 'fixed' && <div><FieldLabel>Оклад, ₽/мес</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={fixedSalary} onChange={(e) => setFixedSalary(e.target.value)} placeholder="0" /></div>}
+        {canSetSalary && compType === 'fixed' && <div><FieldLabel>Оклад с</FieldLabel><input className="input sm" type="date" style={input} value={salaryFrom} onChange={(e) => setSalaryFrom(e.target.value)} /></div>}
       </div>
       {isAdmin && (
         <div style={{ marginTop: 14 }}>
@@ -274,11 +317,9 @@ export function EditEmployeeModal({
   const [userId, setUserId] = useState(employee.user_id ?? '')
   const [hiredOn, setHiredOn] = useState(employee.hired_on ?? '')
   const [compType, setCompType] = useState<CompType>(employee.comp_type ?? 'hourly')
-  const [fixedSalary, setFixedSalary] = useState(
-    employee.fixed_salary_kopecks != null ? String(Math.round(employee.fixed_salary_kopecks / 100)) : '',
-  )
   const [busy, setBusy] = useState(false)
-  const withMoney = employee.with_money
+  // Тип оплаты и оклад в месяц правит только админ (менеджер окладов не ведёт).
+  const canSetSalary = canViewSalary(user)
 
   const submit = async () => {
     if (!name.trim()) { toast('Укажите ФИО', 'error'); return }
@@ -289,10 +330,7 @@ export function EditEmployeeModal({
         position_id: positionId || null,
         hired_on: hiredOn || null,
         user_id: isAdmin ? (userId || null) : undefined,
-        ...(withMoney ? {
-          comp_type: compType,
-          fixed_salary_kopecks: compType === 'fixed' ? rublesToKopecks(fixedSalary) : null,
-        } : {}),
+        ...(canSetSalary ? { comp_type: compType } : {}),
       })
       toast('Сохранено', 'success')
       onSaved(); onClose()
@@ -315,7 +353,7 @@ export function EditEmployeeModal({
         </div>
         <div><FieldLabel>На складе с</FieldLabel><input className="input sm" type="date" style={input} value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} /></div>
       </div>
-      {withMoney && (
+      {canSetSalary && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
           <div>
             <FieldLabel>Тип оплаты</FieldLabel>
@@ -324,20 +362,13 @@ export function EditEmployeeModal({
               <option value="fixed">Оклад (фикс)</option>
             </select>
           </div>
-          {compType === 'fixed' ? (
-            <div>
-              <FieldLabel>Оклад, ₽/мес</FieldLabel>
-              <input className="input sm" style={input} inputMode="numeric" value={fixedSalary} onChange={(e) => setFixedSalary(e.target.value)} placeholder="0" />
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'flex-end', fontSize: 11, color: 'var(--c-text-subtle)' }}>
-              Ставка ₽/ч — на вкладке оплаты
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'flex-end', fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            {compType === 'fixed' ? 'Оклад ₽/мес — в блоке «Оклад» карточки' : 'Ставка ₽/ч — в блоке «Ставка» карточки'}
+          </div>
           {compType === 'fixed' && (
             <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', gap: 6 }}>
               <Icon name="calendar" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-              Оклад начисляется автоматически: 15-го числа — половина, в последний день месяца — вторая половина (в «Оплату ЗП», ожидает оплаты).
+              Оклад начисляется автоматически 1-го числа одной проводкой за месяц (в «Финансы → Расходы», ожидает оплаты); сумма — по рабочим дням от даты начала оклада.
             </div>
           )}
         </div>

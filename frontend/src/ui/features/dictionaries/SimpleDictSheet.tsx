@@ -19,6 +19,7 @@ import { Field, Input } from '../../primitives/Input'
 import { Toggle } from '../../primitives/Checkbox'
 import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
+import { WarehouseRentBlock } from './WarehouseRentBlock'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
@@ -162,7 +163,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     }
     const colorPayload = apiType === 'colors' ? { color_hex: normalizeColorHex(colorHex) } : {}
     let rentPayload: { rent_monthly_kopecks?: number | null } = {}
-    if (apiType === 'own-warehouses') {
+    if (apiType === 'own-warehouses' && isNew) {
       const s = rentRub.trim().replace(',', '.')
       if (s) {
         const n = Number(s)
@@ -262,8 +263,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         </Field>
       )}
 
-      {apiType === 'own-warehouses' && (
-        <Field label="Аренда, ₽ / мес" help="1-го числа каждого месяца автоматически создаётся расход типа «Аренда» со статусом «Ожидает оплаты». Оставьте пустым, если аренды нет.">
+      {apiType === 'own-warehouses' && isNew && (
+        <Field label="Аренда, ₽ / мес" help="Стартовая ставка действует с сегодняшнего дня. После создания склада можно менять ставку и задавать дату изменения в карточке. Оставьте пустым, если аренды нет.">
           <Input
             className="num"
             inputMode="decimal"
@@ -271,6 +272,12 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
             value={rentRub}
             onChange={(e) => setRentRub(e.target.value)}
           />
+        </Field>
+      )}
+
+      {apiType === 'own-warehouses' && !isNew && initial && (
+        <Field label="Аренда" help="История ставок: 1-го числа месяца по действующей ставке заводится расход «Аренда».">
+          <WarehouseRentBlock warehouseId={initial.id} onChanged={onSaved} />
         </Field>
       )}
 

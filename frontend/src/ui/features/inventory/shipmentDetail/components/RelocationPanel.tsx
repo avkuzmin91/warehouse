@@ -35,14 +35,16 @@ export function RelocationPanel({ docId, lines, zoneOptions, canEdit, readOnly =
 
 function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<Props, 'readOnly'>) {
   const toast = useToast()
+  // Раскладываем только ещё не размещённое (pending): часть могла уехать в ready раньше
+  // через частичное «Разместить готовое» (отгрузка из упаковки) — её повторять не нужно.
   const packedLines = useMemo(
-    () => lines.filter((l) => l.packed_good > 0 || l.packed_defect > 0),
+    () => lines.filter((l) => l.packed_pending_good > 0 || l.packed_pending_defect > 0),
     [lines],
   )
   const [allocs, setAllocs] = useState<Record<string, LineAlloc>>(() => {
     const next: Record<string, LineAlloc> = {}
     for (const l of packedLines) {
-      next[l.id] = { good: initRows(l.packed_good), defect: initRows(l.packed_defect) }
+      next[l.id] = { good: initRows(l.packed_pending_good), defect: initRows(l.packed_pending_defect) }
     }
     return next
   })
@@ -78,8 +80,8 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
     for (const line of packedLines) {
       const a = allocs[line.id]
       for (const [kind, target, ru] of [
-        ['good', line.packed_good, 'годный'],
-        ['defect', line.packed_defect, 'брак'],
+        ['good', line.packed_pending_good, 'годный'],
+        ['defect', line.packed_pending_defect, 'брак'],
       ] as const) {
         const rows = a[kind]
         if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место для «${line.product_name}» (${ru})`)
@@ -164,9 +166,9 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
                 <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {line.packed_good > 0 && (
+                {line.packed_pending_good > 0 && (
                   <KindBlock
-                    title="Годный" tone="var(--c-success)" target={line.packed_good}
+                    title="Годный" tone="var(--c-success)" target={line.packed_pending_good}
                     rows={allocs[line.id].good} options={zoneOpts} disabled={!canEdit || saving}
                     onRow={(i, patch) => setRow(line.id, 'good', i, patch)}
                     onAdd={() => addRow(line.id, 'good')}
@@ -174,9 +176,9 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
                     sum={sumRows(allocs[line.id].good)}
                   />
                 )}
-                {line.packed_defect > 0 && (
+                {line.packed_pending_defect > 0 && (
                   <KindBlock
-                    title="Брак" tone="var(--c-danger)" target={line.packed_defect}
+                    title="Брак" tone="var(--c-danger)" target={line.packed_pending_defect}
                     rows={allocs[line.id].defect} options={zoneOpts} disabled={!canEdit || saving}
                     onRow={(i, patch) => setRow(line.id, 'defect', i, patch)}
                     onAdd={() => addRow(line.id, 'defect')}

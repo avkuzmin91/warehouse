@@ -71,6 +71,8 @@ export type PlannableItem = {
   size_name: string | null
   ready_good: number
   ready_defect: number
+  /** Упаковано, но ещё не размещено по местам — для отгрузки годного такой же источник, как ready. */
+  packed_good: number
   storage_good: number
   storage_defect: number
   in_transit: number

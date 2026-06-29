@@ -204,3 +204,17 @@ def ensure_payroll_access(user: Mapping[str, Any]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,
         )
+
+
+def can_view_salary(user: Mapping[str, Any]) -> bool:
+    """Оклад окладников (fixed) и любые деньги по ним — только администратор.
+    Менеджер ведёт деньги почасовиков, но окладов в месяц не видит."""
+    return user["role"] == "admin"
+
+
+def ensure_salary_access(user: Mapping[str, Any]) -> None:
+    if not can_view_salary(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Оклады доступны только администратору",
+        )

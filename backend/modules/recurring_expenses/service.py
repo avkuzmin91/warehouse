@@ -362,8 +362,8 @@ def run_recurring_accruals(connection, on_date: date, uid: str | None = None) ->
 
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
-            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
-            (EXPENSE_KIND_RECURRING, EXPENSE_SOURCE_RECURRING, template_id, period_start),
+            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0 AND payment_status != ?",
+            (EXPENSE_KIND_RECURRING, EXPENSE_SOURCE_RECURRING, template_id, period_start, EXPENSE_PAYMENT_CANCELLED),
         ).fetchone()
         if exists:
             continue

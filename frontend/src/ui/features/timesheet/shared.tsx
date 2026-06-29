@@ -6,6 +6,7 @@ export {
   fmtMoney,
   fmtMoneyShort,
   fmtRate,
+  fmtSalary,
   fmtHours,
   rublesToKopecks,
   DAY_STATUS_LABELS,

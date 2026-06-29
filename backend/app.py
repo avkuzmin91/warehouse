@@ -29,6 +29,7 @@ from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.pallet_pricing.router import router as pallet_pricing_router
 from modules.pricing.router import router as pricing_router
+from modules.production_calendar.router import router as production_calendar_router
 from modules.products.router import router as products_router
 from modules.receipts.router import router as receipts_router
 from modules.recurring_expenses.router import router as recurring_expenses_router
@@ -37,6 +38,7 @@ from modules.dispatch.router import router as dispatch_router
 from modules.tasks.router import router as tasks_router
 from modules.scan.router import router as scan_router
 from modules.users.router import router as users_router
+from modules.warehouse_rent.router import router as warehouse_rent_router
 
 
 # ── Application lifespan ──────────────────────────────────────────────────────
@@ -436,6 +438,22 @@ def _ensure_runtime_schema() -> None:
             "ON employee_rates(employee_id, effective_from)"
         )
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS employee_salaries (
+                id             TEXT PRIMARY KEY,
+                employee_id    TEXT NOT NULL REFERENCES employees(id),
+                salary_kopecks INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_employee_salaries_emp "
+            "ON employee_salaries(employee_id, effective_from)"
+        )
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS timesheet_entries (
                 id            TEXT PRIMARY KEY,
                 employee_id   TEXT NOT NULL REFERENCES employees(id),
@@ -562,14 +580,31 @@ def _ensure_runtime_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_recurring_expense_rates_lookup "
             "ON recurring_expense_rates (template_id, effective_from)"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS production_calendar (
+                id          TEXT PRIMARY KEY,
+                cal_date    TEXT NOT NULL,
+                is_working  INTEGER NOT NULL,
+                reason      TEXT,
+                created_at  TEXT NOT NULL,
+                created_by  TEXT,
+                updated_at  TEXT,
+                is_deleted  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_production_calendar_date "
+            "ON production_calendar (cal_date) WHERE is_deleted = 0"
+        )
         conn.commit()
 
 
 async def _accrual_loop() -> None:
-    """Фоновое автоначисление: ЗП-оклады (15-е и последний день месяца), аренда складов
-    (1-е число) и регулярные расходы по шаблонам (ежедневно / в число месяца). Будится раз
-    в час; дедуп по периоду делает повторные прогоны и рестарты безопасными. Отключается в
-    тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
+    """Фоновое автоначисление: ЗП-оклады (одна проводка на месяц, 1-го числа / в день
+    приёма), аренда складов (за текущий месяц, в любой день — самовосстановление при
+    пропущенном 1-м числе) и регулярные расходы по шаблонам (ежедневно / в число месяца).
+    Будится раз в час; дедуп по периоду делает повторные прогоны и рестарты безопасными.
+    Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
     from idempotency import purge_expired_idempotency_keys
     from modules.expenses.service import run_rent_accruals, run_salary_accruals
     from modules.recurring_expenses.service import run_recurring_accruals
@@ -742,6 +777,8 @@ app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(pricing_router)
 app.include_router(pallet_pricing_router)
+app.include_router(production_calendar_router)
+app.include_router(warehouse_rent_router)
 app.include_router(receipts_router)
 app.include_router(shipments_router)
 app.include_router(dispatch_router)

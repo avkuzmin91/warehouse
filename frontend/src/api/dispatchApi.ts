@@ -120,6 +120,8 @@ export type DispatchDetail = {
   comment:          string | null
   status:           DispatchStatus
   status_label:     string
+  /** По отгрузке выставлен счёт (issued+) — палеты править нельзя. */
+  invoiced:         boolean
   trips:            { id: string; number: string }[]
   created_at:       string
   created_by:       string | null
@@ -301,6 +303,27 @@ export function getDispatchTripRemaining(id: string, signal?: AbortSignal) {
   return request<{ lines: DispatchTripRemainingLine[] }>(`/dispatches/${id}/trip-alloc-remaining`, { signal })
 }
 
+/** Зарезервированный к отгрузке остаток по варианту (уже обещан незакрытым отгрузкам). */
+export type DispatchReservation = {
+  product_id: string
+  color_id:   string | null
+  size_id:    string | null
+  reserved:   number
+}
+
+/** Резервы по вариантам для клиента/типа груза — чтобы витрина подбора показывала
+ *  свободный, а не валовой остаток (тот же резерв вычитает серверный гейт). */
+export function getDispatchReservations(
+  params: { client_id?: string; cargo_type?: DispatchCargoType } = {},
+  signal?: AbortSignal,
+) {
+  const sp = new URLSearchParams()
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  const q = sp.toString()
+  return request<{ items: DispatchReservation[] }>(`/dispatches/reservations${q ? `?${q}` : ''}`, { signal })
+}
+
 export function createDispatch(body: DispatchDocCreate) {
   return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body) })
 }
@@ -322,6 +345,14 @@ export function addDispatchLine(docId: string, line: DispatchLineIn) {
 
 export function updateDispatchLine(docId: string, lineId: string, body: DispatchLineUpdate) {
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+/** Правка числа палет по строке на любом статусе (кроме аннулированной/выставленной счётом). */
+export function updateDispatchLinePallets(docId: string, lineId: string, palletsQty: number | null) {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/pallets`, {
+    method: 'PATCH',
+    body: JSON.stringify({ pallets_qty: palletsQty }),
+  })
 }
 
 export function deleteDispatchLine(docId: string, lineId: string) {

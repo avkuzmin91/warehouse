@@ -28,6 +28,10 @@ from config import (
     EXPENSE_PAYMENT_PARTIAL,
     EXPENSE_PAYMENT_STATUS_LABELS,
     EXPENSE_PAYMENT_STATUSES_ALL,
+    EXPENSE_SALARY_SOURCE_SUBTYPE,
+    EXPENSE_SALARY_SUBTYPE_FIXED,
+    EXPENSE_SALARY_SUBTYPE_LABELS,
+    EXPENSE_SALARY_SUBTYPE_TIMESHEET,
     EXPENSE_SOURCE_EMPLOYEE,
     EXPENSE_SOURCE_PAYROLL,
     EXPENSE_SOURCE_TRIP,
@@ -35,10 +39,14 @@ from config import (
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,
     EXPENSE_SYSTEM_CATEGORY_SALARY,
+    EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED,
+    EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET,
     PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
-from modules.timesheet.service import daily_payroll_accruals
+from modules.production_calendar.service import working_days_of_month
+from modules.timesheet.service import daily_payroll_accruals_split, load_salaries, salary_on
+from modules.warehouse_rent.service import current_rent_rates
 
 
 def now_iso() -> str:
@@ -317,9 +325,17 @@ def _expense_filter_sql(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> tuple[str, list]:
     conds = ["COALESCE(e.is_deleted, 0) = 0"]
     params: list = []
+    if salary_subtype:
+        src = {
+            EXPENSE_SALARY_SUBTYPE_FIXED:     EXPENSE_SOURCE_EMPLOYEE,
+            EXPENSE_SALARY_SUBTYPE_TIMESHEET: EXPENSE_SOURCE_PAYROLL,
+        }.get(salary_subtype)
+        if src:
+            conds.append("e.source_kind = ?"); params.append(src)
     if kinds is not None:
         if kinds:
             placeholders = ",".join("?" for _ in kinds)
@@ -346,6 +362,11 @@ def _expense_filter_sql(
 
 
 def _row_to_list_item(r) -> dict:
+    kind = str(r["kind"] or "manual")
+    salary_subtype = (
+        EXPENSE_SALARY_SOURCE_SUBTYPE.get(str(r["source_kind"] or ""))
+        if kind == EXPENSE_KIND_SALARY else None
+    )
     return {
         "id": str(r["id"]),
         "exp_number": str(r["exp_number"]),
@@ -363,8 +384,8 @@ def _row_to_list_item(r) -> dict:
         "payment_source_name": r["payment_source_name"],
         "supplier": r["supplier"],
         "comment": r["comment"],
-        "kind": str(r["kind"] or "manual"),
-        "kind_label": EXPENSE_KIND_LABELS.get(str(r["kind"] or "manual"), str(r["kind"] or "")),
+        "kind": kind,
+        "kind_label": EXPENSE_KIND_LABELS.get(kind, str(r["kind"] or "")),
         "payment_status": str(r["payment_status"] or "paid"),
         "payment_status_label": EXPENSE_PAYMENT_STATUS_LABELS.get(
             str(r["payment_status"] or "paid"), str(r["payment_status"] or "")
@@ -374,6 +395,8 @@ def _row_to_list_item(r) -> dict:
         "period_end": r["period_end"],
         "source_kind": r["source_kind"],
         "source_id": r["source_id"],
+        "salary_subtype": salary_subtype,
+        "salary_subtype_label": EXPENSE_SALARY_SUBTYPE_LABELS.get(salary_subtype) if salary_subtype else None,
         "file_count": int(r["file_count"]),
         "created_at": str(r["created_at"]),
         "created_by_email": r["created_by_email"],
@@ -409,11 +432,12 @@ def list_expenses_aggregated(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> tuple[list[dict], int]:
     where, params = _expense_filter_sql(
         search=search, category_id=category_id, payment_source_id=payment_source_id,
         date_from=date_from, date_to=date_to,
-        kind=kind, payment_status=payment_status, kinds=kinds,
+        kind=kind, payment_status=payment_status, kinds=kinds, salary_subtype=salary_subtype,
     )
     total = int(connection.execute(
         f"SELECT COUNT(*) AS n FROM material_expenses e WHERE {where}", params
@@ -438,11 +462,12 @@ def expense_summary(
     kind: str | None = None,
     payment_status: str | None = None,
     kinds: list[str] | None = None,
+    salary_subtype: str | None = None,
 ) -> dict:
     where, params = _expense_filter_sql(
         search=search, category_id=category_id, payment_source_id=payment_source_id,
         date_from=date_from, date_to=date_to,
-        kind=kind, payment_status=payment_status, kinds=kinds,
+        kind=kind, payment_status=payment_status, kinds=kinds, salary_subtype=salary_subtype,
     )
     # «Оплачено» — фактически проведённые деньги (paid_amount), «Ожидает» — остаток
     # к оплате (amount − paid_amount) по неаннулированным; частично оплаченные дают
@@ -458,9 +483,11 @@ def expense_summary(
         f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
         f"     ELSE GREATEST(e.amount - COALESCE(e.paid_amount, 0), 0) END), 0) AS awaiting, "
         f"COALESCE(SUM(CASE WHEN e.payment_status = ? THEN 0 "
-        f"     ELSE COALESCE(e.paid_amount, 0) END), 0) AS paid "
+        f"     ELSE COALESCE(e.paid_amount, 0) END), 0) AS paid, "
+        f"COALESCE(SUM(CASE WHEN e.payment_status IN (?, ?) THEN 1 ELSE 0 END), 0) AS awaiting_count "
         f"FROM material_expenses e WHERE {where}",
-        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, *params],
+        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED, EXPENSE_PAYMENT_CANCELLED,
+         EXPENSE_PAYMENT_AWAITING, EXPENSE_PAYMENT_PARTIAL, *params],
     ).fetchone()
 
     by_cat = connection.execute(
@@ -504,6 +531,7 @@ def expense_summary(
         "total_amount": int(head["total"]),
         "total_count": int(head["n"]),
         "awaiting_amount": int(head["awaiting"]),
+        "awaiting_count": int(head["awaiting_count"]),
         "paid_amount": int(head["paid"]),
         "by_category": _bd(by_cat),
         "by_payment_source": _bd(by_src),
@@ -529,8 +557,8 @@ def expense_analytics(
     оклада), а не из реестровых выплат, — поэтому реестровый kind=salary из динамики и
     by_kind исключён (иначе двойной учёт).
 
-    `kinds=None` — все типы (админ); список — ограниченная роли область (менеджер не видит
-    аренду и ЗП, для него эти срезы пустые). Срез by_status считается по реестровым строкам
+    `kinds=None` — все типы; список — явно запрошенная область. Аналитика не скрывает типы
+    по роли: менеджер видит аренду и ЗП наравне с админом. Срез by_status считается по реестровым строкам
     (выплаты ЗП и аренда — по их дате), это состояние долгов, а не дневная атрибуция,
     поэтому его итог может отличаться от «начислено». by_category сходится с total_amount."""
     try:
@@ -652,20 +680,26 @@ def expense_analytics(
                 by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["count"] += 1
                 _add_category(rent_name, r["category_id"], in_window, 1)
 
-    # 3) ЗП — начисление по дням из табеля (часы × ставка / доля оклада).
+    # 3) ЗП — начисление по дням из табеля (часы × ставка / доля оклада), разнесённое
+    # на оклад (фикс) и табель (почасовую) двумя категориями, чтобы они не смешивались.
     if salary_in_scope:
-        sal_amount = sal_days = 0
-        for day_iso, amount in daily_payroll_accruals(connection, df.isoformat(), dt.isoformat()).items():
-            if amount and day_iso in series:
-                series[day_iso] += amount
-                sal_amount += amount
-                sal_days += 1
-                _add_matrix(EXPENSE_SYSTEM_CATEGORY_SALARY, None, EXPENSE_KIND_SALARY, day_iso, amount)
-        if sal_amount:
-            bk = by_kind.setdefault(EXPENSE_KIND_SALARY, {"amount": 0, "count": 0})
-            bk["amount"] += sal_amount
-            bk["count"] += sal_days
-            _add_category(EXPENSE_SYSTEM_CATEGORY_SALARY, None, sal_amount, sal_days)
+        split = daily_payroll_accruals_split(connection, df.isoformat(), dt.isoformat())
+        for subtype, cat_name in (
+            (EXPENSE_SALARY_SUBTYPE_FIXED, EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED),
+            (EXPENSE_SALARY_SUBTYPE_TIMESHEET, EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET),
+        ):
+            sal_amount = sal_days = 0
+            for day_iso, amount in split[subtype].items():
+                if amount and day_iso in series:
+                    series[day_iso] += amount
+                    sal_amount += amount
+                    sal_days += 1
+                    _add_matrix(cat_name, None, EXPENSE_KIND_SALARY, day_iso, amount)
+            if sal_amount:
+                bk = by_kind.setdefault(EXPENSE_KIND_SALARY, {"amount": 0, "count": 0})
+                bk["amount"] += sal_amount
+                bk["count"] += sal_days
+                _add_category(cat_name, None, sal_amount, sal_days)
 
     # 4) Статус оплаты — по реестровым строкам области; аннулированные в отчёт не входят.
     by_status: dict[str, dict] = {}
@@ -951,51 +985,76 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     )
 
 
-def _salary_accrual_plan(on_date: date) -> tuple[str, str, str, bool] | None:
-    """(period_start, period_end, title, first_half) для даты начисления, либо None.
-    Начисляем 15-го (первая половина оклада) и в последний день месяца (вторая)."""
-    y, m = on_date.year, on_date.month
-    last_day = calendar.monthrange(y, m)[1]
-    if on_date.day == 15:
-        return (date(y, m, 1).isoformat(), date(y, m, 15).isoformat(), f"Аванс ЗП {m:02d}.{y}", True)
-    if on_date.day == last_day:
-        return (date(y, m, 16).isoformat(), date(y, m, last_day).isoformat(), f"Расчёт ЗП {m:02d}.{y}", False)
-    return None
+def _fixed_month_accrual(connection, salaries_desc, year: int, month: int) -> int:
+    """Сумма оклада за месяц по истории окладов (effective-dated). Для каждого рабочего дня
+    берётся оклад, действовавший в этот день (salary_on), и его дневная доля (оклад ÷ рабочие
+    дни месяца, остаток на первые рабочие дни). Считается так же, как дневная разбивка в
+    аналитике, поэтому начисление в реестр и аналитика по дням сходятся копейка-в-копейку; для
+    полного месяца без смены оклада сумма равна окладу, дни до даты начала оклада не считаются."""
+    wd = working_days_of_month(connection, year, month)
+    n = len(wd)
+    if n == 0:
+        return 0
+    total = 0
+    for idx, day in enumerate(wd):
+        s = salary_on(salaries_desc, day.isoformat())
+        if not s:
+            continue
+        base, rem = divmod(s, n)
+        total += base + (1 if idx < rem else 0)
+    return total
 
 
 def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> int:
-    """Идемпотентно начисляет ЗП-оклады по датам: 15-е число — первая половина оклада,
-    последний день месяца — вторая. Только сотрудники с окладом (comp_type=fixed, fixed_salary>0).
-    Дедуп по (source_id, period_start) — повторный прогон в тот же день не плодит дубли.
-    Возвращает число созданных начислений. Не коммитит — это делает вызывающий."""
-    plan = _salary_accrual_plan(on_date)
-    if plan is None:
-        return 0
-    period_start, period_end, title, first_half = plan
+    """Идемпотентно начисляет ЗП-оклады: ОДНА проводка на (сотрудник, месяц) за полный
+    месяц, статус «ожидает оплаты». Заводится 1-го числа (или в день начала оклада для
+    серединного старта); аванс/расчёт гасят её частичной оплатой — отдельных проводок
+    15-го/последнего дня больше нет. Сумма берётся из истории окладов (effective-dated):
+    дневная доля по рабочим дням, дни до даты начала оклада не считаются, смена оклада среди
+    месяца учитывается с её даты; сходится с дневной разбивкой в аналитике. Только окладники
+    (comp_type=fixed) с записью оклада. Дедуп по (source_id, period_start) — повторный прогон
+    не плодит дубли. Возвращает число созданных начислений. Не коммитит — это делает вызывающий."""
+    year, month = on_date.year, on_date.month
+    last_day = calendar.monthrange(year, month)[1]
+    month_start = date(year, month, 1)
+    period_start = month_start.isoformat()
+    period_end = date(year, month, last_day).isoformat()
+    title = f"Оклад {month:02d}.{year}"
 
     rows = connection.execute(
-        "SELECT id, full_name, fixed_salary_kopecks FROM employees "
-        "WHERE comp_type = ? AND status = ? AND COALESCE(is_deleted, 0) = 0 "
-        "AND COALESCE(fixed_salary_kopecks, 0) > 0",
+        "SELECT id, full_name "
+        "FROM employees WHERE comp_type = ? AND status = ? AND COALESCE(is_deleted, 0) = 0",
         (EMPLOYEE_COMP_FIXED, EMPLOYEE_STATUS_ACTIVE),
     ).fetchall()
     if not rows:
         return 0
 
+    salaries = load_salaries(connection, [str(r["id"]) for r in rows])
     cat_id = resolve_system_category_id(connection, EXPENSE_SYSTEM_CATEGORY_SALARY)
     spent_on = on_date.isoformat()
     created = 0
     for r in rows:
         emp_id = str(r["id"])
+        sal = salaries.get(emp_id)
+        if not sal:
+            continue
+        # Самая ранняя запись оклада = дата его начала. В этом месяце оклад «стартует» не
+        # раньше 1-го числа; пока стартовый день не наступил — ждём (заведём проводку тогда).
+        try:
+            earliest = min(date.fromisoformat(str(s["effective_from"])[:10]) for s in sal)
+        except (ValueError, TypeError):
+            earliest = month_start
+        start_in_month = max(month_start, earliest)
+        if on_date < start_in_month:
+            continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
-            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
-            (EXPENSE_KIND_SALARY, EXPENSE_SOURCE_EMPLOYEE, emp_id, period_start),
+            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0 AND payment_status != ?",
+            (EXPENSE_KIND_SALARY, EXPENSE_SOURCE_EMPLOYEE, emp_id, period_start, EXPENSE_PAYMENT_CANCELLED),
         ).fetchone()
         if exists:
             continue
-        fixed = int(r["fixed_salary_kopecks"])
-        amount = fixed // 2 if first_half else fixed - fixed // 2
+        amount = _fixed_month_accrual(connection, sal, year, month)
         if amount <= 0:
             continue
         expense_id = str(uuid4())
@@ -1106,41 +1165,42 @@ def reverse_payroll_expense(connection, *, payment_id: str, uid: str | None = No
     return True
 
 
-def run_rent_accruals(connection, on_date: date, uid: str | None = None, *, force: bool = False) -> int:
+def run_rent_accruals(connection, on_date: date, uid: str | None = None) -> int:
     """Идемпотентно заводит аренду складов: по записи в едином реестре на каждый активный
-    склад с заданной ставкой (rent_monthly_kopecks > 0). Авто-прогон — только 1-го числа
-    месяца; force=True (ручной бэкафилл) заводит аренду за месяц on_date в любой день.
-    Дедуп по (kind=rent, source_kind=warehouse, source_id, period_start) делает повторные
-    прогоны и рестарты безопасными. Не коммитит — это делает вызывающий."""
-    if not force and on_date.day != 1:
-        return 0
+    склад с действующей на 1-е число ставкой. Ставка — effective-dated (warehouse_rent_rates,
+    правило pricing.price_on), а не из колонки-кэша own_warehouses.rent_monthly_kopecks.
+    Заводит аренду за МЕСЯЦ даты on_date в любой день (а не только 1-го числа), как и оклады:
+    дедуп по (kind=rent, source_kind=warehouse, source_id, period_start) делает повторные
+    прогоны безопасными, поэтому фоновый цикл сам добирает месяц, даже если backend не
+    работал ровно 1-го числа или ставку завели позже. Тот же путь — ручной бэкафилл прошлого
+    месяца через on_date. Не коммитит — это делает вызывающий."""
     y, m = on_date.year, on_date.month
     last_day = calendar.monthrange(y, m)[1]
     period_start = date(y, m, 1).isoformat()
     period_end = date(y, m, last_day).isoformat()
 
     rows = connection.execute(
-        "SELECT id, name, rent_monthly_kopecks FROM own_warehouses "
-        "WHERE COALESCE(is_active, 0) = 1 AND COALESCE(is_deleted, 0) = 0 "
-        "AND COALESCE(rent_monthly_kopecks, 0) > 0"
+        "SELECT id, name FROM own_warehouses "
+        "WHERE COALESCE(is_active, 0) = 1 AND COALESCE(is_deleted, 0) = 0"
     ).fetchall()
     if not rows:
         return 0
 
+    rates = current_rent_rates(connection, [str(r["id"]) for r in rows], period_start)
     cat_id = resolve_system_category_id(connection, EXPENSE_SYSTEM_CATEGORY_RENT)
     title_month = f"{m:02d}.{y}"
     created = 0
     for r in rows:
         wh_id = str(r["id"])
+        amount = int(rates.get(wh_id, 0))
+        if amount <= 0:
+            continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
-            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
-            (EXPENSE_KIND_RENT, EXPENSE_SOURCE_WAREHOUSE, wh_id, period_start),
+            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0 AND payment_status != ?",
+            (EXPENSE_KIND_RENT, EXPENSE_SOURCE_WAREHOUSE, wh_id, period_start, EXPENSE_PAYMENT_CANCELLED),
         ).fetchone()
         if exists:
-            continue
-        amount = int(r["rent_monthly_kopecks"])
-        if amount <= 0:
             continue
         expense_id = str(uuid4())
         exp_number = next_expense_number(connection)

@@ -35,23 +35,28 @@ from modules.dispatch.schemas import (
     DispatchDocUpdate,
     DispatchFinishPreparationPayload,
     DispatchLineIn,
+    DispatchLinePalletsUpdate,
     DispatchLinesListItem,
     DispatchLinesResponse,
     DispatchLineUpdate,
     DispatchListItem,
     DispatchListResponse,
     DispatchPriorityUpdate,
+    DispatchReservationItem,
+    DispatchReservationsResponse,
 )
 from modules.dispatch.service import (
     check_lines_have_pallets,
     check_lines_have_ready,
     check_lines_have_sku,
     dispatch_alloc_remaining,
+    dispatch_is_invoiced,
     get_dispatch_detail,
     list_dispatches_aggregated,
     next_doc_number,
     normalize_cargo_type,
     prepare_to_ready,
+    reserved_by_variant,
     return_prepared_stock,
 )
 
@@ -270,6 +275,26 @@ def list_dispatch_lines(
     return DispatchLinesResponse(items=items, total=total, page=page, limit=limit)
 
 
+@router.get("/dispatches/reservations", response_model=DispatchReservationsResponse)
+def dispatch_reservations(
+    client_id:  str | None = Query(None),
+    cargo_type: str | None = Query(None),
+    user=Depends(_get_manager),
+):
+    """Зарезервированный к отгрузке остаток по вариантам для клиента/типа груза.
+
+    Витрина подбора товара вычитает это из валового «упаковано», чтобы не предлагать
+    к отгрузке штуки, уже обещанные другим незакрытым отгрузкам (тот же резерв снимает
+    серверный гейт `check_lines_have_ready`)."""
+    with get_connection() as conn:
+        items = reserved_by_variant(
+            conn,
+            client_id=client_id.strip() if client_id else None,
+            cargo_type=cargo_type,
+        )
+    return DispatchReservationsResponse(items=[DispatchReservationItem(**it) for it in items])
+
+
 @router.get("/dispatches/{doc_id}/trip-alloc-remaining")
 def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
     """Остаток к распределению по строкам отгрузки для привязки к рейсу."""
@@ -441,6 +466,51 @@ def update_dispatch_line(doc_id: str, line_id: str, body: DispatchLineUpdate, us
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE, f"Изменён товар «{line['product_name']}»", now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.patch("/dispatches/{doc_id}/lines/{line_id}/pallets")
+def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePalletsUpdate, user=Depends(_get_manager)):
+    """Менеджер правит число палет по строке на любом статусе отгрузки.
+
+    Палеты — основа тарификации клиенту, и до выставления счёта менеджер должен иметь
+    возможность их поправить даже после отгрузки. Гейты: нельзя у аннулированной отгрузки
+    и нельзя, если по отгрузке уже выставлен счёт (сумма зафиксирована). Прочие поля строки
+    по-прежнему правятся только в черновике (`update_dispatch_line`)."""
+    now = _now()
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
+            raise HTTPException(status_code=400, detail="Нельзя менять палеты у аннулированной отгрузки")
+        if dispatch_is_invoiced(conn, doc_id):
+            raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — палеты изменить нельзя")
+        line = conn.execute(
+            "SELECT id, product_name, pallets_qty FROM dispatch_lines "
+            "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        old = int(line["pallets_qty"]) if line["pallets_qty"] is not None else None
+        if old == body.pallets_qty:
+            return {"message": "ok"}
+        conn.execute(
+            "UPDATE dispatch_lines SET pallets_qty = ? WHERE id = ? AND doc_id = ?",
+            (body.pallets_qty, line_id, doc_id),
+        )
+        old_s = str(old) if old is not None else "—"
+        new_s = str(body.pallets_qty) if body.pallets_qty is not None else "—"
+        conn.execute(
+            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE,
+             f"Палеты «{line['product_name']}»: {old_s} → {new_s}", now, uid),
         )
         conn.commit()
     return {"message": "ok"}

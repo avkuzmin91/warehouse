@@ -14,6 +14,7 @@ class EmployeeCreate(BaseModel):
     effective_from:     str | None = None             # дата действия стартовой ставки
     comp_type:          str | None = None             # hourly | fixed
     fixed_salary_kopecks: int | None = Field(default=None, ge=0)  # оклад для fixed, копейки
+    salary_from:        str | None = None             # дата начала оклада (для fixed)
 
 
 class EmployeeUpdate(BaseModel):
@@ -27,6 +28,12 @@ class EmployeeUpdate(BaseModel):
 
 class RateCreate(BaseModel):
     rate_kopecks:   int = Field(ge=0)
+    effective_from: str                               # YYYY-MM-DD
+    note:           str | None = None
+
+
+class SalaryCreate(BaseModel):
+    salary_kopecks: int = Field(ge=0)
     effective_from: str                               # YYYY-MM-DD
     note:           str | None = None
 
@@ -56,7 +63,16 @@ class EmployeeLookupItem(BaseModel):
 
 
 class RateHistoryItem(BaseModel):
+    id:             str
     rate_kopecks:   int
+    effective_from: str
+    note:           str | None = None
+    current:        bool = False
+
+
+class SalaryHistoryItem(BaseModel):
+    id:             str
+    salary_kopecks: int
     effective_from: str
     note:           str | None = None
     current:        bool = False
@@ -133,8 +149,9 @@ class EmployeeDetailResponse(BaseModel):
     week_label:    str
     this_week:     EmployeeWeekSummary
     attendance:    AttendanceBlock
-    rate_history:  list[RateHistoryItem] = []         # менеджер
-    pay_history:   list[PayHistoryItem] = []          # менеджер
+    rate_history:    list[RateHistoryItem] = []       # менеджер (почасовики)
+    salary_history:  list[SalaryHistoryItem] = []     # менеджер (окладники)
+    pay_history:     list[PayHistoryItem] = []        # менеджер
 
 
 # ── Табель (сетка недели) ─────────────────────────────────────────────────────

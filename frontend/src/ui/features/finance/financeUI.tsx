@@ -12,7 +12,7 @@ import { Panel, ReadRow } from '../shared/process/processUI'
 /** Компактные деньги для KPI: рубли без копеек, не растягивают карточку. «2 400 000 ₽». */
 export function kpiMoney(kopecks: number): string {
   const rub = Math.floor(Math.abs(kopecks) / 100)
-  return `${rub.toLocaleString('ru-RU')} ₽`
+  return `${rub.toLocaleString('ru-RU')} ₽`
 }
 
 export type KpiTone = 'default' | 'warning' | 'danger'

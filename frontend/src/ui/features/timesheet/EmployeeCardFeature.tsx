@@ -2,14 +2,12 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
-import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
-import { canViewPayroll } from '../../../utils/access'
 import { fmtDateLong } from '../../../utils/format'
-import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate } from './shared'
-import { AdvanceModal, RateModal, EditEmployeeModal } from './modals'
-import { getEmployee, archiveEmployee, restoreEmployee, cancelPayment, DAY_STATUS_LABELS, type EmployeeDetail, type RateHistoryItem, type PayHistoryItem, type AttendanceBlock, type AttendanceStatus } from '../../../api/timesheetApi'
+import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate, fmtSalary } from './shared'
+import { AdvanceModal, RateModal, SalaryModal, EditEmployeeModal } from './modals'
+import { getEmployee, archiveEmployee, restoreEmployee, cancelPayment, deleteEmployeeRate, deleteEmployeeSalary, DAY_STATUS_LABELS, type EmployeeDetail, type PayHistoryItem, type AttendanceBlock, type AttendanceStatus } from '../../../api/timesheetApi'
 
 function SumCell({ label, value, big, tone }: { label: string; value: string; big?: boolean; tone?: 'accent' | 'danger' }) {
   const col = tone === 'accent' ? 'var(--c-accent-text)' : tone === 'danger' ? 'var(--c-danger)' : 'var(--c-text)'
@@ -34,13 +32,15 @@ function Panel({ icon, title, right, children, bodyPad = true }: { icon: string;
   )
 }
 
-function RateTimeline({ history }: { history: RateHistoryItem[] }) {
+type PayTimelineItem = { id: string; label: string; effective_from: string; note: string | null; current: boolean }
+
+function PayTimeline({ items, canDelete, onDelete }: { items: PayTimelineItem[]; canDelete: boolean; onDelete: (item: PayTimelineItem) => void }) {
   return (
     <div style={{ padding: 2 }}>
-      {history.map((r, i) => {
-        const last = i === history.length - 1
+      {items.map((r, i) => {
+        const last = i === items.length - 1
         return (
-          <div key={i} style={{ display: 'flex', gap: 12 }}>
+          <div key={r.id} style={{ display: 'flex', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 22 }}>
               <div style={{ width: 22, height: 22, borderRadius: 99, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: r.current ? 'var(--c-accent)' : 'var(--c-bg-elev)', border: r.current ? '1.5px solid var(--c-accent)' : '1.5px solid var(--c-border-strong)', color: r.current ? '#fff' : 'var(--c-text-faint)' }}>
                 <Icon name={r.current ? 'ruble' : 'history'} size={11} />
@@ -49,8 +49,11 @@ function RateTimeline({ history }: { history: RateHistoryItem[] }) {
             </div>
             <div style={{ paddingBottom: last ? 0 : 16, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: r.current ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{fmtRate(r.rate_kopecks)}</span>
+                <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: r.current ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{r.label}</span>
                 {r.current && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--c-accent)' }}>сейчас</span>}
+                {canDelete && (
+                  <button className="btn ghost icon sm" style={{ marginLeft: 'auto' }} title="Удалить запись" onClick={() => onDelete(r)}><Icon name="trash" size={12} /></button>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
                 <Icon name="calendar" size={11} />действует с {r.effective_from}
@@ -190,19 +193,20 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
 
 export function EmployeeCardFeature({ empId }: { empId: string }) {
   const navigate = useNavigate()
-  const { user } = useCurrentUser()
-  const showMoney = canViewPayroll(user)
   const toast = useToast()
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
   const [advance, setAdvance] = useState(false)
   const [rateOpen, setRateOpen] = useState(false)
+  const [salaryOpen, setSalaryOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
 
   const { data: e, loading, error } = useApi<EmployeeDetail>(
     (signal) => getEmployee(empId, signal),
     [empId, tick],
   )
+  // Бэкенд решает видимость денег по сотруднику (оклад окладника — только админ).
+  const showMoney = e?.with_money ?? false
   const reload = () => setTick((t) => t + 1)
 
   const onArchive = async () => {
@@ -230,6 +234,26 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
     try { await cancelPayment(p.id); toast('Выплата отменена', 'success'); reload() }
     catch (err) { toast(err instanceof Error ? err.message : 'Ошибка', 'error') }
   }
+  const onDeleteRate = async (item: PayTimelineItem) => {
+    const ok = await confirm({
+      title: 'Удалить запись ставки?',
+      body: `Ставка ${item.label} (с ${item.effective_from}) будет удалена. Прошлые недели после этого считаются по оставшейся истории ставок. Уже проведённые расчёты не меняются.`,
+      danger: true, confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    try { await deleteEmployeeRate(empId, item.id); toast('Запись удалена', 'success'); reload() }
+    catch (err) { toast(err instanceof Error ? err.message : 'Ошибка', 'error') }
+  }
+  const onDeleteSalary = async (item: PayTimelineItem) => {
+    const ok = await confirm({
+      title: 'Удалить запись оклада?',
+      body: `Оклад ${item.label} (с ${item.effective_from}) будет удалён из истории. «Оклад на сегодня» пересчитается по оставшейся истории. Уже начисленные проводки ЗП в «Финансы → Расходы» не меняются — их правят там.`,
+      danger: true, confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    try { await deleteEmployeeSalary(empId, item.id); toast('Запись удалена', 'success'); reload() }
+    catch (err) { toast(err instanceof Error ? err.message : 'Ошибка', 'error') }
+  }
 
   if (error) return <div className="page"><div className="card" style={{ padding: 16, color: 'var(--c-danger)' }}>{error.message}</div></div>
   if (!e) return <div className="page" style={{ padding: 24, color: 'var(--c-text-subtle)' }}>{loading ? 'Загрузка…' : null}</div>
@@ -245,6 +269,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>{e.full_name}</span>
               {e.status === 'archived' ? <Badge>В архиве</Badge> : <Badge tone="success" dot>Активен</Badge>}
+              {e.comp_label && <Badge tone={e.comp_type === 'fixed' ? 'info' : ''}>{e.comp_label}</Badge>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, fontSize: 13, color: 'var(--c-text-muted)' }}>
               <Icon name="briefcase" size={13} style={{ color: 'var(--c-text-subtle)' }} />{e.position ?? '—'}
@@ -304,19 +329,34 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
 
         <div className="col" style={{ gap: 14 }}>
           {showMoney ? (
-            <Panel icon="ruble" title="История ставки" bodyPad={false} right={e.status === 'active' ? <button className="btn ghost sm" onClick={() => setRateOpen(true)}><Icon name="plus" size={13} />Изменить</button> : undefined}>
-              <div style={{ padding: '14px 14px 12px' }}>
-                {e.rate_history.length ? <RateTimeline history={e.rate_history} /> : <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Ставка ещё не задана</div>}
-              </div>
-              <div style={{ padding: '10px 14px', borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="history" size={12} />Прошлые недели считаются по ставке, действовавшей в тот день
-              </div>
-            </Panel>
+            e.comp_type === 'fixed' ? (
+              <Panel icon="ruble" title="Оклад" bodyPad={false} right={e.status === 'active' ? <button className="btn ghost sm" onClick={() => setSalaryOpen(true)}><Icon name="plus" size={13} />Изменить</button> : undefined}>
+                <div style={{ padding: '14px 14px 12px' }}>
+                  {e.salary_history.length
+                    ? <PayTimeline canDelete={e.status === 'active'} onDelete={onDeleteSalary} items={e.salary_history.map((s) => ({ id: s.id, label: fmtSalary(s.salary_kopecks), effective_from: s.effective_from, note: s.note, current: s.current }))} />
+                    : <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Оклад ещё не задан</div>}
+                </div>
+                <div style={{ padding: '10px 14px', borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="history" size={12} />Начисляется по рабочим дням от даты начала оклада; смена оклада действует с её даты
+                </div>
+              </Panel>
+            ) : (
+              <Panel icon="ruble" title="История ставки" bodyPad={false} right={e.status === 'active' ? <button className="btn ghost sm" onClick={() => setRateOpen(true)}><Icon name="plus" size={13} />Изменить</button> : undefined}>
+                <div style={{ padding: '14px 14px 12px' }}>
+                  {e.rate_history.length
+                    ? <PayTimeline canDelete={e.status === 'active'} onDelete={onDeleteRate} items={e.rate_history.map((r) => ({ id: r.id, label: fmtRate(r.rate_kopecks), effective_from: r.effective_from, note: r.note, current: r.current }))} />
+                    : <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Ставка ещё не задана</div>}
+                </div>
+                <div style={{ padding: '10px 14px', borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="history" size={12} />Прошлые недели считаются по ставке, действовавшей в тот день
+                </div>
+              </Panel>
+            )
           ) : (
-            <Panel icon="lock" title="Ставка и выплаты">
+            <Panel icon="lock" title={e.comp_type === 'fixed' ? 'Оклад и выплаты' : 'Ставка и выплаты'}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '14px 6px', textAlign: 'center' }}>
                 <div style={{ width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--c-bg-sunken)', color: 'var(--c-text-faint)' }}><Icon name="lock" size={17} /></div>
-                <div style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Доступно только менеджеру</div>
+                <div style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{e.comp_type === 'fixed' ? 'Оклад доступен только администратору' : 'Доступно только менеджеру'}</div>
               </div>
             </Panel>
           )}
@@ -340,6 +380,9 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
       )}
       {rateOpen && showMoney && (
         <RateModal employeeId={empId} employeeName={e.full_name} onClose={() => setRateOpen(false)} onSaved={reload} />
+      )}
+      {salaryOpen && showMoney && (
+        <SalaryModal employeeId={empId} employeeName={e.full_name} onClose={() => setSalaryOpen(false)} onSaved={reload} />
       )}
       {editOpen && (
         <EditEmployeeModal employee={e} onClose={() => setEditOpen(false)} onSaved={reload} />

@@ -16,6 +16,9 @@ const TimesheetEmployeesPage = lazy(() =>
 const TimesheetEmployeeCardPage = lazy(() =>
   import('../pages/TimesheetEmployeeCardPage').then((m) => ({ default: m.TimesheetEmployeeCardPage })),
 )
+const TimesheetCalendarPage = lazy(() =>
+  import('../pages/TimesheetCalendarPage').then((m) => ({ default: m.TimesheetCalendarPage })),
+)
 
 export const timesheetRoutes = [
   <Route key="timesheet-week" path="/timesheet" element={<TimesheetWeekPage />} />,
@@ -23,4 +26,5 @@ export const timesheetRoutes = [
   <Route key="timesheet-payroll" path="/timesheet/payroll" element={<TimesheetPayrollPage />} />,
   <Route key="timesheet-employees" path="/timesheet/employees" element={<TimesheetEmployeesPage />} />,
   <Route key="timesheet-employee" path="/timesheet/employees/:empId" element={<TimesheetEmployeeCardPage />} />,
+  <Route key="timesheet-calendar" path="/timesheet/calendar" element={<TimesheetCalendarPage />} />,
 ]

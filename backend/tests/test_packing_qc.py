@@ -365,6 +365,68 @@ def test_return_from_packing_restores_source_zones(api, client_id):
     assert _zone_qty(client_id, pos, packing_id, "on_packing") == 0
 
 
+def _ready_qty(client_id, pos, zone_id):
+    """Готовый к отгрузке годный (ready/good) позиции в конкретном месте."""
+    with get_connection() as c:
+        bz = get_balances_by_zone(c, client_id=client_id, search=None, only_positive=False)
+    return sum(
+        i.qty for i in bz.items
+        if i.product_id == pos["product_id"] and i.color_id == pos["color_id"]
+        and i.size_id == pos["size_id"] and i.location_id == zone_id
+        and i.op_status == "ready" and i.quality == "good"
+    )
+
+
+def test_partial_place_packed_keeps_on_packing_and_exposes_ready(api, client_id):
+    """Частичное размещение упакованного: отгрузка из упаковки до её завершения.
+
+    Большую задачу пакуют несколько дней; уже упакованное размещаем по местам
+    (packed→ready) — становится доступно к отгрузке (dispatch читает ready), а статус
+    остаётся «На упаковке». Финальное «Готово к рейсу» докладывает остаток.
+    """
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 6, "packed_date": _TODAY})
+
+    # Размещаем упакованные 6 годных по месту — статус остаётся «На упаковке».
+    _as(_WH)
+    r = api.post(f"/shipments/{doc_id}/place-packed", json={
+        "lines": [{"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Готовое-1", "qty": 6}], "defect": []}],
+    })
+    assert r.status_code == 200 and r.json()["moved"] == 6, r.text
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
+    # Размещённое доступно к отгрузке (ready), упаковочный пул не тронут.
+    assert _ready_qty(client_id, pos, good_zone) == 6
+    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    assert line["packed_good"] == 6           # факт упаковки держится
+    assert line["packed_pending_good"] == 0   # всё размещено
+    assert line["available_for_pack"] == 4    # нерешённый пул на столе остался
+
+    # Больше, чем упаковано-не-размещено (pending=0), разместить нельзя.
+    bad = api.post(f"/shipments/{doc_id}/place-packed", json={
+        "lines": [{"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "x", "qty": 1}], "defect": []}],
+    })
+    assert bad.status_code == 400, bad.text
+
+    # Допаковываем остаток и финально размещаем — переходит в «Упаковано».
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 4, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Готовое-1", "qty": 4}], "defect": []},
+    ])
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
+    assert _ready_qty(client_id, pos, good_zone) == 10
+
+
 def test_return_in_on_packing_returns_only_undecided(api, client_id):
     """Откат «На упаковке» возвращает только нерешённый пул; упакованное не трогает."""
     pos = _position()

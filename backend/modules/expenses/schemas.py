@@ -141,6 +141,8 @@ class ExpenseListItem(BaseModel):
     period_end:           str | None = None
     source_kind:          str | None = None
     source_id:            str | None = None
+    salary_subtype:       str | None = None
+    salary_subtype_label: str | None = None
     file_count:           int = 0
     created_at:           str
     created_by_email:     str | None = None
@@ -172,6 +174,7 @@ class ExpenseSummaryResponse(BaseModel):
     total_amount:       int
     total_count:        int
     awaiting_amount:    int = 0
+    awaiting_count:     int = 0
     paid_amount:        int = 0
     by_category:        list[ExpenseSummaryBreakdown]
     by_payment_source:  list[ExpenseSummaryBreakdown]

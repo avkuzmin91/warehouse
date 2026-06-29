@@ -478,14 +478,30 @@ def test_analytics_spreads_rent_over_period(admin_client):
             conn.commit()
 
 
-def test_analytics_manager_scope_excludes_admin_kinds(manager_client):
-    # Менеджер не может явно запросить аренду/ЗП.
-    assert manager_client.get(
-        "/expenses/analytics?date_from=2099-04-01&date_to=2099-04-02&kinds=rent"
-    ).status_code == 403
-    # Без явных типов — область менеджера: аренда и ЗП в разбивке не появляются.
-    a = manager_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-02").json()
-    assert all(k["kind"] not in ("rent", "salary") for k in a["by_kind"])
+def test_analytics_manager_sees_admin_kinds(admin_client, manager_client):
+    # Аналитика расходов НЕ скрывает типы от менеджера: аренду заводит админ,
+    # но в дневной динамике/разбивке менеджер видит её наравне с админом.
+    rent_id = admin_client.post("/expenses", json={
+        "spent_on": "2099-11-01", "name": "Аренда тест видимости", "amount": 300000,
+        "kind": "rent", "payment_status": "awaiting",
+        "period_start": "2099-11-01", "period_end": "2099-11-30",
+    }).json()["message"]
+    try:
+        # Явный запрос админского типа менеджером больше не запрещён.
+        resp = manager_client.get(
+            "/expenses/analytics?date_from=2099-11-01&date_to=2099-11-30&kinds=rent"
+        )
+        assert resp.status_code == 200
+        rent = next(k for k in resp.json()["by_kind"] if k["kind"] == "rent")
+        assert rent["amount"] == 300000
+        # Без явных типов аренда тоже попадает в разбивку менеджера.
+        a = manager_client.get("/expenses/analytics?date_from=2099-11-01&date_to=2099-11-30").json()
+        assert any(k["kind"] == "rent" for k in a["by_kind"])
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM expense_ops WHERE expense_id = ?", (rent_id,))
+            conn.execute("DELETE FROM material_expenses WHERE id = ?", (rent_id,))
+            conn.commit()
 
 
 def test_analytics_rbac_forbids_warehouse(warehouse_client):
@@ -570,39 +586,36 @@ def test_rent_edit_does_not_require_manual_fields(admin_client, dict_ids):
     assert admin_client.get(f"/expenses/{rid}").json()["payment_status"] == "paid"
 
 
-def test_salary_accruals_halves_idempotent(admin_client, manager_client):
+def test_salary_accruals_monthly_idempotent(admin_client, manager_client):
     tag = uuid.uuid4().hex[:8]
     emp = admin_client.post("/employees", json={
         "full_name": f"Оклад-{tag}", "comp_type": "fixed", "fixed_salary_kopecks": 100000,
+        "hired_on": "2026-06-01",
     })
     assert emp.status_code == 200, emp.text
     emp_id = emp.json()["message"]
     try:
         # Менеджер не может запускать начисление (admin-only).
-        assert manager_client.post("/expenses/salary/accruals/run?on_date=2026-06-15").status_code == 403
+        assert manager_client.post("/expenses/salary/accruals/run?on_date=2026-06-01").status_code == 403
 
-        # 15-е число → первая половина оклада, «ожидает оплаты».
-        r1 = admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-15")
+        # 1-е число → одна проводка на весь июнь, полный оклад, «ожидает оплаты».
+        r1 = admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-01")
         assert r1.status_code == 200, r1.text
         assert r1.json()["created"] >= 1
-        # Повтор той же даты — без дублей.
-        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-15").json()["created"] == 0
 
         items = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
         mine = [e for e in items if e.get("source_id") == emp_id and e["period_start"] == "2026-06-01"]
         assert len(mine) == 1
         assert mine[0]["payment_status"] == "awaiting"
-        assert mine[0]["amount"] == 50000               # 1/2 от 1000 ₽
+        assert mine[0]["amount"] == 100000              # полный месяц = оклад
+        assert mine[0]["period_end"] == "2026-06-30"
 
-        # Последний день месяца (июнь → 30-е) → вторая половина.
-        admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-30")
-        items2 = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
-        mine2 = [e for e in items2 if e.get("source_id") == emp_id and e["period_start"] == "2026-06-16"]
-        assert len(mine2) == 1 and mine2[0]["amount"] == 50000
-
-        # Прочие даты (в т.ч. 1-е) — ничего не начисляется.
+        # Любой повтор в том же месяце — без дублей (одна проводка на месяц).
         assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-01").json()["created"] == 0
-        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-10").json()["created"] == 0
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-15").json()["created"] == 0
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-30").json()["created"] == 0
+        again = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        assert len([e for e in again if e.get("source_id") == emp_id and e["period_start"] == "2026-06-01"]) == 1
     finally:
         with get_connection() as conn:
             ids = [r["id"] for r in conn.execute(
@@ -613,8 +626,107 @@ def test_salary_accruals_halves_idempotent(admin_client, manager_client):
                 conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
             conn.execute("DELETE FROM material_expenses WHERE source_kind='employee' AND source_id=?", (emp_id,))
             conn.execute("DELETE FROM employee_rates WHERE employee_id=?", (emp_id,))
+            conn.execute("DELETE FROM employee_salaries WHERE employee_id=?", (emp_id,))
             conn.execute("DELETE FROM employees WHERE id=?", (emp_id,))
             conn.commit()
+
+
+def test_salary_effective_dated_accrual_and_history(admin_client):
+    tag = uuid.uuid4().hex[:8]
+    # Оклад 150 000 ₽ с серединой месяца (27.06) → начисление пропорционально рабочим дням
+    # от даты начала оклада, а не за весь месяц.
+    emp = admin_client.post("/employees", json={
+        "full_name": f"Окл2-{tag}", "comp_type": "fixed",
+        "fixed_salary_kopecks": 15000000, "salary_from": "2026-06-27",
+    })
+    assert emp.status_code == 200, emp.text
+    emp_id = emp.json()["message"]
+    try:
+        # Стартовый оклад лёг одной записью истории с датой начала 27.06.
+        detail = admin_client.get(f"/employees/{emp_id}").json()
+        assert len(detail["salary_history"]) == 1
+        assert detail["salary_history"][0]["effective_from"] == "2026-06-27"
+        assert detail["salary_history"][0]["salary_kopecks"] == 15000000
+        wrong_id = detail["salary_history"][0]["id"]
+
+        # Начисление за июнь = доля за рабочие дни с 27.06 (3 рабочих дня из 26) = 1 730 769 коп.
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-30").status_code == 200
+        items = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        mine = [e for e in items if e.get("source_id") == emp_id and e["period_start"] == "2026-06-01"]
+        assert len(mine) == 1
+        assert mine[0]["amount"] == 1730769
+
+        # Исправление даты начала оклада: добавляем запись с 01.06, удаляем ошибочную с 27.06.
+        assert admin_client.post(f"/employees/{emp_id}/salaries", json={
+            "salary_kopecks": 15000000, "effective_from": "2026-06-01",
+        }).status_code == 200
+        assert admin_client.delete(f"/employees/{emp_id}/salaries/{wrong_id}").status_code == 200
+        assert admin_client.delete(f"/employees/{emp_id}/salaries/{wrong_id}").status_code == 404
+
+        d2 = admin_client.get(f"/employees/{emp_id}").json()
+        assert len(d2["salary_history"]) == 1
+        assert d2["salary_history"][0]["effective_from"] == "2026-06-01"
+        assert d2["fixed_salary_kopecks"] == 15000000   # кэш «оклад на сегодня» пересчитан
+
+        # Свежий окладник с датой начала 01.06 → полный месяц = оклад (1-е число).
+        emp2 = admin_client.post("/employees", json={
+            "full_name": f"Окл3-{tag}", "comp_type": "fixed",
+            "fixed_salary_kopecks": 15000000, "salary_from": "2026-06-01",
+        }).json()["message"]
+        try:
+            assert admin_client.post("/expenses/salary/accruals/run?on_date=2026-06-01").status_code == 200
+            it2 = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+            full = [e for e in it2 if e.get("source_id") == emp2 and e["period_start"] == "2026-06-01"]
+            assert len(full) == 1
+            assert full[0]["amount"] == 15000000
+        finally:
+            _purge_employee(emp2)
+    finally:
+        _purge_employee(emp_id)
+
+
+def test_salary_reaccrual_after_cancel(admin_client):
+    tag = uuid.uuid4().hex[:8]
+    # Сценарий пользователя: начислили оклад, аннулировали проводку, начисляем заново —
+    # отменённая проводка НЕ должна блокировать повторное начисление (дедуп игнорит cancelled).
+    emp = admin_client.post("/employees", json={
+        "full_name": f"Окл4-{tag}", "comp_type": "fixed",
+        "fixed_salary_kopecks": 15000000, "salary_from": "2031-03-01",
+    }).json()["message"]
+    try:
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-01").status_code == 200
+        items = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        mine = [e for e in items if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
+        assert len(mine) == 1
+        exp_id = mine[0]["id"]
+
+        # Повтор без отмены — дубля нет.
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-10").json()["created"] == 0
+
+        # Аннулируем и начисляем заново → появляется свежая проводка.
+        assert admin_client.post(f"/expenses/{exp_id}/cancel").status_code == 200
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-10").json()["created"] == 1
+        again = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        rows = [e for e in again if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
+        assert len(rows) == 2  # одно аннулированное + одно новое
+        assert sorted(e["payment_status"] for e in rows) == ["awaiting", "cancelled"]
+    finally:
+        _purge_employee(emp)
+
+
+def _purge_employee(emp_id: str) -> None:
+    with get_connection() as conn:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM material_expenses WHERE source_kind='employee' AND source_id=?",
+            (emp_id,),
+        ).fetchall()]
+        for eid in ids:
+            conn.execute("DELETE FROM expense_ops WHERE expense_id=?", (eid,))
+        conn.execute("DELETE FROM material_expenses WHERE source_kind='employee' AND source_id=?", (emp_id,))
+        conn.execute("DELETE FROM employee_rates WHERE employee_id=?", (emp_id,))
+        conn.execute("DELETE FROM employee_salaries WHERE employee_id=?", (emp_id,))
+        conn.execute("DELETE FROM employees WHERE id=?", (emp_id,))
+        conn.commit()
 
 
 def test_rent_accruals_per_warehouse_idempotent(admin_client, manager_client):

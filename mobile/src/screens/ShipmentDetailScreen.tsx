@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
+import { useAuth } from '../auth/AuthContext'
 import { useNav } from '../nav/NavContext'
 import { getUnloadingZones, type Zone } from '../api/lookupsApi'
 import { getBalancesByZone, type ZoneBalance } from '../api/balancesApi'
@@ -9,6 +10,8 @@ import {
   finishRelocation,
   getShipment,
   moveLineToPacking,
+  placePackedShipment,
+  rejectShipment,
   returnLineFromPacking,
   SHIPMENT_STATUS_LABELS,
   type MoveAllocation,
@@ -18,7 +21,9 @@ import {
 } from '../api/shipmentsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
+import { TextArea } from '../components/TextArea'
 import { ZoneField } from '../components/ZoneField'
+import { canAcceptPackingTask } from '../utils/access'
 import { fmtDate, variantTitle } from '../utils/format'
 
 type Row = { zoneId: string; qty: number }
@@ -34,6 +39,7 @@ function sumRows(rows: Row[]): number {
 
 export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
   const { back } = useNav()
+  const { user } = useAuth()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [zoneBalances, setZoneBalances] = useState<ZoneBalance[]>([])
@@ -45,8 +51,13 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
   const [moveRows, setMoveRows] = useState<Record<string, Row[]>>({})
   const [goodRows, setGoodRows] = useState<Record<string, Row[]>>({})
   const [defectRows, setDefectRows] = useState<Record<string, Row[]>>({})
+  // Частичное размещение упакованного по местам прямо на упаковке (good).
+  const [placeRows, setPlaceRows] = useState<Record<string, Row[]>>({})
   const [showErrors, setShowErrors] = useState(false)
   const [returnLine, setReturnLine] = useState<ShipmentLine | null>(null)
+  // Отклонение задачи упаковки на приёмке (assigned → draft): обязательная причина.
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
 
   const load = useCallback(
     (signal?: AbortSignal) => {
@@ -65,11 +76,19 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
             const g: Record<string, Row[]> = {}
             const df: Record<string, Row[]> = {}
             for (const l of d.lines) {
-              if (l.packed_good > 0) g[l.id] = [{ zoneId: '', qty: l.packed_good }]
-              if (l.packed_defect > 0) df[l.id] = [{ zoneId: '', qty: l.packed_defect }]
+              // Раскладываем только ещё не размещённое (часть могла уехать в ready раньше).
+              if (l.packed_pending_good > 0) g[l.id] = [{ zoneId: '', qty: l.packed_pending_good }]
+              if (l.packed_pending_defect > 0) df[l.id] = [{ zoneId: '', qty: l.packed_pending_defect }]
             }
             setGoodRows(g)
             setDefectRows(df)
+          }
+          if (d.status === 'on_packing' && d.cargo_type === 'good') {
+            const p: Record<string, Row[]> = {}
+            for (const l of d.lines) {
+              if (l.packed_pending_good > 0) p[l.id] = [{ zoneId: '', qty: l.packed_pending_good }]
+            }
+            setPlaceRows(p)
           }
         })
         .catch((err) => {
@@ -203,8 +222,36 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     }
   }
 
+  // Для финальной раскладки берём ещё не размещённое (pending): часть могла уехать в
+  // ready раньше частичным «Разместить готовое» — её повторно раскладывать не нужно.
+  async function placeLinePacked(line: ShipmentLine) {
+    const rows = placeRows[line.id] ?? []
+    const filled = rows.filter((r) => r.zoneId && r.qty > 0)
+    if (filled.length === 0) {
+      setError('Выберите место и количество')
+      return
+    }
+    if (sumRows(filled) > line.packed_pending_good) {
+      setError(`Нельзя разместить больше упакованного (${line.packed_pending_good} шт.)`)
+      return
+    }
+    const good = filled.map((r) => ({ zone_id: r.zoneId, zone_name: zoneName(r.zoneId), qty: r.qty }))
+    const placeKey = `place:${line.id}`
+    setSavingLine(line.id)
+    setError('')
+    try {
+      await placePackedShipment(shipmentId, [{ line_id: line.id, good, defect: [] }], requestIdFor(placeKey))
+      delete reqIds.current[placeKey]
+      reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось разместить')
+    } finally {
+      setSavingLine(null)
+    }
+  }
+
   const packedLines = useMemo(
-    () => (doc?.lines ?? []).filter((l) => l.packed_good > 0 || l.packed_defect > 0),
+    () => (doc?.lines ?? []).filter((l) => l.packed_pending_good > 0 || l.packed_pending_defect > 0),
     [doc],
   )
 
@@ -212,18 +259,37 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     void runAction(() => advanceShipment(shipmentId, requestIdFor('advance')), 'advance')
   }
 
+  async function doReject() {
+    const reason = rejectReason.trim()
+    if (!reason || saving || savingLine) return
+    setSaving(true)
+    setError('')
+    try {
+      await rejectShipment(shipmentId, reason)
+      setRejectOpen(false)
+      setRejectReason('')
+      reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отклонить задачу')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const canAccept = doc?.status === 'assigned' && canAcceptPackingTask(user?.role)
+
   function handleFinishRelocation() {
     const reasons: string[] = []
     for (const l of packedLines) {
-      if (l.packed_good > 0) {
+      if (l.packed_pending_good > 0) {
         const rows = goodRows[l.id] ?? []
         if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место для годного «${l.product_name}»`)
-        if (sumRows(rows) !== l.packed_good) reasons.push(`Разложите весь годный «${l.product_name}» (нужно ${l.packed_good})`)
+        if (sumRows(rows) !== l.packed_pending_good) reasons.push(`Разложите весь годный «${l.product_name}» (нужно ${l.packed_pending_good})`)
       }
-      if (l.packed_defect > 0) {
+      if (l.packed_pending_defect > 0) {
         const rows = defectRows[l.id] ?? []
         if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место для брака «${l.product_name}»`)
-        if (sumRows(rows) !== l.packed_defect) reasons.push(`Разложите весь брак «${l.product_name}» (нужно ${l.packed_defect})`)
+        if (sumRows(rows) !== l.packed_pending_defect) reasons.push(`Разложите весь брак «${l.product_name}» (нужно ${l.packed_pending_defect})`)
       }
     }
     if (reasons.length) {
@@ -235,8 +301,8 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
       rows.filter((r) => r.zoneId && r.qty > 0).map((r) => ({ zone_id: r.zoneId, zone_name: zoneName(r.zoneId), qty: r.qty }))
     const lines: RelocateLine[] = packedLines.map((l) => ({
       line_id: l.id,
-      good: l.packed_good > 0 ? toAlloc(goodRows[l.id] ?? []) : [],
-      defect: l.packed_defect > 0 ? toAlloc(defectRows[l.id] ?? []) : [],
+      good: l.packed_pending_good > 0 ? toAlloc(goodRows[l.id] ?? []) : [],
+      defect: l.packed_pending_defect > 0 ? toAlloc(defectRows[l.id] ?? []) : [],
     }))
     void runAction(() => finishRelocation(shipmentId, lines, requestIdFor('finish')), 'finish')
   }
@@ -288,7 +354,49 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
               </div>
             )}
 
-            {doc.status === 'packing' ? (
+            {doc.status === 'assigned' ? (
+              <>
+                <div className="sec">
+                  Состав задачи
+                  <span className="sec-count">{doc.lines.length} SKU</span>
+                </div>
+                {doc.lines.map((l) => (
+                  <div key={l.id} className="line">
+                    <div className="line-name">{lineTitle(l)}</div>
+                    <div className="line-head">
+                      <span className="line-sub mono">{l.product_sku}</span>
+                      <span className="line-sub">{l.qty} шт</span>
+                    </div>
+                  </div>
+                ))}
+                {canAccept ? (
+                  <div className="actionbar">
+                    {error && (
+                      <div className="alert">
+                        <Icon name="alert" size={15} />
+                        {error}
+                      </div>
+                    )}
+                    <button className="btn" disabled={saving} onClick={handleAdvance}>
+                      {saving ? '…' : <><Icon name="check" size={18} /> Принять в работу</>}
+                    </button>
+                    <button className="btn ghost" disabled={saving} onClick={() => { setError(''); setRejectOpen(true) }}>
+                      <Icon name="x" size={18} /> Отклонить
+                    </button>
+                  </div>
+                ) : (
+                  <div className="center">
+                    <div className="center-ico">
+                      <Icon name="box" size={26} />
+                    </div>
+                    <div>Ожидает принятия начальником склада.</div>
+                    <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
+                      Назад
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : doc.status === 'packing' ? (
               <>
                 <div className="sec">Передача на упаковку</div>
                 {doc.lines.map((l) => {
@@ -429,11 +537,11 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                       <div key={l.id} className="line">
                         <div className="line-name">{lineTitle(l)}</div>
                         <div className="line-sub mono">{l.product_sku}</div>
-                        {l.packed_good > 0 && (
+                        {l.packed_pending_good > 0 && (
                           <KindRows
                             title="Годный"
                             tone="var(--c-success)"
-                            target={l.packed_good}
+                            target={l.packed_pending_good}
                             rows={goodRows[l.id] ?? []}
                             zones={zones}
                             showErrors={showErrors}
@@ -441,11 +549,11 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                             onChange={(rows) => setGoodRows((p) => ({ ...p, [l.id]: rows }))}
                           />
                         )}
-                        {l.packed_defect > 0 && (
+                        {l.packed_pending_defect > 0 && (
                           <KindRows
                             title="Брак"
                             tone="var(--c-danger)"
-                            target={l.packed_defect}
+                            target={l.packed_pending_defect}
                             rows={defectRows[l.id] ?? []}
                             zones={zones}
                             showErrors={showErrors}
@@ -473,6 +581,63 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                   Назад
                 </button>
               </div>
+            ) : doc.status === 'on_packing' && doc.cargo_type === 'good' ? (
+              (() => {
+                const placeable = doc.lines.filter((l) => l.packed_pending_good > 0)
+                return (
+                  <>
+                    <div className="sec">Разместить готовое к отгрузке</div>
+                    <div className="line-sub" style={{ padding: '0 2px 8px' }}>
+                      Упаковка идёт у начальника смены. Уже упакованный годный можно разложить
+                      по местам — он станет доступен к отгрузке, не дожидаясь конца упаковки.
+                    </div>
+                    {placeable.length === 0 ? (
+                      <div className="center">
+                        <div className="center-ico">
+                          <Icon name="box" size={26} />
+                        </div>
+                        <div>Пока нечего размещать — нет упакованного годного.</div>
+                        <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
+                          Назад
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {placeable.map((l) => (
+                          <div key={l.id} className="line">
+                            <div className="line-name">{lineTitle(l)}</div>
+                            <div className="line-sub mono">{l.product_sku}</div>
+                            <KindRows
+                              title="Готовое"
+                              tone="var(--c-success)"
+                              target={l.packed_pending_good}
+                              rows={placeRows[l.id] ?? []}
+                              zones={zones}
+                              showErrors={showErrors}
+                              onError={setError}
+                              onChange={(rows) => setPlaceRows((p) => ({ ...p, [l.id]: rows }))}
+                            />
+                            <button
+                              className="btn sm"
+                              style={{ marginTop: 8 }}
+                              disabled={savingLine === l.id}
+                              onClick={() => void placeLinePacked(l)}
+                            >
+                              {savingLine === l.id ? '…' : <><Icon name="check" size={16} /> Разместить</>}
+                            </button>
+                          </div>
+                        ))}
+                        {error && (
+                          <div className="alert">
+                            <Icon name="alert" size={15} />
+                            {error}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )
+              })()
             ) : doc.status === 'on_packing' ? (
               <div className="center">
                 <div className="center-ico">
@@ -513,6 +678,38 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
               </button>
               <button className="btn" disabled={savingLine === returnLine.id} onClick={() => void doReturnFromPacking()}>
                 {savingLine === returnLine.id ? '…' : 'Вернуть'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rejectOpen && (
+        <div className="sheet-backdrop" onClick={() => { if (!saving) setRejectOpen(false) }}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-grip" />
+            <h3>Отклонить задачу?</h3>
+            <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+              Задача вернётся менеджеру на доработку. Укажите причину отклонения.
+            </p>
+            <TextArea
+              value={rejectReason}
+              onChange={setRejectReason}
+              placeholder="Причина отклонения…"
+              minRows={3}
+            />
+            {error && (
+              <div className="alert" style={{ marginTop: 10 }}>
+                <Icon name="alert" size={15} />
+                {error}
+              </div>
+            )}
+            <div className="dtf-actions">
+              <button className="btn ghost" disabled={saving} onClick={() => setRejectOpen(false)}>
+                Отмена
+              </button>
+              <button className="btn danger" disabled={saving || !rejectReason.trim()} onClick={() => void doReject()}>
+                {saving ? '…' : 'Отклонить'}
               </button>
             </div>
           </div>

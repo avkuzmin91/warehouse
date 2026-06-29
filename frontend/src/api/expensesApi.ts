@@ -8,6 +8,8 @@ export type ExpenseDictItem = { id: string; name: string }
 
 export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring'
 export type ExpensePaymentStatus = 'awaiting' | 'partially_paid' | 'paid' | 'cancelled'
+// Подтип ЗП (производный от source_kind): оклад vs табель — разносим на витринах, чтобы не смешивались.
+export type SalarySubtype = 'fixed' | 'timesheet'
 
 export type ExpenseOpType =
   | 'create' | 'update' | 'delete' | 'restore' | 'file_add' | 'file_delete'
@@ -68,6 +70,8 @@ export type ExpenseListItem = {
   period_end: string | null
   source_kind: string | null
   source_id: string | null
+  salary_subtype: SalarySubtype | null
+  salary_subtype_label: string | null
   file_count: number
   created_at: string
   created_by_email: string | null
@@ -99,6 +103,7 @@ export type ExpenseSummary = {
   total_amount: number
   total_count: number
   awaiting_amount: number
+  awaiting_count: number
   paid_amount: number
   by_category: ExpenseSummaryBreakdown[]
   by_payment_source: ExpenseSummaryBreakdown[]
@@ -181,6 +186,7 @@ export type ExpenseListParams = {
   kind?: string
   kinds?: string
   payment_status?: string
+  salary_subtype?: string
 }
 
 export type ExpenseSummaryParams = Omit<ExpenseListParams, 'page' | 'limit'>
@@ -199,6 +205,7 @@ function expenseQuery(params: ExpenseListParams): string {
   if (params.kind) sp.set('kind', params.kind)
   if (params.kinds) sp.set('kinds', params.kinds)
   if (params.payment_status) sp.set('payment_status', params.payment_status)
+  if (params.salary_subtype) sp.set('salary_subtype', params.salary_subtype)
   const q = sp.toString()
   return q ? `?${q}` : ''
 }
@@ -268,6 +275,11 @@ export function runSalaryAccruals(onDate?: string) {
   return request<{ created: number; on_date: string }>(`/expenses/salary/accruals/run${q}`, { method: 'POST' })
 }
 
+export function runRentAccruals(onDate?: string) {
+  const q = onDate ? `?on_date=${onDate}` : ''
+  return request<{ created: number; on_date: string }>(`/expenses/rent/accruals/run${q}`, { method: 'POST' })
+}
+
 export function uploadExpenseFile(expenseId: string, file: File) {
   const form = new FormData()
   form.append('file', file)
@@ -326,6 +338,11 @@ export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
   rent: 'Аренда',
   salary: 'Зарплата',
   recurring: 'Регулярный',
+}
+
+export const SALARY_SUBTYPE_LABELS: Record<SalarySubtype, string> = {
+  fixed: 'Оклад (фикс)',
+  timesheet: 'Табель (почасовая)',
 }
 
 export const EXPENSE_PAYMENT_STATUS_LABELS: Record<ExpensePaymentStatus, string> = {

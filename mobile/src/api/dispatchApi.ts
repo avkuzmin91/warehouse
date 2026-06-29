@@ -165,6 +165,27 @@ export function advanceDispatch(id: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
 }
 
+/** Зарезервированный к отгрузке остаток по варианту (уже обещан незакрытым отгрузкам). */
+export type DispatchReservation = {
+  product_id: string
+  color_id: string | null
+  size_id: string | null
+  reserved: number
+}
+
+/** Резервы по вариантам для клиента/типа груза — витрина показывает свободный, а не
+ *  валовой остаток (тот же резерв вычитает серверный гейт «В ожидание рейса»). */
+export function getDispatchReservations(
+  params: { client_id?: string; cargo_type?: DispatchCargoType } = {},
+  signal?: AbortSignal,
+): Promise<{ items: DispatchReservation[] }> {
+  const sp = new URLSearchParams()
+  if (params.client_id)  sp.set('client_id', params.client_id)
+  if (params.cargo_type) sp.set('cargo_type', params.cargo_type)
+  const q = sp.toString()
+  return request<{ items: DispatchReservation[] }>(`/dispatches/reservations${q ? `?${q}` : ''}`, { signal })
+}
+
 // --- API functions ---
 export function getDispatches(params: DispatchListParams = {}, signal?: AbortSignal): Promise<DispatchListResponse> {
   const sp = new URLSearchParams()

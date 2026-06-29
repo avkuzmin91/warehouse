@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getPlannableItems, type PlannableItem, type InvQuality } from '../../api/balancesApi'
+import { getDispatchReservations, type DispatchCargoType } from '../../api/dispatchApi'
 import { balanceKey } from '../../utils/balanceKey'
 import { Icon } from '../../components/Icon'
 
@@ -32,7 +33,9 @@ export function BalancePickerSheet({
   onAddMany: (rows: { item: PlannableItem; qty: number }[]) => void
   onClose: () => void
 }) {
+  const isDispatch = source === 'dispatch'
   const [items, setItems] = useState<PlannableItem[]>([])
+  const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -41,12 +44,26 @@ export function BalancePickerSheet({
   useEffect(() => {
     const ac = new AbortController()
     setLoading(true)
-    getPlannableItems({ client_id: clientId, cargo_type: cargoType, limit: 500 }, ac.signal)
-      .then((res) => { if (!ac.signal.aborted) setItems(res.items) })
+    const reservedP = isDispatch
+      ? getDispatchReservations({ client_id: clientId, cargo_type: cargoType as DispatchCargoType }, ac.signal)
+          .then((r) => r.items)
+          .catch(() => [])
+      : Promise.resolve([] as Awaited<ReturnType<typeof getDispatchReservations>>['items'])
+    Promise.all([
+      getPlannableItems({ client_id: clientId, cargo_type: cargoType, limit: 500 }, ac.signal),
+      reservedP,
+    ])
+      .then(([res, reservations]) => {
+        if (ac.signal.aborted) return
+        const map: Record<string, number> = {}
+        for (const rv of reservations) map[balanceKey(rv)] = rv.reserved
+        setReservedMap(map)
+        setItems(res.items)
+      })
       .catch((err) => { if (!ac.signal.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить остатки') })
       .finally(() => { if (!ac.signal.aborted) setLoading(false) })
     return () => ac.abort()
-  }, [clientId, cargoType])
+  }, [clientId, cargoType, isDispatch])
 
   const existing = useMemo(() => new Set(existingKeys), [existingKeys])
 
@@ -57,9 +74,10 @@ export function BalancePickerSheet({
     return base.filter((b) => fold(`${b.product_name} ${variantLabel(b)}`).includes(needle))
   }, [items, search, existing])
 
-  const dispatchGood = source === 'dispatch' && cargoType !== 'defect'
+  const dispatchGood = isDispatch && cargoType !== 'defect'
   function ready(b: PlannableItem): number {
-    return dispatchGood ? b.ready_good : 0
+    // «Готов к отгрузке» = разложенное ready + упакованное на столе (packed) — оба отгружаемы.
+    return dispatchGood ? b.ready_good + (b.packed_good ?? 0) : 0
   }
   function storage(b: PlannableItem): number {
     return cargoType === 'defect' ? b.storage_defect : b.storage_good
@@ -67,14 +85,30 @@ export function BalancePickerSheet({
   function transitOf(b: PlannableItem): number {
     return cargoType === 'defect' ? 0 : b.in_transit
   }
+  function reservedOf(b: PlannableItem): number {
+    return isDispatch ? (reservedMap[balanceKey(b)] ?? 0) : 0
+  }
+  // Валовый источник отгрузки (до вычета резерва): упаковано для годного, склад — иначе.
+  function grossSrc(b: PlannableItem): number {
+    return dispatchGood ? ready(b) : storage(b)
+  }
+  // Свободно к передаче в подготовку сейчас: источник минус резерв.
+  function free(b: PlannableItem): number {
+    return Math.max(0, grossSrc(b) - reservedOf(b))
+  }
   function cap(b: PlannableItem): number {
     return ready(b) + storage(b) + transitOf(b)
   }
   function stockChips(b: PlannableItem): { label: string; value: number; tone: string }[] {
     const out: { label: string; value: number; tone: string }[] = []
-    if (dispatchGood) {
-      out.push({ label: 'упаковано', value: ready(b), tone: 'success' })
-      if (storage(b) > 0) out.push({ label: 'склад', value: storage(b), tone: 'accent' })
+    if (isDispatch) {
+      out.push({ label: 'свободно', value: free(b), tone: 'success' })
+      const r = reservedOf(b)
+      if (r > 0) {
+        out.push({ label: cargoType === 'defect' ? 'брак' : 'упаковано', value: grossSrc(b), tone: 'accent' })
+        out.push({ label: 'в резерве', value: r, tone: 'warning' })
+      }
+      if (dispatchGood && storage(b) > 0) out.push({ label: 'склад', value: storage(b), tone: 'accent' })
     } else {
       out.push(
         cargoType === 'defect'

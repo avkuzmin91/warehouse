@@ -190,6 +190,77 @@ def _create_defect(admin_client, client_id, product_id, sku, qty) -> str:
     return r.json()["message"]
 
 
+def _seed_packed(client_id: str, *, product_id: str, sku: str, qty: int, shipment_line_id: str):
+    """Засеять «Упаковано» (packing → packed/good@зона упаковки) с привязкой к строке упаковки."""
+    from modules.balances.service import insert_inventory_move, get_packing_zone
+
+    with get_connection() as conn:
+        pk_id, pk_name = get_packing_zone(conn)
+        insert_inventory_move(
+            conn,
+            product_id=product_id, product_name="Product", product_sku=sku,
+            color_id=None, color_name=None, size_id=None, size_name=None,
+            client_id=client_id, client_name="Test Client",
+            from_op="packing", to_op="packed",
+            from_quality="good", to_quality="good",
+            from_zone_id=pk_id, from_zone_name=pk_name,
+            to_zone_id=pk_id, to_zone_name=pk_name,
+            qty=qty, user_id="test-admin-id", shipment_line_id=shipment_line_id,
+        )
+        conn.commit()
+    return pk_id, pk_name
+
+
+def _packed_net(client_id: str, product_id: str) -> int:
+    from modules.balances.service import get_available_total
+
+    with get_connection() as conn:
+        return get_available_total(
+            conn, product_id=product_id, color_id=None, size_id=None,
+            client_id=client_id, op="packed", quality="good",
+        )
+
+
+def test_dispatch_from_packed_unplaced(admin_client, client_id):
+    """Отгрузка из упакованного, но ещё не размещённого товара (packed).
+
+    Менеджер выбирает упакованное (packed виден в plannable), передаёт в подготовку,
+    кладовщик берёт его из «Зоны упаковки» → «Готов к отгрузке». Списание packed
+    атрибутируется к строке упаковки (shipment_line_id), чтобы финальная раскладка
+    задачи упаковки не переразложила уже отгруженное.
+    """
+    pid = _make_product(client_id, sku="DSP-PK")
+    sl1 = str(uuid.uuid4())  # строка задачи упаковки, произведшая packed
+    pk_id, pk_name = _seed_packed(client_id, product_id=pid, sku="DSP-PK", qty=10, shipment_line_id=sl1)
+
+    # 1. Упакованное видно в окне выбора отгрузки (plannable.packed_good).
+    pl = admin_client.get(f"/balances/plannable?client_id={client_id}&cargo_type=good").json()
+    item = next(i for i in pl["items"] if i["product_id"] == pid)
+    assert item["packed_good"] == 10, item
+
+    # 2. Создаём отгрузку на 6 и передаём в подготовку — гейт пускает (packed = источник).
+    doc_id = _create(admin_client, client_id, pid, "DSP-PK", 6)
+    adv = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert adv.status_code == 200 and adv.json()["message"] == "preparing", adv.text
+
+    # 3. Кладовщик готовит отгрузку, источник — «Зона упаковки» (packed).
+    lines = admin_client.get(f"/dispatches/{doc_id}").json()["lines"]
+    body = {"lines": [{"line_id": lines[0]["id"], "sources": [{"zone_id": pk_id, "zone_name": pk_name, "qty": 6}]}]}
+    fin = admin_client.post(f"/dispatches/{doc_id}/finish-preparation", json=body)
+    assert fin.status_code == 200, fin.text
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "awaiting_trip"
+
+    # 4. 6 ушло packed → ready (доступно к рейсу), 4 осталось упакованным.
+    assert _ready_net(client_id, pid) == 6
+    assert _packed_net(client_id, pid) == 4
+
+    # 5. Списание packed атрибутировано к строке упаковки: её ещё-не-размещённое = 4,
+    #    значит финальное «Готово к рейсу» разложит только остаток (без переразложения).
+    from modules.shipments.service import line_packed_pending
+    with get_connection() as conn:
+        assert line_packed_pending(conn, sl1)["good"] == 4
+
+
 def test_create_dispatch_returns_doc_id(admin_client, client_id):
     pid = _make_product(client_id, sku="DSP-T1")
     doc_id = _create(admin_client, client_id, pid, "DSP-T1", 3)
@@ -313,6 +384,23 @@ def test_reservation_blocks_second_dispatch(admin_client, client_id):
     assert admin_client.post(f"/dispatches/{doc_b}/advance").status_code == 400
 
 
+def test_reservations_endpoint_reports_reserved(admin_client, client_id):
+    """`/dispatches/reservations` отдаёт остаток, обещанный незакрытым отгрузкам —
+    витрина подбора вычитает его из валового «упаковано»."""
+    pid = _make_product(client_id, sku="DSP-T6")
+    _seed_ready(client_id, product_id=pid, sku="DSP-T6", qty=8)
+    # пока ничего не зафиксировано — резерва нет
+    r0 = admin_client.get("/dispatches/reservations", params={"client_id": client_id, "cargo_type": "good"})
+    assert r0.status_code == 200, r0.text
+    assert all(it["product_id"] != pid for it in r0.json()["items"])
+    # фиксируем отгрузку на 3 → она держит резерв в awaiting_trip-цепочке
+    doc_id = _create(admin_client, client_id, pid, "DSP-T6", 3)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    r1 = admin_client.get("/dispatches/reservations", params={"client_id": client_id, "cargo_type": "good"})
+    hit = [it for it in r1.json()["items"] if it["product_id"] == pid]
+    assert hit and hit[0]["reserved"] == 3, r1.text
+
+
 def test_consume_marks_shipped_and_fully_shipped(admin_client, client_id):
     from modules.dispatch.service import consume_stock_for_dispatch, dispatch_fully_shipped
 
@@ -373,6 +461,29 @@ def test_lines_editable_only_in_draft(admin_client, client_id):
         "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1,
     })
     assert blocked.status_code == 400, blocked.text
+
+
+def test_pallets_editable_after_advance(admin_client, client_id):
+    # Палеты правятся на любом не-черновом статусе (тут — «Подготовка отгрузки»).
+    pid = _make_product(client_id, sku="DSP-PAL")
+    _seed_ready(client_id, product_id=pid, sku="DSP-PAL", qty=3)
+    doc_id = _create(admin_client, client_id, pid, "DSP-PAL", 3)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    r = admin_client.patch(f"/dispatches/{doc_id}/lines/{line['id']}/pallets", json={"pallets_qty": 7})
+    assert r.status_code == 200, r.text
+    updated = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert updated["pallets_qty"] == 7
+
+
+def test_pallets_blocked_on_cancelled(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-PAL2")
+    _seed_ready(client_id, product_id=pid, sku="DSP-PAL2", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-PAL2", 2)
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert admin_client.post(f"/dispatches/{doc_id}/cancel").status_code == 200
+    r = admin_client.patch(f"/dispatches/{doc_id}/lines/{line['id']}/pallets", json={"pallets_qty": 5})
+    assert r.status_code == 400, r.text
 
 
 def test_sku_pending_blocks_advance(admin_client, client_id):

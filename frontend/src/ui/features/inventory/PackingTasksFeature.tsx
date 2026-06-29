@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listShipments,
-  advanceShipment,
   isShipmentOverdue,
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STATUS_TONES,
@@ -25,7 +24,7 @@ import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../ut
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
-import { canAcceptPackingTask, canCreateDocuments, canEditShipmentPlanning, canEditShipments } from '../../../utils/access'
+import { canCreateDocuments, canEditShipments } from '../../../utils/access'
 
 const PAGE_SIZE = 25
 
@@ -35,11 +34,6 @@ const MODE_TABS: { id: ModeId; label: string }[] = [
   { id: 'docs',  label: 'По документам' },
   { id: 'items', label: 'По товарам' },
 ]
-
-const ADVANCE_LABELS: Partial<Record<ShipmentStatus, string>> = {
-  draft:    'Поставить задачу',
-  assigned: 'Принять в работу',
-}
 
 function shipmentProgress(item: ShipmentListItem) {
   const totalQty = item.total_qty || 0
@@ -74,12 +68,6 @@ export function PackingTasksFeature() {
   const { user } = useCurrentUser()
   const canEdit = canEditShipments(user)
   const canCreate = canCreateDocuments(user)
-  const canPlanShipment = canEditShipmentPlanning(user)
-  const canAcceptTask = canAcceptPackingTask(user)
-  // Инлайн-переход из списка: постановку (draft) делает менеджер, приёмку (assigned) —
-  // начальник склада/менеджер. Прочие статусы продвигаются из деталки.
-  const canAdvanceRow = (s: ShipmentStatus) =>
-    (s === 'draft' && canPlanShipment) || (s === 'assigned' && canAcceptTask)
 
   const [mode, setMode] = useFilterParam('mode', 'docs')
   const [search, setSearch] = useFilterParam('search', '')
@@ -96,7 +84,6 @@ export function PackingTasksFeature() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [initialLoading, setInitialLoading] = useState(true)
-  const [advancingId, setAdvancingId] = useState<string | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
   const { clients } = useLookups()
@@ -146,17 +133,6 @@ export function PackingTasksFeature() {
       })
     return () => ctrl.abort()
   }, [mode, page, search, skuFilter, clientId, statusParam, overdueParam, cargoParam, dateFrom, dateTo, reloadTick])
-
-  async function handleAdvance(e: React.MouseEvent, item: ShipmentListItem) {
-    e.stopPropagation()
-    setAdvancingId(item.id)
-    try {
-      await advanceShipment(item.id)
-      setReloadTick((t) => t + 1)
-    } finally {
-      setAdvancingId(null)
-    }
-  }
 
   function handlePrioritySaved(id: string, priorityRank: number | null) {
     setItems((prev) => prev.map((item) => (
@@ -384,21 +360,9 @@ export function PackingTasksFeature() {
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{shipmentPackedQty(item).toLocaleString('ru-RU')}</Td>
                       <Td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
-                            {item.status_label}
-                          </Badge>
-                          {canAdvanceRow(item.status) && ADVANCE_LABELS[item.status] && (
-                            <button
-                              className="btn ghost sm"
-                              disabled={advancingId === item.id}
-                              onClick={(e) => handleAdvance(e, item)}
-                              title={ADVANCE_LABELS[item.status]}
-                            >
-                              <Icon name="chev" size={13} style={{ transform: 'rotate(-90deg)' }} />
-                            </button>
-                          )}
-                        </div>
+                        <Badge tone={SHIPMENT_STATUS_TONES[item.status] as BadgeTone} dot>
+                          {item.status_label}
+                        </Badge>
                       </Td>
                       <Td>
                         {(() => {

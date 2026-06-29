@@ -5,7 +5,7 @@ import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canViewPayroll } from '../../../utils/access'
+import { canViewPayroll, canViewSalary } from '../../../utils/access'
 import { EmpAvatar, Badge, fmtRate } from './shared'
 import { AddEmployeeModal } from './modals'
 import { getEmployees, type EmployeeListResponse } from '../../../api/timesheetApi'
@@ -14,6 +14,7 @@ export function EmployeesListFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const showMoney = canViewPayroll(user)
+  const canSetSalary = canViewSalary(user)
   const [search, setSearch] = useFilterParam('search', '')
   const [status, setStatus] = useFilterParam('status', 'active')
   const [tick, setTick] = useState(0)
@@ -78,7 +79,7 @@ export function EmployeesListFeature() {
       </div>
       {loading && !data && <div style={{ padding: 24, color: 'var(--c-text-subtle)' }}>Загрузка…</div>}
 
-      {adding && <AddEmployeeModal canSetRate={showMoney} onClose={() => setAdding(false)} onSaved={() => setTick((t) => t + 1)} />}
+      {adding && <AddEmployeeModal canSetRate={showMoney} canSetSalary={canSetSalary} onClose={() => setAdding(false)} onSaved={() => setTick((t) => t + 1)} />}
     </ListPage>
   )
 }

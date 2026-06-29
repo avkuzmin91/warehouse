@@ -54,6 +54,9 @@ class PlannableItem(BaseModel):
     size_name: str | None
     ready_good: int = 0
     ready_defect: int = 0
+    # Упаковано, но ещё не размещено по местам (корзина packed). Для отгрузки годного —
+    # такой же источник, как ready: можно отгрузить прямо со стола упаковки.
+    packed_good: int = 0
     storage_good: int
     storage_defect: int
     in_transit: int

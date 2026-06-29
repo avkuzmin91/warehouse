@@ -10,9 +10,10 @@ import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 type Props = {
   doc: DispatchDetail
   onOpenTrip: (id: string) => void
+  onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
 }
 
-export function ReadyView({ doc, onOpenTrip }: Props) {
+export function ReadyView({ doc, onOpenTrip, onSavePallets }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const isPreparing = doc.status === 'preparing'
@@ -55,7 +56,7 @@ export function ReadyView({ doc, onOpenTrip }: Props) {
           </Panel>
 
           <Panel icon="boxes" title="Состав отгрузки">
-            <LinesTable lines={doc.lines} />
+            <LinesTable lines={doc.lines} onSavePallets={onSavePallets} />
           </Panel>
         </div>
 

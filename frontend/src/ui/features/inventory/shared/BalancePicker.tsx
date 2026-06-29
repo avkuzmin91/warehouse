@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getPlannableItems } from '../../../../api/balancesApi'
 import type { PlannableItem } from '../../../../api/balancesApi'
+import { getDispatchReservations } from '../../../../api/dispatchApi'
 import type { ShipmentCargoType } from '../../../../api/shipmentsApi'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { Icon } from '../../../primitives/Icon'
@@ -27,19 +28,27 @@ type Props = {
 
 // Годный груз планируется из свободного годного «На хранении» + товара в пути
 // (заявлен в поступлении, ещё не приехал). Брак планируется из суммарного брака
-// «На хранении» (в пути брак не считаем). Для отгрузки добавляется «Упаковано»
-// (ready) — приоритетный источник годного. Местоположение-источник годного выбирает
-// кладовщик при передаче на упаковку; брака — при подготовке.
+// «На хранении» (в пути брак не считаем). Для отгрузки источник — «Готов к отгрузке»
+// (ready): главная цифра — это СВОБОДНЫЙ остаток (минус уже обещанное другим
+// незакрытым отгрузкам), чтобы совпадать с серверным гейтом.
 type PickRow = {
   item: PlannableItem
   ready: number
   storage: number
   inTransit: number
+  /** Уже обещано другим незакрытым отгрузкам — вычитается из главной цифры (только для dispatch). */
+  reserved: number
+  /** Свободно к отгрузке сейчас: главный источник минус резерв. */
+  free: number
   cap: number
 }
 
 function rowKey(item: PlannableItem): string {
   return `${item.product_id}|${item.color_id ?? ''}|${item.size_id ?? ''}`
+}
+
+function reservationKey(productId: string, colorId: string | null, sizeId: string | null): string {
+  return `${productId}|${colorId ?? ''}|${sizeId ?? ''}`
 }
 
 export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onAddMany, onClose }: Props) {
@@ -51,25 +60,44 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
 
   const multi = !!onAddMany
   const isDefect = cargoType === 'defect'
-  // Упакованное как главная цифра — только для отгрузки годного: при упаковке брак не проходит.
-  const dispatchGood = source === 'dispatch' && !isDefect
+  // Отгрузка вычитает резерв и показывает свободный остаток главной цифрой.
+  const isDispatch = source === 'dispatch'
+  // Упакованное (ready) — источник отгрузки годного; при упаковке (pack) — склад.
+  const dispatchGood = isDispatch && !isDefect
 
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
-    getPlannableItems({
-      limit: 200,
-      search: search || undefined,
-      client_id: clientId || undefined,
-      cargo_type: cargoType,
-    }, ctrl.signal)
-      .then((res) => {
+    const reservedP = isDispatch
+      ? getDispatchReservations({ client_id: clientId || undefined, cargo_type: cargoType }, ctrl.signal)
+          .then((r) => r.items)
+          .catch(() => [])
+      : Promise.resolve([] as Awaited<ReturnType<typeof getDispatchReservations>>['items'])
+    Promise.all([
+      getPlannableItems({
+        limit: 200,
+        search: search || undefined,
+        client_id: clientId || undefined,
+        cargo_type: cargoType,
+      }, ctrl.signal),
+      reservedP,
+    ])
+      .then(([res, reservations]) => {
         if (ctrl.signal.aborted) return
+        const reservedMap: Record<string, number> = {}
+        for (const rv of reservations) {
+          reservedMap[reservationKey(rv.product_id, rv.color_id, rv.size_id)] = rv.reserved
+        }
         const next = res.items.map((b): PickRow => {
-          const ready = dispatchGood ? b.ready_good : 0
+          // «Упаковано» для отгрузки = разложенное «Готов к отгрузке» (ready) + ещё не
+          // размещённое на столе упаковки (packed) — оба можно отгрузить.
+          const ready = dispatchGood ? b.ready_good + (b.packed_good ?? 0) : 0
           const storage = isDefect ? b.storage_defect : b.storage_good
           const inTransit = isDefect ? 0 : b.in_transit
-          return { item: b, ready, storage, inTransit, cap: ready + storage + inTransit }
+          const primaryRaw = dispatchGood ? ready : storage
+          const reserved = isDispatch ? (reservedMap[rowKey(b)] ?? 0) : 0
+          const free = Math.max(0, primaryRaw - reserved)
+          return { item: b, ready, storage, inTransit, reserved, free, cap: ready + storage + inTransit }
         })
         setRows(next)
       })
@@ -79,17 +107,23 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
         setLoading(false)
       })
     return () => ctrl.abort()
-  }, [search, clientId, cargoType, isDefect, dispatchGood])
+  }, [search, clientId, cargoType, isDefect, isDispatch, dispatchGood])
 
-  // Главная цифра позиции: для отгрузки годного — упаковано, иначе — остаток на складе/брак.
+  // Главная цифра позиции: для отгрузки — свободный остаток (минус резерв), иначе склад/брак.
   function primaryQty(row: PickRow): number {
+    return isDispatch ? row.free : row.storage
+  }
+  // Валовый остаток источника (до вычета резерва) — для подсказок.
+  function grossQty(row: PickRow): number {
     return dispatchGood ? row.ready : row.storage
   }
-  const primaryLabel = dispatchGood ? 'упаковано' : isDefect ? 'брак' : 'на складе'
+  const primaryLabel = isDispatch ? 'свободно' : isDefect ? 'брак' : 'на складе'
+  const grossLabel = dispatchGood ? 'упаковано' : isDefect ? 'брак' : 'на складе'
 
-  // Хвост подсказки под главной цифрой: что добирается к упакованному.
+  // Хвост подсказки под главной цифрой: из чего складывается остаток (резерв/склад/в пути).
   function secondaryText(row: PickRow): string {
     const parts: string[] = []
+    if (isDispatch && row.reserved > 0) parts.push(`${grossLabel} ${grossQty(row)} · в резерве ${row.reserved}`)
     if (dispatchGood && row.storage > 0) parts.push(`склад ${row.storage}`)
     if (!isDefect && row.inTransit > 0) parts.push(`в пути ${row.inTransit}`)
     return parts.join(' · ')
@@ -130,9 +164,10 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
   const selectedSum = selectedList.reduce((s, e) => s + e.qty, 0)
 
   const cap = pending ? pending.row.cap : 0
-  // Доступно к передаче в подготовку сразу (без ожидания прихода): упаковано + склад.
-  const onStock = pending ? pending.row.ready + pending.row.storage : 0
-  const overTransit = pending ? pending.qty > onStock : false
+  // Свободно к передаче в подготовку прямо сейчас: годный отгружается только из «Готов
+  // к отгрузке» (минус резерв); остальное (склад/в пути) можно лишь сохранить черновиком.
+  const onStock = pending ? primaryQty(pending.row) : 0
+  const overFree = pending ? pending.qty > onStock : false
 
   return (
     <>
@@ -152,7 +187,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
             <div>
               <div style={{ fontWeight: 600, fontSize: 15 }}>Подобрать товар</div>
               <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-                {isDefect ? 'Брак на хранении' : dispatchGood ? 'Упакованный товар, на складе и в пути' : 'Годный товар на хранении и в пути'}
+                {isDefect ? 'Брак на хранении' : dispatchGood ? 'Свободный к отгрузке остаток (за вычетом резерва)' : 'Годный товар на хранении и в пути'}
                 {clientId ? ' · по выбранному клиенту' : ''}
               </div>
             </div>
@@ -202,11 +237,20 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
               </div>
               <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>
-                  {dispatchGood ? 'Упаковано' : isDefect ? 'Брак' : 'На складе'}:{' '}
+                  {isDispatch ? 'Свободно' : isDefect ? 'Брак' : 'На складе'}:{' '}
                   <span className="mono" style={{ fontWeight: 600, color: isDefect ? 'var(--c-warning)' : 'var(--c-success)' }}>
                     {primaryQty(pending.row)}
                   </span> шт
                 </span>
+                {isDispatch && pending.row.reserved > 0 && (
+                  <span>
+                    {dispatchGood ? 'Упаковано' : isDefect ? 'Брак' : 'На складе'}:{' '}
+                    <span className="mono" style={{ fontWeight: 600, color: 'var(--c-text-subtle)' }}>
+                      {grossQty(pending.row)}
+                    </span> шт
+                    <span style={{ color: 'var(--c-text-subtle)' }}>{' '}· в резерве {pending.row.reserved}</span>
+                  </span>
+                )}
                 {dispatchGood && pending.row.storage > 0 && (
                   <span>
                     На складе:{' '}
@@ -241,13 +285,13 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
                   <div style={{ fontSize: 12, color: 'var(--c-warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Icon name="alert" size={12} />Превышает доступное ({cap} шт)
                   </div>
-                ) : overTransit ? (
+                ) : overFree && isDispatch ? (
+                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="clock" size={12} />Сверх свободного остатка ({onStock} шт): часть в резерве, на складе или в пути — сейчас можно сохранить черновик
+                  </div>
+                ) : overFree ? (
                   <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Icon name="clock" size={12} />Часть из товара в пути — отгрузку можно запланировать после прихода
-                  </div>
-                ) : dispatchGood && pending.qty > pending.row.ready ? (
-                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Icon name="boxes" size={12} />Часть со склада — упакуют при подготовке
                   </div>
                 ) : null}
               </div>
