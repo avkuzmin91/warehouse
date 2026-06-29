@@ -1046,8 +1046,8 @@ def run_salary_accruals(connection, on_date: date, uid: str | None = None) -> in
             continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
-            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
-            (EXPENSE_KIND_SALARY, EXPENSE_SOURCE_EMPLOYEE, emp_id, period_start),
+            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0 AND payment_status != ?",
+            (EXPENSE_KIND_SALARY, EXPENSE_SOURCE_EMPLOYEE, emp_id, period_start, EXPENSE_PAYMENT_CANCELLED),
         ).fetchone()
         if exists:
             continue
@@ -1194,8 +1194,8 @@ def run_rent_accruals(connection, on_date: date, uid: str | None = None) -> int:
             continue
         exists = connection.execute(
             "SELECT 1 FROM material_expenses WHERE kind = ? AND source_kind = ? AND source_id = ? "
-            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0",
-            (EXPENSE_KIND_RENT, EXPENSE_SOURCE_WAREHOUSE, wh_id, period_start),
+            "AND period_start = ? AND COALESCE(is_deleted, 0) = 0 AND payment_status != ?",
+            (EXPENSE_KIND_RENT, EXPENSE_SOURCE_WAREHOUSE, wh_id, period_start, EXPENSE_PAYMENT_CANCELLED),
         ).fetchone()
         if exists:
             continue

@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
-import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
-import { canViewPayroll } from '../../../utils/access'
 import { fmtDateLong } from '../../../utils/format'
 import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate, fmtSalary } from './shared'
 import { AdvanceModal, RateModal, SalaryModal, EditEmployeeModal } from './modals'
@@ -195,8 +193,6 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
 
 export function EmployeeCardFeature({ empId }: { empId: string }) {
   const navigate = useNavigate()
-  const { user } = useCurrentUser()
-  const showMoney = canViewPayroll(user)
   const toast = useToast()
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
@@ -209,6 +205,8 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
     (signal) => getEmployee(empId, signal),
     [empId, tick],
   )
+  // Бэкенд решает видимость денег по сотруднику (оклад окладника — только админ).
+  const showMoney = e?.with_money ?? false
   const reload = () => setTick((t) => t + 1)
 
   const onArchive = async () => {
@@ -355,10 +353,10 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
               </Panel>
             )
           ) : (
-            <Panel icon="lock" title="Ставка и выплаты">
+            <Panel icon="lock" title={e.comp_type === 'fixed' ? 'Оклад и выплаты' : 'Ставка и выплаты'}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '14px 6px', textAlign: 'center' }}>
                 <div style={{ width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--c-bg-sunken)', color: 'var(--c-text-faint)' }}><Icon name="lock" size={17} /></div>
-                <div style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>Доступно только менеджеру</div>
+                <div style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>{e.comp_type === 'fixed' ? 'Оклад доступен только администратору' : 'Доступно только менеджеру'}</div>
               </div>
             </Panel>
           )}

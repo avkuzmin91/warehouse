@@ -29,7 +29,13 @@ from config import (
 from dbconn import get_connection
 from modules.auth.service import get_current_user
 from modules.expenses.service import record_payroll_expense, reverse_payroll_expense
-from security import can_view_payroll, ensure_payroll_access, ensure_timesheet_access
+from security import (
+    can_view_payroll,
+    can_view_salary,
+    ensure_payroll_access,
+    ensure_salary_access,
+    ensure_timesheet_access,
+)
 
 from .schemas import (
     BulkPlanRequest,
@@ -97,6 +103,20 @@ def _get_timesheet(user=Depends(get_current_user)):
 def _get_payroll(user=Depends(get_current_user)):
     ensure_payroll_access(user)
     return user
+
+
+def _get_salary(user=Depends(get_current_user)):
+    """Деньги окладников (оклад в месяц) — только администратор."""
+    ensure_salary_access(user)
+    return user
+
+
+def _money_visible(user, comp_type: str | None) -> bool:
+    """Видимость денег по сотруднику: оклад окладников — только админ,
+    деньги почасовиков — весь платёжный состав (менеджер + админ)."""
+    if str(comp_type or EMPLOYEE_COMP_HOURLY) == EMPLOYEE_COMP_FIXED:
+        return can_view_salary(user)
+    return can_view_payroll(user)
 
 
 def _now() -> str:
@@ -215,8 +235,12 @@ def list_employees_route(
     user=Depends(_get_timesheet),
 ):
     with_money = can_view_payroll(user)
+    with_salary = can_view_salary(user)
     with get_connection() as conn:
-        items = list_employees(conn, status=status, search=search, with_money=with_money)
+        items = list_employees(
+            conn, status=status, search=search,
+            with_money=with_money, with_salary=with_salary,
+        )
     return EmployeeListResponse(
         items=[
             EmployeeListItem(
@@ -291,9 +315,9 @@ def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
     now = _now()
     emp_id = str(uuid4())
     comp_type = _validate_comp_type(body.comp_type)
-    # Оклад — это деньги: проставляет только тот, кто их видит.
+    # Оклад в месяц — только администратор: менеджер окладов не видит и не заводит.
     fixed_salary = int(body.fixed_salary_kopecks) \
-        if body.fixed_salary_kopecks is not None and can_view_payroll(user) else None
+        if body.fixed_salary_kopecks is not None and can_view_salary(user) else None
     with get_connection() as conn:
         position_id = _validate_position(conn, body.position_id)
         # Связь с учётной записью назначает только администратор.
@@ -329,13 +353,14 @@ def create_employee(body: EmployeeCreate, user=Depends(_get_timesheet)):
 
 @router.get("/employees/{emp_id}", response_model=EmployeeDetailResponse)
 def get_employee(emp_id: str, user=Depends(_get_timesheet)):
-    with_money = can_view_payroll(user)
     today = business_today()
     sat = week_start_for(today)
     days = week_days(sat)
     fri = days[-1]
     with get_connection() as conn:
         emp = _emp_or_404(conn, emp_id)
+        # Деньги окладника видит только админ; деньги почасовика — весь платёжный состав.
+        with_money = _money_visible(user, emp.get("comp_type"))
         meta = conn.execute(
             "SELECT COALESCE(p.name, e.position) AS position_name, lu.email AS user_email "
             "FROM employees e "
@@ -464,7 +489,7 @@ def update_employee(emp_id: str, body: EmployeeUpdate, user=Depends(_get_timeshe
         add_salary = (
             "fixed_salary_kopecks" in fields
             and body.fixed_salary_kopecks is not None
-            and can_view_payroll(user)
+            and can_view_salary(user)
         )
         if sets:
             sets.append("updated_at = ?"); params.append(now)
@@ -546,7 +571,7 @@ def delete_rate(emp_id: str, rate_id: str, user=Depends(_get_payroll)):
 
 
 @router.post("/employees/{emp_id}/salaries")
-def add_salary(emp_id: str, body: SalaryCreate, user=Depends(_get_payroll)):
+def add_salary(emp_id: str, body: SalaryCreate, user=Depends(_get_salary)):
     eff = str(body.effective_from or "").strip()
     if not eff:
         raise HTTPException(status_code=400, detail="Укажите дату, с которой действует оклад")
@@ -565,7 +590,7 @@ def add_salary(emp_id: str, body: SalaryCreate, user=Depends(_get_payroll)):
 
 
 @router.delete("/employees/{emp_id}/salaries/{salary_id}")
-def delete_salary(emp_id: str, salary_id: str, user=Depends(_get_payroll)):
+def delete_salary(emp_id: str, salary_id: str, user=Depends(_get_salary)):
     """Удаляет (soft-delete) запись истории оклада — для исправления ошибочно заведённого
     оклада/даты. Кэш «оклад на сегодня» пересчитывается из оставшейся истории.
 

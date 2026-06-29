@@ -672,6 +672,73 @@ def test_manager_sees_all_with_money(manager_client, team):
     assert {team["a"], team["b"], team["c"]} <= pids
 
 
+def test_manager_cannot_see_fixed_salary(admin_client, manager_client):
+    """Оклад в месяц — только админ: менеджер не видит ни суммы оклада, ни истории,
+    ни прочих денег по окладнику, и не может завести/правку оклада."""
+    from uuid import uuid4
+    tag = uuid4().hex[:8]
+    emp_id = admin_client.post("/employees", json={
+        "full_name": f"Окладник-{tag}", "comp_type": "fixed",
+        "fixed_salary_kopecks": 15000000, "salary_from": "2026-06-01",
+    }).json()["message"]
+    try:
+        # Админ видит оклад и историю.
+        a = admin_client.get(f"/employees/{emp_id}").json()
+        assert a["with_money"] is True
+        assert a["fixed_salary_kopecks"] == 15000000
+        assert len(a["salary_history"]) == 1
+
+        # Менеджер — деньги окладника скрыты целиком.
+        m = manager_client.get(f"/employees/{emp_id}").json()
+        assert m["with_money"] is False
+        assert m["fixed_salary_kopecks"] is None
+        assert m["salary_history"] == []
+        assert m["this_week"]["earned"] is None
+
+        # В списке оклад менеджеру тоже не отдаётся.
+        row = next(
+            it for it in manager_client.get("/employees?search=Окладник-").json()["items"]
+            if it["id"] == emp_id
+        )
+        assert row.get("fixed_salary_kopecks") is None
+
+        # Менеджер не может заводить/править оклад.
+        assert manager_client.post(f"/employees/{emp_id}/salaries", json={
+            "salary_kopecks": 9000000, "effective_from": "2026-06-01",
+        }).status_code == 403
+        sid = a["salary_history"][0]["id"]
+        assert manager_client.delete(f"/employees/{emp_id}/salaries/{sid}").status_code == 403
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM employee_salaries WHERE employee_id = ?", (emp_id,))
+            conn.execute("DELETE FROM employee_rates WHERE employee_id = ?", (emp_id,))
+            conn.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
+            conn.commit()
+
+
+def test_manager_still_sees_hourly_money(admin_client, manager_client):
+    """Почасовик — деньги остаются видны менеджеру (скрыты только оклады)."""
+    from uuid import uuid4
+    tag = uuid4().hex[:8]
+    emp_id = admin_client.post("/employees", json={
+        "full_name": f"Почасовик-{tag}", "comp_type": "hourly",
+        "rate_kopecks": 40000, "effective_from": "2026-01-01",
+    }).json()["message"]
+    try:
+        m = manager_client.get(f"/employees/{emp_id}").json()
+        assert m["with_money"] is True
+        assert m["rate_kopecks"] == 40000
+        # Менеджер может вести почасовую ставку.
+        assert manager_client.post(f"/employees/{emp_id}/rates", json={
+            "rate_kopecks": 42000, "effective_from": "2026-06-01",
+        }).status_code == 200
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM employee_rates WHERE employee_id = ?", (emp_id,))
+            conn.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
+            conn.commit()
+
+
 def test_positions_dictionary_crud(admin_client):
     from uuid import uuid4
     name = f"ТестДолжность-{uuid4().hex[:8]}"

@@ -738,7 +738,8 @@ def build_attendance(connection, employee_id: str, hired_on: str | None) -> dict
 # ── Сотрудники: список ────────────────────────────────────────────────────────
 
 def list_employees(
-    connection, *, status: str | None, search: str | None, with_money: bool,
+    connection, *, status: str | None, search: str | None,
+    with_money: bool, with_salary: bool = False,
 ) -> list[dict]:
     conds = ["COALESCE(e.is_deleted, 0) = 0"]
     params: list = []
@@ -778,6 +779,8 @@ def list_employees(
         }
         if with_money:
             item["rate_kopecks"] = current_rate(rates.get(str(r["id"])))
+        # Оклад в месяц виден только тому, кто видит оклады (админ).
+        if with_salary:
             item["fixed_salary_kopecks"] = (
                 int(r["fixed_salary_kopecks"]) if r["fixed_salary_kopecks"] is not None else None
             )

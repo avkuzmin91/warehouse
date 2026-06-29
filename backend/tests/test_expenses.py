@@ -685,6 +685,35 @@ def test_salary_effective_dated_accrual_and_history(admin_client):
         _purge_employee(emp_id)
 
 
+def test_salary_reaccrual_after_cancel(admin_client):
+    tag = uuid.uuid4().hex[:8]
+    # Сценарий пользователя: начислили оклад, аннулировали проводку, начисляем заново —
+    # отменённая проводка НЕ должна блокировать повторное начисление (дедуп игнорит cancelled).
+    emp = admin_client.post("/employees", json={
+        "full_name": f"Окл4-{tag}", "comp_type": "fixed",
+        "fixed_salary_kopecks": 15000000, "salary_from": "2031-03-01",
+    }).json()["message"]
+    try:
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-01").status_code == 200
+        items = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        mine = [e for e in items if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
+        assert len(mine) == 1
+        exp_id = mine[0]["id"]
+
+        # Повтор без отмены — дубля нет.
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-10").json()["created"] == 0
+
+        # Аннулируем и начисляем заново → появляется свежая проводка.
+        assert admin_client.post(f"/expenses/{exp_id}/cancel").status_code == 200
+        assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-10").json()["created"] == 1
+        again = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
+        rows = [e for e in again if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
+        assert len(rows) == 2  # одно аннулированное + одно новое
+        assert sorted(e["payment_status"] for e in rows) == ["awaiting", "cancelled"]
+    finally:
+        _purge_employee(emp)
+
+
 def _purge_employee(emp_id: str) -> None:
     with get_connection() as conn:
         ids = [r["id"] for r in conn.execute(

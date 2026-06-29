@@ -81,3 +81,9 @@ export function canManageTimesheet(user: User | null | undefined): boolean {
 export function canViewPayroll(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }
+
+// Оклад окладников (оклад в месяц) и любые деньги по ним — только админ.
+// Менеджер ведёт деньги почасовиков, но окладов не видит и не заводит.
+export function canViewSalary(user: User | null | undefined): boolean {
+  return user?.role === 'admin'
+}

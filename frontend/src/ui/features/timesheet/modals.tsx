@@ -3,7 +3,7 @@ import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canManageUsers } from '../../../utils/access'
+import { canManageUsers, canViewSalary } from '../../../utils/access'
 import { getUsers } from '../../../api/adminApi'
 import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
@@ -226,8 +226,8 @@ export function SalaryModal({
 // ── Добавить сотрудника ───────────────────────────────────────────────────────
 
 export function AddEmployeeModal({
-  canSetRate, onClose, onSaved,
-}: { canSetRate: boolean; onClose: () => void; onSaved: () => void }) {
+  canSetRate, canSetSalary, onClose, onSaved,
+}: { canSetRate: boolean; canSetSalary: boolean; onClose: () => void; onSaved: () => void }) {
   const toast = useToast()
   const { positions } = useLookups()
   const { user } = useCurrentUser()
@@ -251,7 +251,7 @@ export function AddEmployeeModal({
         position_id: positionId || null,
         user_id: isAdmin ? (userId || null) : undefined,
         rate_kopecks: canSetRate && compType === 'hourly' && rate ? rublesToKopecks(rate) : null,
-        ...(canSetRate ? {
+        ...(canSetSalary ? {
           comp_type: compType,
           fixed_salary_kopecks: compType === 'fixed' && fixedSalary ? rublesToKopecks(fixedSalary) : null,
           salary_from: compType === 'fixed' ? salaryFrom : undefined,
@@ -276,7 +276,7 @@ export function AddEmployeeModal({
             {positions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
-        {canSetRate && (
+        {canSetSalary && (
           <div>
             <FieldLabel>Тип оплаты</FieldLabel>
             <select className="input sm" style={input} value={compType} onChange={(e) => setCompType(e.target.value as CompType)}>
@@ -286,8 +286,8 @@ export function AddEmployeeModal({
           </div>
         )}
         {canSetRate && compType === 'hourly' && <div><FieldLabel>Ставка, ₽/ч</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" /></div>}
-        {canSetRate && compType === 'fixed' && <div><FieldLabel>Оклад, ₽/мес</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={fixedSalary} onChange={(e) => setFixedSalary(e.target.value)} placeholder="0" /></div>}
-        {canSetRate && compType === 'fixed' && <div><FieldLabel>Оклад с</FieldLabel><input className="input sm" type="date" style={input} value={salaryFrom} onChange={(e) => setSalaryFrom(e.target.value)} /></div>}
+        {canSetSalary && compType === 'fixed' && <div><FieldLabel>Оклад, ₽/мес</FieldLabel><input className="input sm" style={input} inputMode="numeric" value={fixedSalary} onChange={(e) => setFixedSalary(e.target.value)} placeholder="0" /></div>}
+        {canSetSalary && compType === 'fixed' && <div><FieldLabel>Оклад с</FieldLabel><input className="input sm" type="date" style={input} value={salaryFrom} onChange={(e) => setSalaryFrom(e.target.value)} /></div>}
       </div>
       {isAdmin && (
         <div style={{ marginTop: 14 }}>
@@ -318,7 +318,8 @@ export function EditEmployeeModal({
   const [hiredOn, setHiredOn] = useState(employee.hired_on ?? '')
   const [compType, setCompType] = useState<CompType>(employee.comp_type ?? 'hourly')
   const [busy, setBusy] = useState(false)
-  const withMoney = employee.with_money
+  // Тип оплаты и оклад в месяц правит только админ (менеджер окладов не ведёт).
+  const canSetSalary = canViewSalary(user)
 
   const submit = async () => {
     if (!name.trim()) { toast('Укажите ФИО', 'error'); return }
@@ -329,7 +330,7 @@ export function EditEmployeeModal({
         position_id: positionId || null,
         hired_on: hiredOn || null,
         user_id: isAdmin ? (userId || null) : undefined,
-        ...(withMoney ? { comp_type: compType } : {}),
+        ...(canSetSalary ? { comp_type: compType } : {}),
       })
       toast('Сохранено', 'success')
       onSaved(); onClose()
@@ -352,7 +353,7 @@ export function EditEmployeeModal({
         </div>
         <div><FieldLabel>На складе с</FieldLabel><input className="input sm" type="date" style={input} value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} /></div>
       </div>
-      {withMoney && (
+      {canSetSalary && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
           <div>
             <FieldLabel>Тип оплаты</FieldLabel>
