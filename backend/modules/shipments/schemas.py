@@ -56,6 +56,7 @@ class ShipmentPackingProductivityRow(BaseModel):
     good_earn_kop:   int = 0
     defect_earn_kop: int = 0
     earn_kop:        int = 0
+    doc_ids:         list[str] = []
 
 
 class ShipmentPackingProductivityDay(BaseModel):

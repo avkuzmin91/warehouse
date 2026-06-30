@@ -134,3 +134,54 @@ def _cleanup_balances(client_id: str) -> None:
         conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
         conn.execute("DELETE FROM zone_relocations WHERE client_id = ?", (client_id,))
         conn.commit()
+
+
+# ── Создание документов: повтор при обрыве сети не должен задваивать документ ──────
+
+def _receipt_count(client_id: str) -> int:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM receipt_docs WHERE client_id = ?", (client_id,)
+        ).fetchone()
+    return int(row["n"])
+
+
+def test_create_receipt_same_request_id_creates_once(admin_client):
+    """Повтор POST /receipts с тем же X-Request-Id отдаёт прежний id и НЕ создаёт второй документ."""
+    cid = make_client_id()
+    rid = str(uuid.uuid4())
+    payload = {"client_id": cid, "lines": []}
+    try:
+        first = admin_client.post("/receipts", json=payload, headers={"X-Request-Id": rid})
+        assert first.status_code == 200, first.text
+        doc_id = first.json()["message"]
+
+        second = admin_client.post("/receipts", json=payload, headers={"X-Request-Id": rid})
+        assert second.status_code == 200, second.text
+        assert second.json()["message"] == doc_id   # прежний ответ, не новый документ
+        assert _receipt_count(cid) == 1
+    finally:
+        _cleanup_balances(cid)
+        with get_connection() as conn:
+            conn.execute("DELETE FROM idempotency_keys WHERE request_id = ?", (rid,))
+            conn.commit()
+        cleanup_client(cid)
+
+
+def test_create_receipt_different_request_id_creates_each(admin_client):
+    """Разные X-Request-Id — разные документы (легитимные одинаковые создания не блокируются)."""
+    cid = make_client_id()
+    rid1, rid2 = str(uuid.uuid4()), str(uuid.uuid4())
+    payload = {"client_id": cid, "lines": []}
+    try:
+        r1 = admin_client.post("/receipts", json=payload, headers={"X-Request-Id": rid1})
+        r2 = admin_client.post("/receipts", json=payload, headers={"X-Request-Id": rid2})
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert r1.json()["message"] != r2.json()["message"]
+        assert _receipt_count(cid) == 2
+    finally:
+        _cleanup_balances(cid)
+        with get_connection() as conn:
+            conn.execute("DELETE FROM idempotency_keys WHERE request_id IN (?, ?)", (rid1, rid2))
+            conn.commit()
+        cleanup_client(cid)

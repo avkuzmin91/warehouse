@@ -340,6 +340,39 @@ def test_finish_preparation_advances_to_awaiting_trip(admin_client, client_id):
     assert r.status_code == 200, r.text
     assert r.json()["message"] == "awaiting_trip"
     assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "awaiting_trip"
+
+
+def test_finish_preparation_allows_shipping_zone_as_source(admin_client, client_id):
+    """Товар, уже лежащий в «Зоне отгрузки», можно выбрать источником подготовки.
+
+    Его могли разложить туда при «Готово к рейсу» после упаковки — нет причин запрещать
+    отгрузку из зоны отгрузки. Самоперенос ready@зона отгрузки → ready@зона отгрузки
+    оставляет готовый остаток на месте.
+    """
+    from modules.balances.service import get_shipping_zone, insert_inventory_move
+
+    pid = _make_product(client_id, sku="DSP-SZ")
+    with get_connection() as conn:
+        ship_id, ship_name = get_shipping_zone(conn)
+        insert_inventory_move(
+            conn,
+            product_id=pid, product_name="Product", product_sku="DSP-SZ",
+            color_id=None, color_name=None, size_id=None, size_name=None,
+            client_id=client_id, client_name="Test Client",
+            from_op="packing", to_op="ready", from_quality="good", to_quality="good",
+            from_zone_id=None, from_zone_name=None,
+            to_zone_id=ship_id, to_zone_name=ship_name,
+            qty=5, user_id="test-admin-id",
+        )
+        conn.commit()
+
+    doc_id = _create(admin_client, client_id, pid, "DSP-SZ", 5)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    r = _finish_prep(admin_client, doc_id, cell=(ship_id, ship_name))
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "awaiting_trip"
+    # готовый остаток остался на месте (самоперенос) — рейс спишет его из зоны отгрузки
+    assert _ready_net(client_id, pid) == 5
     # повторная отметка из awaiting_trip запрещена
     assert _finish_prep(admin_client, doc_id).status_code == 400
 
@@ -500,6 +533,55 @@ def test_site_url_persisted(admin_client, client_id):
     doc_id = _create(admin_client, client_id, pid, "DSP-T9", 1, site_url="https://shop.example/item/9")
     line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
     assert line["site_url"] == "https://shop.example/item/9"
+
+
+def test_line_file_upload_and_delete(admin_client, client_id):
+    """Менеджер прикрепляет файл (pdf/zip/jpeg) к строке отгрузки в черновике,
+    файл виден в detail, затем удаляется."""
+    pid = _make_product(client_id, sku="DSP-F1")
+    doc_id = _create(admin_client, client_id, pid, "DSP-F1", 1)
+    line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
+
+    up = admin_client.post(
+        f"/dispatches/{doc_id}/lines/{line_id}/files",
+        files={"file": ("накладная.pdf", b"%PDF-1.4 test", "application/pdf")},
+    )
+    assert up.status_code == 200, up.text
+    file_id = up.json()["message"]
+
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert len(line["files"]) == 1
+    assert line["files"][0]["filename"] == "накладная.pdf"
+    assert line["files"][0]["url"].startswith("/uploads/")
+
+    rm = admin_client.delete(f"/dispatches/{doc_id}/lines/{line_id}/files/{file_id}")
+    assert rm.status_code == 200, rm.text
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["files"] == []
+
+
+def test_line_file_rejects_bad_extension(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-F2")
+    doc_id = _create(admin_client, client_id, pid, "DSP-F2", 1)
+    line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
+    bad = admin_client.post(
+        f"/dispatches/{doc_id}/lines/{line_id}/files",
+        files={"file": ("virus.exe", b"MZ", "application/octet-stream")},
+    )
+    assert bad.status_code == 400, bad.text
+
+
+def test_line_file_only_in_draft(admin_client, client_id):
+    """Прикреплять файлы можно только в черновике — после передачи в подготовку нельзя."""
+    pid = _make_product(client_id, sku="DSP-F3")
+    _seed_ready(client_id, product_id=pid, sku="DSP-F3", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-F3", 2)
+    line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    blocked = admin_client.post(
+        f"/dispatches/{doc_id}/lines/{line_id}/files",
+        files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+    assert blocked.status_code == 400, blocked.text
 
 
 def test_priority_update(admin_client, client_id):

@@ -157,7 +157,11 @@ def _resolve_line_store(conn, client_id: str | None, store_id: str | None) -> tu
 
 
 @router.post("/shipments")
-def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_document_creator)):
+def create_shipment(
+    body: ShipmentDocCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_document_creator),
+):
     if body.logistics_cost is not None:
         ensure_cost_access(user)
     uid = str(user["id"])
@@ -166,6 +170,9 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_document_c
     cargo_type = normalize_cargo_type(body.cargo_type)
 
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_create")
+        if not proceed:
+            return stored
         doc_num = next_doc_number(conn)
         conn.execute(
             """INSERT INTO shipment_docs
@@ -197,8 +204,10 @@ def create_shipment(body: ShipmentDocCreate, user=Depends(get_current_document_c
             "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
             (str(uuid4()), doc_id, "doc_create", now, uid),
         )
+        result = {"message": doc_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": doc_id}
+    return result
 
 
 @router.get("/shipments/summary")
@@ -1051,10 +1060,17 @@ def finish_shipment_defect_relocation(doc_id: str, body: ShipmentFinishDefectRel
 
 
 @router.post("/shipments/{doc_id}/cancel")
-def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
+def cancel_shipment(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_cancel", response={"message": SHIPMENT_STATUS_CANCELLED})
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status, cargo_type, priority_rank FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -1092,7 +1108,12 @@ def cancel_shipment(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/shipments/{doc_id}/reject")
-def reject_shipment(doc_id: str, body: ShipmentRejectPayload, user=Depends(_get_viewer)):
+def reject_shipment(
+    doc_id: str,
+    body: ShipmentRejectPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_viewer),
+):
     """Отклонить задачу упаковки на приёмке: возврат менеджеру (assigned → draft).
 
     Доступно начальнику склада и менеджерскому составу (см. SHIPMENT_ACCEPT_ROLES).
@@ -1106,6 +1127,9 @@ def reject_shipment(doc_id: str, body: ShipmentRejectPayload, user=Depends(_get_
     if not reason:
         raise HTTPException(status_code=400, detail="Укажите причину отклонения")
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_reject", response={"message": SHIPMENT_STATUS_DRAFT})
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -1134,10 +1158,17 @@ def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/shipments/{doc_id}/revert")
-def revert_shipment(doc_id: str, user=Depends(_get_manager)):
+def revert_shipment(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_revert")
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -1155,8 +1186,10 @@ def revert_shipment(doc_id: str, user=Depends(_get_manager)):
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, "revert", f"{current} → {prev_status}", now, uid),
         )
+        result = {"message": prev_status}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": prev_status}
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/files")

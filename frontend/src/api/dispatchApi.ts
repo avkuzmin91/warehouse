@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestForm } from './http'
 
 export type DispatchStatus = 'draft' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
@@ -63,6 +63,14 @@ export type DispatchOp = {
   created_by_email: string | null
 }
 
+export type DispatchLineFile = {
+  id:         string
+  filename:   string
+  url:        string
+  mime_type:  string | null
+  created_at: string
+}
+
 export type DispatchLine = {
   id:           string
   product_id:   string
@@ -84,6 +92,8 @@ export type DispatchLine = {
   store_name:   string | null
   /** Остаток к распределению в рейс (план − отгружено − активные рейсы, по факту ready). */
   remaining:    number
+  /** Вложения по строке (zip/pdf/jpeg), которые менеджер прикрепил для склада. */
+  files:        DispatchLineFile[]
 }
 
 export type DispatchListItem = {
@@ -325,7 +335,7 @@ export function getDispatchReservations(
 }
 
 export function createDispatch(body: DispatchDocCreate) {
-  return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body) })
+  return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body), idempotent: true })
 }
 
 export function updateDispatch(id: string, body: DispatchDocUpdate) {
@@ -357,6 +367,21 @@ export function updateDispatchLinePallets(docId: string, lineId: string, pallets
 
 export function deleteDispatchLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'DELETE' })
+}
+
+export function uploadDispatchLineFile(docId: string, lineId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/files`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function deleteDispatchLineFile(docId: string, lineId: string, fileId: string) {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/files/${fileId}`, {
+    method: 'DELETE',
+  })
 }
 
 export function advanceDispatch(id: string) {

@@ -8,8 +8,10 @@ from datetime import date
 from dbconn import get_connection
 from modules.expenses.service import _fixed_month_accrual
 from modules.production_calendar.service import (
+    bulk_apply,
     delete_day,
     is_working_day,
+    list_year,
     set_day,
     working_days_of_month,
 )
@@ -68,6 +70,64 @@ def test_overrides_both_directions():
         with get_connection() as conn:
             conn.execute("DELETE FROM production_calendar WHERE cal_date IN (?, ?)",
                          (sun.isoformat(), mon.isoformat()))
+            conn.commit()
+
+
+def test_list_year_sums_and_groups():
+    """Год: сумма рабочих дней по месяцам = годовому итогу; исключение в нужном месяце."""
+    day = "2098-03-15"
+    try:
+        with get_connection() as conn:
+            set_day(conn, cal_date=day, is_working=False, reason="Учёт", uid=None)
+            conn.commit()
+            data = list_year(conn, 2098)
+
+        assert len(data["months"]) == 12
+        assert sum(m["working_days"] for m in data["months"]) == data["working_days"]
+        march = next(m for m in data["months"] if m["month"] == 3)
+        assert day in {i["cal_date"] for i in march["items"]}
+        # Исключение не утекает в другие месяцы.
+        assert all(
+            day not in {i["cal_date"] for i in m["items"]}
+            for m in data["months"] if m["month"] != 3
+        )
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM production_calendar WHERE cal_date = ?", (day,))
+            conn.commit()
+
+
+def test_bulk_apply_modes():
+    """bulk_apply: nonworking уменьшает рабочие дни; working создаёт worksun / снимает исключение."""
+    mon1 = _first_weekday_non_sunday(2098, 9)
+    mon2 = next(
+        date(2098, 9, d) for d in range(mon1.day + 1, 31)
+        if date(2098, 9, d).weekday() not in (5, 6)
+    )
+    sun = _first_sunday(2098, 9)
+    dates = [mon1.isoformat(), mon2.isoformat()]
+    try:
+        with get_connection() as conn:
+            base = len(working_days_of_month(conn, 2098, 9))
+
+            # nonworking: два будних → нерабочими, рабочих дней -2.
+            bulk_apply(conn, dates=dates, mode="nonworking", reason="Майские", uid=None)
+            conn.commit()
+            assert len(working_days_of_month(conn, 2098, 9)) == base - 2
+            assert is_working_day(conn, mon1) is False
+
+            # working: будни с исключением → снимает (возврат к base), воскресенье → доп. смена (+1).
+            bulk_apply(conn, dates=[*dates, sun.isoformat()], mode="working", reason="Смена", uid=None)
+            conn.commit()
+            assert is_working_day(conn, mon1) is True
+            assert is_working_day(conn, sun) is True
+            assert len(working_days_of_month(conn, 2098, 9)) == base + 1
+    finally:
+        with get_connection() as conn:
+            conn.execute(
+                "DELETE FROM production_calendar WHERE cal_date IN (?, ?, ?)",
+                (mon1.isoformat(), mon2.isoformat(), sun.isoformat()),
+            )
             conn.commit()
 
 

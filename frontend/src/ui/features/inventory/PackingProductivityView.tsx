@@ -221,14 +221,22 @@ export function PackingProductivityView() {
                     </Td>
                     {showEarn ? <EarnCells m={day} /> : <QtyCells m={day} />}
                   </tr>
-                  {open && day.rows.map((row) => (
-                    <tr key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}`}>
-                      <Td className="mono" style={ELLIP}>{row.product_sku ?? '—'}</Td>
-                      <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
-                      <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
-                      {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
-                    </tr>
-                  ))}
+                  {open && day.rows.map((row) => {
+                    const docId = row.doc_ids?.[0]
+                    return (
+                      <tr
+                        key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}`}
+                        onClick={docId ? () => navigate(`/inventory/shipments/${docId}`) : undefined}
+                        style={docId ? { cursor: 'pointer' } : undefined}
+                        title={docId ? 'Открыть задачу упаковки' : undefined}
+                      >
+                        <Td className="mono" style={ELLIP}>{row.product_sku ?? '—'}</Td>
+                        <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
+                        <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
+                        {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
+                      </tr>
+                    )
+                  })}
                 </tbody>
               )
             })}

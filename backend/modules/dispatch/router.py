@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     DISPATCH_CANCELLABLE_STATUSES,
     DISPATCH_CARGO_DEFECT,
@@ -26,6 +28,8 @@ from config import (
     DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
+    MAX_UPLOAD_BYTES,
+    UPLOADS_DIR,
 )
 from dbconn import get_connection, like_substring_param
 from modules.auth.service import get_current_manager
@@ -64,6 +68,9 @@ router = APIRouter(tags=["dispatch"])
 
 _get_manager = get_current_manager
 
+# Менеджер прикрепляет по строке отгрузки техфайлы для склада: архив, накладную, фото.
+_ALLOWED_DISPATCH_FILE_EXTS = {".zip", ".pdf", ".jpg", ".jpeg"}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -74,13 +81,20 @@ def _priority_label(rank: int | None) -> str:
 
 
 @router.post("/dispatches")
-def create_dispatch(body: DispatchDocCreate, user=Depends(_get_manager)):
+def create_dispatch(
+    body: DispatchDocCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     uid = str(user["id"])
     now = _now()
     doc_id = str(uuid4())
     cargo_type = normalize_cargo_type(body.cargo_type)
 
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_create")
+        if not proceed:
+            return stored
         doc_num = next_doc_number(conn)
         conn.execute(
             """INSERT INTO dispatch_docs
@@ -104,8 +118,10 @@ def create_dispatch(body: DispatchDocCreate, user=Depends(_get_manager)):
             "INSERT INTO dispatch_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
             (str(uuid4()), doc_id, DISPATCH_OP_DOC_CREATE, now, uid),
         )
+        result = {"message": doc_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": doc_id}
+    return result
 
 
 @router.get("/dispatches", response_model=DispatchListResponse)
@@ -546,12 +562,91 @@ def delete_dispatch_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
     return {"message": "ok"}
 
 
+@router.post("/dispatches/{doc_id}/lines/{line_id}/files")
+async def upload_dispatch_line_file(
+    doc_id: str,
+    line_id: str,
+    file: UploadFile = File(...),
+    user=Depends(_get_manager),
+):
+    """Менеджер прикрепляет файл (zip, pdf, jpeg) к строке отгрузки в черновике.
+
+    Кладовщик потом видит файлы по каждому товару на подготовке отгрузки. Менять состав
+    вложений можно только в черновике — как и прочие поля строки (`update_dispatch_line`)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_DISPATCH_FILE_EXTS:
+        raise HTTPException(status_code=400, detail="Допустимы файлы: zip, pdf, jpeg")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Прикреплять файлы можно только в черновике")
+        line = conn.execute(
+            "SELECT id FROM dispatch_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+
+        saved_filename = f"{uuid4()}{ext}"
+        file_path = UPLOADS_DIR / saved_filename
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_bytes(data)
+        tmp_path.rename(file_path)
+
+        file_id = str(uuid4())
+        url = f"/uploads/{saved_filename}"
+        conn.execute(
+            "INSERT INTO dispatch_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (file_id, line_id, doc_id, file.filename, url, file.content_type or None, now, uid),
+        )
+        conn.commit()
+    return {"message": file_id}
+
+
+@router.delete("/dispatches/{doc_id}/lines/{line_id}/files/{file_id}")
+def delete_dispatch_line_file(doc_id: str, line_id: str, file_id: str, user=Depends(_get_manager)):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Менять файлы можно только в черновике")
+        conn.execute(
+            "UPDATE dispatch_line_files SET is_deleted = 1 WHERE id = ? AND line_id = ? AND doc_id = ?",
+            (file_id, line_id, doc_id),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
 @router.post("/dispatches/{doc_id}/advance")
-def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
+def advance_dispatch(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     """Менеджер передаёт отгрузку кладовщику на подготовку (draft → preparing)."""
     now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_advance", response={"message": DISPATCH_STATUS_PREPARING})
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status, comment FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
         ).fetchone()
@@ -582,27 +677,45 @@ def advance_dispatch(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/dispatches/{doc_id}/finish-preparation")
-def finish_dispatch_preparation(doc_id: str, body: DispatchFinishPreparationPayload, user=Depends(_get_manager)):
+def finish_dispatch_preparation(
+    doc_id: str,
+    body: DispatchFinishPreparationPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     """Кладовщик закончил подготовку отгрузки (preparing → awaiting_trip).
 
     Кладовщик указывает ячейки-источники по каждой строке — выбранное переезжает в
     «Готов к отгрузке» (зона отгрузки). Доступ — менеджерский состав + кладовщик/
-    начальник склада (get_current_manager). Идемпотентно невозможно: гейт по статусу.
+    начальник склада (get_current_manager). Помимо гейта по статусу — idempotency-ключ:
+    повтор при обрыве сети не двигает остаток повторно.
     Если рейс уже увёз отгрузку (статус проскочил в shipped/partially_shipped), кнопка
     недоступна — задача снята сама.
     """
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_finish_preparation")
+        if not proceed:
+            return stored
         next_status = prepare_to_ready(conn, doc_id, body.lines, uid)
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": next_status}
+    return result
 
 
 @router.post("/dispatches/{doc_id}/cancel")
-def cancel_dispatch(doc_id: str, user=Depends(_get_manager)):
+def cancel_dispatch(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_cancel", response={"message": DISPATCH_STATUS_CANCELLED})
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status, priority_rank FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
         ).fetchone()

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
-import { recommendedPallets } from '../../../../../api/dispatchApi'
+import { recommendedPallets, getDispatchReservations } from '../../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../../api/balancesApi'
+import { getPlannableItems } from '../../../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../../../api/domainTypes'
 import { updateProduct } from '../../../../../api/adminApi'
@@ -16,6 +17,11 @@ import { Panel, ReadRow, RailPanel, LockedGrid } from '../components/processUI'
 import { BalancePicker } from '../../shared/BalancePicker'
 import { AssignSkuDrawer } from '../../shared/AssignSkuDrawer'
 import { NumberStep } from '../../shared/NumberStep'
+import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
+import { dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from '../components/DispatchLineFiles'
+import { resolvePublicUploadSrc } from '../../../../../api/constants'
+import { AvailabilityCell } from '../../shared/AvailabilityCell'
+import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { fmtYmdAsDmy } from '../../../../../utils/format'
 import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
@@ -29,9 +35,15 @@ type Props = {
   onAddLine: (item: PlannableItem, qty: number) => Promise<void>
   onUpdateLine: (lineId: string, body: { qty?: number; pallets_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
   onDeleteLine: (lineId: string) => Promise<void>
+  onUploadFile: (lineId: string, file: File) => Promise<boolean>
+  onDeleteFile: (lineId: string, fileId: string) => Promise<boolean>
   onUpdateDoc: (body: { client_id?: string | null; client_name?: string | null; ship_date?: string | null; logistics_cost?: number | null; comment?: string | null }) => Promise<boolean>
   onReload: () => Promise<void>
   registerInfoFlush?: (fn: (() => Promise<boolean>) | null) => void
+}
+
+function variantKey(productId: string, colorId: string | null, sizeId: string | null): string {
+  return `${productId}|${colorId ?? ''}|${sizeId ?? ''}`
 }
 
 function draftFromLine(line: DispatchLine): LineDraft {
@@ -45,7 +57,7 @@ function draftFromLine(line: DispatchLine): LineDraft {
   }
 }
 
-export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUpdateDoc, onReload, registerInfoFlush }: Props) {
+export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const isDefectCargo = doc.cargo_type === 'defect'
@@ -54,7 +66,32 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   const [skuLine, setSkuLine] = useState<DispatchLine | null>(null)
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [savingLine, setSavingLine] = useState<string | null>(null)
+  const [uploadingLine, setUploadingLine] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
+  const [availMap, setAvailMap] = useState<Record<string, LineAvailability> | null>(null)
+
+  async function handleUploadFiles(lineId: string, files: File[]) {
+    setUploadingLine(lineId)
+    try {
+      for (const file of files) {
+        const ok = await onUploadFile(lineId, file)
+        if (!ok) break
+      }
+    } finally {
+      setUploadingLine(null)
+    }
+  }
+
+  // Замена = загрузка нового + удаление старого (отдельного эндпоинта нет, как в упаковке).
+  async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
+    setUploadingLine(lineId)
+    try {
+      const ok = await onUploadFile(lineId, file)
+      if (ok) await onDeleteFile(lineId, oldFileId)
+    } finally {
+      setUploadingLine(null)
+    }
+  }
 
   const [shipDate, setShipDate] = useState(doc.ship_date ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
@@ -88,6 +125,40 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       .catch(() => setClientStores([]))
     return () => ctrl.abort()
   }, [doc.client_id])
+
+  // Доступность по строкам = тот же расчёт, что и в окне подбора (BalancePicker):
+  // свободно = упаковано(ready+packed) − резерв для годного, брак на хранении − резерв
+  // для брака. Черновик не входит в резерв (его держат только preparing+), поэтому
+  // свободное здесь совпадает с серверным гейтом и не двоит собственную строку.
+  useEffect(() => {
+    if (!doc.client_id) { setAvailMap(null); return }
+    const ctrl = new AbortController()
+    const isDefect = doc.cargo_type === 'defect'
+    Promise.all([
+      getPlannableItems({ client_id: doc.client_id, cargo_type: doc.cargo_type, limit: 200 }, ctrl.signal),
+      getDispatchReservations({ client_id: doc.client_id, cargo_type: doc.cargo_type }, ctrl.signal)
+        .then((r) => r.items).catch(() => []),
+    ])
+      .then(([res, reservations]) => {
+        if (ctrl.signal.aborted) return
+        const reserved: Record<string, number> = {}
+        for (const rv of reservations) reserved[variantKey(rv.product_id, rv.color_id, rv.size_id)] = rv.reserved
+        const map: Record<string, LineAvailability> = {}
+        for (const b of res.items) {
+          const k = variantKey(b.product_id, b.color_id, b.size_id)
+          const ready = isDefect ? 0 : b.ready_good + (b.packed_good ?? 0)
+          const storage = isDefect ? b.storage_defect : b.storage_good
+          const packing = isDefect ? 0 : (b.packing_good ?? 0)
+          const inTransit = isDefect ? 0 : b.in_transit
+          const primaryRaw = isDefect ? storage : ready
+          const rv = reserved[k] ?? 0
+          map[k] = { free: Math.max(0, primaryRaw - rv), ready, reserved: rv, storage, packing, inTransit, isDefect }
+        }
+        setAvailMap(map)
+      })
+      .catch(() => { if (!ctrl.signal.aborted) setAvailMap(null) })
+    return () => ctrl.abort()
+  }, [doc.client_id, doc.cargo_type])
 
   const storeOptions: ComboboxOption[] = clientStores.map((s) => ({ value: s.id, label: s.name }))
 
@@ -258,7 +329,8 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                   <th style={{ width: 32 }} />
                   <th>Товар · вариант</th>
                   <th style={{ width: 160 }}>Магазин</th>
-                  <th style={{ width: 200 }}>Ссылка на сайт</th>
+                  <th style={{ width: 190 }}>Ссылка</th>
+                  <th style={{ width: 180 }}>Файлы</th>
                   <th style={{ textAlign: 'right', width: 130 }}>План</th>
                   <th style={{ textAlign: 'right', width: 120 }}>Палеты</th>
                   <th style={{ width: 64 }} />
@@ -312,6 +384,19 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                         />
                       </td>
                       <td>
+                        <LineFilesCell
+                          entries={l.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
+                          canEdit={canEdit}
+                          uploading={uploadingLine === l.id}
+                          accept={DISPATCH_FILE_ACCEPT}
+                          glyphFor={dispatchFileGlyph}
+                          onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
+                          onAdd={(files) => void handleUploadFiles(l.id, files)}
+                          onReplace={(fileId, file) => void handleReplaceFile(l.id, fileId, file)}
+                          onRemove={(fileId) => void onDeleteFile(l.id, fileId)}
+                        />
+                      </td>
+                      <td>
                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                           <NumberStep
                             value={d.qty}
@@ -320,6 +405,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                             onChange={(v) => setLineQty(l, v)}
                           />
                         </div>
+                        <AvailabilityCell
+                          avail={availMap
+                            ? (availMap[variantKey(l.product_id, l.color_id, l.size_id)]
+                               ?? { free: 0, ready: 0, reserved: 0, storage: 0, packing: 0, inTransit: 0, isDefect: isDefectCargo })
+                            : null}
+                          plannedQty={d.qty}
+                          loading={availMap === null}
+                        />
                       </td>
                       <td>
                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -368,7 +461,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
               </tbody>
               <tfoot>
                 <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                  <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
+                  <td colSpan={5} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
                     Итого: {skuCount} SKU
                   </td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>

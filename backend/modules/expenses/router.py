@@ -4,9 +4,10 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from psycopg import IntegrityError
 
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     EXPENSE_KIND_LOGISTICS,
     EXPENSE_KIND_MANUAL,
@@ -245,7 +246,11 @@ def carriers_outstanding(user=Depends(_get_finance)):
 
 
 @router.post("/expenses/pay-carrier", response_model=ExpenseCarrierPayResponse)
-def pay_carrier(body: ExpenseCarrierPayRequest, user=Depends(_get_finance)):
+def pay_carrier(
+    body: ExpenseCarrierPayRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     """Внести оплату перевозчику одной суммой: распределяется по его логистическим
     расходам от ранних к поздним, последний может закрыться частично. Сумма не может
     превышать суммарный долг перевозчику."""
@@ -255,11 +260,15 @@ def pay_carrier(body: ExpenseCarrierPayRequest, user=Depends(_get_finance)):
         raise HTTPException(status_code=400, detail="Выберите перевозчика")
     paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_pay_carrier")
+        if not proceed:
+            return stored
         src_name = resolve_payment_source(conn, (body.payment_source_id or "").strip())
         result = pay_carrier_fifo(
             conn, carrier_id=carrier_id, amount=int(body.amount), paid_on=paid_on,
             payment_source_id=(body.payment_source_id or "").strip(), src_name=src_name, uid=uid,
         )
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return ExpenseCarrierPayResponse(**result)
 
@@ -378,7 +387,11 @@ def delete_dict_item(kind: str, item_id: str, user=Depends(_get_finance)):
 # ── Расход: создание ─────────────────────────────────────────────────────────────
 
 @router.post("/expenses", response_model=MessageResponse)
-def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
+def create_expense(
+    body: ExpenseCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     uid = str(user["id"])
     kind = (body.kind or EXPENSE_KIND_MANUAL).strip()
     if kind not in EXPENSE_KINDS_ALL:
@@ -408,6 +421,9 @@ def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
     expense_id = str(uuid4())
     now = now_iso()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_create")
+        if not proceed:
+            return stored
         cat_id = (body.category_id or "").strip() or None
         if kind == EXPENSE_KIND_MANUAL and not cat_id:
             raise HTTPException(status_code=400, detail="Выберите категорию")
@@ -454,8 +470,10 @@ def create_expense(body: ExpenseCreate, user=Depends(_get_finance)):
         if pay_status == EXPENSE_PAYMENT_AWAITING:
             comment += " · ожидает оплаты"
         _journal(conn, expense_id, EXPENSE_OP_CREATE, comment, uid)
+        result = {"message": expense_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return MessageResponse(message=expense_id)
+    return MessageResponse(**result)
 
 
 # ── Расход: карточка / правка ────────────────────────────────────────────────────
@@ -516,13 +534,21 @@ def update_expense(expense_id: str, body: ExpenseUpdate, user=Depends(_get_finan
 
 
 @router.post("/expenses/{expense_id}/pay", response_model=MessageResponse)
-def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_finance)):
+def pay_expense(
+    expense_id: str,
+    body: ExpensePayRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     """Оплата расхода: полная (amount не задан → гасится весь остаток) или частичная.
     Допустима из статусов «ожидает» и «частично оплачен»; переплата запрещена.
     Каждый платёж — запись в журнал expense_payments, статус пересчитывается."""
     uid = str(user["id"])
     paid_on = validate_date(body.paid_on) if body.paid_on else today_iso()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_pay", response={"message": "ok"})
+        if not proceed:
+            return stored
         old = conn.execute(
             "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
             (expense_id,),
@@ -558,11 +584,18 @@ def pay_expense(expense_id: str, body: ExpensePayRequest, user=Depends(_get_fina
 
 
 @router.post("/expenses/{expense_id}/unpay", response_model=MessageResponse)
-def unpay_expense(expense_id: str, user=Depends(_get_finance)):
+def unpay_expense(
+    expense_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     """Откат ошибочной оплаты: «оплачено»/«частично оплачено» → «ожидает оплаты».
     Снимает все платежи расхода (soft-delete журнала expense_payments)."""
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_unpay", response={"message": "ok"})
+        if not proceed:
+            return stored
         old = conn.execute(
             "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (expense_id,),
@@ -578,10 +611,17 @@ def unpay_expense(expense_id: str, user=Depends(_get_finance)):
 
 
 @router.post("/expenses/{expense_id}/cancel", response_model=MessageResponse)
-def cancel_expense(expense_id: str, user=Depends(_get_finance)):
+def cancel_expense(
+    expense_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     """Снятие обязательства «ожидает оплаты» → «аннулирован» (без удаления записи)."""
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_cancel", response={"message": "ok"})
+        if not proceed:
+            return stored
         old = conn.execute(
             "SELECT * FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (expense_id,),

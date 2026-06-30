@@ -234,6 +234,7 @@ export function createExpense(payload: ExpensePayload) {
   return request<{ message: string }>('/expenses', {
     method: 'POST',
     body: JSON.stringify(payload),
+    idempotent: true,
   })
 }
 

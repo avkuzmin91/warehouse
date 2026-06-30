@@ -11,6 +11,8 @@ import { Badge } from '../../../../primitives/Badge'
 import { Panel } from '../../../shared/process/processUI'
 import { RoleChip } from '../../../shared/process/RoleChip'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
+import { DispatchLineFiles } from './DispatchLineFiles'
+import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
 import { fmtDateLong } from '../../../../../utils/format'
@@ -309,6 +311,28 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
                   <div className="prog" style={{ marginTop: 10 }}>
                     <div className={`prog-fill ${done ? 'ok' : ''}`} style={{ width: `${pct}%` }} />
                   </div>
+
+                  {(line.store_name || line.site_url || line.files.length > 0) && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 11, fontSize: 12.5 }}>
+                      {line.store_name && (
+                        <span style={{ color: 'var(--c-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="cart" size={13} style={{ color: 'var(--c-text-subtle)' }} />{line.store_name}
+                        </span>
+                      )}
+                      {line.site_url && (
+                        <a href={line.site_url} target="_blank" rel="noreferrer" title={line.site_url}
+                           style={{ color: 'var(--c-accent)', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="arrowRight" size={13} />Ссылка
+                        </a>
+                      )}
+                      {line.files.length > 0 && (
+                        <DispatchLineFiles
+                          entries={line.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
+                          canEdit={false}
+                        />
+                      )}
+                    </div>
+                  )}
 
                   {!loadingZones && sources.length === 0 && (
                     <div style={{ fontSize: 12.5, color: 'var(--c-danger)', marginTop: 10 }}>

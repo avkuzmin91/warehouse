@@ -286,6 +286,7 @@ export function createReceipt(payload: ReceiptCreatePayload) {
   return request<{ message: string }>('/receipts', {
     method: 'POST',
     body: JSON.stringify(payload),
+    idempotent: true,
   })
 }
 

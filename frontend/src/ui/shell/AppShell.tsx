@@ -5,6 +5,7 @@ import { Topbar } from './Topbar'
 import { CommandPalette } from './CommandPalette'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { PendingAccessPage } from '../pages/PendingAccessPage'
+import { GlobalBusyBar } from '../feedback/GlobalBusyBar'
 
 export function AppShell() {
   const { user, loading } = useCurrentUser()
@@ -40,6 +41,7 @@ export function AppShell() {
 
   return (
     <div className={`app-root${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+      <GlobalBusyBar />
       <Sidebar user={user} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
       <main className="main">
         <Topbar onCmd={openCmd} onToggleSidebar={toggleSidebar} sidebarCollapsed={sidebarCollapsed} />

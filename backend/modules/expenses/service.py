@@ -44,7 +44,7 @@ from config import (
     PAYROLL_KIND_LABELS,
 )
 from dbconn import like_substring_param
-from modules.production_calendar.service import working_days_of_month
+from modules.production_calendar.service import working_days_in_range, working_days_of_month
 from modules.timesheet.service import daily_payroll_accruals_split, load_salaries, salary_on
 from modules.warehouse_rent.service import current_rent_rates
 
@@ -552,8 +552,8 @@ def expense_analytics(
       • by_status   — состояние оплаты обязательств реестра за период.
 
     Сумма дня — «начислено» (обязательство по дате операции); аннулированные исключены
-    из всех срезов отчёта. Аренда размазывается ровно по дням своего периода, а не пиком
-    в день начисления. ЗП берётся из табеля начислением по дням (часы × ставка / доля
+    из всех срезов отчёта. Аренда размазывается по рабочим дням своего периода (как и оклад),
+    а не пиком в день начисления. ЗП берётся из табеля начислением по дням (часы × ставка / доля
     оклада), а не из реестровых выплат, — поэтому реестровый kind=salary из динамики и
     by_kind исключён (иначе двойной учёт).
 
@@ -634,7 +634,7 @@ def expense_analytics(
             _add_category(cat_name, r["category_id"], amount, count)
             _add_matrix(cat_name, r["category_id"], str(r["kind"]), str(r["spent_on"]), amount)
 
-    # 2) Аренда — размазываем сумму по дням периода (period_start..period_end).
+    # 2) Аренда — размазываем сумму по рабочим дням периода (period_start..period_end).
     if rent_in_scope:
         rent_rows = connection.execute(
             """
@@ -659,14 +659,14 @@ def expense_analytics(
                 continue
             if pend < pstart:
                 pstart, pend = pend, pstart
-            n_days = (pend - pstart).days + 1
+            wd = working_days_in_range(connection, pstart, pend)  # размазываем по рабочим дням
+            n_days = len(wd)
             if n_days <= 0:
                 continue
             base, rem = divmod(total, n_days)  # остаток целочисленного деления — на первые дни
             in_window = 0  # сумма долей, попавших в окно отчёта — для by_category
             rent_name = str(r["category_name"] or "Без категории")
-            dd, idx = pstart, 0
-            while dd <= pend:
+            for idx, dd in enumerate(wd):
                 share = base + (1 if idx < rem else 0)
                 day_iso = dd.isoformat()
                 if day_iso in series and share:
@@ -674,8 +674,6 @@ def expense_analytics(
                     by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["amount"] += share
                     in_window += share
                     _add_matrix(rent_name, r["category_id"], EXPENSE_KIND_RENT, day_iso, share)
-                dd += timedelta(days=1)
-                idx += 1
             if in_window:
                 by_kind.setdefault(EXPENSE_KIND_RENT, {"amount": 0, "count": 0})["count"] += 1
                 _add_category(rent_name, r["category_id"], in_window, 1)

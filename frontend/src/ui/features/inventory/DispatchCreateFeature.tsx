@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createDispatch, advanceDispatch, recommendedPallets, getDispatchReservations } from '../../../api/dispatchApi'
+import { createDispatch, advanceDispatch, getDispatch, uploadDispatchLineFile, recommendedPallets, getDispatchReservations } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchLineIn } from '../../../api/dispatchApi'
 import type { PlannableItem } from '../../../api/balancesApi'
+import { balanceKey } from '../../../utils/balanceKey'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../api/domainTypes'
 import { Combobox } from '../../data/Combobox'
@@ -15,19 +16,22 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { BalancePicker } from './shared/BalancePicker'
 import { AssignSkuDrawer } from './shared/AssignSkuDrawer'
 import { NumberStep } from './shared/NumberStep'
+import { AvailabilityCell } from './shared/AvailabilityCell'
 import { updateProduct } from '../../../api/adminApi'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
 import { DispHeader } from './dispatchDetail/components/DispHeader'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './dispatchDetail/components/processUI'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
+import { LineFilesCell } from './shipmentDetail/components/LineFilesCell'
+import { validateDispatchFile, dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from './dispatchDetail/components/DispatchLineFiles'
 import { fmtYmdAsDmy } from '../../../utils/format'
 import { canCreateDocuments, canViewCosts } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
 type DraftLine = DispatchLineIn & {
-  _uid: string; ready: number; onHand: number; inTransit: number; reserved: number; sku_pending: boolean
-  itemsPerPallet: number | null; pallets: number | null; palletsTouched: boolean
+  _uid: string; ready: number; onHand: number; packing: number; inTransit: number; reserved: number; sku_pending: boolean
+  itemsPerPallet: number | null; pallets: number | null; palletsTouched: boolean; files: File[]
 }
 
 function variantKey(productId: string, colorId: string | null | undefined, sizeId: string | null | undefined): string {
@@ -160,6 +164,52 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, site_url: siteUrl } : l))
   }
 
+  function addLineFiles(uid: string, files: File[]) {
+    if (files.length === 0) return
+    for (const file of files) {
+      const invalid = validateDispatchFile(file)
+      if (invalid) { setError(`${file.name}: ${invalid}`); return }
+    }
+    setError('')
+    setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, files: [...l.files, ...files] } : l))
+  }
+
+  function removeLineFile(uid: string, index: number) {
+    setLines((ls) => ls.map((l) => l._uid === uid
+      ? { ...l, files: l.files.filter((_, i) => i !== index) }
+      : l))
+  }
+
+  function replaceLineFile(uid: string, index: number, file: File) {
+    const invalid = validateDispatchFile(file)
+    if (invalid) { setError(`${file.name}: ${invalid}`); return }
+    setError('')
+    setLines((ls) => ls.map((l) => l._uid === uid
+      ? { ...l, files: l.files.map((f, i) => i === index ? file : f) }
+      : l))
+  }
+
+  // Файлы стейджатся локально (у строк формы ещё нет id) и грузятся после создания:
+  // матчим строку черновика к созданной по варианту + магазину + ссылке.
+  async function uploadDraftFiles(docId: string) {
+    const withFiles = lines.filter((l) => l.files.length > 0)
+    if (withFiles.length === 0) return
+    const detail = await getDispatch(docId)
+    const used = new Set<string>()
+    for (const draft of withFiles) {
+      const target = detail.lines.find((cl) =>
+        !used.has(cl.id) &&
+        balanceKey(cl) === balanceKey(draft) &&
+        (cl.store_id ?? null) === (draft.store_id ?? null) &&
+        (cl.site_url ?? null) === (draft.site_url ?? null))
+      if (!target) continue
+      used.add(target.id)
+      for (const file of draft.files) {
+        await uploadDispatchLineFile(docId, target.id, file)
+      }
+    }
+  }
+
   function makeDraftLine(b: PlannableItem, qty: number): DraftLine {
     return {
       _uid:         `line-${lineUidSeq.current++}`,
@@ -175,6 +225,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       // можно передать в подготовку и отгрузить (совпадает с бэк-гейтом _source_ops).
       ready:        isDefectCargo ? 0 : b.ready_good + (b.packed_good ?? 0),
       onHand:       isDefectCargo ? b.storage_defect : b.storage_good,
+      packing:      isDefectCargo ? 0 : (b.packing_good ?? 0),
       inTransit:    isDefectCargo ? 0 : b.in_transit,
       reserved:     reservedMap[variantKey(b.product_id, b.color_id, b.size_id)] ?? 0,
       sku_pending:  !!b.sku_pending,
@@ -184,6 +235,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       site_url:     null,
       store_id:     null,
       store_name:   null,
+      files:        [],
     }
   }
 
@@ -234,6 +286,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         })
         docId = res.message
         createdIdRef.current = docId
+        await uploadDraftFiles(docId)
       }
       if (toAwaiting) await advanceDispatch(docId)
       navigate(`/inventory/dispatches/${docId}`)
@@ -372,7 +425,12 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ width: 170 }}>Магазин</th>
-                    <th style={{ width: 200 }}>Ссылка на сайт</th>
+                    <th style={{ width: 190 }}>Ссылка</th>
+                    <th style={{ width: 180 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
+                        <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
+                      </span>
+                    </th>
                     <th style={{ textAlign: 'right', width: 176 }}>План отгрузки</th>
                     <th style={{ textAlign: 'right', width: 132 }}>Палеты</th>
                     <th style={{ width: 32 }} />
@@ -381,7 +439,6 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                 <tbody>
                   {lines.map((l) => {
                     const overCap = l.qty > l.ready + l.onHand + l.inTransit
-                    const waiting = !overCap && l.qty > srcAvail(l)
                     return (
                       <tr key={l._uid} style={overCap ? { background: 'var(--c-warning-bg)' } : {}}>
                         <td>
@@ -428,20 +485,28 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                           />
                         </td>
                         <td>
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
+                          <LineFilesCell
+                            entries={l.files.map((f, i) => ({ id: String(i), filename: f.name, mimeType: f.type || null }))}
+                            canEdit
+                            accept={DISPATCH_FILE_ACCEPT}
+                            glyphFor={dispatchFileGlyph}
+                            onPreview={(entry) => {
+                              const file = l.files[Number(entry.id)]
+                              if (file) window.open(URL.createObjectURL(file), '_blank', 'noopener')
+                            }}
+                            onAdd={(files) => addLineFiles(l._uid, files)}
+                            onReplace={(entryId, file) => replaceLineFile(l._uid, Number(entryId), file)}
+                            onRemove={(entryId) => removeLineFile(l._uid, Number(entryId))}
+                          />
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                             <NumberStep value={l.qty} onChange={(v) => updateQty(l._uid, v)} />
-                            {overCap ? (
-                              <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />
-                            ) : waiting ? (
-                              <Icon name="clock" size={13} style={{ color: 'var(--c-text-subtle)' }} />
-                            ) : null}
                           </div>
-                          <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
-                            {`свободно ${srcAvail(l)}`}
-                            {l.reserved > 0 ? ` · ${isDefectCargo ? 'брак' : 'упаковано'} ${isDefectCargo ? l.onHand : l.ready}, в резерве ${l.reserved}` : ''}
-                            {!isDefectCargo && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
-                            {!isDefectCargo && l.inTransit > 0 ? ` · в пути ${l.inTransit}` : ''}
-                          </div>
+                          <AvailabilityCell
+                            avail={{ free: srcAvail(l), ready: l.ready, reserved: l.reserved, storage: l.onHand, packing: l.packing, inTransit: l.inTransit, isDefect: isDefectCargo }}
+                            plannedQty={l.qty}
+                          />
                         </td>
                         <td>
                           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -475,7 +540,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                 </tbody>
                 <tfoot>
                   <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
+                    <td colSpan={5} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
                       Итого: {lines.length} SKU
                     </td>
                     <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>

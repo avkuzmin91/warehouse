@@ -466,8 +466,9 @@ def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
             src_qty = int(src.qty or 0)
             if not zone_id:
                 raise HTTPException(status_code=400, detail="Выберите ячейку-источник для каждой строки")
-            if zone_id == shipping_id:
-                raise HTTPException(status_code=400, detail="Выберите ячейку хранения, а не зону отгрузки")
+            # Зона отгрузки допустима как источник: товар могли разложить/оставить прямо в
+            # ней (например, при раскладке «Готово к рейсу» после упаковки). Тогда это
+            # `ready@зона отгрузки` — самоперенос с нулевым нетто, дальше рейс спишет из `ready`.
             if src_qty <= 0:
                 raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
             # Корзина-источник в этой ячейке: годный лежит либо «Готов к отгрузке»
@@ -820,6 +821,20 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
         "WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0 ORDER BY l.created_at, l.id",
         (doc_id,),
     ).fetchall()
+    files_rows = connection.execute(
+        "SELECT id, line_id, filename, url, mime_type, created_at FROM dispatch_line_files "
+        "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
+        (doc_id,),
+    ).fetchall()
+    files_by_line: dict[str, list[dict]] = {}
+    for f in files_rows:
+        files_by_line.setdefault(str(f["line_id"]), []).append({
+            "id": str(f["id"]),
+            "filename": str(f["filename"]),
+            "url": str(f["url"]),
+            "mime_type": f["mime_type"],
+            "created_at": str(f["created_at"]),
+        })
     ops_rows = connection.execute(
         """SELECT o.*, u.email AS user_email
            FROM dispatch_ops o LEFT JOIN users u ON u.id = o.created_by
@@ -854,6 +869,7 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
             "store_id": l["store_id"],
             "store_name": l["store_name"],
             "remaining": int(remaining.get(str(l["id"]), 0)),
+            "files": files_by_line.get(str(l["id"]), []),
         }
         for l in lines_rows
     ]

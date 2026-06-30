@@ -57,6 +57,9 @@ class PlannableItem(BaseModel):
     # Упаковано, но ещё не размещено по местам (корзина packed). Для отгрузки годного —
     # такой же источник, как ready: можно отгрузить прямо со стола упаковки.
     packed_good: int = 0
+    # На столе упаковки (корзина packing): снято со склада, ещё не упаковано. К отгрузке
+    # недоступно (источник = ready + packed), показывается только как провенанс остатка.
+    packing_good: int = 0
     storage_good: int
     storage_defect: int
     in_transit: int

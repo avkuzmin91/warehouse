@@ -73,6 +73,8 @@ export type PlannableItem = {
   ready_defect: number
   /** Упаковано, но ещё не размещено по местам — для отгрузки годного такой же источник, как ready. */
   packed_good: number
+  /** На столе упаковки (снято со склада, ещё не упаковано) — к отгрузке недоступно, только провенанс. */
+  packing_good: number
   storage_good: number
   storage_defect: number
   in_transit: number

@@ -799,3 +799,42 @@ def test_manager_sees_manual_expenses(admin_client, manager_client, dict_ids):
     mids = {it["id"] for it in manager_client.get("/expenses?limit=200").json()["items"]}
     assert eid in mids
     assert manager_client.get(f"/expenses/{eid}").status_code == 200
+
+
+def _create_awaiting(client, cat, src, *, name, amount=100000):
+    return client.post("/expenses", json={
+        "spent_on": "2026-06-15", "category_id": cat, "name": name, "quantity": 1,
+        "unit": "шт", "amount": amount, "payment_source_id": src, "payment_status": "awaiting",
+    }).json()["message"]
+
+
+def test_pay_same_request_id_charges_once(admin_client, dict_ids):
+    """Двойной клик «Оплатить» при обрыве сети не списывает деньги дважды (idempotency)."""
+    cat, src = dict_ids
+    eid = _create_awaiting(admin_client, cat, src, name="К оплате")
+    rid = uuid.uuid4().hex
+    pay = {"amount": 40000, "payment_source_id": src}
+
+    first = admin_client.post(f"/expenses/{eid}/pay", json=pay, headers={"X-Request-Id": rid})
+    assert first.status_code == 200, first.text
+    second = admin_client.post(f"/expenses/{eid}/pay", json=pay, headers={"X-Request-Id": rid})
+    assert second.status_code == 200, second.text  # прежний ответ, второй платёж НЕ проведён
+
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["paid_amount"] == 40000           # списано один раз, не 80000
+    assert d["payment_status"] == "partially_paid"
+    assert len(d["payments"]) == 1
+
+
+def test_pay_different_request_id_charges_each(admin_client, dict_ids):
+    """Разные X-Request-Id — два легитимных частичных платежа проходят оба."""
+    cat, src = dict_ids
+    eid = _create_awaiting(admin_client, cat, src, name="К оплате 2")
+    pay = {"amount": 40000, "payment_source_id": src}
+
+    r1 = admin_client.post(f"/expenses/{eid}/pay", json=pay, headers={"X-Request-Id": uuid.uuid4().hex})
+    r2 = admin_client.post(f"/expenses/{eid}/pay", json=pay, headers={"X-Request-Id": uuid.uuid4().hex})
+    assert r1.status_code == 200 and r2.status_code == 200
+    d = admin_client.get(f"/expenses/{eid}").json()
+    assert d["paid_amount"] == 80000           # два разных платежа
+    assert len(d["payments"]) == 2

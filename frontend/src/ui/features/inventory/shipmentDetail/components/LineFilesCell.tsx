@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../../../../primitives/Icon'
+import type { IconName } from '../../../../primitives/Icon'
 import { fileTypeIcon, fileTypeColor, shortName } from './fileHelpers'
+
+type FileGlyph = { name: IconName; color: string }
 
 /** Файл в ячейке: загруженный (id + href) или локальный черновик (id = индекс, без href). */
 export type LineFileEntry = {
@@ -13,6 +16,8 @@ export type LineFileEntry = {
 
 export function LineFilesCell({
   entries, canEdit, uploading, onPreview, onAdd, onReplace, onRemove,
+  accept = '.pdf,.png,.jpg,.jpeg',
+  glyphFor = (mime, filename) => ({ name: fileTypeIcon(mime, filename), color: fileTypeColor(mime, filename) }),
 }: {
   entries: LineFileEntry[]
   canEdit: boolean
@@ -21,6 +26,10 @@ export function LineFilesCell({
   onAdd: (files: File[]) => void
   onReplace: (entryId: string, file: File) => void
   onRemove: (entryId: string) => void
+  /** Список расширений для input[type=file]. По умолчанию — набор упаковки (pdf/png/jpg). */
+  accept?: string
+  /** Иконка+цвет глифа по файлу — для доменов с другим набором типов (напр. zip в отгрузке). */
+  glyphFor?: (mime: string | null, filename: string) => FileGlyph
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const replaceTargetRef = useRef<string | null>(null)
@@ -85,7 +94,7 @@ export function LineFilesCell({
     <input
       ref={inputRef}
       type="file"
-      accept=".pdf,.png,.jpg,.jpeg"
+      accept={accept}
       multiple
       style={{ display: 'none' }}
       onChange={handleInputChange}
@@ -131,13 +140,8 @@ export function LineFilesCell({
   const many = entries.length > 1
 
   function entryGlyph(entry: LineFileEntry, size: number) {
-    return (
-      <Icon
-        name={fileTypeIcon(entry.mimeType, entry.filename)}
-        size={size}
-        style={{ color: fileTypeColor(entry.mimeType, entry.filename), flexShrink: 0 }}
-      />
-    )
+    const g = glyphFor(entry.mimeType, entry.filename)
+    return <Icon name={g.name} size={size} style={{ color: g.color, flexShrink: 0 }} />
   }
 
   function previewLink(entry: LineFileEntry, onPicked: () => void, children: React.ReactNode, style: React.CSSProperties) {

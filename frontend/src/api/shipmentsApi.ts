@@ -314,7 +314,7 @@ export function getShipment(id: string, signal?: AbortSignal) {
 }
 
 export function createShipment(body: ShipmentDocCreate) {
-  return request<{ message: string }>('/shipments', { method: 'POST', body: JSON.stringify(body) })
+  return request<{ message: string }>('/shipments', { method: 'POST', body: JSON.stringify(body), idempotent: true })
 }
 
 export function updateShipment(id: string, body: ShipmentDocUpdate) {
@@ -393,6 +393,7 @@ export type PackingProductivityRow = {
   good_earn_kop:   number
   defect_earn_kop: number
   earn_kop:        number
+  doc_ids:         string[]
 }
 
 export type PackingProductivityDay = {

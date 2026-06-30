@@ -7,8 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from dbconn import get_connection
 from modules.auth.service import get_current_manager
 
-from .schemas import CalendarMonthResponse, MessageResponse, SetCalendarDayRequest
-from .service import delete_day, list_month, set_day
+from .schemas import (
+    BulkApplyRequest,
+    CalendarMonthResponse,
+    CalendarYearResponse,
+    MessageResponse,
+    SetCalendarDayRequest,
+)
+from .service import bulk_apply, delete_day, list_month, list_year, set_day
 
 router = APIRouter(tags=["production-calendar"])
 
@@ -22,6 +28,17 @@ def _validate_date(raw: str) -> str:
     return s
 
 
+@router.get("/production-calendar/year", response_model=CalendarYearResponse)
+def get_calendar_year(
+    user=Depends(get_current_manager),
+    year: int = Query(..., ge=2000, le=2100),
+):
+    _ = user
+    with get_connection() as conn:
+        data = list_year(conn, year)
+    return CalendarYearResponse(**data)
+
+
 @router.get("/production-calendar", response_model=CalendarMonthResponse)
 def get_calendar_month(
     user=Depends(get_current_manager),
@@ -32,6 +49,18 @@ def get_calendar_month(
     with get_connection() as conn:
         data = list_month(conn, year, month)
     return CalendarMonthResponse(**data)
+
+
+@router.post("/production-calendar/bulk", response_model=MessageResponse)
+def bulk_apply_days(body: BulkApplyRequest, user=Depends(get_current_manager)):
+    uid = str(user["id"])
+    if body.mode not in ("working", "nonworking"):
+        raise HTTPException(status_code=400, detail="Некорректный режим")
+    dates = [_validate_date(d) for d in body.dates]
+    with get_connection() as conn:
+        bulk_apply(conn, dates=dates, mode=body.mode, reason=body.reason, uid=uid)
+        conn.commit()
+    return MessageResponse(message="ok")
 
 
 @router.post("/production-calendar", response_model=MessageResponse)

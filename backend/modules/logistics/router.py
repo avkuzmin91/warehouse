@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from idempotency import begin_idempotent
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
@@ -151,7 +151,11 @@ def _fetch_doc(conn, trip_id: str):
 
 
 @router.post("/trips")
-def create_trip(payload: TripDocCreate, user=Depends(get_current_document_creator)):
+def create_trip(
+    payload: TripDocCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_document_creator),
+):
     if payload.cost_estimate is not None:
         ensure_cost_access(user)
     direction = (payload.direction or TRIP_DIRECTION_INBOUND).strip()
@@ -166,6 +170,9 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_document_creato
         cargo_type = DISPATCH_CARGO_GOOD
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "trip_create")
+        if not proceed:
+            return stored
         trip_id = str(uuid4())
         trip_num = next_trip_number(conn)
         now = _now()
@@ -212,8 +219,10 @@ def create_trip(payload: TripDocCreate, user=Depends(get_current_document_creato
                 [{"receipt_doc_id": rid, "allocations": []} for rid in payload.receipt_doc_ids],
                 uid,
             )
+        result = {"message": trip_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": trip_id}
+    return result
 
 
 @router.get("/trips", response_model=TripListResponse)
@@ -581,9 +590,16 @@ def _advance(conn, trip_id: str, *, to_status: str, op_type: str,
 
 
 @router.post("/trips/{trip_id}/handoff")
-def handoff_trip(trip_id: str, user=Depends(get_current_manager)):
+def handoff_trip(
+    trip_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "trip_handoff", response={"message": TRIP_STATUS_AWAITING_ARRIVAL})
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_DRAFT:
             raise HTTPException(status_code=400, detail="Передать на склад можно только черновик")
@@ -729,10 +745,18 @@ def trip_unload(
 
 
 @router.post("/trips/{trip_id}/cost")
-def trip_cost(trip_id: str, payload: TripCostPayload, user=Depends(get_current_manager)):
+def trip_cost(
+    trip_id: str,
+    payload: TripCostPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
     ensure_cost_access(user)
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "trip_cost", response={"message": "ok"})
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_COSTING:
             raise HTTPException(status_code=400, detail="Внести стоимость можно только в статусе 'Уточнение стоимости'")
@@ -809,9 +833,16 @@ def update_trip_execution(trip_id: str, payload: TripExecutionPayload, user=Depe
 
 
 @router.post("/trips/{trip_id}/close")
-def close_trip(trip_id: str, user=Depends(get_current_manager)):
+def close_trip(
+    trip_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "trip_close", response={"message": TRIP_STATUS_CLOSED})
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         if str(doc_row["status"]) != TRIP_STATUS_COSTING:
             raise HTTPException(status_code=400, detail="Закрыть можно только рейс в статусе 'Уточнение стоимости'")
@@ -822,9 +853,16 @@ def close_trip(trip_id: str, user=Depends(get_current_manager)):
 
 
 @router.post("/trips/{trip_id}/cancel")
-def cancel_trip(trip_id: str, user=Depends(get_current_manager)):
+def cancel_trip(
+    trip_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "trip_cancel", response={"message": TRIP_STATUS_CANCELLED})
+        if not proceed:
+            return stored
         doc_row = _fetch_doc(conn, trip_id)
         current = str(doc_row["status"])
         if current in (TRIP_STATUS_CLOSED, TRIP_STATUS_CANCELLED):

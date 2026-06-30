@@ -70,6 +70,25 @@ def working_days_of_month(
     return out
 
 
+def working_days_in_range(
+    connection, date_from: date, date_to: date, *, overrides: dict[str, bool] | None = None
+) -> list[date]:
+    """Упорядоченный список рабочих дней в диапазоне [date_from..date_to] вкл. с учётом
+    производственного календаря. Аналог working_days_of_month для произвольного диапазона
+    (например, периода аренды)."""
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+    if overrides is None:
+        overrides = load_overrides(connection, date_from.isoformat(), date_to.isoformat())
+    out: list[date] = []
+    d = date_from
+    while d <= date_to:
+        if overrides.get(d.isoformat(), _default_is_working(d)):
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
 # ── Справочник (CRUD) ─────────────────────────────────────────────────────────
 
 def list_month(connection, year: int, month: int) -> dict:
@@ -99,6 +118,64 @@ def list_month(connection, year: int, month: int) -> dict:
         "working_days": len(working_days_of_month(connection, year, month, overrides=overrides)),
         "items": items,
     }
+
+
+def list_year(connection, year: int) -> dict:
+    """Сводка года: рабочие дни по каждому месяцу + исключения, сгруппированные по месяцу.
+
+    Один запрос исключений на весь год (год-экран не дёргает БД по месяцу).
+    """
+    df = date(year, 1, 1).isoformat()
+    dt = date(year, 12, 31).isoformat()
+    overrides = load_overrides(connection, df, dt)
+    rows = connection.execute(
+        "SELECT id, cal_date, is_working, reason FROM production_calendar "
+        "WHERE COALESCE(is_deleted, 0) = 0 AND cal_date >= ? AND cal_date <= ? "
+        "ORDER BY cal_date ASC",
+        (df, dt),
+    ).fetchall()
+    by_month: dict[int, list[dict]] = {m: [] for m in range(1, 13)}
+    for r in rows:
+        iso = str(r["cal_date"])[:10]
+        by_month[int(iso[5:7])].append(
+            {
+                "id": str(r["id"]),
+                "cal_date": iso,
+                "is_working": bool(int(r["is_working"])),
+                "reason": r["reason"],
+            }
+        )
+    months = []
+    total = 0
+    for m in range(1, 13):
+        wd = len(working_days_of_month(connection, year, m, overrides=overrides))
+        total += wd
+        months.append({"month": m, "working_days": wd, "items": by_month[m]})
+    return {"year": year, "working_days": total, "months": months}
+
+
+def bulk_apply(
+    connection, *, dates: list[str], mode: str, reason: str | None, uid: str | None
+) -> int:
+    """Массовое применение статуса к набору дат. mode: 'working' | 'nonworking'.
+
+    'nonworking' → каждая дата помечается нерабочей (праздник/закрытие).
+    'working'    → воскресенье делается рабочим (доп. смена), будний день
+                   возвращается к правилу 6/1 (снятие исключения). Совпадает с
+                   действиями инспектора единичного дня.
+    """
+    n = 0
+    for raw in dates:
+        iso = raw[:10]
+        d = date.fromisoformat(iso)
+        if mode == "nonworking":
+            set_day(connection, cal_date=iso, is_working=False, reason=reason, uid=uid)
+        elif d.weekday() == _DEFAULT_OFF_WEEKDAY:
+            set_day(connection, cal_date=iso, is_working=True, reason=reason, uid=uid)
+        else:
+            delete_day(connection, iso)
+        n += 1
+    return n
 
 
 def set_day(connection, *, cal_date: str, is_working: bool, reason: str | None, uid: str | None) -> None:

@@ -286,6 +286,7 @@ export function createInvoice(payload: InvoiceCreatePayload) {
   return request<{ message: string }>('/invoices', {
     method: 'POST',
     body: JSON.stringify(payload),
+    idempotent: true,
   })
 }
 

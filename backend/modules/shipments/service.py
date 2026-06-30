@@ -661,6 +661,23 @@ def packing_productivity(
     ).fetchall()
     docs_by_day = {str(r["packed_date"]): int(r["doc_count"] or 0) for r in doc_rows}
 
+    # Документы-источники по каждой строке (день × клиент × SKU) — для перехода
+    # из отчёта в карточку «Задачи упаковки». Чаще всего ровно один.
+    doc_id_rows = connection.execute(
+        f"""SELECT zr.packed_date, zr.client_id, zr.product_id,
+               array_agg(DISTINCT l.doc_id) AS doc_ids
+           FROM zone_relocations zr
+           JOIN shipment_lines l ON l.id = zr.shipment_line_id
+           WHERE {where}
+           GROUP BY zr.packed_date, zr.client_id, zr.product_id""",
+        params,
+    ).fetchall()
+    doc_ids_by_row = {
+        (str(r["packed_date"]), r["client_id"], str(r["product_id"])):
+            [str(d) for d in (r["doc_ids"] or [])]
+        for r in doc_id_rows
+    }
+
     histories: dict = {}
     if with_earnings:
         from modules.pricing.service import load_histories
@@ -699,6 +716,7 @@ def packing_productivity(
             "good": good, "defect": defect, "total": good + defect,
             "good_earn_kop": good_earn, "defect_earn_kop": defect_earn,
             "earn_kop": good_earn + defect_earn,
+            "doc_ids": doc_ids_by_row.get((day_key, cid, str(r["product_id"])), []),
         })
         day["good"] += good
         day["defect"] += defect

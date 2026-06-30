@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     DISPATCH_STATUS_LABELS,
     INVOICE_ACTIVE_STATUSES,
@@ -275,7 +276,11 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
 # ── Create ─────────────────────────────────────────────────────────────────────
 
 @router.post("/invoices")
-def create_invoice(body: InvoiceCreate, user=Depends(_get_finance)):
+def create_invoice(
+    body: InvoiceCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     # Счёт рождается черновиком: обязателен только клиент, остальное (отгрузки,
     # сумма, срок, файл) дозаполняется в карточке и проверяется при выставлении.
     client_id = str(body.client_id or "").strip()
@@ -288,6 +293,9 @@ def create_invoice(body: InvoiceCreate, user=Depends(_get_finance)):
     invoice_id = str(uuid4())
 
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_create")
+        if not proceed:
+            return stored
         doc_number = next_invoice_number(conn)
         conn.execute(
             """INSERT INTO invoice_docs
@@ -311,8 +319,10 @@ def create_invoice(body: InvoiceCreate, user=Depends(_get_finance)):
                 uid=uid,
                 now=now,
             )
+        result = {"message": invoice_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": invoice_id}
+    return result
 
 
 # ── Lists (static routes BEFORE /invoices/{invoice_id}) ─────────────────────────
@@ -600,10 +610,17 @@ def update_invoice(invoice_id: str, body: InvoiceUpdate, user=Depends(_get_finan
 
 
 @router.post("/invoices/{invoice_id}/issue")
-def issue_invoice(invoice_id: str, user=Depends(_get_finance)):
+def issue_invoice(
+    invoice_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_issue", response={"message": INVOICE_STATUS_ISSUED})
+        if not proceed:
+            return stored
         doc = conn.execute(
             "SELECT status, total_amount, due_date FROM invoice_docs "
             "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -654,10 +671,18 @@ def issue_invoice(invoice_id: str, user=Depends(_get_finance)):
 # ── Payments / due date / close / cancel ────────────────────────────────────────
 
 @router.post("/invoices/{invoice_id}/payments")
-def add_payment(invoice_id: str, body: InvoicePaymentCreate, user=Depends(_get_finance)):
+def add_payment(
+    invoice_id: str,
+    body: InvoicePaymentCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_payment", response={"message": "ok"})
+        if not proceed:
+            return stored
         doc = conn.execute(
             "SELECT status, total_amount, paid_amount FROM invoice_docs "
             "WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
@@ -804,10 +829,17 @@ def update_amount(invoice_id: str, body: InvoiceAmountUpdate, user=Depends(_get_
 
 
 @router.post("/invoices/{invoice_id}/close")
-def close_invoice(invoice_id: str, user=Depends(_get_finance)):
+def close_invoice(
+    invoice_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_close", response={"message": INVOICE_STATUS_CLOSED})
+        if not proceed:
+            return stored
         doc = conn.execute(
             "SELECT status, total_amount, paid_amount FROM invoice_docs "
             "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -833,10 +865,17 @@ def close_invoice(invoice_id: str, user=Depends(_get_finance)):
 
 
 @router.post("/invoices/{invoice_id}/cancel")
-def cancel_invoice(invoice_id: str, user=Depends(_get_finance)):
+def cancel_invoice(
+    invoice_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_cancel", response={"message": INVOICE_STATUS_CANCELLED})
+        if not proceed:
+            return stored
         doc = conn.execute(
             "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
             (invoice_id,),

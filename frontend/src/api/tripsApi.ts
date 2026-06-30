@@ -216,6 +216,7 @@ export function createTrip(payload: TripCreatePayload) {
   return request<{ message: string }>('/trips', {
     method: 'POST',
     body: JSON.stringify(payload),
+    idempotent: true,
   })
 }
 

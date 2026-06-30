@@ -9,6 +9,8 @@ import {
   updateDispatchLine,
   updateDispatchLinePallets,
   deleteDispatchLine,
+  uploadDispatchLineFile,
+  deleteDispatchLineFile,
   recommendedPallets,
 } from '../../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchDetail, DispatchStatus } from '../../../../api/dispatchApi'
@@ -145,6 +147,28 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     }
   }
 
+  async function handleUploadLineFile(lineId: string, file: File): Promise<boolean> {
+    try {
+      await uploadDispatchLineFile(docId, lineId, file)
+      await load()
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось прикрепить файл', 'error')
+      return false
+    }
+  }
+
+  async function handleDeleteLineFile(lineId: string, fileId: string): Promise<boolean> {
+    try {
+      await deleteDispatchLineFile(docId, lineId, fileId)
+      await load()
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось удалить файл', 'error')
+      return false
+    }
+  }
+
   async function handleDeleteLine(lineId: string) {
     const ok = await confirm({
       title: 'Удалить товар из отгрузки?',
@@ -253,6 +277,8 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onAddLine={handleAddLine}
           onUpdateLine={handleUpdateLine}
           onDeleteLine={handleDeleteLine}
+          onUploadFile={handleUploadLineFile}
+          onDeleteFile={handleDeleteLineFile}
           onUpdateDoc={handleUpdateDoc}
           onReload={load}
           registerInfoFlush={(fn) => { flushDraftInfo.current = fn }}

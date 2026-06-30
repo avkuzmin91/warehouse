@@ -2168,3 +2168,32 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .alloc-backdrop, .alloc-modal { animation: none; }
 }
+
+/* Глобальная полоса прогресса: видна, пока выполняется write-запрос (см. http.ts).
+   Обратная связь при подвисании сети, чтобы пользователь не жал кнопку повторно. */
+.global-busy-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2.5px;
+  z-index: 9999;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+.global-busy-bar.active { opacity: 1; }
+.global-busy-bar.active::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 35%;
+  background: linear-gradient(90deg, transparent, var(--c-accent), transparent);
+  animation: global-busy-slide 1.05s ease-in-out infinite;
+}
+@keyframes global-busy-slide {
+  0%   { left: -35%; }
+  100% { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .global-busy-bar.active::before { animation-duration: 2.2s; }
+}

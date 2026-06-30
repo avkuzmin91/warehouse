@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from idempotency import begin_idempotent, finish_idempotent
 from config import (
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_CANCEL,
@@ -104,7 +105,11 @@ def _receipt_op_comment_for_user(comment: str | None, user) -> str | None:
 
 
 @router.post("/receipts")
-def create_receipt(payload: ReceiptDocCreate, user=Depends(get_current_document_creator)):
+def create_receipt(
+    payload: ReceiptDocCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_document_creator),
+):
     if payload.logistics_cost is not None:
         ensure_cost_access(user)
     uid = str(user["id"])
@@ -115,6 +120,9 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(get_current_document_
         _validate_receipt_line_has_color(line)
 
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "receipt_create")
+        if not proceed:
+            return stored
         client_row = conn.execute(
             "SELECT id, name FROM clients WHERE id = ? AND COALESCE(is_deleted,0)=0",
             (cid,),
@@ -180,8 +188,10 @@ def create_receipt(payload: ReceiptDocCreate, user=Depends(get_current_document_
                  _line_label(line.product_sku, line.color_name, line.size_name, line.planned_qty), now, uid),
             )
 
+        result = {"message": doc_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": doc_id}
+    return result
 
 
 @router.get("/receipts/summary")
@@ -807,9 +817,16 @@ def advance_receipt_status(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/receipts/{doc_id}/cancel")
-def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
+def cancel_receipt(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "receipt_cancel", response={"message": RECEIPT_STATUS_CANCELLED})
+        if not proceed:
+            return stored
         doc_row = conn.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -844,7 +861,11 @@ def cancel_receipt(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/receipts/{doc_id}/close-short")
-def close_receipt_short(doc_id: str, user=Depends(_get_manager)):
+def close_receipt_short(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     """Частично принято → Завершён: менеджер закрывает поступление с недопоставкой.
 
     Применяется, когда рейсы поступления приехали, но привезли меньше плана и больше
@@ -853,6 +874,9 @@ def close_receipt_short(doc_id: str, user=Depends(_get_manager)):
     """
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "receipt_close_short", response={"message": RECEIPT_STATUS_DONE})
+        if not proceed:
+            return stored
         doc_row = conn.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -905,7 +929,11 @@ def close_receipt_short(doc_id: str, user=Depends(_get_manager)):
 
 
 @router.post("/receipts/{doc_id}/expect-redelivery")
-def expect_receipt_redelivery(doc_id: str, user=Depends(_get_manager)):
+def expect_receipt_redelivery(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
     """Частично принято: менеджер фиксирует, что недовоз довезут новым рейсом.
 
     Зеркало close-short (тот же гейт «рейсы кончились, привезли меньше плана»), но
@@ -916,6 +944,9 @@ def expect_receipt_redelivery(doc_id: str, user=Depends(_get_manager)):
     """
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "receipt_expect_redelivery", response={"message": "ok"})
+        if not proceed:
+            return stored
         doc_row = conn.execute(
             "SELECT status FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()

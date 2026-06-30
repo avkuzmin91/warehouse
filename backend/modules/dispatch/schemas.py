@@ -74,6 +74,14 @@ class DispatchFinishPreparationPayload(BaseModel):
     lines: list[DispatchPrepareLine] = []
 
 
+class DispatchLineFile(BaseModel):
+    id:         str
+    filename:   str
+    url:        str
+    mime_type:  str | None = None
+    created_at: str
+
+
 class DispatchLineItem(BaseModel):
     id:           str
     product_id:   str
@@ -92,6 +100,7 @@ class DispatchLineItem(BaseModel):
     store_id:     str | None
     store_name:   str | None
     remaining:    int = 0
+    files:        list[DispatchLineFile] = []
 
 
 class DispatchReservationItem(BaseModel):
