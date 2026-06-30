@@ -174,8 +174,8 @@ export function InventoryReceiptsListPage() {
             <Icon name="tag" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 160, paddingRight: skuFilter ? 26 : undefined }}
-              placeholder="SKU товара…"
+              style={{ paddingLeft: 28, width: 190, paddingRight: skuFilter ? 26 : undefined }}
+              placeholder="SKU или название…"
               value={skuFilter}
               onChange={(e) => setSkuFilter(e.target.value)}
             />

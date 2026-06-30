@@ -233,9 +233,9 @@ def shipments_summary(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " LEFT JOIN products p ON p.id = sl.product_id"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
-                " AND COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ?)"
+                " AND (COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ? OR sl.product_name LIKE ?))"
             )
-            params.append(like_substring_param(sku))
+            s = like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -308,9 +308,9 @@ def list_shipments(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " LEFT JOIN products p ON p.id = sl.product_id"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
-                " AND COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ?)"
+                " AND (COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ? OR sl.product_name LIKE ?))"
             )
-            params.append(like_substring_param(sku))
+            s = like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:

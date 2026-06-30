@@ -180,9 +180,9 @@ def dispatches_summary(
                 "EXISTS (SELECT 1 FROM dispatch_lines dl"
                 " LEFT JOIN products p ON p.id = dl.product_id"
                 " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
-                " AND COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ?)"
+                " AND (COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ? OR dl.product_name LIKE ?))"
             )
-            params.append(like_substring_param(sku))
+            s = like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:

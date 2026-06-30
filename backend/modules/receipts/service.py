@@ -165,9 +165,11 @@ def list_receipts_aggregated(
     if sku:
         conds.append(
             "EXISTS (SELECT 1 FROM receipt_lines rl"
-            " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0 AND rl.product_sku LIKE ?)"
+            " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0"
+            " AND (rl.product_sku LIKE ? OR rl.product_name LIKE ?))"
         )
-        params.append(like_substring_param(sku))
+        s = like_substring_param(sku)
+        params += [s, s]
     if date_from:
         conds.append("d.arrival_date >= ?")
         params.append(date_from)
