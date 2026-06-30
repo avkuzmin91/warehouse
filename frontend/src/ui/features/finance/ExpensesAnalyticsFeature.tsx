@@ -9,6 +9,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
+import { AnalyticsTabs } from './AnalyticsTabs'
 
 const PRESETS = [7, 14, 30] as const
 const DEFAULT_PERIOD = 30
@@ -100,6 +101,7 @@ export function ExpensesAnalyticsFeature() {
   if (!isFinance) {
     return (
       <ListPage title="Аналитика расходов">
+        <AnalyticsTabs active="expenses" />
         <EmptyState title="Недостаточно прав" sub="Аналитика расходов доступна администратору и менеджеру." />
       </ListPage>
     )
@@ -144,6 +146,7 @@ export function ExpensesAnalyticsFeature() {
       subtitle={`Период: ${ddmm(effFrom)} — ${ddmm(effTo)} · ${period} дн.`}
       actions={actions}
     >
+      <AnalyticsTabs active="expenses" />
       {loading && !data ? (
         <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка аналитики…</div>
       ) : error ? (

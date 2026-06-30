@@ -28,6 +28,7 @@ from modules.timesheet.router import router as timesheet_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.pallet_pricing.router import router as pallet_pricing_router
+from modules.pnl.router import router as pnl_router
 from modules.pricing.router import router as pricing_router
 from modules.production_calendar.router import router as production_calendar_router
 from modules.products.router import router as products_router
@@ -787,6 +788,7 @@ app.include_router(cabinet_router)
 app.include_router(invoices_router)
 app.include_router(expenses_router)
 app.include_router(recurring_expenses_router)
+app.include_router(pnl_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
