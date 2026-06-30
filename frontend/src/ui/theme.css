@@ -1813,20 +1813,82 @@ a { color: inherit; text-decoration: none; }
 .bd-name { font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .bd-name span.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Диверговая диаграмма доход/расход (P&L): доход вверх, расход вниз от нулевой линии */
-.pnl-plot { position: relative; height: 300px; margin: 6px 0 2px; }
-.pnl-gl { position: absolute; left: 64px; right: 0; border-top: 1px dashed var(--c-border); pointer-events: none; }
-.pnl-gl .yl { position: absolute; left: -64px; width: 58px; text-align: right; font-family: var(--font-mono); font-size: 10px; color: var(--c-text-faint); transform: translateY(-50%); }
-.pnl-zero { position: absolute; left: 64px; right: 0; top: 50%; border-top: 1.5px solid var(--c-border-strong); pointer-events: none; }
-.pnl-bars { position: absolute; left: 64px; right: 0; top: 0; bottom: 0; display: flex; gap: 3px; }
+/* P&L «доходы и расходы»: result-hero, KPI с дельтами, нетто/диверговый график, тултип.
+   Классы namespace'д под pnl-, чтобы не конфликтовать с общим .kpi/.hero-split. */
+
+/* дельта-пилюля к прошлому периоду (рост хорош для дохода/прибыли, плох для расхода) */
+.pnl-delta { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 1px 6px 1px 4px; border-radius: 99px; white-space: nowrap; }
+.pnl-delta.up { color: var(--c-success); background: var(--c-success-bg); }
+.pnl-delta.down { color: var(--c-danger); background: var(--c-danger-bg); }
+.pnl-delta.flat { color: var(--c-text-subtle); background: var(--c-bg-sunken); }
+.pnl-delta svg { display: block; }
+
+/* тумблер «сравнить с прошлым» */
+.pnl-cmp { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 12.5px; color: var(--c-text-muted); cursor: pointer; user-select: none; padding: 6px 11px; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); background: var(--c-bg-elev); white-space: nowrap; }
+.pnl-cmp.on { background: var(--c-accent-bg); border-color: var(--c-accent-border); color: var(--c-accent-text); }
+.pnl-cmp-sw { width: 26px; height: 15px; border-radius: 99px; background: var(--c-border-strong); position: relative; transition: background 120ms; flex: 0 0 26px; }
+.pnl-cmp.on .pnl-cmp-sw { background: var(--c-accent); }
+.pnl-cmp-sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transition: transform 120ms; }
+.pnl-cmp.on .pnl-cmp-sw::after { transform: translateX(11px); }
+
+/* result-hero: крупный итог слева + спарклайн накопительного итога справа */
+.pnl-hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 0; }
+.pnl-hero-main { padding: 20px 22px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--c-border); }
+.pnl-hero-label { font-size: 11.5px; font-weight: 500; color: var(--c-text-subtle); letter-spacing: 0.03em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 7px; }
+.pnl-hero-num { font-size: 46px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; margin-top: 6px; }
+.pnl-hero-num .u { font-size: 22px; font-weight: 500; color: var(--c-text-subtle); margin-left: 6px; letter-spacing: 0; }
+.pnl-hero-meta { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.pnl-verdict { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 99px; }
+.pnl-verdict.plus { color: var(--c-success); background: var(--c-success-bg); }
+.pnl-verdict.minus { color: var(--c-danger); background: var(--c-danger-bg); }
+.pnl-hero-side { padding: 16px 18px 12px; display: flex; flex-direction: column; min-width: 0; }
+.pnl-hero-side-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.pnl-hero-side-label { font-size: 11.5px; font-weight: 500; color: var(--c-text-subtle); letter-spacing: 0.02em; text-transform: uppercase; }
+
+/* KPI-плитка с дельтой */
+.pnl-kpi { background: var(--c-bg-elev); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 13px 15px; display: flex; flex-direction: column; gap: 5px; }
+.pnl-kpi-label { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--c-text-subtle); letter-spacing: 0.02em; text-transform: uppercase; }
+.pnl-kpi-val { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.pnl-kpi-val .u { font-size: 12px; color: var(--c-text-subtle); font-weight: 500; margin-left: 3px; }
+.pnl-kpi-foot { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--c-text-subtle); }
+
+/* главный график: нетто по дням (плюс вверх / минус вниз) либо диверговый доход/расход */
+.pnl-plot { position: relative; height: 280px; }
+.pnl-gl { position: absolute; left: 62px; right: 0; border-top: 1px dashed var(--c-border); pointer-events: none; }
+.pnl-gl .yl { position: absolute; left: -62px; width: 56px; text-align: right; font-family: var(--font-mono); font-size: 10px; color: var(--c-text-faint); transform: translateY(-50%); }
+.pnl-zero { position: absolute; left: 62px; right: 0; top: 50%; border-top: 1.5px solid var(--c-border-strong); pointer-events: none; }
+.pnl-zero .yl { position: absolute; left: -62px; width: 56px; text-align: right; font-family: var(--font-mono); font-size: 10px; color: var(--c-text-faint); transform: translateY(-50%); }
+.pnl-bars { position: absolute; left: 62px; right: 0; top: 0; bottom: 0; display: flex; gap: 3px; }
 .pnl-col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; cursor: pointer; border-radius: 3px; }
 .pnl-col.sel { background: var(--c-bg-hover); }
 .pnl-half { flex: 1 1 0; display: flex; overflow: hidden; }
-.pnl-half.up { flex-direction: column-reverse; justify-content: flex-start; }
-.pnl-half.dn { flex-direction: column; justify-content: flex-start; }
-.pnl-seg { width: 100%; transition: opacity 110ms; }
-.pnl-xaxis { display: flex; gap: 3px; margin-left: 64px; margin-top: 6px; }
+.pnl-half.up { flex-direction: column-reverse; }
+.pnl-half.dn { flex-direction: column; }
+.pnl-bar { width: 100%; transition: opacity 100ms; }
+.pnl-bar.up { border-radius: 3px 3px 0 0; }
+.pnl-bar.dn { border-radius: 0 0 3px 3px; }
+.pnl-seg { width: 100%; transition: opacity 100ms; }
+.pnl-half.up .pnl-seg:first-child { border-radius: 3px 3px 0 0; }
+.pnl-half.dn .pnl-seg:last-child { border-radius: 0 0 3px 3px; }
+.pnl-xaxis { display: flex; gap: 3px; margin-left: 62px; margin-top: 6px; }
 .pnl-xtick { flex: 1 1 0; min-width: 0; text-align: center; font-family: var(--font-mono); font-size: 9.5px; color: var(--c-text-faint); white-space: nowrap; overflow: hidden; }
+
+/* тултип дня в графике P&L */
+.pnl-tip { position: absolute; z-index: 20; pointer-events: none; background: var(--c-bg-elev); border: 1px solid var(--c-border-strong); border-radius: var(--r-md); box-shadow: var(--sh-3); padding: 9px 11px; min-width: 196px; max-width: 252px; }
+.pnl-tip-date { font-size: 11.5px; font-weight: 600; margin-bottom: 5px; }
+.pnl-tip-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; padding: 1.5px 0; }
+.pnl-tip-line .k { color: var(--c-text-muted); display: inline-flex; align-items: center; gap: 6px; }
+.pnl-tip-line .v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.pnl-tip-sw { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
+.pnl-tip-net { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--c-border); display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; }
+
+/* разбивки и легенда P&L */
+.pnl-bd-sw { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10); }
+.pnl-bd-right { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.pnl-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0 2px 2px; }
+.pnl-legend-it { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-text-muted); }
+
+@media (max-width: 980px) { .pnl-hero { grid-template-columns: 1fr; } .pnl-hero-main { border-right: 0; border-bottom: 1px solid var(--c-border); } }
 
 /* Карточки магазинов */
 .stgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
