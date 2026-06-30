@@ -3,11 +3,16 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class DashboardMetric(BaseModel):
+    plan: int           # плановый объём за день (шт.)
+    fact: int           # фактический объём за день (шт.)
+
+
 class DashboardTodayStats(BaseModel):
-    receipt_docs: int   # поступлений с плановым прибытием сегодня
-    accepted: int       # принято товара сегодня (по дате операции приёмки)
-    shipped: int        # отгружено сегодня (по дате перехода в shipped)
-    defects: int        # браков зафиксировано сегодня (по дате операции)
+    arrivals: DashboardMetric   # поступления: план/факт по дате прибытия
+    packed: DashboardMetric     # упаковка: план/факт по дате задачи упаковки
+    shipped: DashboardMetric    # отгрузка: план/факт по дате отгрузки
+    defects: int                # браков зафиксировано сегодня (по дате операции)
 
 
 class DashboardTodayResponse(BaseModel):

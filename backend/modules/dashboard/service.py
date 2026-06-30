@@ -3,43 +3,62 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 
 from config import (
+    DISPATCH_STATUS_CANCELLED,
+    RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
+    SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_SHIPPED,
 )
 
 
-def _receipt_docs_on(connection, day: date) -> int:
-    """Количество поступлений с датой прибытия = день."""
-    row = connection.execute(
-        """
-        SELECT COUNT(*) AS cnt
-        FROM receipt_docs
-        WHERE COALESCE(is_deleted, 0) = 0
-          AND arrival_date = ?
-        """,
-        (day.isoformat(),),
-    ).fetchone()
-    return int(row["cnt"] if row else 0)
+def _arrivals_on(connection, day: date) -> dict:
+    """Поступления за день (по дате прибытия): план = Σ planned_qty, факт = Σ accepted_qty.
 
-
-def _accepted_qty_on(connection, day: date) -> int:
-    """Принято товара по поступлениям с датой прибытия = день.
-
-    Берём accepted_qty строк (приёмка при прибытии) по документам этого дня.
+    Аннулированные документы не цель дня — исключаем. Совпадает с колонками
+    ПЛАН/ФАКТ группы «Сегодня» в списке поступлений.
     """
     row = connection.execute(
         """
-        SELECT COALESCE(SUM(COALESCE(l.accepted_qty, 0)), 0) AS total
+        SELECT COALESCE(SUM(COALESCE(l.planned_qty, 0)), 0)  AS plan,
+               COALESCE(SUM(COALESCE(l.accepted_qty, 0)), 0) AS fact
         FROM receipt_docs d
         JOIN receipt_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
         WHERE COALESCE(d.is_deleted, 0) = 0
+          AND d.status <> ?
           AND d.arrival_date = ?
         """,
-        (day.isoformat(),),
+        (RECEIPT_STATUS_CANCELLED, day.isoformat()),
     ).fetchone()
-    return int(row["total"] if row else 0)
+    return {"plan": int(row["plan"] if row else 0), "fact": int(row["fact"] if row else 0)}
+
+
+def _packed_on(connection, day: date) -> dict:
+    """Упаковка за день (по дате задачи упаковки `shipment_docs.ship_date`):
+    план = Σ qty строк, факт = упакованный годный из журнала (как «Факт» в списке упаковок).
+
+    Факт — нетто годного, вошедшего в `packed`/`ready` по строкам документа
+    (формула совпадает с `total_packed_qty` списка отгрузок-упаковок).
+    """
+    row = connection.execute(
+        """
+        SELECT
+          (SELECT COALESCE(SUM(COALESCE(l.qty, 0)), 0)
+             FROM shipment_docs d
+             JOIN shipment_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
+             WHERE COALESCE(d.is_deleted, 0) = 0 AND d.status <> ? AND d.ship_date = ?) AS plan,
+          (SELECT COALESCE(SUM(CASE
+                     WHEN zr.to_op IN ('packed','ready')   AND zr.to_quality='good'   AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
+                     WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing' THEN -zr.qty
+                     ELSE 0 END), 0)
+             FROM zone_relocations zr
+             JOIN shipment_lines sl ON sl.id = zr.shipment_line_id
+             JOIN shipment_docs d ON d.id = sl.doc_id
+             WHERE COALESCE(d.is_deleted, 0) = 0 AND d.status <> ? AND d.ship_date = ?) AS fact
+        """,
+        (SHIPMENT_STATUS_CANCELLED, day.isoformat(), SHIPMENT_STATUS_CANCELLED, day.isoformat()),
+    ).fetchone()
+    return {"plan": int(row["plan"] if row else 0), "fact": int(row["fact"] if row else 0)}
 
 
 def _local_day_utc_range(day: date) -> tuple[str, str]:
@@ -71,27 +90,34 @@ def _defect_qty_on(connection, day: date) -> int:
     return int(row["total"] if row else 0)
 
 
-def _shipped_qty_on(connection, day: date) -> int:
-    """Объём отгрузки по shipped-документам с датой отгрузки = день."""
+def _shipped_on(connection, day: date) -> dict:
+    """Отгрузки за день (по дате отгрузки `dispatch_docs.ship_date`):
+    план = Σ qty строк, факт = Σ shipped_qty. Аннулированные исключаем.
+
+    Реальная отгрузка живёт в домене `dispatch` (DSP-документы), а не в
+    `shipment_docs` (там теперь только «Задачи упаковки»). Совпадает с
+    колонками ПЛАН/ОТГРУЖЕНО группы «Сегодня» в списке отгрузок.
+    """
     row = connection.execute(
         """
-        SELECT COALESCE(SUM(l.shipped_qty), 0) AS total
-        FROM shipment_docs d
-        JOIN shipment_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
+        SELECT COALESCE(SUM(COALESCE(l.qty, 0)), 0)         AS plan,
+               COALESCE(SUM(COALESCE(l.shipped_qty, 0)), 0) AS fact
+        FROM dispatch_docs d
+        JOIN dispatch_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
         WHERE COALESCE(d.is_deleted, 0) = 0
-          AND d.status = ?
+          AND d.status <> ?
           AND d.ship_date = ?
         """,
-        (SHIPMENT_STATUS_SHIPPED, day.isoformat()),
+        (DISPATCH_STATUS_CANCELLED, day.isoformat()),
     ).fetchone()
-    return int(row["total"] if row else 0)
+    return {"plan": int(row["plan"] if row else 0), "fact": int(row["fact"] if row else 0)}
 
 
 def day_stats(connection, day: date) -> dict:
     return {
-        "receipt_docs": _receipt_docs_on(connection, day),
-        "accepted": _accepted_qty_on(connection, day),
-        "shipped": _shipped_qty_on(connection, day),
+        "arrivals": _arrivals_on(connection, day),
+        "packed": _packed_on(connection, day),
+        "shipped": _shipped_on(connection, day),
         "defects": _defect_qty_on(connection, day),
     }
 

@@ -284,7 +284,15 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           registerInfoFlush={(fn) => { flushDraftInfo.current = fn }}
         />
       ) : (isPreparing && showPrepareTask) ? (
-        <PreparePanel doc={doc} canEdit={canPrepare} onDone={load} />
+        <PreparePanel
+          doc={doc}
+          canEdit={canPrepare}
+          canEditDocs={canEditPlanning}
+          onUpdateLine={handleUpdateLine}
+          onUploadFile={handleUploadLineFile}
+          onDeleteFile={handleDeleteLineFile}
+          onDone={load}
+        />
       ) : (isPreparing || isAwaiting || isPartially) ? (
         <ReadyView
           doc={doc}

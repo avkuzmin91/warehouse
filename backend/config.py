@@ -405,6 +405,13 @@ DISPATCH_EDITABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_DRAFT,
 })
 
+# Вложения и ссылку по строке менеджер правит и на подготовке — поправить
+# ошибочно прикреплённый файл/ссылку, пока кладовщик ещё собирает отгрузку.
+DISPATCH_ATTACHMENT_EDITABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_PREPARING,
+})
+
 # Аннулировать можно, пока ничего не уехало (до первого рейса).
 DISPATCH_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_DRAFT,

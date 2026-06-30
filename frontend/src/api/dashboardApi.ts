@@ -2,10 +2,15 @@ import { request } from './http'
 
 // --- Types ---
 
+export type DashboardMetric = {
+  plan: number
+  fact: number
+}
+
 export type DashboardTodayStats = {
-  receipt_docs: number
-  accepted: number
-  shipped: number
+  arrivals: DashboardMetric
+  packed: DashboardMetric
+  shipped: DashboardMetric
   defects: number
 }
 

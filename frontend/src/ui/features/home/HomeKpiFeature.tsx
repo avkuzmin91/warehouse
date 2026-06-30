@@ -1,5 +1,5 @@
 import { getDashboardToday } from '../../../api/dashboardApi'
-import type { DashboardTodayStats } from '../../../api/dashboardApi'
+import type { DashboardMetric, DashboardTodayStats } from '../../../api/dashboardApi'
 import { useApi } from '../../../hooks/useApi'
 import { KPI } from '../../primitives/KPI'
 
@@ -18,6 +18,11 @@ function fmt(value: number): string {
   return value.toLocaleString('ru-RU')
 }
 
+// «Факт / План» — основное число виджета по плановым показателям.
+function factPlan(m: DashboardMetric): string {
+  return `${fmt(m.fact)} / ${fmt(m.plan)}`
+}
+
 // Дельта «к вчера» по абсолютной разнице. Вверх — рост, вниз — падение.
 function delta(today: number, yesterday: number): { label: string; dir: 'up' | 'down' } {
   const diff = today - yesterday
@@ -32,8 +37,8 @@ export function HomeKpiFeature() {
   if (error) {
     return (
       <div className="kpi-grid">
-        <KPI label="Поступления сегодня" value="—" delta="не удалось загрузить" deltaDir="down" />
-        <KPI label="Принято товара" value="—" delta="не удалось загрузить" deltaDir="down" />
+        <KPI label="Поступления" value="—" delta="не удалось загрузить" deltaDir="down" />
+        <KPI label="Упаковано" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Отгружено" value="—" delta="не удалось загрузить" deltaDir="down" />
         <KPI label="Браков зафиксировано" value="—" delta="не удалось загрузить" deltaDir="down" />
       </div>
@@ -47,27 +52,27 @@ export function HomeKpiFeature() {
   return (
     <div className="kpi-grid">
       <KPI
-        label="Поступления сегодня"
-        value={loading ? '…' : fmt(today?.receipt_docs ?? 0)}
+        label="Поступления"
+        value={loading || !today ? '…' : factPlan(today.arrivals)}
         unit="шт"
-        delta={ready ? delta(today.receipt_docs, yesterday.receipt_docs).label : undefined}
-        deltaDir={ready ? delta(today.receipt_docs, yesterday.receipt_docs).dir : undefined}
+        delta={ready ? delta(today.arrivals.fact, yesterday.arrivals.fact).label : undefined}
+        deltaDir={ready ? delta(today.arrivals.fact, yesterday.arrivals.fact).dir : undefined}
         spark={spark(1)}
       />
       <KPI
-        label="Принято товара"
-        value={loading ? '…' : fmt(today?.accepted ?? 0)}
+        label="Упаковано"
+        value={loading || !today ? '…' : factPlan(today.packed)}
         unit="шт"
-        delta={ready ? delta(today.accepted, yesterday.accepted).label : undefined}
-        deltaDir={ready ? delta(today.accepted, yesterday.accepted).dir : undefined}
+        delta={ready ? delta(today.packed.fact, yesterday.packed.fact).label : undefined}
+        deltaDir={ready ? delta(today.packed.fact, yesterday.packed.fact).dir : undefined}
         spark={spark(2)}
       />
       <KPI
         label="Отгружено"
-        value={loading ? '…' : fmt(today?.shipped ?? 0)}
+        value={loading || !today ? '…' : factPlan(today.shipped)}
         unit="шт"
-        delta={ready ? delta(today.shipped, yesterday.shipped).label : undefined}
-        deltaDir={ready ? delta(today.shipped, yesterday.shipped).dir : undefined}
+        delta={ready ? delta(today.shipped.fact, yesterday.shipped.fact).label : undefined}
+        deltaDir={ready ? delta(today.shipped.fact, yesterday.shipped.fact).dir : undefined}
         spark={spark(3)}
       />
       <KPI

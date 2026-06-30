@@ -11,7 +11,8 @@ import { Badge } from '../../../../primitives/Badge'
 import { Panel } from '../../../shared/process/processUI'
 import { RoleChip } from '../../../shared/process/RoleChip'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
-import { DispatchLineFiles } from './DispatchLineFiles'
+import { DispatchLineFiles, dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from './DispatchLineFiles'
+import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
@@ -23,10 +24,15 @@ type ZoneSource = { id: string; name: string; available: number }
 type Props = {
   doc:    DispatchDetail
   canEdit: boolean
+  /** Менеджер правит ссылку и вложения по строке прямо на подготовке (поправить ошибку). */
+  canEditDocs: boolean
+  onUpdateLine: (lineId: string, body: { site_url?: string | null }) => Promise<boolean>
+  onUploadFile: (lineId: string, file: File) => Promise<boolean>
+  onDeleteFile: (lineId: string, fileId: string) => Promise<boolean>
   onDone: () => Promise<void> | void
 }
 
-export function PreparePanel({ doc, canEdit, onDone }: Props) {
+export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUploadFile, onDeleteFile, onDone }: Props) {
   const toast = useToast()
   const isDefect = doc.cargo_type === 'defect'
   // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready,
@@ -47,6 +53,48 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
   })
   const [saving, setSaving] = useState(false)
   const [showReasons, setShowReasons] = useState(false)
+
+  // Менеджер правит ссылку и вложения по строке прямо на подготовке (поправить ошибку).
+  const [urlDrafts, setUrlDrafts] = useState<Record<string, string>>(() => {
+    const next: Record<string, string> = {}
+    for (const l of lines) next[l.id] = l.site_url ?? ''
+    return next
+  })
+  const [savingUrl, setSavingUrl] = useState<string | null>(null)
+  const [uploadingLine, setUploadingLine] = useState<string | null>(null)
+
+  function urlDirty(line: DispatchLine): boolean {
+    return (urlDrafts[line.id] ?? '').trim() !== (line.site_url ?? '')
+  }
+  async function saveUrl(line: DispatchLine) {
+    setSavingUrl(line.id)
+    try {
+      await onUpdateLine(line.id, { site_url: (urlDrafts[line.id] ?? '').trim() || null })
+    } finally {
+      setSavingUrl(null)
+    }
+  }
+  async function handleUploadFiles(lineId: string, files: File[]) {
+    setUploadingLine(lineId)
+    try {
+      for (const file of files) {
+        const ok = await onUploadFile(lineId, file)
+        if (!ok) break
+      }
+    } finally {
+      setUploadingLine(null)
+    }
+  }
+  // Замена = загрузка нового + удаление старого (отдельного эндпоинта нет, как в черновике).
+  async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
+    setUploadingLine(lineId)
+    try {
+      const ok = await onUploadFile(lineId, file)
+      if (ok) await onDeleteFile(lineId, oldFileId)
+    } finally {
+      setUploadingLine(null)
+    }
+  }
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -312,7 +360,46 @@ export function PreparePanel({ doc, canEdit, onDone }: Props) {
                     <div className={`prog-fill ${done ? 'ok' : ''}`} style={{ width: `${pct}%` }} />
                   </div>
 
-                  {(line.store_name || line.site_url || line.files.length > 0) && (
+                  {canEditDocs ? (
+                    <div style={{ marginTop: 11, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, fontSize: 12.5 }}>
+                      {line.store_name && (
+                        <span style={{ color: 'var(--c-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="cart" size={13} style={{ color: 'var(--c-text-subtle)' }} />{line.store_name}
+                        </span>
+                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 240 }}>
+                        <span style={{ fontSize: 11, color: 'var(--c-text-subtle)', flexShrink: 0 }}>Ссылка</span>
+                        <input
+                          className="input sm"
+                          placeholder="https://…"
+                          value={urlDrafts[line.id] ?? ''}
+                          onChange={(e) => setUrlDrafts((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                          style={{ flex: 1, minWidth: 0 }}
+                        />
+                        {urlDirty(line) && (
+                          <button
+                            className="btn ghost icon sm"
+                            title="Сохранить ссылку"
+                            disabled={savingUrl === line.id}
+                            onClick={() => void saveUrl(line)}
+                          >
+                            <Icon name={savingUrl === line.id ? 'refresh' : 'save'} size={13} style={savingUrl === line.id ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+                          </button>
+                        )}
+                      </div>
+                      <LineFilesCell
+                        entries={line.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
+                        canEdit
+                        uploading={uploadingLine === line.id}
+                        accept={DISPATCH_FILE_ACCEPT}
+                        glyphFor={dispatchFileGlyph}
+                        onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
+                        onAdd={(files) => void handleUploadFiles(line.id, files)}
+                        onReplace={(fileId, file) => void handleReplaceFile(line.id, fileId, file)}
+                        onRemove={(fileId) => void onDeleteFile(line.id, fileId)}
+                      />
+                    </div>
+                  ) : (line.store_name || line.site_url || line.files.length > 0) && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 11, fontSize: 12.5 }}>
                       {line.store_name && (
                         <span style={{ color: 'var(--c-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>

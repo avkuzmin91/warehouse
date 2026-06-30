@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
+    DISPATCH_ATTACHMENT_EDITABLE_STATUSES,
     DISPATCH_CANCELLABLE_STATUSES,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
@@ -467,8 +468,14 @@ def update_dispatch_line(doc_id: str, line_id: str, body: DispatchLineUpdate, us
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
-            raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике")
+        status = str(row["status"])
+        if status not in DISPATCH_EDITABLE_STATUSES:
+            # На подготовке менеджер правит только ссылку (вложения — отдельным эндпоинтом),
+            # чтобы поправить ошибочно указанную ссылку, пока кладовщик ещё собирает отгрузку.
+            if status == DISPATCH_STATUS_PREPARING and set(fields) <= {"site_url"}:
+                pass
+            else:
+                raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике")
         line = conn.execute(
             "SELECT id, product_name FROM dispatch_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
             (line_id, doc_id),
@@ -572,10 +579,11 @@ async def upload_dispatch_line_file(
     file: UploadFile = File(...),
     user=Depends(_get_manager),
 ):
-    """Менеджер прикрепляет файл (zip, pdf, jpeg) к строке отгрузки в черновике.
+    """Менеджер прикрепляет файл (zip, pdf, jpeg) к строке отгрузки.
 
-    Кладовщик потом видит файлы по каждому товару на подготовке отгрузки. Менять состав
-    вложений можно только в черновике — как и прочие поля строки (`update_dispatch_line`)."""
+    Кладовщик видит файлы по каждому товару на подготовке отгрузки. Прикрепить/заменить
+    можно в черновике и на подготовке — поправить ошибочно прикреплённый файл, пока
+    кладовщик ещё собирает отгрузку."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Файл не выбран")
     ext = Path(file.filename).suffix.lower()
@@ -593,8 +601,8 @@ async def upload_dispatch_line_file(
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
-            raise HTTPException(status_code=400, detail="Прикреплять файлы можно только в черновике")
+        if str(row["status"]) not in DISPATCH_ATTACHMENT_EDITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Прикреплять файлы можно в черновике и на подготовке")
         line = conn.execute(
             "SELECT id FROM dispatch_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
             (line_id, doc_id),
@@ -627,8 +635,8 @@ def delete_dispatch_line_file(doc_id: str, line_id: str, file_id: str, user=Depe
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
-            raise HTTPException(status_code=400, detail="Менять файлы можно только в черновике")
+        if str(row["status"]) not in DISPATCH_ATTACHMENT_EDITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Менять файлы можно в черновике и на подготовке")
         conn.execute(
             "UPDATE dispatch_line_files SET is_deleted = 1 WHERE id = ? AND line_id = ? AND doc_id = ?",
             (file_id, line_id, doc_id),
