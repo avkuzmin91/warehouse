@@ -821,6 +821,69 @@ def test_packing_productivity_report(api, client_id):
     assert (after["total_good"], after["total_defect"], after["total"]) == (12, 3, 15)
 
 
+def test_move_packing_date_admin(api, client_id):
+    """Админ переносит дату упаковки из отчёта: запись (и её сторно) едут на другой день."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 40, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 30)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 30})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+
+    d_wrong, d_right = "2026-06-08", "2026-06-15"
+    _as(_SHIFT)
+    # Запись A (10 годных) и B (5 годных) — обе ошибочно на d_wrong.
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": d_wrong})
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 5, "packed_date": d_wrong})
+    # Отменяем A — её нетто 0, но сторно наследует d_wrong.
+    entries = api.get(f"/shipments/{doc_id}/lines/{line_id}/packing").json()["entries"]
+    a = next(e for e in entries if e["good"] == 10 and not e["reversed"])
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/packing/{a['id']}/reverse")
+
+    # Отчёт за d_wrong: только B (нетто 5).
+    rep = api.get("/shipments/packing/productivity",
+                  params={"client_id": client_id, "date_from": d_wrong, "date_to": d_right}).json()
+    assert [d["packed_date"] for d in rep["days"]] == [d_wrong]
+    assert rep["total_good"] == 5 and rep["total_defect"] == 0
+
+    # Начальник смены не вправе смотреть записи строки отчёта и переносить дату.
+    _as(_SHIFT)
+    assert api.get("/shipments/packing/productivity/entries",
+                   params={"packed_date": d_wrong, "product_id": pos["product_id"], "client_id": client_id}
+                   ).status_code == 403
+    assert api.post("/shipments/packing/productivity/move-date",
+                    json={"entry_ids": ["x"], "new_date": d_right}).status_code == 403
+
+    # Админ видит обе записи строки (A помечена отменённой).
+    _as(_ADMIN)
+    ents = api.get("/shipments/packing/productivity/entries",
+                   params={"packed_date": d_wrong, "product_id": pos["product_id"], "client_id": client_id}).json()["entries"]
+    ids = [e["id"] for e in ents]
+    assert len(ids) == 2
+    assert any(e["reversed"] for e in ents) and ents[0]["doc_number"]
+
+    # Перенос на ту же дату — ничего не двигает.
+    same = api.post("/shipments/packing/productivity/move-date",
+                    json={"entry_ids": ids, "new_date": d_wrong})
+    assert same.status_code == 200 and same.json()["moved"] == 0, same.text
+
+    # Перенос обеих записей на правильный день: сторно A уезжает вместе с оригиналом,
+    # иначе на d_wrong остался бы орфан-минус.
+    mv = api.post("/shipments/packing/productivity/move-date",
+                  json={"entry_ids": ids, "new_date": d_right})
+    assert mv.status_code == 200 and mv.json()["moved"] == 2, mv.text
+
+    after = api.get("/shipments/packing/productivity",
+                    params={"client_id": client_id, "date_from": d_wrong, "date_to": d_right}).json()
+    assert [d["packed_date"] for d in after["days"]] == [d_right]
+    assert after["total_good"] == 5 and after["total_defect"] == 0
+
+    # Аудит переноса записан в журнал отгрузки.
+    ops = api.get(f"/shipments/{doc_id}").json()["ops"]
+    assert any(o["op_type"] == "pack_date_move" for o in ops), ops
+
+
 def test_cancel_in_plan_returns_packing_pool_to_storage(api, client_id):
     """Аннулирование годной отгрузки «В плане» возвращает переданное на упаковку на исходные места."""
     pos = _position()

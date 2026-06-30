@@ -353,6 +353,8 @@ SHIPMENT_OP_DOC_UPDATE = "doc_update"
 SHIPMENT_OP_PRIORITY_UPDATE = "priority_update"
 SHIPMENT_OP_PACK            = "pack"
 SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
+# Админ перенёс бизнес-дату упаковки (историческая коррекция «указали не тот день»).
+SHIPMENT_OP_PACK_DATE_MOVE  = "pack_date_move"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"

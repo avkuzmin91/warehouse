@@ -33,6 +33,7 @@ from config import (
 )
 from dbconn import get_connection, like_substring_param
 from modules.auth.service import (
+    get_current_admin,
     get_current_document_creator,
     get_current_manager,
     get_current_packer,
@@ -56,6 +57,9 @@ from modules.shipments.schemas import (
     ShipmentListResponse,
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
+    PackDateMovePayload,
+    ProductivityEntriesResponse,
+    ProductivityPackEntry,
     ShipmentPackingEntry,
     ShipmentPackingProductivityResponse,
     ShipmentPackingResponse,
@@ -71,7 +75,9 @@ from modules.shipments.service import (
     line_on_packing_qty,
     line_packed_breakdown,
     list_packing_entries,
+    list_productivity_entries,
     move_line_to_packing,
+    move_packing_date,
     next_doc_number,
     normalize_cargo_type,
     packing_productivity,
@@ -109,6 +115,11 @@ def _shipment_priority_order(alias: str = "d") -> str:
 
 def _priority_label(rank: int | None) -> str:
     return SHIPMENT_PRIORITY_LABELS.get(rank, f"#{rank}")
+
+
+def _ensure_strict_admin(user) -> None:
+    if str(user["role"]) != "admin":
+        raise HTTPException(status_code=403, detail="Доступно только администратору")
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
@@ -918,6 +929,42 @@ def get_packing_productivity(
             conn, date_from=date_from, date_to=date_to, client_id=client_id, search=search,
             with_earnings=can_view_costs(user),
         )
+
+
+@router.get("/shipments/packing/productivity/entries", response_model=ProductivityEntriesResponse)
+def get_productivity_entries(
+    packed_date: str = Query(...),
+    product_id: str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(get_current_admin),
+):
+    _ensure_strict_admin(user)
+    with get_connection() as conn:
+        entries = list_productivity_entries(
+            conn,
+            packed_date=packed_date,
+            client_id=(client_id or None),
+            product_id=product_id,
+        )
+    return ProductivityEntriesResponse(entries=[ProductivityPackEntry(**e) for e in entries])
+
+
+@router.post("/shipments/packing/productivity/move-date")
+def move_productivity_pack_date(
+    body: PackDateMovePayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_admin),
+):
+    _ensure_strict_admin(user)
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "pack_date_move")
+        if not proceed:
+            return stored
+        result = move_packing_date(conn, body.entry_ids, body.new_date, uid)
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/packing/{entry_id}/reverse")

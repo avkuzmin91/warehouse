@@ -83,6 +83,27 @@ class ShipmentPackingProductivityResponse(BaseModel):
     with_earnings:         bool = False
 
 
+class ProductivityPackEntry(BaseModel):
+    id:               str
+    packed_date:      str | None = None
+    good:             int
+    defect:           int
+    created_at:       str
+    created_by_email: str | None = None
+    doc_id:           str | None = None
+    doc_number:       str | None = None
+    reversed:         bool = False
+
+
+class ProductivityEntriesResponse(BaseModel):
+    entries: list[ProductivityPackEntry]
+
+
+class PackDateMovePayload(BaseModel):
+    entry_ids: list[str] = Field(min_length=1)
+    new_date:  str  # YYYY-MM-DD — целевая бизнес-дата упаковки
+
+
 class ShipmentMoveAllocation(BaseModel):
     from_zone_id: str | None = None
     qty: int = Field(ge=1)

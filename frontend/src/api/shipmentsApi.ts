@@ -437,6 +437,39 @@ export function getPackingProductivity(params: PackingProductivityParams = {}, s
   return request<PackingProductivityResponse>(`/shipments/packing/productivity${q ? `?${q}` : ''}`, { signal })
 }
 
+export type ProductivityPackEntry = {
+  id:               string
+  packed_date:      string | null
+  good:             number
+  defect:           number
+  created_at:       string
+  created_by_email: string | null
+  doc_id:           string | null
+  doc_number:       string | null
+  reversed:         boolean
+}
+
+export function getProductivityEntries(
+  params: { packed_date: string; product_id: string; client_id?: string | null },
+  signal?: AbortSignal,
+) {
+  const sp = new URLSearchParams()
+  sp.set('packed_date', params.packed_date)
+  sp.set('product_id', params.product_id)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<{ entries: ProductivityPackEntry[] }>(
+    `/shipments/packing/productivity/entries?${sp.toString()}`,
+    { signal },
+  )
+}
+
+export function movePackingDate(payload: { entry_ids: string[]; new_date: string }) {
+  return request<{ moved: number }>('/shipments/packing/productivity/move-date', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export type ShipmentMoveAllocation = { from_zone_id: string | null; qty: number }
 
 export function moveShipmentLineToPacking(docId: string, lineId: string, allocations: ShipmentMoveAllocation[]) {

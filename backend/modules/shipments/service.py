@@ -17,6 +17,7 @@ from config import (
     SHIPMENT_OP_MOVE_RETURN,
     SHIPMENT_OP_PACK,
     SHIPMENT_OP_PACK_CORRECTION,
+    SHIPMENT_OP_PACK_DATE_MOVE,
     SHIPMENT_OP_RELOCATE,
     SHIPMENT_OP_RETURN_TO_PACKING,
     SHIPMENT_STATUS_ASSIGNED,
@@ -786,6 +787,121 @@ def packing_productivity(
         "total_earn_kop": sum(d["earn_kop"] for d in days),
         "with_earnings": with_earnings,
     }
+
+
+def list_productivity_entries(
+    connection, *, packed_date: str, client_id: str | None, product_id: str,
+) -> list[dict]:
+    """Pack-записи одной строки отчёта (день × клиент × SKU) — для шторки переноса даты.
+
+    Только первичные записи (reverses_id IS NULL); reversed=true, если по записи есть
+    компенсация. Отдаёт документ-источник по каждой записи (перенос двигает и сторно).
+    """
+    rows = connection.execute(
+        """SELECT zr.pack_entry_id AS id,
+              MIN(zr.packed_date) AS packed_date,
+              MIN(zr.created_at) AS created_at,
+              MIN(u.email) AS created_by_email,
+              MIN(l.doc_id) AS doc_id,
+              MIN(d.doc_number) AS doc_number,
+              COALESCE(SUM(CASE WHEN zr.to_op = ? AND zr.to_quality = ? THEN zr.qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN zr.to_quality = ? THEN zr.qty ELSE 0 END), 0) AS defect
+           FROM zone_relocations zr
+           LEFT JOIN users u ON u.id = zr.created_by
+           LEFT JOIN shipment_lines l ON l.id = zr.shipment_line_id
+           LEFT JOIN shipment_docs d ON d.id = l.doc_id
+           WHERE zr.pack_entry_id IS NOT NULL AND zr.reverses_id IS NULL
+             AND zr.packed_date = ?
+             AND zr.client_id IS NOT DISTINCT FROM ?
+             AND zr.product_id = ?
+           GROUP BY zr.pack_entry_id
+           ORDER BY MIN(zr.created_at) DESC""",
+        (INV_OP_PACKED, INV_Q_GOOD, INV_Q_DEFECT, packed_date, client_id, product_id),
+    ).fetchall()
+    ids = [str(r["id"]) for r in rows]
+    reversed_ids: set[str] = set()
+    if ids:
+        ph = ",".join(["?"] * len(ids))
+        rev = connection.execute(
+            f"SELECT DISTINCT reverses_id FROM zone_relocations WHERE reverses_id IN ({ph})",
+            ids,
+        ).fetchall()
+        reversed_ids = {str(r["reverses_id"]) for r in rev}
+    return [
+        {
+            "id": str(r["id"]),
+            "packed_date": r["packed_date"],
+            "good": int(r["good"] or 0),
+            "defect": int(r["defect"] or 0),
+            "created_at": str(r["created_at"]),
+            "created_by_email": r["created_by_email"],
+            "doc_id": str(r["doc_id"]) if r["doc_id"] else None,
+            "doc_number": r["doc_number"],
+            "reversed": str(r["id"]) in reversed_ids,
+        }
+        for r in rows
+    ]
+
+
+def move_packing_date(connection, entry_ids: list[str], new_date: str, user_id: str) -> dict:
+    """Админ переносит бизнес-дату упаковки на другой день (историческая коррекция).
+
+    Двигает packed_date у выбранных pack-записей И их сторно (reverses_id наследует
+    дату оригинала), чтобы нетто по дням оставался консистентным. Затрагивает только
+    метку даты — остаток (опер.статус × качество × qty) и статус документа не меняются,
+    поэтому разрешено на любом статусе, включая отгруженные. Заработок в отчёте
+    пересчитывается сам — тариф берётся на packed_date.
+    """
+    new_date = _validate_packed_date(new_date)
+    ids = [str(e).strip() for e in (entry_ids or []) if str(e).strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Не выбрано ни одной записи упаковки")
+
+    ph = ",".join(["?"] * len(ids))
+    rows = connection.execute(
+        f"""SELECT zr.pack_entry_id AS id,
+              MIN(zr.packed_date) AS old_date,
+              MIN(l.doc_id) AS doc_id,
+              MIN(COALESCE(NULLIF(zr.product_sku, ''), zr.product_name)) AS label,
+              COALESCE(SUM(CASE WHEN zr.to_op = ? AND zr.to_quality = ? THEN zr.qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN zr.to_quality = ? THEN zr.qty ELSE 0 END), 0) AS defect
+           FROM zone_relocations zr
+           LEFT JOIN shipment_lines l ON l.id = zr.shipment_line_id
+           WHERE zr.pack_entry_id IN ({ph}) AND zr.reverses_id IS NULL
+           GROUP BY zr.pack_entry_id""",
+        (INV_OP_PACKED, INV_Q_GOOD, INV_Q_DEFECT, *ids),
+    ).fetchall()
+    found = {str(r["id"]): r for r in rows}
+    missing = [e for e in ids if e not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail="Часть записей упаковки не найдена")
+
+    moved = 0
+    for entry_id in ids:
+        r = found[entry_id]
+        old_date = str(r["old_date"])
+        if old_date == new_date:
+            continue
+        connection.execute(
+            "UPDATE zone_relocations SET packed_date = ? "
+            "WHERE (pack_entry_id = ? OR reverses_id = ?) AND packed_date IS NOT NULL",
+            (new_date, entry_id, entry_id),
+        )
+        moved += 1
+        doc_id = r["doc_id"]
+        if doc_id:
+            label = (r["label"] or "").strip()
+            comment = (
+                f"Перенос даты упаковки: {old_date} → {new_date} "
+                f"(годный {int(r['good'] or 0)} · брак {int(r['defect'] or 0)} шт.)"
+            )
+            if label:
+                comment += f" — {label}"
+            connection.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), str(doc_id), SHIPMENT_OP_PACK_DATE_MOVE, comment, _now(), user_id),
+            )
+    return {"moved": moved}
 
 
 def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, user_id: str) -> dict:

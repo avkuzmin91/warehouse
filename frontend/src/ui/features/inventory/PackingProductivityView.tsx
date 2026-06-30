@@ -11,8 +11,11 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { fmtYmdAsDmy, formatMoneyKopecks } from '../../../utils/format'
 import { useLookups } from '../../../hooks/useLookups'
 import { useApi } from '../../../hooks/useApi'
+import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
+import { MovePackDateDrawer } from './MovePackDateDrawer'
+import type { PackingProductivityRow } from '../../../api/shipmentsApi'
 
 // table-layout: fixed фиксирует ширины колонок одинаково для всех дат-групп
 // (иначе «Товар»/«Клиент» считаются по контенту каждой таблицы и «прыгают»);
@@ -81,6 +84,10 @@ export function PackingProductivityView() {
   const { setMany } = useFilterParamsActions()
   const [reloadTick, setReloadTick] = useState(0)
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
+  const [moveTarget, setMoveTarget] = useState<{ packedDate: string; row: PackingProductivityRow } | null>(null)
+
+  const { user } = useCurrentUser()
+  const isAdmin = user?.role === 'admin'
 
   const { clients } = useLookups()
 
@@ -183,6 +190,7 @@ export function PackingProductivityView() {
                   <th colSpan={2} style={{ textAlign: 'center', color: 'var(--c-warning)', borderLeft: BORDER }}>Брак</th>
                   <th rowSpan={2} style={{ width: 84, borderLeft: BORDER }} />
                   <th rowSpan={2} style={{ textAlign: 'right', width: 120, borderLeft: BORDER }}>Итого ₽</th>
+                  {isAdmin && <th rowSpan={2} style={{ width: 40 }} />}
                 </tr>
                 <tr>
                   <th style={{ textAlign: 'right', width: 66, borderLeft: BORDER }}>шт</th>
@@ -200,6 +208,7 @@ export function PackingProductivityView() {
                   <th style={{ textAlign: 'right', width: 90, borderLeft: BORDER }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
+                  {isAdmin && <th style={{ width: 40 }} />}
                 </tr>
               </thead>
             )}
@@ -220,6 +229,7 @@ export function PackingProductivityView() {
                       </span>
                     </Td>
                     {showEarn ? <EarnCells m={day} /> : <QtyCells m={day} />}
+                    {isAdmin && <Td />}
                   </tr>
                   {open && day.rows.map((row) => {
                     const docId = row.doc_ids?.[0]
@@ -234,6 +244,17 @@ export function PackingProductivityView() {
                         <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
                         <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
                         {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
+                        {isAdmin && (
+                          <Td style={{ textAlign: 'center' }}>
+                            <button
+                              className="btn ghost icon sm"
+                              title="Перенести дату упаковки"
+                              onClick={(e) => { e.stopPropagation(); setMoveTarget({ packedDate: day.packed_date, row }) }}
+                            >
+                              <Icon name="calendar" size={14} />
+                            </button>
+                          </Td>
+                        )}
                       </tr>
                     )
                   })}
@@ -243,6 +264,14 @@ export function PackingProductivityView() {
           </Table>
         </div>
         </>
+      )}
+      {isAdmin && moveTarget && (
+        <MovePackDateDrawer
+          packedDate={moveTarget.packedDate}
+          row={moveTarget.row}
+          onClose={() => setMoveTarget(null)}
+          onMoved={() => setReloadTick((t) => t + 1)}
+        />
       )}
     </ListPage>
   )
