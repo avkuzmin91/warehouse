@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
+    DISPATCH_ALLOW_SHIP_FROM_PACKED,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
     DISPATCH_OP_PREPARE,
@@ -289,10 +290,17 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     """Остаток к распределению по строкам отгрузки (для привязки к рейсу).
 
     Спрос строки = qty − shipped_qty − уже распределённое в активные ещё-не-уехавшие
-    рейсы. Ограничивается жадно общим готовым остатком варианта (несколько строк
-    одного варианта делят один пул `ready`).
+    рейсы. Ограничивается жадно общим остатком-источником варианта (несколько строк
+    одного варианта делят один пул). Для годного источник — `ready` плюс `packed`
+    (если разрешён выезд из упаковки, см. DISPATCH_ALLOW_SHIP_FROM_PACKED): упакованный
+    годный считается доступным к рейсу, не дожидаясь раскладки кладовщиком. Брак —
+    только `ready` (как и раньше: его свозит туда подготовка с хранения).
     """
     from modules.balances.service import ready_zones_for_variant
+
+    pool_ops = [INV_OP_READY]
+    if DISPATCH_ALLOW_SHIP_FROM_PACKED and _doc_quality(connection, doc_id) == INV_Q_GOOD:
+        pool_ops.append(INV_OP_PACKED)
 
     doc = connection.execute(
         "SELECT client_id FROM dispatch_docs WHERE id = ?", (doc_id,)
@@ -328,16 +336,19 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
         key = (str(ln["product_id"]), ln["color_id"], ln["size_id"])
         if key in variant_ready_left:
             continue
-        zones = ready_zones_for_variant(
-            connection,
-            product_id=str(ln["product_id"]),
-            color_id=ln["color_id"],
-            size_id=ln["size_id"],
-            client_id=client_id,
-            quality=quality,
-            op=INV_OP_READY,
+        variant_ready_left[key] = sum(
+            int(z["net"])
+            for op in pool_ops
+            for z in ready_zones_for_variant(
+                connection,
+                product_id=str(ln["product_id"]),
+                color_id=ln["color_id"],
+                size_id=ln["size_id"],
+                client_id=client_id,
+                quality=quality,
+                op=op,
+            )
         )
-        variant_ready_left[key] = sum(int(z["net"]) for z in zones)
 
     result: dict[str, int] = {}
     for ln in lines:
@@ -350,19 +361,62 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     return result
 
 
+def dispatch_trip_allocations(connection, doc_id: str) -> dict[str, list[dict]]:
+    """Разбивка распределения по строкам отгрузки: в какие активные рейсы и сколько.
+
+    Для шторки привязки — показать, куда уже ушло количество (рейс, статус, куда,
+    кто и когда распределил). Исключает отменённые рейсы. Ключ — line_id, значение —
+    список аллокаций.
+    """
+    rows = connection.execute(
+        """SELECT ta.dispatch_line_id AS line_id, ta.qty AS qty, ta.created_at AS allocated_at,
+                  td.trip_number AS trip_number, td.status AS trip_status,
+                  td.direction AS direction, td.origin_name AS destination,
+                  u.email AS allocated_by
+           FROM trip_alloc ta
+           JOIN trip_lines tl ON tl.id = ta.trip_line_id
+           JOIN trip_docs td ON td.id = tl.trip_id
+           LEFT JOIN users u ON u.id = ta.created_by
+           WHERE ta.dispatch_line_id IN (
+                   SELECT id FROM dispatch_lines
+                   WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0
+                 )
+             AND COALESCE(ta.is_deleted, 0) = 0
+             AND COALESCE(tl.is_deleted, 0) = 0
+             AND td.status != ?
+           ORDER BY td.created_at, td.trip_number""",
+        (doc_id, TRIP_STATUS_CANCELLED),
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(str(r["line_id"]), []).append({
+            "trip_number": r["trip_number"],
+            "trip_status": r["trip_status"],
+            "direction": r["direction"],
+            "destination": r["destination"],
+            "qty": int(r["qty"] or 0),
+            "allocated_by": r["allocated_by"],
+            "allocated_at": r["allocated_at"],
+        })
+    return out
+
+
 def _insert_shipped_move(
     connection, *,
     line, client_id: str | None, client_name: str | None, quality: str,
     from_op: str, from_zone_id: str | None, from_zone_name: str | None,
     qty: int, user_id: str | None, dispatch_line_id: str, trip_id: str | None,
-    comment: str | None,
+    comment: str | None, shipment_line_id: str | None = None,
 ) -> None:
     """Журнальная запись списания при отгрузке (`from_op` → shipped) с атрибуцией к строке.
 
     Прямой INSERT в zone_relocations (а не insert_inventory_move): движение нужно
     привязать к dispatch_line_id, которого нет в сигнатуре balances.insert_inventory_move.
     Список столбцов скопирован из balances.insert_inventory_move плюс dispatch_line_id.
-    `from_op` — корзина-источник: `ready` для годного, `storage` для брака.
+    `from_op` — корзина-источник: `ready` для годного, `storage` для брака. При выезде
+    прямо из «Упаковано» (`packed`) передаётся `shipment_line_id` — тогда списание
+    уменьшает `line_packed_pending` строки упаковки (ветка from_op='packed' → −qty), и
+    финальное «Готово к рейсу» не переразложит уже отгруженное.
     """
     connection.execute(
         """INSERT INTO zone_relocations
@@ -375,7 +429,7 @@ def _insert_shipped_move(
          line["color_id"], line["color_name"], line["size_id"], line["size_name"],
          client_id, client_name, from_op, INV_OP_SHIPPED, quality, quality,
          from_zone_id, from_zone_name, None, None, qty, comment,
-         _now(), user_id, None,
+         _now(), user_id, shipment_line_id,
          None, None, None, None, None, trip_id, dispatch_line_id),
     )
 
@@ -612,13 +666,21 @@ def consume_stock_for_dispatch(
     client_name = doc_row["client_name"] if doc_row else None
     quality = INV_Q_DEFECT if cargo_type == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
     comment_prefix = "Отгрузка брака" if cargo_type == DISPATCH_CARGO_DEFECT else "Отгрузка"
+    # Годный может уехать прямо из «Упаковано» (`packed`), не дожидаясь раскладки в зону
+    # отгрузки — тогда после `ready` дочерпываем из упаковки с атрибуцией к строкам задачи
+    # упаковки. Брак этим путём не едет (всегда из `ready` после подготовки с хранения).
+    ship_from_packed = DISPATCH_ALLOW_SHIP_FROM_PACKED and quality == INV_Q_GOOD
 
-    from modules.balances.service import ready_zones_for_variant
+    from modules.balances.service import get_packing_zone, ready_zones_for_variant
+
+    packing_id, packing_name = get_packing_zone(connection) if ship_from_packed else (None, None)
 
     lines = connection.execute(
         "SELECT * FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
         (doc_id,),
     ).fetchall()
+
+    drained_shipment_lines: set[str] = set()
 
     for line in lines:
         line_id = str(line["id"])
@@ -633,14 +695,23 @@ def consume_stock_for_dispatch(
             quality=quality,
             op=INV_OP_READY,
         )
-        available = sum(int(z["net"]) for z in zones)
+        ready_avail = sum(int(z["net"]) for z in zones)
+        # Упакованный годный, ещё не разложенный в зону отгрузки (по строкам упаковки, FIFO).
+        packed_lines = _packed_lines_for_variant(
+            connection, product_id=str(line["product_id"]),
+            color_id=line["color_id"], size_id=line["size_id"], client_id=client_id,
+        ) if ship_from_packed else []
+        packed_avail = sum(net for _, net in packed_lines)
+        available = ready_avail + packed_avail
+
         target = int(alloc.get(line_id, 0)) if alloc is not None else available
         if target <= 0:
             continue
         if target > available:
+            where = "«Готов к отгрузке»/«Упаковано»" if ship_from_packed else "«Готов к отгрузке»"
             raise HTTPException(
                 status_code=400,
-                detail=f"Недостаточно товара в «Готов к отгрузке» для отгрузки: нужно {target}, есть {available}",
+                detail=f"Недостаточно товара в {where} для отгрузки: нужно {target}, есть {available}",
             )
 
         shipped_total = 0
@@ -659,11 +730,33 @@ def consume_stock_for_dispatch(
             )
             shipped_total += take
             remaining -= take
+        for sl_id, net in packed_lines:
+            if remaining <= 0:
+                break
+            take = min(remaining, net)
+            _insert_shipped_move(
+                connection,
+                line=line, client_id=client_id, client_name=client_name, quality=quality,
+                from_op=INV_OP_PACKED,
+                from_zone_id=packing_id, from_zone_name=packing_name,
+                qty=take, user_id=user_id, dispatch_line_id=line_id, trip_id=trip_id,
+                comment=f"{comment_prefix} (из упаковки): {take} шт.", shipment_line_id=sl_id,
+            )
+            shipped_total += take
+            remaining -= take
+            drained_shipment_lines.add(sl_id)
 
         connection.execute(
             "UPDATE dispatch_lines SET shipped_qty = COALESCE(shipped_qty, 0) + ? WHERE id = ?",
             (shipped_total, line_id),
         )
+
+    if drained_shipment_lines:
+        # Упаковочные задачи, чей упакованный уехал, закрываем автоматически — кладовщику
+        # больше нечего раскладывать (инвентарь корректен и без этого: списание `packed`
+        # уже уменьшило line_packed_pending, это лишь гигиена статуса задачи).
+        from modules.shipments.service import close_drained_packing_tasks
+        close_drained_packing_tasks(connection, drained_shipment_lines, user_id)
 
 
 def dispatch_fully_shipped(connection, doc_id: str) -> bool:

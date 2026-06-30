@@ -449,6 +449,46 @@ def receipt_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     return {str(r["line_id"]): int(r["planned"]) - int(r["allocated"]) for r in rows}
 
 
+def receipt_trip_allocations(connection, doc_id: str) -> dict[str, list[dict]]:
+    """Разбивка распределения по строкам поступления: в какие активные рейсы и сколько.
+
+    Для шторки привязки — показать, куда уже ушло количество (рейс, статус, откуда,
+    кто и когда распределил). Исключает отменённые рейсы (зеркало
+    receipt_alloc_remaining). Ключ — line_id, значение — список аллокаций.
+    """
+    rows = connection.execute(
+        """SELECT ta.receipt_line_id AS line_id, ta.qty AS qty, ta.created_at AS allocated_at,
+                  td.trip_number AS trip_number, td.status AS trip_status,
+                  td.direction AS direction, td.origin_name AS destination,
+                  u.email AS allocated_by
+           FROM trip_alloc ta
+           JOIN trip_lines tl ON tl.id = ta.trip_line_id
+           JOIN trip_docs td ON td.id = tl.trip_id
+           LEFT JOIN users u ON u.id = ta.created_by
+           WHERE ta.receipt_line_id IN (
+                   SELECT id FROM receipt_lines
+                   WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0
+                 )
+             AND COALESCE(ta.is_deleted, 0) = 0
+             AND COALESCE(tl.is_deleted, 0) = 0
+             AND td.status != ?
+           ORDER BY td.created_at, td.trip_number""",
+        (doc_id, TRIP_STATUS_CANCELLED),
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(str(r["line_id"]), []).append({
+            "trip_number": r["trip_number"],
+            "trip_status": r["trip_status"],
+            "direction": r["direction"],
+            "destination": r["destination"],
+            "qty": int(r["qty"] or 0),
+            "allocated_by": r["allocated_by"],
+            "allocated_at": r["allocated_at"],
+        })
+    return out
+
+
 def _has_pending_delivery_trip(connection, doc_id: str) -> bool:
     """Есть ли привязанный рейс, который ещё может что-то привезти (черновик / в пути / разгрузка)."""
     row = connection.execute(

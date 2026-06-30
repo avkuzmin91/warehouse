@@ -405,6 +405,56 @@ def line_packed_pending(connection, line_id: str) -> dict:
     return {"good": int(row["good"] or 0), "defect": int(row["defect"] or 0)}
 
 
+def close_drained_packing_tasks(connection, shipment_line_ids, user_id: str) -> int:
+    """Авто-закрытие упаковочных задач, чей упакованный уехал рейсом (relocating → packed).
+
+    Вызывается доменом «Отгрузка» при выезде рейса прямо из «Упаковано»: списание
+    `packed` атрибутировано к строкам упаковки, поэтому раскладывать кладовщику больше
+    нечего. Закрываем только задачи в статусе «Перемещение» (relocating), у которых по
+    ВСЕМ строкам не осталось упакованного (`line_packed_pending` good+defect = 0) — это
+    то же конечное состояние, что и ручное «Готово к рейсу» (finish_relocation), только
+    без раскладки по местам. Задачи, где ещё упаковывают (on_packing), не трогаем. Без
+    commit — коммитит вызывающий каскад рейса. Возвращает число закрытых задач.
+    """
+    if not shipment_line_ids:
+        return 0
+    placeholders = ",".join("?" for _ in shipment_line_ids)
+    doc_rows = connection.execute(
+        f"SELECT DISTINCT doc_id FROM shipment_lines WHERE id IN ({placeholders})",
+        list(shipment_line_ids),
+    ).fetchall()
+
+    closed = 0
+    now = _now()
+    for dr in doc_rows:
+        doc_id = str(dr["doc_id"])
+        doc = connection.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not doc or str(doc["status"]) != SHIPMENT_STATUS_RELOCATING:
+            continue
+        lines = connection.execute(
+            "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchall()
+        if any(
+            line_packed_pending(connection, str(l["id"]))["good"]
+            + line_packed_pending(connection, str(l["id"]))["defect"] > 0
+            for l in lines
+        ):
+            continue
+        connection.execute(
+            "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+            (SHIPMENT_STATUS_PACKED, now, doc_id),
+        )
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
+             "Упаковано: товар уехал рейсом из упаковки (задача закрыта автоматически)", now, user_id),
+        )
+        closed += 1
+    return closed
+
+
 def _relocate_alloc_zone(a) -> tuple[str, str | None, int]:
     """Одна аллокация раскладки → (zone_id, zone_name, qty) с валидацией."""
     zone_id = (a.zone_id or "").strip()

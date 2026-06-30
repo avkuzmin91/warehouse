@@ -54,6 +54,7 @@ from modules.dispatch.service import (
     check_lines_have_ready,
     check_lines_have_sku,
     dispatch_alloc_remaining,
+    dispatch_trip_allocations,
     dispatch_is_invoiced,
     get_dispatch_detail,
     list_dispatches_aggregated,
@@ -321,6 +322,7 @@ def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
         if not doc:
             raise HTTPException(status_code=404, detail="Документ не найден")
         remaining = dispatch_alloc_remaining(conn, doc_id)
+        allocations = dispatch_trip_allocations(conn, doc_id)
         lines = conn.execute(
             "SELECT l.id, "
             "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku, "
@@ -339,6 +341,7 @@ def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
             "qty": int(ln["qty"] or 0),
             "shipped_qty": int(ln["shipped_qty"] or 0),
             "remaining": int(remaining.get(str(ln["id"]), 0)),
+            "allocations": allocations.get(str(ln["id"]), []),
         }
         for ln in lines
     ]

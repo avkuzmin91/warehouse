@@ -5,6 +5,8 @@ import type { IconName } from '../../../../primitives/Icon'
 import { foldCiSearch } from '../../../../../utils/foldCiSearch'
 import { colorSwatch } from '../../../../../utils/colorSwatch'
 import { fmtDateShort, fmtDateLong } from '../../../../../utils/format'
+import { tripStatusLabel, tripStatusTone } from '../../../../../api/tripsApi'
+import type { TripAllocBreakdownItem } from '../../../../../api/tripsApi'
 
 /* ====================================================================== */
 /* Полноэкранный модал «Распределение по рейсу»: левый рейл документов +   */
@@ -37,6 +39,8 @@ export type AllocLine = {
   preset: number | null
   /** Магазин назначения строки (только отгрузки); null → колонка не показывается. */
   store?: string | null
+  /** В какие активные рейсы уже ушло количество — для поповера на теге «распределено». */
+  allocations?: TripAllocBreakdownItem[]
 }
 
 export type AllocItem = { doc_id: string; allocations: { line_id: string; qty: number }[] }
@@ -145,6 +149,97 @@ function DocChip({ doc, lines, qty, active, onClick, onRemove }: {
   )
 }
 
+/* ---------------- distributed tag with per-trip breakdown popover ---------------- */
+function DistributedTag({ allocations }: { allocations?: TripAllocBreakdownItem[] }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const has = (allocations?.length ?? 0) > 0
+  const total = useMemo(() => (allocations ?? []).reduce((s, a) => s + a.qty, 0), [allocations])
+
+  function toggle() {
+    if (!has) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r) {
+      const width = 312
+      const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8))
+      setPos({ top: r.bottom + 6, left })
+    }
+    setOpen(true)
+  }
+
+  // Поповер — fixed по координатам кнопки: иначе обрезается overflow'ом скролла таблицы.
+  // Esc в capture-фазе гасится здесь, чтобы не закрыть весь модал.
+  useEffect(() => {
+    if (!open) return
+    function onDoc(e: MouseEvent) {
+      const t = e.target as Node
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false) } }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey, true) }
+  }, [open])
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="line-tag done"
+        onClick={toggle}
+        title={has ? 'В какие рейсы распределено' : undefined}
+        style={{ appearance: 'none', border: 0, background: 'none', padding: 0, margin: 0, fontFamily: 'inherit', cursor: has ? 'pointer' : 'default' }}
+      >
+        {has && <Icon name="check" size={12} />}
+        <span style={has ? { marginLeft: 2 } : undefined}>{has ? 'распределено' : 'нет остатка'}</span>
+        {has && <Icon name={open ? 'chevUp' : 'chevDown'} size={12} style={{ marginLeft: 2 }} />}
+      </button>
+      {open && has && pos && (
+        <div
+          ref={popRef}
+          role="dialog"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: pos.top, left: pos.left, zIndex: 1000, width: 312,
+            background: 'var(--c-bg-elev)', border: '1px solid var(--c-border-strong)',
+            borderRadius: 'var(--r-md)', boxShadow: 'var(--sh-2)', padding: '10px 12px', textAlign: 'left',
+          }}
+        >
+          <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginBottom: 8 }}>
+            Распределено по рейсам · {total} шт
+          </div>
+          {(allocations ?? []).map((a, i) => (
+            <div
+              key={`${a.trip_number}-${i}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: i === 0 ? 'none' : '1px solid var(--c-border)' }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="row gap-8" style={{ alignItems: 'center' }}>
+                  <span className="mono" style={{ fontSize: 12.5 }}>{a.trip_number}</span>
+                  <span className={`badge ${tripStatusTone(a.trip_status)}`} style={{ height: 17, padding: '0 6px' }}>
+                    <span className="dot" />{tripStatusLabel(a.trip_status, a.direction)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {a.destination && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="arrowRight" size={11} />{a.destination}</span>}
+                  {a.allocated_by && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="user" size={11} />{a.allocated_by}</span>}
+                  {a.allocated_at && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="calendar" size={11} />{fmtDateShort(a.allocated_at)}</span>}
+                </div>
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 500 }}>{a.qty}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 /* ---------------- lines table ---------------- */
 function LinesTable({ lines, qty, setQty, query }: {
   lines: AllocLine[]
@@ -209,7 +304,7 @@ function LinesTable({ lines, qty, setQty, query }: {
                   {disabled ? (
                     <>
                       <span className="qty-of" />
-                      <span className="line-tag done"><Icon name="check" size={12} /><span style={{ marginLeft: 2 }}>распределено</span></span>
+                      <DistributedTag allocations={l.allocations} />
                     </>
                   ) : (
                     <>

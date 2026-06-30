@@ -210,13 +210,10 @@ def test_outbound_unload_blocked_for_draft_dispatch(admin_client, client_id):
     assert "не подготовлены к отгрузке" in blocked.json()["detail"]
     assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "unloading"
 
-    # Передаём кладовщику в подготовку — рейс всё ещё нельзя грузить, пока товар не подготовлен.
+    # Передаём кладовщику в подготовку. Годную отгрузку теперь можно грузить прямо из
+    # «Подготовки» — товар уезжает из ready/упаковки, ручная раскладка «Готово к рейсу»
+    # не обязательна (DISPATCH_ALLOW_SHIP_FROM_PACKED).
     assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "preparing"
-    still_blocked = admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"})
-    assert still_blocked.status_code == 400, still_blocked.text
-
-    # Кладовщик указал ячейки и подготовил отгрузку → рейс можно грузить.
-    assert _finish_prep(admin_client, doc_id).status_code == 200
     ok = admin_client.post(f"/trips/{trip_id}/unload", json={
         "load_factor": "full", "unload_started_at": "2026-06-10T07:35", "unload_finished_at": "2026-06-10T08:10",
     })
@@ -520,3 +517,87 @@ def test_outbound_list_filter_by_direction(admin_client, client_id):
     assert out_trip in out_ids
     assert in_trip not in out_ids
     assert all(i["direction"] == "outbound" for i in items)
+
+
+# --- Выезд прямо из «Упаковано» (без ручной раскладки «Готово к рейсу») ---
+
+def _seed_packed_task(client_id: str, *, product_id: str, sku: str, qty: int) -> tuple[str, str]:
+    """Упаковочная задача (shipment) в статусе «Перемещение» с упакованным годным.
+
+    Сеет packing→packed (good) в зону упаковки с атрибуцией к строке упаковки —
+    как после внесения упаковки, но до раскладки в зону отгрузки. Возвращает
+    (shipment_doc_id, shipment_line_id). Имитирует состояние, из которого домен
+    «Отгрузка» теперь может увезти товар, не дожидаясь «Готово к рейсу».
+    """
+    from modules.balances.service import get_packing_zone, insert_inventory_move
+
+    doc_id = str(uuid.uuid4())
+    line_id = str(uuid.uuid4())
+    with get_connection() as conn:
+        packing_id, packing_name = get_packing_zone(conn)
+        conn.execute(
+            "INSERT INTO shipment_docs (id, doc_number, status, client_id, client_name, cargo_type, created_at) "
+            "VALUES (?, ?, 'relocating', ?, 'Test Client', 'good', NOW())",
+            (doc_id, f"SH-PKD-{doc_id[:8]}", client_id),
+        )
+        conn.execute(
+            "INSERT INTO shipment_lines (id, doc_id, product_id, product_name, product_sku, qty, created_at) "
+            "VALUES (?, ?, ?, 'Товар', ?, ?, NOW())",
+            (line_id, doc_id, product_id, sku, qty),
+        )
+        insert_inventory_move(
+            conn,
+            product_id=product_id, product_name="Товар", product_sku=sku,
+            color_id=None, color_name=None, size_id=None, size_name=None,
+            client_id=client_id, client_name="Test Client",
+            from_op="packing", to_op="packed", from_quality="good", to_quality="good",
+            from_zone_id=packing_id, from_zone_name=packing_name,
+            to_zone_id=packing_id, to_zone_name=packing_name,
+            qty=qty, user_id="test", shipment_line_id=line_id,
+        )
+        conn.commit()
+    return doc_id, line_id
+
+
+def _packed_net(client_id: str, product_id: str) -> int:
+    from modules.balances.service import get_available_total
+    with get_connection() as conn:
+        return get_available_total(
+            conn, product_id=product_id, color_id=None, size_id=None,
+            client_id=client_id, op="packed", quality="good",
+        )
+
+
+def _shipment_status(shipment_doc_id: str) -> str:
+    with get_connection() as conn:
+        return str(conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ?", (shipment_doc_id,)
+        ).fetchone()["status"])
+
+
+def test_ship_good_from_packed_closes_packing_task(admin_client, client_id):
+    # Товар только упакован (в `packed`), раскладку «Готово к рейсу» НЕ делали.
+    pid = str(uuid.uuid4())
+    sh_doc, sh_line = _seed_packed_task(client_id, product_id=pid, sku="SKU-PK", qty=8)
+    assert _packed_net(client_id, pid) == 8
+    assert _ready_net(client_id, pid) == 0
+
+    doc_id, line_id, pid = _create_dispatch(admin_client, client_id, qty=8, sku="SKU-PK", product_id=pid)
+    # Передача в подготовку проходит за счёт упакованного (источник ready+packed).
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "preparing"
+
+    # Остаток к распределению в рейс виден из упаковки (а не 0).
+    rem = admin_client.get(f"/dispatches/{doc_id}/trip-alloc-remaining").json()["lines"]
+    assert rem[0]["remaining"] == 8, rem
+
+    trip_id = _bare_outbound_trip(admin_client)
+    assert _link(admin_client, trip_id, doc_id, line_id, 8).status_code == 200
+    _drive_to_costing(admin_client, trip_id)
+
+    # Отгрузка уехала прямо из упаковки, остаток packed обнулился.
+    ship = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert ship["status"] == "shipped"
+    assert ship["lines"][0]["shipped_qty"] == 8
+    assert _packed_net(client_id, pid) == 0
+    # Упаковочная задача закрылась автоматически (relocating → packed).
+    assert _shipment_status(sh_doc) == "packed"

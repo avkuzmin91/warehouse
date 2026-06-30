@@ -60,6 +60,9 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   const [recvDist, setRecvDist] = useState<TripReceiptLinkItem[]>([])
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
   const [availableDispatches, setAvailableDispatches] = useState<DispatchListItem[]>([])
+  // Отгрузки, найденные серверным поиском в модале (за пределами предзагруженных 100):
+  // без них выбранная из поиска отгрузка не отрисуется карточкой в карточке создания.
+  const [seenDispatches, setSeenDispatches] = useState<Record<string, DispatchListItem>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
@@ -148,8 +151,14 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
         storage_zone_id: null, storage_zone_name: null,
       })),
     }))
-  const selectedDispatches: TripDispatchItem[] = availableDispatches
-    .filter((s) => selected.has(s.id))
+  // Пул всех известных отгрузок: предзагруженные + найденные поиском.
+  const dispatchById: Record<string, DispatchListItem> = {}
+  for (const s of availableDispatches) dispatchById[s.id] = s
+  for (const id in seenDispatches) dispatchById[id] = seenDispatches[id]
+
+  const selectedDispatches: TripDispatchItem[] = [...selected]
+    .map((id) => dispatchById[id])
+    .filter((s): s is DispatchListItem => !!s)
     .map((s) => ({
       line_id: s.id, dispatch_doc_id: s.id, dispatch_number: s.doc_number,
       dispatch_status: s.status, client_id: s.client_id, client_name: s.client_name,
@@ -163,7 +172,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
   const enrich: ReceiptEnrich = {}
   for (const r of available) enrich[r.id] = { sku: r.sku_count, qty: r.total_planned, eta: fmtDay(r.arrival_date) }
   const dispatchEnrich: DispatchEnrich = {}
-  for (const s of availableDispatches) dispatchEnrich[s.id] = { sku: s.sku_count, qty: s.total_qty }
+  for (const id in dispatchById) dispatchEnrich[id] = { sku: dispatchById[id].sku_count, qty: dispatchById[id].total_qty }
 
   // Модал распределения отдаёт строки с количествами; рейс ещё не создан, поэтому
   // распределение копим локально и применяем при создании (linkTrip* после createTrip).
@@ -198,6 +207,8 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
         { status: DISPATCH_TRIP_SELECTABLE_STATUSES, limit: 100, available_for_trip_id: 'new', cargo_type: cargoType, search: q },
         signal,
       )
+      // Запоминаем найденные документы, чтобы выбранная из поиска отгрузка отрисовалась карточкой.
+      setSeenDispatches((prev) => { const n = { ...prev }; for (const s of res.items) n[s.id] = s; return n })
       return res.items.filter((s) => !selected.has(s.id))
     },
     presetsLinked: false,

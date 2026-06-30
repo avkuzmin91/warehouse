@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
+    DISPATCH_ALLOW_SHIP_FROM_PACKED,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
     DISPATCH_OP_ADVANCE,
@@ -15,6 +16,7 @@ from config import (
     DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUS_SHIPPED,
     INV_OP_INTAKE,
     INV_OP_SHIPPED,
@@ -567,27 +569,43 @@ def reverse_receipt_intake_for_trip(connection, trip_id: str, uid: str) -> None:
         recompute_trip_receipt_status(connection, rid, uid, note="отмена рейса")
 
 
+def _dispatch_loadable(status: str, cargo_type: str) -> bool:
+    """Можно ли везти эту отгрузку выезжающим рейсом (по статусу).
+
+    Готовые — «Ожидает рейс»/«Частично отгружено». Аннулированные пропускаются (не
+    поедут). Годная отгрузка грузится и из «Подготовки»: упакованный годный уедет прямо
+    из упаковки, не дожидаясь раскладки в зону отгрузки (DISPATCH_ALLOW_SHIP_FROM_PACKED).
+    """
+    if status in (DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED, DISPATCH_STATUS_CANCELLED):
+        return True
+    if (
+        DISPATCH_ALLOW_SHIP_FROM_PACKED
+        and cargo_type == DISPATCH_CARGO_GOOD
+        and status == DISPATCH_STATUS_PREPARING
+    ):
+        return True
+    return False
+
+
 def assert_dispatches_ready_for_load(connection, trip_id: str) -> None:
     """Гейт перед завершением погрузки outbound-рейса.
 
-    Кладовщик завершает погрузку только когда все привязанные отгрузки готовы к
-    рейсу (статус «Ожидает рейс»). Аннулированные пропускаем — они не поедут.
+    Кладовщик завершает погрузку, когда все привязанные отгрузки готовы к рейсу
+    («Ожидает рейс»/«Частично отгружено»). Годные отгрузки можно грузить и из
+    «Подготовки» — товар уезжает прямо из упаковки (см. DISPATCH_ALLOW_SHIP_FROM_PACKED),
+    раскладка в зону отгрузки не обязательна. Аннулированные пропускаем — они не поедут.
     """
     rows = connection.execute(
-        "SELECT s.doc_number, s.status FROM trip_lines l "
+        "SELECT s.doc_number, s.status, COALESCE(s.cargo_type, ?) AS cargo_type FROM trip_lines l "
         "JOIN dispatch_docs s ON s.id = l.dispatch_doc_id AND COALESCE(s.is_deleted, 0) = 0 "
         "WHERE l.trip_id = ? AND l.is_deleted = 0 AND l.dispatch_doc_id IS NOT NULL "
         "ORDER BY s.doc_number",
-        (trip_id,),
+        (DISPATCH_CARGO_GOOD, trip_id),
     ).fetchall()
     blocking = [
         str(r["doc_number"])
         for r in rows
-        if str(r["status"]) not in (
-            DISPATCH_STATUS_AWAITING_TRIP,
-            DISPATCH_STATUS_PARTIALLY_SHIPPED,
-            DISPATCH_STATUS_CANCELLED,
-        )
+        if not _dispatch_loadable(str(r["status"]), str(r["cargo_type"]))
     ]
     if blocking:
         raise HTTPException(
@@ -622,9 +640,10 @@ def cascade_dispatches_to_shipped(connection, trip_id: str, trip_number: str, ui
         ship = connection.execute(
             "SELECT status, priority_rank, cargo_type FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (sid,)
         ).fetchone()
-        if not ship or str(ship["status"]) not in (
-            DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED
-        ):
+        if not ship:
+            continue
+        ship_cargo = str(ship["cargo_type"]) if ship["cargo_type"] else DISPATCH_CARGO_GOOD
+        if str(ship["status"]) == DISPATCH_STATUS_CANCELLED or not _dispatch_loadable(str(ship["status"]), ship_cargo):
             continue
 
         alloc_rows = connection.execute(

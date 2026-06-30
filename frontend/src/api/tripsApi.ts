@@ -10,6 +10,19 @@ export type TripStatus =
   | 'closed'
   | 'cancelled'
 
+/** Одна аллокация строки документа в рейс — «куда/сколько/кем/когда» ушло количество.
+ *  Возвращается в trip-alloc-remaining, чтобы шторка привязки объясняла «распределено». */
+export type TripAllocBreakdownItem = {
+  trip_number: string
+  trip_status: TripStatus
+  direction: string | null
+  /** origin_name рейса: для inbound — откуда, для outbound — куда. */
+  destination: string | null
+  qty: number
+  allocated_by: string | null
+  allocated_at: string | null
+}
+
 export type TripLoadFactor = 'full' | 'partial'
 
 export type TripDirection = 'inbound' | 'outbound'

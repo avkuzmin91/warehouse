@@ -1,4 +1,5 @@
 import { request, requestForm } from './http'
+import type { TripAllocBreakdownItem } from './tripsApi'
 
 export type DispatchStatus = 'draft' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
@@ -306,6 +307,8 @@ export type DispatchTripRemainingLine = {
   qty:          number
   shipped_qty:  number
   remaining:    number
+  /** В какие активные рейсы уже распределена строка (объясняет «распределено»). */
+  allocations:  TripAllocBreakdownItem[]
 }
 
 /** Остаток к распределению по строкам отгрузки для привязки к рейсу. */

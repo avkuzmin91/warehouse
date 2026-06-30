@@ -1,5 +1,6 @@
 import { request } from './http'
 import { moscowTodayYmd } from '../utils/format'
+import type { TripAllocBreakdownItem } from './tripsApi'
 
 // --- Types ---
 
@@ -275,6 +276,8 @@ export type ReceiptTripRemainingLine = {
   planned_qty: number
   accepted_qty: number
   remaining: number
+  /** В какие активные рейсы уже распределена строка (объясняет «распределено»). */
+  allocations: TripAllocBreakdownItem[]
 }
 
 /** Остаток к распределению по строкам поступления для привязки к рейсу. */

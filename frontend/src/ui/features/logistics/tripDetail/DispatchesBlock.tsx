@@ -195,6 +195,7 @@ export function DispatchesBlock({ title = 'Отгрузки в рейсе', righ
                 plan: l.qty,
                 max: l.remaining + addBack,
                 preset,
+                allocations: l.allocations?.filter((a) => a.trip_number !== link.tripNumber),
               }
             })
           }}

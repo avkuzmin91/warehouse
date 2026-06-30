@@ -183,6 +183,7 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
                 plan: l.planned_qty,
                 max: l.remaining + addBack,
                 preset,
+                allocations: l.allocations?.filter((a) => a.trip_number !== link.tripNumber),
               }
             })
           }}

@@ -63,6 +63,7 @@ from modules.receipts.service import (
     list_receipts_aggregated,
     next_doc_number,
     receipt_alloc_remaining,
+    receipt_trip_allocations,
     receipt_shortage_final,
     received_placements_by_line,
     release_shortfall_for_redelivery,
@@ -353,6 +354,7 @@ def receipt_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
         if not doc:
             raise HTTPException(status_code=404, detail="Документ не найден")
         remaining = receipt_alloc_remaining(conn, doc_id)
+        allocations = receipt_trip_allocations(conn, doc_id)
         lines = conn.execute(
             "SELECT id, product_sku, product_name, color_name, size_name, planned_qty, accepted_qty "
             "FROM receipt_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY product_sku, id",
@@ -368,6 +370,7 @@ def receipt_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
             "planned_qty": int(ln["planned_qty"] or 0),
             "accepted_qty": int(ln["accepted_qty"] or 0),
             "remaining": int(remaining.get(str(ln["id"]), 0)),
+            "allocations": allocations.get(str(ln["id"]), []),
         }
         for ln in lines
     ]
