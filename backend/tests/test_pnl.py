@@ -228,7 +228,21 @@ def test_pnl_trip_profitability(admin_client, client_id):
     assert row["income_kop"] == 100000          # только логистика клиента 1000 ₽ (палеты — отдельно)
     assert row["cost_kop"] == 40000             # себестоимость рейса 400 ₽
     assert row["margin_kop"] == 60000
+    assert row["margin_pct"] == 150.0           # рентабельность = 60000 / 40000
     assert row["day"] == "2026-06-12"
+
+
+def test_pnl_trip_margin_pct_zero_income(admin_client, client_id):
+    """Рентабельность = прибыль / себестоимость: доход 0 при себестоимости 5000 ₽ → −100%."""
+    _, trip_number = _dispatch_in_trip(
+        admin_client, client_id, pallets=[1], logistics_rub=0.0, trip_cost_rub=5000.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+    body = admin_client.get("/pnl/trips?date_from=2026-06-01&date_to=2026-06-30").json()
+    row = next(it for it in body["items"] if it["trip_number"] == trip_number)
+    assert row["income_kop"] == 0
+    assert row["cost_kop"] == 500000
+    assert row["margin_pct"] == -100.0
 
 
 def test_pnl_trip_logistics_apportioned_by_qty(admin_client, client_id):

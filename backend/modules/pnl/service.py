@@ -701,7 +701,10 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
             "income_kop": income,
             "cost_kop": cost,
             "margin_kop": margin,
-            "margin_pct": round(margin / income * 100, 1) if income > 0 else None,
+            # Рентабельность = прибыль / себестоимость: доход 0 при себестоимости 5000 ₽ даёт
+            # −100%. База — доход неустойчива у нуля (income→0 уводит % в −∞); без себестоимости
+            # отношение не определено — отдаём None («—»).
+            "margin_pct": round(margin / cost * 100, 1) if cost > 0 else None,
         })
 
     return {
