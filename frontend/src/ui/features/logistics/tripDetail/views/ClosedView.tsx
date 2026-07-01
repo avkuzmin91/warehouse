@@ -1,13 +1,56 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
 import type { TripDetail, TripDirection } from '../../../../../api/tripsApi'
 import { TRIP_LOAD_LABELS, tripLexicon } from '../../../../../api/tripsApi'
 import { TripHeader } from '../TripHeader'
-import { ReadRow } from '../../components/fields'
+import { ReadRow, SelectField } from '../../components/fields'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import { Panel, ProcessPanel, CostPanel, JournalPanel } from '../panels'
 import { fmtDateTime } from '../format'
+
+/** Инлайн-смена перевозчика на карточке закрытого рейса (только админ). */
+export type CarrierEdit = {
+  carriers: { id: string; name: string }[]
+  currentId: string | null
+  onSave: (carrierId: string) => void
+  busy: boolean
+}
+
+function CarrierRow({ name, edit }: { name: string | null; edit?: CarrierEdit }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  if (!edit) return <ReadRow label="Перевозчик">{name ?? '—'}</ReadRow>
+  if (!editing) {
+    return (
+      <ReadRow label="Перевозчик">
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {name ?? '—'}
+          <button
+            className="btn ghost sm icon"
+            title="Изменить перевозчика"
+            onClick={() => { setDraft(edit.currentId ?? ''); setEditing(true) }}
+          >
+            <Icon name="edit" size={13} />
+          </button>
+        </span>
+      </ReadRow>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
+      <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)', flexShrink: 0 }}>Перевозчик</span>
+      <div style={{ flex: 1, minWidth: 0, maxWidth: 220, marginLeft: 'auto' }}>
+        <SelectField value={draft} options={edit.carriers} leadIcon="truckIn" placeholder="Выберите перевозчика"
+          onChange={setDraft} />
+      </div>
+      <button className="btn primary sm" disabled={edit.busy || !draft || draft === edit.currentId}
+        onClick={() => { edit.onSave(draft); setEditing(false) }}>Сохранить</button>
+      <button className="btn ghost sm" disabled={edit.busy} onClick={() => setEditing(false)}>Отмена</button>
+    </div>
+  )
+}
 
 function money(v: number | null | undefined): string {
   return v == null ? '—' : `${v.toLocaleString('ru-RU')} ₽`
@@ -31,12 +74,13 @@ function Kpi({ icon, label, value }: { icon: IconName; label: string; value: str
   )
 }
 
-export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode }: {
+export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode, carrierEdit }: {
   detail: TripDetail
   showCosts: boolean
   onBack: () => void
   onOpenReceipt: (id: string) => void
   docsNode?: ReactNode
+  carrierEdit?: CarrierEdit
 }) {
   const { doc, ops, receipts } = detail
   const direction = (doc.direction as TripDirection) ?? 'inbound'
@@ -74,7 +118,7 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode 
           <Panel icon="map" title="Планирование транспорта">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 28, rowGap: 0 }}>
               <ReadRow label={lex.routeLabel}>{doc.origin_name ?? '—'}</ReadRow>
-              <ReadRow label="Перевозчик">{doc.carrier_name ?? '—'}</ReadRow>
+              <CarrierRow name={doc.carrier_name} edit={carrierEdit} />
               <ReadRow label="Тип кузова">{doc.vehicle_type_name ?? '—'}</ReadRow>
               <ReadRow label="Гос. номер">{doc.vehicle_number ?? '—'}</ReadRow>
               <ReadRow label="Транспорт заказан" mono>{fmtDateTime(doc.transport_ordered_at)}</ReadRow>

@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestForm } from './http'
 
 // --- Types --- (зеркало backend/modules/products/schemas.py)
 export type BarcodeMatch = {
@@ -39,6 +39,33 @@ export function updateProductMultiplicity(
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
+}
+
+// Создание товара менеджером (зеркало web adminApi.createProduct). meta — JSON,
+// images — необязательные файлы (первый становится главным). Возвращает id товара в message.
+export type ProductCreateMeta = {
+  product: {
+    name: string
+    type_id: string
+    sku_base?: string | null
+    sku_pending?: boolean
+    weight_grams?: number | null
+    items_per_box?: number | null
+    boxes_per_pallet?: number | null
+    client_id: string
+    is_active: boolean
+    packing_price_good_kop?: number | null
+    packing_price_defect_kop?: number | null
+  }
+  colors: string[]
+  dimensions: { length: number; width: number; height: number; sizes: string[] }[]
+}
+
+export function createProduct(meta: ProductCreateMeta, images: File[] = []): Promise<{ message: string }> {
+  const form = new FormData()
+  form.append('meta', JSON.stringify(meta))
+  for (const file of images) form.append('images', file)
+  return requestForm<{ message: string }>('/products', { method: 'POST', body: form })
 }
 
 // --- Helpers ---

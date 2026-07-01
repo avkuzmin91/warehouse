@@ -172,6 +172,53 @@ def test_product_sku_can_repeat_for_different_clients(admin_client):
             conn.commit()
 
 
+def test_create_product_allowed_for_manager(manager_client):
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-mgr-create-{suffix}"
+    client_id = f"client-mgr-create-{suffix}"
+    sku = f"MGR-SKU-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 0, 0, 0, NOW())
+            """,
+            (type_id, f"Type Mgr {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Mgr {suffix}"),
+        )
+        conn.commit()
+
+    payload = {
+        "meta": json.dumps({
+            "product": {
+                "name": f"Mgr Product {suffix}",
+                "type_id": type_id,
+                "sku_base": sku,
+                "client_id": client_id,
+                "is_active": True,
+            },
+            "colors": [],
+            "dimensions": [{"length": 1, "width": 1, "height": 1, "sizes": []}],
+        }),
+    }
+
+    try:
+        res = manager_client.post("/products", data=payload)
+        assert res.status_code == 200, res.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE sku = ?)", (sku,))
+            conn.execute("DELETE FROM products WHERE sku = ?", (sku,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
+
+
 def test_product_sku_stays_unique_inside_client_on_update(admin_client):
     suffix = uuid.uuid4().hex[:10]
     type_id = f"ptype-sku-update-{suffix}"

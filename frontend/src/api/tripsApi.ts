@@ -240,6 +240,15 @@ export function updateTrip(tripId: string, payload: TripUpdatePayload) {
   })
 }
 
+/** Смена перевозчика у закрытого рейса (только админ). Расход рейса переезжает на нового
+ *  перевозчика в «Задолженности по перевозчикам», если ещё не оплачивается. */
+export function updateTripCarrier(tripId: string, payload: { carrier_id: string; carrier_name: string | null }) {
+  return request<{ message: string }>(`/trips/${tripId}/carrier`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function linkTripReceipts(tripId: string, items: TripReceiptLinkItem[]) {
   return request<{ message: string }>(`/trips/${tripId}/receipts`, {
     method: 'POST',

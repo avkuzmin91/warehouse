@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestIdHeaders } from './http'
 
 // Минимальная форма справочного элемента — нам нужны только id/name (+ активность).
 export type Zone = { id: string; name: string; is_active?: boolean; is_deleted?: boolean }
@@ -51,6 +51,40 @@ export function getVehicleTypes(signal?: AbortSignal): Promise<DictionaryItem[]>
 export function getClientStores(clientId: string | null | undefined, signal?: AbortSignal): Promise<ClientStoreItem[]> {
   const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
   return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q}`, { signal })
+}
+
+// --- Справочники для создания товара (менеджер) ---
+export type ProductTypeLookup = { id: string; name: string; requires_color: boolean; requires_size: boolean }
+
+export function getProductTypes(signal?: AbortSignal): Promise<ProductTypeLookup[]> {
+  return request<ProductTypeLookup[]>('/inventory/lookups/product-types', { signal })
+}
+
+export function getColors(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/colors', { signal })
+}
+
+export function getSizes(signal?: AbortSignal): Promise<DictionaryItem[]> {
+  return request<DictionaryItem[]>('/inventory/lookups/sizes', { signal })
+}
+
+// Создание цвета/размера менеджером. Уникальность имени гарантирует БД
+// (IntegrityError → «Запись с таким названием уже существует»). is_active=true —
+// иначе новый элемент не попадёт в активные lookups. Backend: POST /colors, /sizes.
+export function createColor(name: string, requestId?: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/colors', {
+    method: 'POST',
+    body: JSON.stringify({ name, is_active: true }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+export function createSize(name: string, requestId?: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/sizes', {
+    method: 'POST',
+    body: JSON.stringify({ name, is_active: true }),
+    headers: requestIdHeaders(requestId),
+  })
 }
 
 export function getProducts(clientId?: string | null, signal?: AbortSignal): Promise<ProductLookup[]> {

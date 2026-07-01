@@ -14,6 +14,7 @@ import {
   unlinkTripDispatch,
   updateTripExecution,
   updateTrip,
+  updateTripCarrier,
   isOutbound,
   tripLexicon,
 } from '../../../api/tripsApi'
@@ -265,6 +266,17 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     await run(async () => { await saveCost(); await closeTrip(tripId) })
   }
 
+  async function handleChangeCarrier(carrierId: string) {
+    const carrier = carriers.find((c) => c.id === carrierId)
+    const ok = await confirm({
+      title: 'Сменить перевозчика?',
+      body: `Рейс и его логистический расход перейдут на «${carrier?.name ?? '—'}». Если расход уже оплачивается, смена будет отклонена.`,
+      confirmLabel: 'Сменить',
+    })
+    if (!ok) return
+    await run(() => updateTripCarrier(tripId, { carrier_id: carrierId, carrier_name: carrier?.name ?? null }))
+  }
+
   async function handleCancel() {
     const ok = await confirm({ title: 'Аннулировать рейс?', body: 'Это действие нельзя отменить.', danger: true, confirmLabel: 'Аннулировать' })
     if (!ok) return
@@ -512,7 +524,10 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       />
     )
   } else {
-    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} docsNode={docsNode} />
+    const carrierEdit = user?.role === 'admin' && status === 'closed'
+      ? { carriers, currentId: doc.carrier_id, onSave: handleChangeCarrier, busy }
+      : undefined
+    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} docsNode={docsNode} carrierEdit={carrierEdit} />
   }
 
   return (

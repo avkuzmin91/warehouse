@@ -35,6 +35,11 @@ class TripDocUpdate(BaseModel):
     comment: str | None = None
 
 
+class TripCarrierUpdate(BaseModel):
+    carrier_id: str | None = None
+    carrier_name: str | None = None
+
+
 class TripReceiptLineAlloc(BaseModel):
     line_id: str
     qty: int = Field(ge=1)

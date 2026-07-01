@@ -24,6 +24,9 @@ import { DispatchListScreen } from './screens/manager/DispatchListScreen'
 import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
 import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
 import { WarehouseHubScreen } from './screens/manager/WarehouseHubScreen'
+import { ProductFormScreen } from './screens/manager/ProductFormScreen'
+import { ProductsCatalogScreen } from './screens/manager/ProductsCatalogScreen'
+import { DictCatalogScreen } from './screens/manager/DictCatalogScreen'
 import { ManagerTripsListScreen } from './screens/manager/ManagerTripsListScreen'
 import { TripFormScreen } from './screens/manager/TripFormScreen'
 import { ManagerTripDetailScreen } from './screens/manager/ManagerTripDetailScreen'
@@ -41,6 +44,10 @@ function Main() {
     case 'tripNew':   screen = <TripFormScreen />; break
     case 'mTripDoc':  screen = <ManagerTripDetailScreen tripId={route.id} />; break
     case 'mWarehouse': screen = <WarehouseHubScreen />; break
+    case 'productNew': screen = <ProductFormScreen />; break
+    case 'mProducts': screen = <ProductsCatalogScreen />; break
+    case 'mColors':   screen = <DictCatalogScreen kind="colors" />; break
+    case 'mSizes':    screen = <DictCatalogScreen kind="sizes" />; break
     case 'mReceipts': screen = <ReceiptsListScreen />; break
     case 'receiptNew': screen = <ReceiptFormScreen />; break
     case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break

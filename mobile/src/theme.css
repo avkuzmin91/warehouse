@@ -266,6 +266,8 @@ button {
 .tile:active {
   background: var(--c-bg-hover);
 }
+.tile.static { cursor: default; }
+.tile.static:active { background: var(--c-bg-elev); }
 .tile-ico {
   width: 42px;
   height: 42px;

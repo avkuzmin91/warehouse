@@ -30,6 +30,10 @@ export type Route =
   | { name: 'dispatchNew' }
   | { name: 'dispatchEdit'; id: string }
   | { name: 'tripNew' }
+  | { name: 'productNew' }
+  | { name: 'mProducts' }
+  | { name: 'mColors' }
+  | { name: 'mSizes' }
   | { name: 'mReceiptDoc'; id: string }
   | { name: 'mPackingDoc'; id: string }
   | { name: 'mDispatchDoc'; id: string }
@@ -58,6 +62,10 @@ type NavState = {
   openDispatchNew: () => void
   openDispatchEdit: (id: string) => void
   openTripNew: () => void
+  openProductNew: () => void
+  openProductsList: () => void
+  openColorsList: () => void
+  openSizesList: () => void
   openReceiptDoc: (id: string) => void
   openPackingDoc: (id: string) => void
   openDispatchDoc: (id: string) => void
@@ -104,6 +112,10 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openDispatchNew: () => setStack((s) => [...s, { name: 'dispatchNew' }]),
     openDispatchEdit: (id) => setStack((s) => [...s, { name: 'dispatchEdit', id }]),
     openTripNew: () => setStack((s) => [...s, { name: 'tripNew' }]),
+    openProductNew: () => setStack((s) => [...s, { name: 'productNew' }]),
+    openProductsList: () => setStack((s) => [...s, { name: 'mProducts' }]),
+    openColorsList: () => setStack((s) => [...s, { name: 'mColors' }]),
+    openSizesList: () => setStack((s) => [...s, { name: 'mSizes' }]),
     openReceiptDoc: (id) => setStack((s) => [...s, { name: 'mReceiptDoc', id }]),
     openPackingDoc: (id) => setStack((s) => [...s, { name: 'mPackingDoc', id }]),
     openDispatchDoc: (id) => setStack((s) => [...s, { name: 'mDispatchDoc', id }]),

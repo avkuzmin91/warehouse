@@ -46,6 +46,7 @@ from modules.auth.service import (
 )
 from modules.logistics.schemas import (
     TripArrivalPayload,
+    TripCarrierUpdate,
     TripCostPayload,
     TripDetailResponse,
     TripDispatchAllocItem,
@@ -76,8 +77,11 @@ from modules.logistics.service import (
     sync_actual_arrival,
     sync_actual_ship_date,
 )
-from modules.expenses.service import upsert_trip_logistics_expense
-from security import can_view_costs, ensure_cost_access
+from modules.expenses.service import (
+    reattribute_trip_logistics_carrier,
+    upsert_trip_logistics_expense,
+)
+from security import can_view_costs, ensure_cost_access, is_admin
 
 router = APIRouter(tags=["logistics"])
 
@@ -486,6 +490,43 @@ def update_trip(trip_id: str, payload: TripDocUpdate, user=Depends(get_current_m
                 (str(uuid4()), trip_id, TRIP_OP_DOC_UPDATE, "Карточка рейса изменена", now, uid),
             )
             conn.commit()
+    return {"message": "ok"}
+
+
+@router.patch("/trips/{trip_id}/carrier")
+def update_trip_carrier(trip_id: str, payload: TripCarrierUpdate, user=Depends(get_current_manager)):
+    """Смена перевозчика у закрытого рейса (только админ). Логистический расход рейса и его
+    учёт в «Задолженности по перевозчикам» переезжают на нового перевозчика — но лишь пока
+    расход не оплачивается (иначе 400, чтобы не искажать историю платежей)."""
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    uid = str(user["id"])
+    carrier_id = (payload.carrier_id or "").strip() or None
+    carrier_name = (payload.carrier_name or "").strip() or None
+    if not carrier_id:
+        raise HTTPException(status_code=400, detail="Укажите перевозчика")
+    with get_connection() as conn:
+        doc_row = _fetch_doc(conn, trip_id)
+        if str(doc_row["status"]) != TRIP_STATUS_CLOSED:
+            raise HTTPException(status_code=400, detail="Сменить перевозчика можно только у закрытого рейса")
+        if str(doc_row["carrier_id"] or "") == carrier_id:
+            return {"message": "ok"}
+        old_name = doc_row["carrier_name"] or "—"
+        # Сначала переносим расход (валидация «не оплачивается» — до записи в рейс).
+        reattribute_trip_logistics_carrier(
+            conn, trip_id, carrier_id=carrier_id, carrier_name=carrier_name, uid=uid
+        )
+        now = _now()
+        conn.execute(
+            "UPDATE trip_docs SET carrier_id = ?, carrier_name = ?, updated_at = ? WHERE id = ?",
+            (carrier_id, carrier_name, now, trip_id),
+        )
+        conn.execute(
+            "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), trip_id, TRIP_OP_DOC_UPDATE,
+             f"Перевозчик изменён: {old_name} → {carrier_name or '—'}", now, uid),
+        )
+        conn.commit()
     return {"message": "ok"}
 
 

@@ -1121,6 +1121,42 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     )
 
 
+def reattribute_trip_logistics_carrier(
+    connection, trip_id: str, *, carrier_id: str | None, carrier_name: str | None, uid: str
+) -> None:
+    """Переносит логистический расход рейса (source_kind=trip) на другого перевозчика.
+
+    Разрешено, только пока расход «ожидает оплаты»: у оплаченного/частично оплаченного
+    расхода смена перевозчика исказила бы историю платежей и «Задолженность по перевозчикам»
+    (агрегируется по carrier_id), поэтому — 400. Если расхода нет (стоимость не заводилась)
+    или перевозчик уже совпадает — тихо выходим. Не коммитит — это делает вызывающий."""
+    existing = connection.execute(
+        "SELECT * FROM material_expenses "
+        "WHERE source_kind = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (EXPENSE_SOURCE_TRIP, trip_id),
+    ).fetchone()
+    if not existing:
+        return
+    if str(existing["carrier_id"] or "") == str(carrier_id or ""):
+        return
+    if str(existing["payment_status"]) != EXPENSE_PAYMENT_AWAITING:
+        raise HTTPException(
+            status_code=400,
+            detail="Расход рейса уже оплачивается — сменить перевозчика нельзя",
+        )
+    old_name = existing["supplier"] or "—"
+    connection.execute(
+        "UPDATE material_expenses SET supplier = ?, carrier_id = ?, updated_at = ? WHERE id = ?",
+        (carrier_name or None, carrier_id or None, now_iso(), str(existing["id"])),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), str(existing["id"]), EXPENSE_OP_UPDATE,
+         f"Перевозчик изменён: {old_name} → {carrier_name or '—'}", now_iso(), uid),
+    )
+
+
 def _fixed_month_accrual(connection, salaries_desc, year: int, month: int) -> int:
     """Сумма оклада за месяц по истории окладов (effective-dated). Для каждого рабочего дня
     берётся оклад, действовавший в этот день (salary_on), и его дневная доля (оклад ÷ рабочие

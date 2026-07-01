@@ -257,7 +257,7 @@ async def upload_product_image(image: UploadFile = File(...), admin=Depends(get_
 async def create_product(
     meta: str = Form(...),
     images: list[UploadFile] = File(default=[]),
-    admin=Depends(get_current_admin),
+    user=Depends(get_current_manager),
 ):
     try:
         parsed = ProductCreateMeta.model_validate_json(meta)
@@ -314,7 +314,7 @@ async def create_product(
                 INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, sku_pending, weight_grams, items_per_box, boxes_per_pallet, image_url, gallery_json, is_active, created_at, creator_id)
                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (pid, _normalize_name(inner.name), tid, cid, sku_base, 1 if sku_pending else 0, inner.weight_grams, inner.items_per_box, inner.boxes_per_pallet, preview_url, gallery_ser, 1 if inner.is_active else 0, now, admin["id"]),
+                (pid, _normalize_name(inner.name), tid, cid, sku_base, 1 if sku_pending else 0, inner.weight_grams, inner.items_per_box, inner.boxes_per_pallet, preview_url, gallery_ser, 1 if inner.is_active else 0, now, user["id"]),
             )
             for vr in variant_rows:
                 connection.execute(
@@ -331,10 +331,10 @@ async def create_product(
                 eff = business_today().isoformat()
                 if inner.packing_price_good_kop is not None:
                     add_price(connection, product_id=pid, client_id=cid, quality=INV_Q_GOOD,
-                              price_kop=inner.packing_price_good_kop, effective_from=eff, user_id=str(admin["id"]))
+                              price_kop=inner.packing_price_good_kop, effective_from=eff, user_id=str(user["id"]))
                 if inner.packing_price_defect_kop is not None:
                     add_price(connection, product_id=pid, client_id=cid, quality=INV_Q_DEFECT,
-                              price_kop=inner.packing_price_defect_kop, effective_from=eff, user_id=str(admin["id"]))
+                              price_kop=inner.packing_price_defect_kop, effective_from=eff, user_id=str(user["id"]))
             connection.commit()
         except IntegrityError as exc:
             connection.rollback()

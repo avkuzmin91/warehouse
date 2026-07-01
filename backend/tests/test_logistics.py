@@ -1065,3 +1065,86 @@ def test_warehouse_cannot_edit_trip_execution_in_costing(admin_client, warehouse
         "load_factor": "full",
     })
     assert execution.status_code == 403, execution.text
+
+
+# --- Смена перевозчика у закрытого рейса (админ) ---
+
+def _closed_trip_with_cost(admin_client, receipt_id: str, *, carrier_id: str,
+                           carrier_name: str, cost: int = 12000) -> tuple[str, str]:
+    """Прогоняет рейс без строк до статуса «Закрыт» с внесённой стоимостью — заводится
+    логистический расход «ожидает оплаты» на указанного перевозчика. Возвращает (trip_id, trip_number)."""
+    create = admin_client.post("/trips", json={
+        "origin_id": "wh-1", "origin_name": "Москва",
+        "carrier_id": carrier_id, "carrier_name": carrier_name,
+        "vehicle_type_id": "vt-1", "vehicle_type_name": "Тент",
+        "vehicle_number": "А123ВС 77", "cost_estimate": 10000,
+        "transport_ordered_at": "2026-06-01T10:00", "eta": "2026-06-02T08:00",
+        "receipt_doc_ids": [receipt_id],
+    })
+    assert create.status_code == 200, create.text
+    trip_id = create.json()["message"]
+    trip_number = admin_client.get(f"/trips/{trip_id}").json()["doc"]["trip_number"]
+    assert admin_client.post(f"/trips/{trip_id}/handoff").json()["message"] == "awaiting_arrival"
+    assert admin_client.post(f"/trips/{trip_id}/arrival", json={}).json()["message"] == "unloading"
+    assert admin_client.post(f"/trips/{trip_id}/unload", json={"load_factor": "full"}).json()["message"] == "costing"
+    assert admin_client.post(f"/trips/{trip_id}/cost", json={"logistics_cost_actual": cost}).status_code == 200
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+    return trip_id, trip_number
+
+
+def _find_trip_expense(admin_client, trip_number: str, carrier_id: str):
+    items = admin_client.get(f"/expenses?search={trip_number}&kind=logistics&limit=50").json()["items"]
+    return next((e for e in items if str(e.get("carrier_id")) == carrier_id), None)
+
+
+def test_admin_moves_carrier_on_closed_trip_with_expense(admin_client, manager_client, client_id):
+    old_cid = f"car-{uuid.uuid4().hex[:8]}"
+    new_cid = f"car-{uuid.uuid4().hex[:8]}"
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id, trip_number = _closed_trip_with_cost(admin_client, receipt_id, carrier_id=old_cid, carrier_name="Старый")
+
+    assert _find_trip_expense(admin_client, trip_number, old_cid) is not None
+
+    # менеджер не имеет доступа — только админ
+    forbidden = manager_client.patch(f"/trips/{trip_id}/carrier", json={"carrier_id": new_cid, "carrier_name": "Новый"})
+    assert forbidden.status_code == 403, forbidden.text
+
+    ok = admin_client.patch(f"/trips/{trip_id}/carrier", json={"carrier_id": new_cid, "carrier_name": "Новый перевозчик"})
+    assert ok.status_code == 200, ok.text
+
+    detail = admin_client.get(f"/trips/{trip_id}").json()
+    assert detail["doc"]["carrier_id"] == new_cid
+    assert detail["doc"]["carrier_name"] == "Новый перевозчик"
+    assert any("Перевозчик изменён" in (o["comment"] or "") for o in detail["ops"])
+
+    # расход переехал на нового перевозчика (по carrier_id), у старого его больше нет
+    assert _find_trip_expense(admin_client, trip_number, old_cid) is None
+    assert _find_trip_expense(admin_client, trip_number, new_cid) is not None
+
+
+def test_carrier_change_rejected_on_open_trip(admin_client, client_id):
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id = _handoff_ready_trip(admin_client, receipt_id)  # статус draft
+    r = admin_client.patch(f"/trips/{trip_id}/carrier", json={"carrier_id": "x", "carrier_name": "Y"})
+    assert r.status_code == 400, r.text
+    assert "закрыт" in r.json()["detail"].lower()
+
+
+def test_carrier_change_blocked_when_expense_paid(admin_client, client_id):
+    cid = f"car-{uuid.uuid4().hex[:8]}"
+    receipt_id = _planned_receipt(admin_client, client_id)
+    trip_id, trip_number = _closed_trip_with_cost(admin_client, receipt_id, carrier_id=cid, carrier_name="Оплачиваемый")
+
+    src = str(admin_client.get("/expenses/dict/payment-sources").json()[0]["id"])
+    paid = admin_client.post("/expenses/pay-carrier", json={
+        "carrier_id": cid, "amount": 1200000, "payment_source_id": src, "paid_on": "2026-06-20",
+    })
+    assert paid.status_code == 200, paid.text
+
+    blocked = admin_client.patch(f"/trips/{trip_id}/carrier", json={
+        "carrier_id": f"car-{uuid.uuid4().hex[:8]}", "carrier_name": "Другой",
+    })
+    assert blocked.status_code == 400, blocked.text
+    assert "оплач" in blocked.json()["detail"].lower()
+    # перевозчик рейса не изменился
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["carrier_id"] == cid

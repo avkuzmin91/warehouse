@@ -7,7 +7,7 @@ import { canCreateDocuments } from '../../utils/access'
 type HubEntry = { label: string; sub: string; icon: IconName; open: () => void }
 
 export function WarehouseHubScreen() {
-  const { openReceiptsList, openPackingList, openDispatchList } = useNav()
+  const { openReceiptsList, openPackingList, openDispatchList, openProductsList, openColorsList, openSizesList } = useNav()
   const { user } = useAuth()
   // Начальник склада видит хаб в режиме просмотра: создание документов — у менеджера.
   const viewOnly = !canCreateDocuments(user?.role)
@@ -18,6 +18,14 @@ export function WarehouseHubScreen() {
     { label: 'Отгрузки', sub: 'Документы отгрузки', icon: 'forklift', open: openDispatchList },
   ]
 
+  // Справочники доступны на просмотр всем, кто видит хаб; создание записей внутри
+  // экранов гейтится canCreateDocuments (менеджерский состав).
+  const catalogEntries: HubEntry[] = [
+    { label: 'Товары', sub: 'Карточки товаров', icon: 'tag', open: openProductsList },
+    { label: 'Цвета', sub: 'Справочник цветов', icon: 'sparkles', open: openColorsList },
+    { label: 'Размеры', sub: 'Справочник размеров', icon: 'layers', open: openSizesList },
+  ]
+
   return (
     <div className="screen">
       <AppBar title="Склад" sub="Документы" />
@@ -26,6 +34,20 @@ export function WarehouseHubScreen() {
           <div className="sec">Документы склада<span className="sec-count">просмотр</span></div>
         )}
         {entries.map((e) => (
+          <button key={e.label} className="tile" onClick={e.open}>
+            <div className="tile-ico">
+              <Icon name={e.icon} size={21} />
+            </div>
+            <div className="tile-body">
+              <div className="tile-title">{e.label}</div>
+              <div className="tile-meta">{e.sub}</div>
+            </div>
+            <span className="tile-chev"><Icon name="chev" size={18} /></span>
+          </button>
+        ))}
+
+        <div className="sec" style={{ marginTop: 16 }}>Справочники</div>
+        {catalogEntries.map((e) => (
           <button key={e.label} className="tile" onClick={e.open}>
             <div className="tile-ico">
               <Icon name={e.icon} size={21} />
