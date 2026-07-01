@@ -5,9 +5,14 @@ from fastapi import APIRouter, Depends, Query
 from dbconn import get_connection
 from modules.auth.service import get_current_manager
 from modules.expenses.service import validate_date
-from modules.pnl.schemas import PnlResponse, TripProfitabilityResponse
-from modules.pnl.service import pnl_report, trip_profitability
-from security import ensure_finance_access
+from modules.pnl.schemas import (
+    IncomeAnalyticsResponse,
+    PnlDayResponse,
+    PnlResponse,
+    TripProfitabilityResponse,
+)
+from modules.pnl.service import income_analytics, pnl_day_detail, pnl_report, trip_profitability
+from security import can_view_salary, ensure_finance_access
 
 router = APIRouter(tags=["pnl"])
 
@@ -32,6 +37,45 @@ def get_pnl(
     with get_connection() as conn:
         data = pnl_report(conn, date_from=df, date_to=dt, client_id=(client_id or None))
     return PnlResponse(**data)
+
+
+@router.get("/pnl/income", response_model=IncomeAnalyticsResponse)
+def get_income_analytics(
+    date_from: str = Query(...),
+    date_to:   str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Аналитика доходов по дням (зеркало аналитики расходов): потоки дохода (упаковка,
+    логистика, палеты) с посуточной динамикой и разрезом по клиентам. Доход считается тем же
+    расчётом, что и в P&L. Видна финансовым ролям (админ/менеджер)."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    with get_connection() as conn:
+        data = income_analytics(conn, date_from=df, date_to=dt, client_id=(client_id or None))
+    return IncomeAnalyticsResponse(**data)
+
+
+@router.get("/pnl/day", response_model=PnlDayResponse)
+def get_pnl_day(
+    date:      str = Query(...),
+    date_from: str = Query(...),
+    date_to:   str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Детализация одного дня P&L: из чего сложился доход и расход. Окно [date_from..date_to]
+    графика передаётся, чтобы атрибуция логистики/палет совпала со столбиком. Оклад окладников
+    раскрывается по сотрудникам только администратору (can_view_salary)."""
+    day = validate_date(date)
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    with get_connection() as conn:
+        data = pnl_day_detail(
+            conn, day=day, date_from=df, date_to=dt,
+            client_id=(client_id or None), can_view_salary=can_view_salary(user),
+        )
+    return PnlDayResponse(**data)
 
 
 @router.get("/pnl/trips", response_model=TripProfitabilityResponse)

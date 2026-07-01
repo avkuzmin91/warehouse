@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getPlannableItems, type PlannableItem, type InvQuality } from '../../api/balancesApi'
 import { getDispatchReservations, type DispatchCargoType } from '../../api/dispatchApi'
 import { balanceKey } from '../../utils/balanceKey'
+import { lineStockChips } from '../../utils/stockChips'
 import { Icon } from '../../components/Icon'
 
 function fold(s: string): string {
@@ -85,40 +86,11 @@ export function BalancePickerSheet({
   function transitOf(b: PlannableItem): number {
     return cargoType === 'defect' ? 0 : b.in_transit
   }
-  function reservedOf(b: PlannableItem): number {
-    return isDispatch ? (reservedMap[balanceKey(b)] ?? 0) : 0
-  }
-  // Валовый источник отгрузки (до вычета резерва): упаковано для годного, склад — иначе.
-  function grossSrc(b: PlannableItem): number {
-    return dispatchGood ? ready(b) : storage(b)
-  }
-  // Свободно к передаче в подготовку сейчас: источник минус резерв.
-  function free(b: PlannableItem): number {
-    return Math.max(0, grossSrc(b) - reservedOf(b))
-  }
   function cap(b: PlannableItem): number {
     return ready(b) + storage(b) + transitOf(b)
   }
-  function stockChips(b: PlannableItem): { label: string; value: number; tone: string }[] {
-    const out: { label: string; value: number; tone: string }[] = []
-    if (isDispatch) {
-      out.push({ label: 'свободно', value: free(b), tone: 'success' })
-      const r = reservedOf(b)
-      if (r > 0) {
-        out.push({ label: cargoType === 'defect' ? 'брак' : 'упаковано', value: grossSrc(b), tone: 'accent' })
-        out.push({ label: 'в резерве', value: r, tone: 'warning' })
-      }
-      if (dispatchGood && storage(b) > 0) out.push({ label: 'склад', value: storage(b), tone: 'accent' })
-    } else {
-      out.push(
-        cargoType === 'defect'
-          ? { label: 'брак', value: storage(b), tone: 'danger' }
-          : { label: 'склад', value: storage(b), tone: 'accent' },
-      )
-    }
-    const t = transitOf(b)
-    if (t > 0) out.push({ label: 'в пути', value: t, tone: 'info' })
-    return out
+  function stockChips(b: PlannableItem) {
+    return lineStockChips(b, { source, cargoType, reserved: reservedMap[balanceKey(b)] ?? 0 })
   }
 
   function setQ(b: PlannableItem, n: number) {

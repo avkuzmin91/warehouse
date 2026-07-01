@@ -19,6 +19,9 @@ type Props = {
   avail:       LineAvailability | null
   plannedQty:  number
   loading?:    boolean
+  // 'dispatch' — пул отгрузки (свободно = готово − резерв); 'pack' — пул задачи
+  // упаковки (главное — «на хранении», плюс «в пути»; сырьё для упаковки, не ready).
+  context?:    'dispatch' | 'pack'
 }
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: 'muted' | 'warning' | 'success' }) {
@@ -33,7 +36,7 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: 'mut
 
 const POP_WIDTH = 220
 
-export function AvailabilityCell({ avail, plannedQty, loading }: Props) {
+export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispatch' }: Props) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLSpanElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
@@ -71,10 +74,14 @@ export function AvailabilityCell({ avail, plannedQty, loading }: Props) {
     return <div className="t-sub" style={{ textAlign: 'right', marginTop: 5, color: 'var(--c-text-muted)' }}>нет данных</div>
   }
 
-  const label = avail.isDefect ? 'брак' : 'свободно'
-  // План сверх свободного остатка допустим (добор со склада/в пути при подготовке) —
+  const isPack = context === 'pack'
+  // В упаковке главный ориентир — «на хранении» (сырьё, которое уже приехало);
+  // в отгрузке — «свободно» (готовое минус резерв).
+  const primary = isPack ? avail.storage : avail.free
+  const label = isPack ? 'на хранении' : avail.isDefect ? 'брак' : 'свободно'
+  // План сверх остатка допустим (добор со склада/в пути при подготовке) —
   // это мягкое предупреждение, а не ошибка: на этом этапе сохраняется лишь черновик.
-  const over = plannedQty > avail.free
+  const over = plannedQty > primary
 
   return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 5 }}>
@@ -94,7 +101,7 @@ export function AvailabilityCell({ avail, plannedQty, loading }: Props) {
           }}
         >
           <Icon name={over ? 'alert' : 'check'} size={12} />
-          {label} {avail.free}
+          {label} {primary}
         </span>
       </span>
 
@@ -108,24 +115,43 @@ export function AvailabilityCell({ avail, plannedQty, loading }: Props) {
             pointerEvents: 'none',
           }}
         >
-          <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 6 }}>Откуда остаток</div>
-          {avail.isDefect ? (
-            <Row label="Брак на хранении" value={String(avail.storage)} />
-          ) : (
-            <Row label="Упаковано" value={String(avail.ready)} />
-          )}
-          {avail.reserved > 0 && <Row label="В резерве" value={`−${avail.reserved}`} tone="warning" />}
-          <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 5 }}>
-            <Row label={avail.isDefect ? 'Доступно' : 'Свободно'} value={String(avail.free)} tone="success" />
+          <div style={{ fontSize: 11, color: 'var(--c-text-muted)', marginBottom: 6 }}>
+            {isPack ? 'Откуда возьмём' : 'Откуда остаток'}
           </div>
-          {!avail.isDefect && avail.storage > 0 && <Row label="На хранении" value={String(avail.storage)} tone="muted" />}
-          {!avail.isDefect && avail.packing > 0 && <Row label="На упаковке" value={String(avail.packing)} tone="muted" />}
-          {!avail.isDefect && avail.inTransit > 0 && <Row label="В пути" value={String(avail.inTransit)} tone="muted" />}
-          {over && (
-            <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
-              <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-              План сверх свободного — добор со склада/в пути при подготовке
-            </div>
+          {isPack ? (
+            <>
+              <Row label="На хранении" value={String(avail.storage)} tone="success" />
+              {avail.inTransit > 0 && <Row label="В пути" value={String(avail.inTransit)} tone="muted" />}
+              {over && (
+                <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+                  <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+                  {avail.inTransit >= plannedQty - avail.storage
+                    ? `Не хватает ${plannedQty - avail.storage} — придут с рейсом`
+                    : `Не хватает ${plannedQty - avail.storage} — дождитесь прихода на склад`}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {avail.isDefect ? (
+                <Row label="Брак на хранении" value={String(avail.storage)} />
+              ) : (
+                <Row label="Упаковано" value={String(avail.ready)} />
+              )}
+              {avail.reserved > 0 && <Row label="В резерве" value={`−${avail.reserved}`} tone="warning" />}
+              <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 5 }}>
+                <Row label={avail.isDefect ? 'Доступно' : 'Свободно'} value={String(avail.free)} tone="success" />
+              </div>
+              {!avail.isDefect && avail.storage > 0 && <Row label="На хранении" value={String(avail.storage)} tone="muted" />}
+              {!avail.isDefect && avail.packing > 0 && <Row label="На упаковке" value={String(avail.packing)} tone="muted" />}
+              {!avail.isDefect && avail.inTransit > 0 && <Row label="В пути" value={String(avail.inTransit)} tone="muted" />}
+              {over && (
+                <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+                  <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+                  План сверх свободного — добор со склада/в пути при подготовке
+                </div>
+              )}
+            </>
           )}
         </div>,
         document.body,

@@ -6,6 +6,8 @@ import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
 import { NumberStep } from '../../shared/NumberStep'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
+import { AvailabilityCell } from '../../shared/AvailabilityCell'
+import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { LineFilesCell } from './LineFilesCell'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from '../shared/types'
 
@@ -61,6 +63,9 @@ type CompositionTableProps = {
   onDeleteFile:    (lineId: string, fileId: string) => void
   // Дозаполнение SKU для товара «ожидает SKU» прямо из состава отгрузки.
   onAssignSku?:    (line: ShipmentLine) => void
+  // Доступность строки под планом: «на хранении» + «в пути» (только при правке плана).
+  getAvail?:       (line: ShipmentLine) => LineAvailability | null
+  availLoading?:   boolean
 }
 
 /** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
@@ -68,6 +73,7 @@ export function CompositionTable({
   lines, showZone = false, canEditPlan, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onAssignSku,
+  getAvail, availLoading,
 }: CompositionTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
@@ -143,10 +149,14 @@ export function CompositionTable({
               </Td>
               <Td className="num">
                 {canEditPlan ? (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
-                    <NumberStep value={draft.qty} onChange={(v) => onQty(line.id, v)} disabled={busy} warning={planOver} width={100} />
-                    {planOver && <Icon name="alert" size={13} style={{ color: 'var(--c-warning)' }} />}
-                  </div>
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <NumberStep value={draft.qty} onChange={(v) => onQty(line.id, v)} disabled={busy} warning={planOver} width={100} />
+                    </div>
+                    {getAvail && (
+                      <AvailabilityCell context="pack" avail={getAvail(line)} plannedQty={draft.qty} loading={availLoading} />
+                    )}
+                  </>
                 ) : (
                   <span className="num" style={{ fontWeight: 500 }}>{line.qty}</span>
                 )}

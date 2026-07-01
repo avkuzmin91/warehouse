@@ -494,6 +494,80 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
     return {"fixed": fixed_out, "timesheet": timesheet}
 
 
+def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]:
+    """Начисленная ЗП за ОДИН день с разбивкой по сотрудникам (оклад и табель отдельно).
+
+    Возвращает {"fixed": [...], "timesheet": [...]}, каждый элемент —
+    {"employee_id", "full_name", "amount"} (копейки > 0), отсортировано по сумме. Та же
+    управленческая модель начисления по дням труда, что и `daily_payroll_accruals_split`,
+    но с атрибуцией к сотруднику — для детализации дня в P&L. Оклад окладников (fixed) —
+    чувствительные деньги (см. security.can_view_salary), фильтрацию по роли делает вызывающий."""
+    try:
+        d = date.fromisoformat(day_iso[:10])
+    except ValueError:
+        return {"fixed": [], "timesheet": []}
+    day = d.isoformat()
+
+    emp_rows = connection.execute(
+        "SELECT id, full_name, comp_type, status, "
+        "COALESCE(hired_on, SUBSTR(created_at, 1, 10)) AS start_on "
+        "FROM employees WHERE COALESCE(is_deleted, 0) = 0"
+    ).fetchall()
+    names = {str(r["id"]): str(r["full_name"]) for r in emp_rows}
+    comp = {str(r["id"]): str(r["comp_type"] or EMPLOYEE_COMP_HOURLY) for r in emp_rows}
+
+    timesheet: list[dict] = []
+    hourly_ids = [eid for eid, c in comp.items() if c == EMPLOYEE_COMP_HOURLY]
+    if hourly_ids:
+        entries = load_entries_range(connection, day, day)
+        rates = load_rates(connection, hourly_ids)
+        for (emp_id, di), entry in entries.items():
+            if di != day or comp.get(emp_id) != EMPLOYEE_COMP_HOURLY:
+                continue
+            h = entry_hours(entry)
+            if h <= 0:
+                continue
+            r = rate_on(rates.get(emp_id), day)
+            if not r:
+                continue
+            amt = round(h * r)
+            if amt:
+                timesheet.append({"employee_id": emp_id, "full_name": names.get(emp_id, "—"), "amount": amt})
+
+    fixed_out: list[dict] = []
+    fixed_emps = [
+        r for r in emp_rows
+        if str(r["comp_type"] or "") == EMPLOYEE_COMP_FIXED
+        and str(r["status"]) == EMPLOYEE_STATUS_ACTIVE
+    ]
+    if fixed_emps:
+        salaries = load_salaries(connection, [str(r["id"]) for r in fixed_emps])
+        month_last = calendar.monthrange(d.year, d.month)[1]
+        overrides = load_overrides(
+            connection, date(d.year, d.month, 1).isoformat(), date(d.year, d.month, month_last).isoformat()
+        )
+        wd = working_days_of_month(connection, d.year, d.month, overrides=overrides)
+        n = len(wd)
+        idx = wd.index(d) if d in wd else None
+        if n and idx is not None:
+            for r in fixed_emps:
+                sal = salaries.get(str(r["id"]))
+                if not sal:
+                    continue
+                s = salary_on(sal, day)
+                if not s:
+                    continue
+                base, rem = divmod(s, n)
+                share = base + (1 if idx < rem else 0)
+                if share:
+                    eid = str(r["id"])
+                    fixed_out.append({"employee_id": eid, "full_name": names.get(eid, "—"), "amount": share})
+
+    timesheet.sort(key=lambda x: x["amount"], reverse=True)
+    fixed_out.sort(key=lambda x: x["amount"], reverse=True)
+    return {"fixed": fixed_out, "timesheet": timesheet}
+
+
 # ── Сборка сетки недели ───────────────────────────────────────────────────────
 
 def build_week(connection, sat: date, *, with_money: bool) -> dict:

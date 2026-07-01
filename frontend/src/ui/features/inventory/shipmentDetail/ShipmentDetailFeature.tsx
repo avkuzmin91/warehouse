@@ -18,7 +18,7 @@ import {
 } from '../../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../api/constants'
-import { getBalances, getBalancesByZone } from '../../../../api/balancesApi'
+import { getBalances, getBalancesByZone, getPlannableItems } from '../../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem, PlannableItem } from '../../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../../api/domainTypes'
@@ -54,6 +54,7 @@ import { PlacePackedDrawer } from './components/PlacePackedDrawer'
 import { RelocationPanel } from './components/RelocationPanel'
 import { DefectPreparePanel } from './components/DefectPreparePanel'
 import { CompositionTable } from './components/CompositionTable'
+import type { LineAvailability } from '../shared/AvailabilityCell'
 import { PackingTable } from './components/PackingTable'
 import { FilePreviewModal } from './components/FilePreviewModal'
 import { validateLineFile } from './components/fileHelpers'
@@ -84,6 +85,8 @@ export function ShipmentDetailFeature() {
   const [skuLine, setSkuLine] = useState<ShipmentLine | null>(null)
   const [filePreview, setFilePreview] = useState<LineFilePreview | null>(null)
   const [balances, setBalances] = useState<BalanceItem[]>([])
+  // Остаток «на хранении» + «в пути» под планом строки (только при правке плана).
+  const [plannable, setPlannable] = useState<PlannableItem[] | null>(null)
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
@@ -209,7 +212,20 @@ export function ShipmentDetailFeature() {
     if (!shipmentClientId || !(canDelete || isAssigned || canMovePacking || isOnPacking)) {
       setBalances([])
       setReviewZoneBalances([])
+      setPlannable(null)
       return
+    }
+    // Под планом строки (правка состава) показываем «на хранении» и «в пути» —
+    // plannable отдаёт in_transit, которого нет в обычном /balances.
+    if (canDelete) {
+      const pl = await getPlannableItems({
+        client_id: shipmentClientId,
+        cargo_type: shipmentCargoType === 'defect' ? 'defect' : 'good',
+        limit: 500,
+      })
+      setPlannable(pl.items)
+    } else {
+      setPlannable(null)
     }
     // На приёмке задачи (assigned) начальнику склада тоже нужен остаток — чек-лист
     // «Весь товар на остатках» считается на клиенте, а править состав он не может.
@@ -285,6 +301,18 @@ export function ShipmentDetailFeature() {
         available: lineAvailable(line, balances, doc.cargo_type as ShipmentCargoType),
       }))
     : []
+
+  const plannableByKey = new Map((plannable ?? []).map((p) => [balanceKey(p), p]))
+  const availLoading = canDelete && plannable === null
+
+  // Доступность под планом строки: «на хранении» (сырьё, уже приехало) + «в пути».
+  // Остальные поля LineAvailability для контекста упаковки не используются.
+  function getLineAvail(line: ShipmentLine): LineAvailability {
+    const p = plannableByKey.get(balanceKey(line))
+    const storage = p ? (isDefectCargo ? p.storage_defect : p.storage_good) : 0
+    const inTransit = p && !isDefectCargo ? p.in_transit : 0
+    return { free: 0, ready: 0, reserved: 0, storage, packing: 0, inTransit, isDefect: isDefectCargo }
+  }
 
   function getDraft(line: ShipmentLine): LineDraft {
     return drafts[line.id] ?? {
@@ -924,6 +952,8 @@ export function ShipmentDetailFeature() {
                 onReplaceFile={handleReplaceFile}
                 onDeleteFile={handleDeleteFile}
                 onAssignSku={setSkuLine}
+                getAvail={canEditPlan ? getLineAvail : undefined}
+                availLoading={availLoading}
               />
             )}
           </PhaseBlock>

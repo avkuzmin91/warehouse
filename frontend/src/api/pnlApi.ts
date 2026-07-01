@@ -28,6 +28,50 @@ export type Pnl = {
 
 export type PnlParams = { date_from: string; date_to: string; client_id?: string }
 
+export type IncomeSourceSeries = {
+  key: string
+  name: string
+  kind: string | null
+  series: number[]     // копейки по дням
+}
+export type IncomeClientBreakdown = { id: string | null; name: string; amount: number }
+export type IncomeAnalyticsPoint = { date: string; amount: number }
+export type IncomeAnalytics = {
+  date_from: string
+  date_to: string
+  days: number
+  total_amount: number
+  avg_per_day: number
+  max_day_amount: number
+  series: IncomeAnalyticsPoint[]
+  sources: IncomeSourceSeries[]
+  by_client: IncomeClientBreakdown[]
+}
+
+export type PnlDayItem = {
+  type: string             // doc | packing | expense | employee | computed
+  label: string
+  amount: number           // копейки
+  ref_id: string | null    // документ/рейс/сотрудник для ссылки
+  ref_kind: string | null  // dispatch | receipt | trip | expense | employee
+  note: string | null
+}
+export type PnlDaySource = {
+  key: string
+  label: string
+  kind: string | null
+  amount: number
+  items: PnlDayItem[]
+}
+export type PnlDay = {
+  date: string
+  income_total: number
+  expense_total: number
+  net_total: number
+  income_sources: PnlDaySource[]
+  expense_categories: PnlDaySource[]
+}
+
 export type TripProfitItem = {
   trip_id: string
   trip_number: string
@@ -60,6 +104,26 @@ export function getPnl(params: PnlParams, signal?: AbortSignal) {
   sp.set('date_to', params.date_to)
   if (params.client_id) sp.set('client_id', params.client_id)
   return request<Pnl>(`/pnl?${sp.toString()}`, { signal })
+}
+
+export function getIncomeAnalytics(params: PnlParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<IncomeAnalytics>(`/pnl/income?${sp.toString()}`, { signal })
+}
+
+export function getPnlDay(
+  params: { date: string; date_from: string; date_to: string; client_id?: string },
+  signal?: AbortSignal,
+) {
+  const sp = new URLSearchParams()
+  sp.set('date', params.date)
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<PnlDay>(`/pnl/day?${sp.toString()}`, { signal })
 }
 
 export function getTripProfitability(params: { date_from: string; date_to: string }, signal?: AbortSignal) {
