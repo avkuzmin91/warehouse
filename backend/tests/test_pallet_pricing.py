@@ -187,17 +187,19 @@ def test_admin_pallet_edit_after_invoice_adjusts_total(admin_client, client_id):
     assert _invoice(inv)["total_amount"] == 50000
 
 
-def test_manager_pallet_edit_blocked_after_invoice(manager_client, admin_client, client_id):
+def test_manager_pallet_edit_after_invoice_adjusts_total(manager_client, admin_client, client_id):
+    # Менеджер теперь правит палеты на любом статусе, включая отгрузки с выставленным
+    # счётом — сумма счёта авто-корректируется так же, как у админа.
     admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
                       json={"price_kop": 10000, "effective_from": "2026-01-01"})
     ship = _shipped_dispatch_with_pallets(admin_client, client_id, pallets=[3])
     inv = _issue_invoice(ship, client_id, total_kop=30000)
     line = admin_client.get(f"/dispatches/{ship}").json()["lines"][0]
+    # 3 → 5 палет: +2 × 100,00 = +200,00 → счёт 500,00.
     r = manager_client.patch(f"/dispatches/{ship}/lines/{line['id']}/pallets", json={"pallets_qty": 5})
-    assert r.status_code == 400, r.text
-    # Ни палеты, ни сумма счёта не изменились.
-    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 3
-    assert _invoice(inv)["total_amount"] == 30000
+    assert r.status_code == 200, r.text
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 5
+    assert _invoice(inv)["total_amount"] == 50000
 
 
 def test_admin_pallet_edit_blocked_below_paid(admin_client, client_id):

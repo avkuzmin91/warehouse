@@ -39,7 +39,6 @@ from modules.invoices.service import (
     adjust_invoice_total_for_pallet_delta,
     invalidate_alerts_cache,
 )
-from security import is_admin
 from modules.dispatch.schemas import (
     DispatchDetailResponse,
     DispatchDocCreate,
@@ -527,16 +526,13 @@ def update_dispatch_line(doc_id: str, line_id: str, body: DispatchLineUpdate, us
 def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePalletsUpdate, user=Depends(_get_manager)):
     """Правка числа палет по строке на любом статусе отгрузки.
 
-    Палеты — основа тарификации клиенту, и до выставления счёта менеджер должен иметь
-    возможность их поправить даже после отгрузки. Гейты: нельзя у аннулированной отгрузки;
-    если по отгрузке уже выставлен счёт — менеджеру нельзя (сумма зафиксирована), а
-    админ вправе поправить палеты и после выставления — при этом сумма связанного счёта
-    авто-корректируется на Δпалет × цену палета (аналитика/P&L пересчитываются сами из
-    `dispatch_lines`). Прочие поля строки по-прежнему правятся только в черновике
-    (`update_dispatch_line`)."""
+    Палеты — основа тарификации клиенту, и менеджер должен иметь возможность их поправить
+    на любом статусе, включая отгруженные. Единственный гейт — нельзя у аннулированной
+    отгрузки. Если по отгрузке уже выставлен счёт — сумма связанного счёта авто-корректируется
+    на Δпалет × цену палета (аналитика/P&L пересчитываются сами из `dispatch_lines`). Прочие
+    поля строки по-прежнему правятся только в черновике (`update_dispatch_line`)."""
     now = _now()
     uid = str(user["id"])
-    admin = is_admin(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
@@ -546,8 +542,6 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
         if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
             raise HTTPException(status_code=400, detail="Нельзя менять палеты у аннулированной отгрузки")
         invoiced = dispatch_is_invoiced(conn, doc_id)
-        if invoiced and not admin:
-            raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — палеты изменить нельзя")
         line = conn.execute(
             "SELECT id, product_name, pallets_qty FROM dispatch_lines "
             "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -586,14 +580,12 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
 def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxesUpdate, user=Depends(_get_manager)):
     """Правка числа коробов по строке на любом статусе отгрузки.
 
-    Полный аналог правки палет: короба — основа тарификации клиенту, и до выставления
-    счёта менеджер должен иметь возможность их поправить даже после отгрузки. Гейты:
-    нельзя у аннулированной отгрузки; если по отгрузке уже выставлен счёт — менеджеру
-    нельзя (сумма зафиксирована), а админ вправе поправить и после выставления — при этом
-    сумма связанного счёта авто-корректируется на Δкоробов × цену короба."""
+    Полный аналог правки палет: короба — основа тарификации клиенту, и менеджер должен иметь
+    возможность их поправить на любом статусе, включая отгруженные. Единственный гейт —
+    нельзя у аннулированной отгрузки. Если по отгрузке уже выставлен счёт — сумма связанного
+    счёта авто-корректируется на Δкоробов × цену короба."""
     now = _now()
     uid = str(user["id"])
-    admin = is_admin(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
@@ -603,8 +595,6 @@ def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxe
         if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
             raise HTTPException(status_code=400, detail="Нельзя менять короба у аннулированной отгрузки")
         invoiced = dispatch_is_invoiced(conn, doc_id)
-        if invoiced and not admin:
-            raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — короба изменить нельзя")
         line = conn.execute(
             "SELECT id, product_name, boxes_qty FROM dispatch_lines "
             "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",

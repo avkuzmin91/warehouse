@@ -148,8 +148,8 @@ def _issued_invoice(admin_client, client_id, ship, *, total_amount=1000, due_dat
     return iid
 
 
-def test_invoiced_dispatch_pallet_edit_manager_vs_admin(admin_client, manager_client, client_id):
-    """Палеты после выставления счёта: менеджеру нельзя, админ вправе поправить."""
+def test_invoiced_dispatch_pallet_edit_manager_and_admin(admin_client, manager_client, client_id):
+    """Палеты правятся на любом статусе, включая счёт: и менеджер, и админ."""
     ship = _shipped_shipment(admin_client, client_id)
     line_id = f"{ship}-l0"
     with get_connection() as conn:
@@ -168,17 +168,17 @@ def test_invoiced_dispatch_pallet_edit_manager_vs_admin(admin_client, manager_cl
     ok = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 4})
     assert ok.status_code == 200, ok.text
 
-    # После выставления счёта менеджеру палеты недоступны.
+    # После выставления счёта менеджер вправе поправить палеты — правка проходит.
     _attach_file(admin_client, iid)
     assert admin_client.post(f"/invoices/{iid}/issue").status_code == 200
-    blocked = manager_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
-    assert blocked.status_code == 400, blocked.text
-    assert "счёт" in blocked.json()["detail"].lower()
-
-    # Админ вправе поправить палеты и после выставления — правка проходит.
-    allowed = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
-    assert allowed.status_code == 200, allowed.text
+    by_manager = manager_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
+    assert by_manager.status_code == 200, by_manager.text
     assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 6
+
+    # Админ так же вправе поправить палеты и после выставления.
+    by_admin = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 7})
+    assert by_admin.status_code == 200, by_admin.text
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 7
 
 
 def test_create_invoice_lands_in_draft_then_issues(admin_client, client_id):

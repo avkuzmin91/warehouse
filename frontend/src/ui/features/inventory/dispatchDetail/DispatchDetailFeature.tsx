@@ -229,11 +229,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const isPreparing = status === 'preparing'
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
-  // Палеты менеджер правит на любом статусе, пока по отгрузке не выставлен счёт
-  // (после выставления сумма зафиксирована) и пока отгрузка не аннулирована. Админ
-  // правит палеты и после выставления счёта — сумма счёта авто-скорректируется.
-  const isAdmin = user?.role === 'admin'
-  const canEditPallets = status !== 'cancelled' && (doc.invoiced ? isAdmin : canEditPlanning)
+  // Палеты/короба менеджер правит на любом статусе (включая отгруженные), пока отгрузка
+  // не аннулирована. Если по отгрузке уже выставлен счёт — его сумма авто-скорректируется.
+  const canEditPallets = status !== 'cancelled' && canEditPlanning
   const palletsNotice = canEditPallets && doc.invoiced
     ? 'По отгрузке выставлен счёт: при изменении палет его сумма скорректируется автоматически.'
     : undefined

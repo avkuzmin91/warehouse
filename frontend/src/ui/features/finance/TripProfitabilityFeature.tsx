@@ -84,7 +84,7 @@ export function TripProfitabilityFeature() {
       ) : !data ? null : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-            <KpiCard icon="coins" label="Доход рейсов" value={fmtRub(data.income_total)} unit="₽" sub="логистика клиента + палеты + короба" />
+            <KpiCard icon="coins" label="Доход рейсов" value={fmtRub(data.income_total)} unit="₽" sub="логистика клиента" />
             <KpiCard icon="wallet" label="Себестоимость" value={fmtRub(data.cost_total)} unit="₽" sub="фактические расходы рейсов" />
             <KpiCard icon="chart" label="Маржа" value={fmtSignedRub(data.margin_total)} unit="₽"
               sub={data.margin_total >= 0 ? 'рейсы в плюсе' : 'рейсы в минусе'}

@@ -599,16 +599,13 @@ def pnl_day_detail(
 def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
     """Рентабельность рейсов в окне (по факту прибытия): доход рейса − его себестоимость.
 
-    Доход = логистика клиента (по привязанным отгрузкам и поступлениям) + палеты + короба по
-    привязанным отгрузкам на день рейса. Себестоимость = `trip_docs.logistics_cost_actual`.
-    Аннулированные рейсы и рейсы без факта прибытия не учитываются. Документ,
-    привязанный к нескольким рейсам, в этой таблице учитывается у каждого рейса —
-    это экономика конкретного рейса, не дневной агрегат."""
+    Доход рейса = логистика клиента по привязанным отгрузкам и поступлениям. Если документ
+    разбит на несколько рейсов, его логистика делится между ними пропорционально
+    перевезённому количеству (`trip_alloc.qty`), поэтому по документу она учитывается ровно
+    один раз. Себестоимость = `trip_docs.logistics_cost_actual`. Аннулированные рейсы и рейсы
+    без факта прибытия не учитываются. Палеты и короба сюда не входят — это отдельный учёт."""
     from config import TRIP_STATUS_RU_BY_DIRECTION
-    from modules.box_pricing.service import load_box_price_histories
     from modules.invoices.service import rub_to_kop
-    from modules.pallet_pricing.service import load_pallet_price_histories
-    from modules.pricing.service import price_on
 
     trips = connection.execute(
         """
@@ -623,77 +620,61 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
         (TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)),
     ).fetchall()
 
-    # Доход всех рейсов окна собираем оконными запросами (по одному на источник),
-    # а не по O(рейсы)×запросов. Документ учитывается у КАЖДОГО рейса (экономика рейса),
-    # поэтому группировка по (рейс, документ), без дедупа между рейсами.
     trip_ids = [str(t["id"]) for t in trips]
-    trip_day = {str(t["id"]): str(t["day"]) for t in trips}
     income_by_trip: dict[str, int] = {}
 
     def _add_income(tid: str, amount: int) -> None:
         if amount:
             income_by_trip[tid] = income_by_trip.get(tid, 0) + amount
 
-    pallets_rows: list = []
-    boxes_rows: list = []
     if trip_ids:
         ph = ",".join("?" for _ in trip_ids)
         for table, link_col in (("dispatch_docs", "dispatch_doc_id"), ("receipt_docs", "receipt_doc_id")):
-            for r in connection.execute(
+            rows = connection.execute(
                 f"""
-                SELECT tl.trip_id AS trip_id, MAX(COALESCE(d.logistics_cost, 0)) AS logistics_cost
+                SELECT tl.trip_id AS trip_id, d.id AS doc_id,
+                       COALESCE(d.logistics_cost, 0) AS logistics_cost,
+                       COALESCE((
+                           SELECT SUM(COALESCE(ta.qty, 0)) FROM trip_alloc ta
+                           WHERE ta.trip_line_id = tl.id AND COALESCE(ta.is_deleted, 0) = 0
+                       ), 0) AS alloc_here
                 FROM {table} d
                 JOIN trip_lines tl ON tl.{link_col} = d.id AND tl.is_deleted = 0
                 WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
-                GROUP BY tl.trip_id, d.id
                 """,
                 trip_ids,
-            ).fetchall():
-                _add_income(str(r["trip_id"]), rub_to_kop(r["logistics_cost"]))
-        pallets_rows = connection.execute(
-            f"""
-            SELECT tl.trip_id AS trip_id, d.client_id AS client_id,
-                   COALESCE((
-                       SELECT SUM(COALESCE(sl.pallets_qty, 0)) FROM dispatch_lines sl
-                       WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
-                   ), 0) AS pallets
-            FROM dispatch_docs d
-            JOIN trip_lines tl ON tl.dispatch_doc_id = d.id AND tl.is_deleted = 0
-            WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
-            GROUP BY tl.trip_id, d.id, d.client_id
-            """,
-            trip_ids,
-        ).fetchall()
-        boxes_rows = connection.execute(
-            f"""
-            SELECT tl.trip_id AS trip_id, d.client_id AS client_id,
-                   COALESCE((
-                       SELECT SUM(COALESCE(sl.boxes_qty, 0)) FROM dispatch_lines sl
-                       WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
-                   ), 0) AS boxes
-            FROM dispatch_docs d
-            JOIN trip_lines tl ON tl.dispatch_doc_id = d.id AND tl.is_deleted = 0
-            WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
-            GROUP BY tl.trip_id, d.id, d.client_id
-            """,
-            trip_ids,
-        ).fetchall()
-
-    client_ids = [r["client_id"] for r in pallets_rows] + [r["client_id"] for r in boxes_rows]
-    pallet_hist = load_pallet_price_histories(connection, client_ids)
-    box_hist = load_box_price_histories(connection, client_ids)
-    for r in pallets_rows:
-        pallets, cid, tid = int(r["pallets"] or 0), r["client_id"], str(r["trip_id"])
-        if pallets > 0 and cid:
-            price = price_on(pallet_hist.get(str(cid)), trip_day.get(tid, ""))
-            if price:
-                _add_income(tid, price * pallets)
-    for r in boxes_rows:
-        boxes, cid, tid = int(r["boxes"] or 0), r["client_id"], str(r["trip_id"])
-        if boxes > 0 and cid:
-            price = price_on(box_hist.get(str(cid)), trip_day.get(tid, ""))
-            if price:
-                _add_income(tid, price * boxes)
+            ).fetchall()
+            doc_ids = list({str(r["doc_id"]) for r in rows})
+            # Знаменатель доли — полное распределение документа по ВСЕМ его рейсам (в т.ч. вне
+            # окна), иначе доли рейсов не сойдутся к целой логистике документа.
+            totals: dict[str, tuple[int, int]] = {}
+            if doc_ids:
+                dph = ",".join("?" for _ in doc_ids)
+                for tr in connection.execute(
+                    f"""
+                    SELECT tl.{link_col} AS doc_id,
+                           COALESCE(SUM(COALESCE(ta.qty, 0)), 0) AS alloc_total,
+                           COUNT(DISTINCT tl.trip_id) AS trip_count
+                    FROM trip_lines tl
+                    JOIN trip_docs t ON t.id = tl.trip_id AND t.is_deleted = 0 AND t.status != ?
+                    LEFT JOIN trip_alloc ta ON ta.trip_line_id = tl.id AND COALESCE(ta.is_deleted, 0) = 0
+                    WHERE tl.is_deleted = 0 AND tl.{link_col} IN ({dph})
+                    GROUP BY tl.{link_col}
+                    """,
+                    [TRIP_STATUS_CANCELLED, *doc_ids],
+                ).fetchall():
+                    totals[str(tr["doc_id"])] = (int(tr["alloc_total"] or 0), int(tr["trip_count"] or 0))
+            for r in rows:
+                logistics_kop = rub_to_kop(r["logistics_cost"])
+                if not logistics_kop:
+                    continue
+                alloc_total, trip_count = totals.get(str(r["doc_id"]), (0, 0))
+                if alloc_total > 0:
+                    share = round(logistics_kop * int(r["alloc_here"] or 0) / alloc_total)
+                else:
+                    # Документ без распределения по строкам — делим логистику поровну между рейсами.
+                    share = round(logistics_kop / trip_count) if trip_count else logistics_kop
+                _add_income(str(r["trip_id"]), share)
 
     items: list[dict] = []
     income_total = cost_total = 0

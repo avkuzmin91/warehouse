@@ -11,9 +11,13 @@ import {
   getDispatchReservations,
   recommendedPallets,
   recommendedBoxes,
+  checkDispatchDuplicate,
+  uploadDispatchLineFile,
   type DispatchLineIn,
   type DispatchCargoType,
+  type DuplicateMatch,
 } from '../../api/dispatchApi'
+import { updateProductMultiplicity } from '../../api/productsApi'
 import { getClients, getClientStores, type DictionaryItem, type ClientStoreItem } from '../../api/lookupsApi'
 import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { balanceKey } from '../../utils/balanceKey'
@@ -24,6 +28,20 @@ import { TextArea } from '../../components/TextArea'
 import { Icon } from '../../components/Icon'
 import { BalancePickerSheet } from './BalancePickerSheet'
 import { AssignSkuSheet } from './AssignSkuSheet'
+import { PackMultiplicitySheet } from './PackMultiplicitySheet'
+import { PackPriceBanner } from './PackPriceBanner'
+import { DuplicateWarnSheet } from './DuplicateWarnSheet'
+
+const ALLOWED_FILE_EXTS = ['zip', 'pdf', 'jpg', 'jpeg']
+const MAX_FILE_BYTES = 10 * 1024 * 1024
+
+/** null — файл валиден; иначе текст ошибки. Совпадает с бэк-гейтом отгрузки. */
+function validateFile(file: File): string | null {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  if (!ALLOWED_FILE_EXTS.includes(ext)) return 'Допустимы zip, pdf, jpeg'
+  if (file.size > MAX_FILE_BYTES) return 'Файл больше 10 МБ'
+  return null
+}
 
 type DraftLine = DispatchLineIn & {
   _uid: string
@@ -35,8 +53,11 @@ type DraftLine = DispatchLineIn & {
   sku_pending: boolean
   itemsPerBox: number | null
   boxesPerPallet: number | null
+  boxes: number | null
+  boxesTouched: boolean
   pallets: number | null
   palletsTouched: boolean
+  files: File[]
 }
 
 function lineSub(l: DraftLine): string {
@@ -44,7 +65,7 @@ function lineSub(l: DraftLine): string {
 }
 
 export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
-  const { back } = useNav()
+  const { back, openDispatchDoc } = useNav()
   const editing = !!docId
   const [cargoType, setCargoType] = useState<DispatchCargoType>('good')
   const [clients, setClients] = useState<DictionaryItem[]>([])
@@ -58,11 +79,15 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
+  const [multiLine, setMultiLine] = useState<DraftLine | null>(null)
+  const [dupMatches, setDupMatches] = useState<DuplicateMatch[]>([])
   const [loadingDoc, setLoadingDoc] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const uidSeq = useRef(0)
   const initialServerIds = useRef<Set<string>>(new Set())
+  // Куда идти после подтверждения дубля: черновик или сразу «в ожидание рейса».
+  const pendingAdvanceRef = useRef(false)
   // Черновик, созданный при первом нажатии «В ожидание рейса». Если создание прошло, а
   // advance упал на гейте, повторное нажатие НЕ плодит новый документ — переиспользуем id.
   // Любая правка формы сбрасывает ссылку (см. эффект ниже), чтобы не отгрузить устаревший черновик.
@@ -120,11 +145,14 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             sku_pending: !!p?.sku_pending,
             itemsPerBox: l.items_per_box ?? p?.items_per_box ?? null,
             boxesPerPallet: l.boxes_per_pallet ?? p?.boxes_per_pallet ?? null,
+            boxes: l.boxes_qty,
+            boxesTouched: false,
             pallets: l.pallets_qty,
             palletsTouched: false,
             site_url: l.site_url,
             store_id: l.store_id,
             store_name: l.store_name,
+            files: [],
           }
         }))
         initialServerIds.current = initIds
@@ -168,7 +196,11 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   }, [clientId, cargoType])
 
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
+  const totalBoxes = lines.reduce((s, l) => s + (l.boxes ?? 0), 0)
   const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
+  // Цену подсказываем, пока единица «релевантна»: не задана (null) либо задана >0.
+  const needBoxPrice = lines.some((l) => (l.boxes ?? 1) > 0)
+  const needPalletPrice = lines.some((l) => (l.pallets ?? 1) > 0)
   // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
   // отгрузке» (ready), брак — со склада (storage_defect = onHand), минус остаток, уже
   // обещанный другим незакрытым отгрузкам (резерв). Склад/в пути/зарезервированное
@@ -187,6 +219,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (lines.length === 0) blockReasons.push('Добавьте хотя бы одну позицию')
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
   if (lines.some((l) => l.pallets == null)) blockReasons.push('Укажите количество палет для каждой позиции (можно 0)')
+  if (lines.some((l) => l.boxes == null)) blockReasons.push('Укажите количество коробов для каждой позиции (можно 0)')
   if (!allReady) blockReasons.push(
     isDefect
       ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество'
@@ -225,11 +258,14 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         sku_pending: !!b.sku_pending,
         itemsPerBox: b.items_per_box,
         boxesPerPallet: b.boxes_per_pallet,
+        boxes: recommendedBoxes(qty, b.items_per_box),
+        boxesTouched: false,
         pallets: recommendedPallets(recommendedBoxes(qty, b.items_per_box), b.boxes_per_pallet),
         palletsTouched: false,
         site_url: null as string | null,
         store_id: null as string | null,
         store_name: null as string | null,
+        files: [] as File[],
       })),
     ])
     setShowPicker(false)
@@ -239,8 +275,20 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
     setLines((ls) => ls.map((l) => {
       if (l._uid !== uid) return l
       const nextQty = Math.max(1, Math.floor(qty))
-      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(recommendedBoxes(nextQty, l.itemsPerBox), l.boxesPerPallet) ?? l.pallets)
-      return { ...l, qty: nextQty, pallets }
+      // Пока менеджер не правил вручную — держим рекомендацию из кратности.
+      // Цепочка: короба из штук, палеты из коробов (палета меряется в коробах).
+      const boxes = l.boxesTouched ? l.boxes : (recommendedBoxes(nextQty, l.itemsPerBox) ?? l.boxes)
+      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(boxes, l.boxesPerPallet) ?? l.pallets)
+      return { ...l, qty: nextQty, boxes, pallets }
+    }))
+  }
+  function setBoxes(uid: string, value: number | null) {
+    setLines((ls) => ls.map((l) => {
+      if (l._uid !== uid) return l
+      const boxes = value == null ? null : Math.max(0, value)
+      // Палеты меряются в коробах — при ручной правке коробов пересчитываем рекомендацию палет.
+      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(boxes, l.boxesPerPallet) ?? l.pallets)
+      return { ...l, boxes, boxesTouched: true, pallets }
     }))
   }
   function setPallets(uid: string, value: number | null) {
@@ -257,9 +305,41 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   function setSiteUrl(uid: string, url: string) {
     setLines((ls) => ls.map((l) => (l._uid === uid ? { ...l, site_url: url || null } : l)))
   }
+  function addFiles(uid: string, files: File[]) {
+    for (const f of files) {
+      const bad = validateFile(f)
+      if (bad) { setError(`${f.name}: ${bad}`); return }
+    }
+    setError('')
+    setLines((ls) => ls.map((l) => (l._uid === uid ? { ...l, files: [...l.files, ...files] } : l)))
+  }
+  function removeFile(uid: string, idx: number) {
+    setLines((ls) => ls.map((l) => (l._uid === uid ? { ...l, files: l.files.filter((_, i) => i !== idx) } : l)))
+  }
   function applySku(line: DraftLine, skuBase: string) {
     setLines((ls) => ls.map((l) => (l.product_id === line.product_id ? { ...l, sku_pending: false, product_sku: skuBase } : l)))
     setSkuLine(null)
+  }
+
+  // Кратность живёт на товаре — правка обновляет все строки с этим product_id и освежает
+  // рекомендации по осям, которые менеджер не трогал вручную.
+  async function saveMultiplicity(line: DraftLine, patch: { items_per_box: number | null; boxes_per_pallet: number | null }): Promise<boolean> {
+    try {
+      await updateProductMultiplicity(line.product_id, patch)
+      setLines((ls) => ls.map((l) => {
+        if (l.product_id !== line.product_id) return l
+        const itemsPerBox = patch.items_per_box
+        const boxesPerPallet = patch.boxes_per_pallet
+        const boxes = l.boxesTouched ? l.boxes : (recommendedBoxes(l.qty, itemsPerBox) ?? l.boxes)
+        const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(boxes, boxesPerPallet) ?? l.pallets)
+        return { ...l, itemsPerBox, boxesPerPallet, boxes, pallets }
+      }))
+      setMultiLine(null)
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return false
+    }
   }
 
   function lineToIn(l: DraftLine): DispatchLineIn {
@@ -273,9 +353,31 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
       size_name: l.size_name,
       qty: l.qty,
       pallets_qty: l.pallets,
+      boxes_qty: l.boxes,
       site_url: l.site_url ?? null,
       store_id: l.store_id ?? null,
       store_name: l.store_name ?? null,
+    }
+  }
+
+  // Создание: файлы стейджатся локально (у строк формы ещё нет id) и грузятся после
+  // создания — матчим строку черновика к созданной по варианту + магазину + ссылке.
+  async function uploadDraftFiles(docId: string): Promise<void> {
+    const withFiles = lines.filter((l) => l.files.length > 0)
+    if (withFiles.length === 0) return
+    const detail = await getDispatch(docId)
+    const used = new Set<string>()
+    for (const draft of withFiles) {
+      const target = detail.lines.find((cl) =>
+        !used.has(cl.id) &&
+        balanceKey(cl) === draft._key &&
+        (cl.store_id ?? null) === (draft.store_id ?? null) &&
+        (cl.site_url ?? null) === (draft.site_url ?? null))
+      if (!target) continue
+      used.add(target.id)
+      for (const file of draft.files) {
+        await uploadDispatchLineFile(docId, target.id, file)
+      }
     }
   }
 
@@ -297,12 +399,16 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         await updateDispatchLine(id, l._serverId, {
           qty: l.qty,
           pallets_qty: l.pallets,
+          boxes_qty: l.boxes,
           site_url: l.site_url ?? null,
           store_id: l.store_id ?? null,
           store_name: l.store_name ?? null,
         })
+        for (const file of l.files) await uploadDispatchLineFile(id, l._serverId, file)
       } else {
-        await addDispatchLine(id, lineToIn(l))
+        const res = await addDispatchLine(id, lineToIn(l))
+        const newLineId = res.message
+        for (const file of l.files) await uploadDispatchLineFile(id, newLineId, file)
       }
     }
     for (const oldId of initialServerIds.current) {
@@ -314,6 +420,30 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
     if (saving) return
     if (advance && blockReasons.length > 0) { setError(blockReasons[0]); return }
     if (!clientId || lines.length === 0) { setError('Выберите клиента и добавьте позиции'); return }
+    setError('')
+    // Дубль ищем только для нового документа (не правка, черновик ещё не создан).
+    if (!editing && !createdIdRef.current) {
+      setSaving(true)
+      try {
+        const dup = await checkDispatchDuplicate({
+          cargo_type: cargoType,
+          client_id: clientId,
+          ship_date: shipDate || null,
+          lines: lines.map((l) => ({ product_id: l.product_id, color_id: l.color_id ?? null, size_id: l.size_id ?? null, qty: l.qty })),
+        })
+        if (dup.matches.length > 0) {
+          pendingAdvanceRef.current = advance
+          setDupMatches(dup.matches)
+          setSaving(false)
+          return
+        }
+      } catch { /* проверка на дубль не критична — не блокируем создание */ }
+      setSaving(false)
+    }
+    await runSave(advance)
+  }
+
+  async function runSave(advance: boolean) {
     setError('')
     setSaving(true)
     try {
@@ -334,6 +464,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         })
         id = res.message
         createdIdRef.current = id
+        await uploadDraftFiles(id)
       }
       if (advance) await advanceDispatch(id)
       back()
@@ -409,6 +540,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           />
         </div>
 
+        {clientId && (needBoxPrice || needPalletPrice) && (
+          <PackPriceBanner clientId={clientId} needBoxPrice={needBoxPrice} needPalletPrice={needPalletPrice} />
+        )}
+
         <div className="sec" style={{ marginTop: 4 }}>
           Состав
           <span className="sec-count">{lines.length}</span>
@@ -424,6 +559,13 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             const freeQ = srcAvail(l)
             const overCap = l.qty > l.ready + l.onHand + l.inTransit
             const waiting = !overCap && l.qty > freeQ
+            const fullySet = l.itemsPerBox != null && l.boxesPerPallet != null
+            // Предложение = целочисленное деление введённых вручную чисел, если ось ещё не
+            // задана. Короб: шт ÷ коробов. Палета: коробов ÷ палет (меряется в коробах).
+            const suggestPerBox = l.boxesTouched && l.itemsPerBox == null
+              && l.boxes != null && l.boxes > 0 && l.qty % l.boxes === 0 ? l.qty / l.boxes : null
+            const suggestPerPallet = l.palletsTouched && l.boxesPerPallet == null
+              && l.pallets != null && l.pallets > 0 && l.boxes != null && l.boxes > 0 && l.boxes % l.pallets === 0 ? l.boxes / l.pallets : null
             return (
               <div key={l._uid} className="formline">
                 <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
@@ -467,6 +609,26 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                   <input
                     className="input num"
                     inputMode="numeric"
+                    value={l.boxes != null ? String(l.boxes) : ''}
+                    placeholder="Короба"
+                    aria-label="Количество коробов"
+                    style={l.boxes == null ? { borderColor: 'var(--c-warning)' } : undefined}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '')
+                      setBoxes(l._uid, raw === '' ? null : parseInt(raw, 10))
+                    }}
+                  />
+                  <div className="line-sub" style={{ flex: 1 }}>
+                    {l.itemsPerBox
+                      ? `короба · реком. ${recommendedBoxes(l.qty, l.itemsPerBox)} (${l.itemsPerBox} шт/кор)`
+                      : 'короба · кратность не задана'}
+                  </div>
+                </div>
+
+                <div className="line-row" style={{ marginTop: 8, gap: 6, alignItems: 'center' }}>
+                  <input
+                    className="input num"
+                    inputMode="numeric"
                     value={l.pallets != null ? String(l.pallets) : ''}
                     placeholder="Палеты"
                     aria-label="Количество палет"
@@ -477,10 +639,42 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     }}
                   />
                   <div className="line-sub" style={{ flex: 1 }}>
-                    {l.boxesPerPallet && l.itemsPerBox
-                      ? `палеты · реком. ${recommendedPallets(recommendedBoxes(l.qty, l.itemsPerBox), l.boxesPerPallet)} (${l.boxesPerPallet} кор/пал)`
+                    {l.boxesPerPallet
+                      ? `палеты · реком. ${recommendedPallets(l.boxes, l.boxesPerPallet) ?? '—'} (${l.boxesPerPallet} кор/пал)`
                       : 'палеты · кратность не задана'}
                   </div>
+                </div>
+
+                <div className="line-row" style={{ marginTop: 8, gap: 6, flexWrap: 'wrap' }}>
+                  {suggestPerBox != null && (
+                    <button
+                      type="button"
+                      className="badge success"
+                      style={{ border: 'none', cursor: 'pointer' }}
+                      onClick={() => void saveMultiplicity(l, { items_per_box: suggestPerBox, boxes_per_pallet: l.boxesPerPallet })}
+                    >
+                      <Icon name="sparkles" size={11} /> {suggestPerBox} шт/короб — сохранить?
+                    </button>
+                  )}
+                  {suggestPerPallet != null && (
+                    <button
+                      type="button"
+                      className="badge success"
+                      style={{ border: 'none', cursor: 'pointer' }}
+                      onClick={() => void saveMultiplicity(l, { items_per_box: l.itemsPerBox, boxes_per_pallet: suggestPerPallet })}
+                    >
+                      <Icon name="sparkles" size={11} /> {suggestPerPallet} кор/палет — сохранить?
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={fullySet ? 'badge success' : 'badge accent'}
+                    style={{ border: 'none', cursor: 'pointer', marginLeft: 'auto' }}
+                    onClick={() => setMultiLine(l)}
+                  >
+                    <Icon name={fullySet ? 'box' : 'plus'} size={11} />
+                    {fullySet ? ` ${l.itemsPerBox} шт/кор · ${l.boxesPerPallet} кор/пал` : ' Задать кратность'}
+                  </button>
                 </div>
 
                 <div className="line-row" style={{ marginTop: 8 }}>
@@ -494,6 +688,31 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     value={l.site_url ?? ''}
                     onChange={(e) => setSiteUrl(l._uid, e.target.value)}
                   />
+                </div>
+
+                <div className="line-row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 6 }}>
+                  {l.files.map((f, i) => (
+                    <span key={i} className="filechip">
+                      <Icon name="file" size={12} />
+                      <span className="fc-name">{f.name}</span>
+                      <button className="fc-x" onClick={() => removeFile(l._uid, i)} aria-label="Убрать файл">
+                        <Icon name="x" size={12} />
+                      </button>
+                    </span>
+                  ))}
+                  <label className="btn ghost sm auto" style={{ cursor: 'pointer' }}>
+                    <Icon name="file" size={13} /> Файл
+                    <input
+                      type="file"
+                      hidden
+                      multiple
+                      accept=".zip,.pdf,.jpg,.jpeg"
+                      onChange={(e) => {
+                        addFiles(l._uid, Array.from(e.target.files ?? []))
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
                 </div>
 
                 {l.sku_pending && (
@@ -517,6 +736,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           <div className="summary" style={{ marginTop: 16 }}>
             <div className="kv"><span className="k">SKU</span><span className="v mono">{lines.length}</span></div>
             <div className="kv"><span className="k">Кол-во</span><span className="v mono">{totalQty} шт</span></div>
+            <div className="kv"><span className="k">Коробов</span><span className="v mono">{totalBoxes}</span></div>
             <div className="kv"><span className="k">Палет</span><span className="v mono">{totalPallets}</span></div>
           </div>
         )}
@@ -557,6 +777,26 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           currentSku={skuLine.sku_pending ? null : skuLine.product_sku}
           onDone={(sku) => applySku(skuLine, sku)}
           onClose={() => setSkuLine(null)}
+        />
+      )}
+
+      {multiLine && (
+        <PackMultiplicitySheet
+          productName={multiLine.product_name}
+          itemsPerBox={multiLine.itemsPerBox}
+          boxesPerPallet={multiLine.boxesPerPallet}
+          onSave={(patch) => saveMultiplicity(multiLine, patch)}
+          onClose={() => setMultiLine(null)}
+        />
+      )}
+
+      {dupMatches.length > 0 && (
+        <DuplicateWarnSheet
+          matches={dupMatches}
+          busy={saving}
+          onOpenExisting={(id) => openDispatchDoc(id)}
+          onProceed={() => { setDupMatches([]); void runSave(pendingAdvanceRef.current) }}
+          onCancel={() => setDupMatches([])}
         />
       )}
     </div>

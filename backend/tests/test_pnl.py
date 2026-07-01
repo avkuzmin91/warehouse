@@ -43,6 +43,8 @@ def _cleanup(client_id: str) -> None:
                     "SELECT trip_id FROM trip_lines WHERE id = ?", (tlid,)
                 ).fetchall()
             ]
+        for tlid in trip_line_ids:
+            conn.execute("DELETE FROM trip_alloc WHERE trip_line_id = ?", (tlid,))
         for sid in disp_ids:
             conn.execute("DELETE FROM trip_lines WHERE dispatch_doc_id = ?", (sid,))
             conn.execute("DELETE FROM dispatch_ops WHERE doc_id = ?", (sid,))
@@ -167,10 +169,10 @@ def test_pnl_income_includes_boxes(admin_client, client_id):
     day_src = {s["key"]: s["amount"] for s in day["income_sources"]}
     assert day_src.get("boxes") == 90000
 
-    # Рентабельность рейса включает короба в доход.
+    # Рентабельность рейса — только логистика клиента; палеты и короба сюда не входят.
     trips = admin_client.get("/pnl/trips?date_from=2026-06-01&date_to=2026-06-30").json()
     row = next(r for r in trips["items"] if r["trip_number"] == trip_number)
-    assert row["income_kop"] == 365000
+    assert row["income_kop"] == 100000
 
 
 def test_pnl_day_detail_matches_bar(admin_client, client_id):
@@ -223,10 +225,61 @@ def test_pnl_trip_profitability(admin_client, client_id):
     body = admin_client.get("/pnl/trips?date_from=2026-06-01&date_to=2026-06-30").json()
     row = next((it for it in body["items"] if it["trip_number"] == trip_number), None)
     assert row is not None, "рейс не найден в отчёте рентабельности"
-    assert row["income_kop"] == 275000          # логистика 100000 + палеты 175000
+    assert row["income_kop"] == 100000          # только логистика клиента 1000 ₽ (палеты — отдельно)
     assert row["cost_kop"] == 40000             # себестоимость рейса 400 ₽
-    assert row["margin_kop"] == 235000
+    assert row["margin_kop"] == 60000
     assert row["day"] == "2026-06-12"
+
+
+def test_pnl_trip_logistics_apportioned_by_qty(admin_client, client_id):
+    """Логистика одного документа, разбитого на два рейса, делится пропорционально
+    перевезённому количеству (trip_alloc.qty), а не начисляется целиком на каждый рейс."""
+    r = admin_client.post("/dispatches", json={
+        "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
+        "destination": "Москва", "ship_date": "2026-06-10", "lines": [],
+    })
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    now = "2026-06-10T00:00:00+00:00"
+    line_id = f"{doc_id}-l0"
+    # Рейс A везёт 4 ед, рейс B — 6 ед из 10; логистика документа 1000 ₽ → 400 / 600.
+    trips = [("TR-A" + uuid4().hex[:6], "2026-06-12T08:00:00+00:00", 4),
+             ("TR-B" + uuid4().hex[:6], "2026-06-13T08:00:00+00:00", 6)]
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO dispatch_lines "
+            "(id,doc_id,product_id,product_name,product_sku,qty,pallets_qty,boxes_qty,shipped_qty,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (line_id, doc_id, "p-0", "Товар 0", "P0", 10, 5, 0, 10, now),
+        )
+        conn.execute(
+            "UPDATE dispatch_docs SET status = 'shipped', logistics_cost = ? WHERE id = ?",
+            (1000.0, doc_id),
+        )
+        for trip_number, arrived_at, qty in trips:
+            trip_id = str(uuid4())
+            trip_line_id = str(uuid4())
+            conn.execute(
+                "INSERT INTO trip_docs (id,trip_number,direction,status,cargo_type,arrived_at,"
+                "logistics_cost_actual,carrier_name,created_at,is_deleted) "
+                "VALUES (?,?,?,?,?,?,?,?,?,0)",
+                (trip_id, trip_number, "outbound", "closed", "good", arrived_at, 0, "Перевозчик-Т", now),
+            )
+            conn.execute(
+                "INSERT INTO trip_lines (id,trip_id,dispatch_doc_id,client_id,client_name,created_at,is_deleted) "
+                "VALUES (?,?,?,?,?,?,0)",
+                (trip_line_id, trip_id, doc_id, client_id, "Test Client", now),
+            )
+            conn.execute(
+                "INSERT INTO trip_alloc (id,trip_line_id,dispatch_line_id,qty,created_at) VALUES (?,?,?,?,?)",
+                (str(uuid4()), trip_line_id, line_id, qty, now),
+            )
+        conn.commit()
+
+    body = admin_client.get("/pnl/trips?date_from=2026-06-01&date_to=2026-06-30").json()
+    by_num = {it["trip_number"]: it for it in body["items"]}
+    assert by_num[trips[0][0]]["income_kop"] == 40000   # 1000 ₽ × 4/10
+    assert by_num[trips[1][0]]["income_kop"] == 60000   # 1000 ₽ × 6/10
 
 
 def test_pnl_empty_window_ok(admin_client, client_id):

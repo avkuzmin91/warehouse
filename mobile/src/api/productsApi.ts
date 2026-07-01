@@ -29,6 +29,18 @@ export function assignProductSku(productId: string, skuBase: string): Promise<{ 
   })
 }
 
+// Кратность упаковки товара (штук в коробе / коробов на палете) — пишется в карточку
+// и переиспользуется на всех будущих отгрузках. Admin/manager-эндпоинт.
+export function updateProductMultiplicity(
+  productId: string,
+  patch: { items_per_box?: number | null; boxes_per_pallet?: number | null },
+): Promise<{ message: string }> {
+  return request<{ message: string }>(`/products/${productId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
 // --- Helpers ---
 export function barcodeVariantLabel(m: BarcodeMatch): string {
   return [m.color_name, m.size_name].filter(Boolean).join(' · ')

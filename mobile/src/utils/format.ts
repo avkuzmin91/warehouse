@@ -47,6 +47,15 @@ export function fmtDateTime(s: string | null | undefined, empty = '—'): string
   })
 }
 
+/** «150» / «150,50» → копейки (15050). null — пусто или не число. Контракт повторяет веб. */
+export function parseRublesToKopecks(input: string): number | null {
+  const s = input.trim().replace(/\s/g, '').replace(',', '.')
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100)
+}
+
 /** Название позиции «Товар · цвет · размер» (пустые части отбрасываются). */
 export function variantTitle(productName: string, parts: (string | null | undefined)[]): string {
   const variant = parts.filter(Boolean).join(' · ')

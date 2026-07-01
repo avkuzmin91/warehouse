@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestForm } from './http'
 
 // --- Types --- (подмножество backend/modules/dispatch/schemas.py)
 export type DispatchStatus =
@@ -50,6 +50,7 @@ export type DispatchLineIn = {
   size_name?: string | null
   qty: number
   pallets_qty?: number | null
+  boxes_qty?: number | null
   site_url?: string | null
   store_id?: string | null
   store_name?: string | null
@@ -65,6 +66,14 @@ export type DispatchDocCreate = {
   lines?: DispatchLineIn[]
 }
 
+export type DispatchLineFile = {
+  id: string
+  filename: string
+  url: string
+  mime_type: string | null
+  created_at: string
+}
+
 export type DispatchLine = {
   id: string
   product_id: string
@@ -78,12 +87,14 @@ export type DispatchLine = {
   qty: number
   shipped_qty: number
   pallets_qty: number | null
+  boxes_qty: number | null
   items_per_box: number | null
   boxes_per_pallet: number | null
   site_url: string | null
   store_id: string | null
   store_name: string | null
   remaining: number
+  files: DispatchLineFile[]
 }
 
 export type DispatchOp = {
@@ -138,6 +149,7 @@ export function updateDispatch(id: string, body: DispatchDocUpdate): Promise<{ m
 export type DispatchLineUpdate = {
   qty?: number
   pallets_qty?: number | null
+  boxes_qty?: number | null
   site_url?: string | null
   store_id?: string | null
   store_name?: string | null
@@ -170,8 +182,60 @@ export function deleteDispatchLine(docId: string, lineId: string): Promise<{ mes
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
 
+// Вложение по строке отгрузки (zip/pdf/jpeg). Content-Type multipart ставит браузер.
+export function uploadDispatchLineFile(docId: string, lineId: string, file: File): Promise<{ message: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/files`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
 export function advanceDispatch(id: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
+}
+
+// --- Проверка дубля (зеркало web DuplicateWarnModal) ---
+export type DispatchDuplicateCheckLine = {
+  product_id: string
+  color_id?: string | null
+  size_id?: string | null
+  qty: number
+}
+
+export type DispatchDuplicateCheck = {
+  cargo_type: DispatchCargoType
+  client_id: string | null
+  ship_date: string | null
+  lines: DispatchDuplicateCheckLine[]
+}
+
+export type DuplicateMatchLine = {
+  product_sku: string | null
+  product_name: string | null
+  color_name: string | null
+  size_name: string | null
+  qty: number
+}
+
+export type DuplicateMatch = {
+  id: string
+  doc_number: string
+  status: string
+  status_label: string
+  created_at: string
+  created_by_name: string | null
+  lines: DuplicateMatchLine[]
+}
+
+/** Ищет уже созданные сегодня для клиента отгрузки с тем же составом. Проверка не
+ *  критична — при ошибке создание не блокируем (см. вызов в форме). */
+export function checkDispatchDuplicate(body: DispatchDuplicateCheck): Promise<{ matches: DuplicateMatch[] }> {
+  return request<{ matches: DuplicateMatch[] }>('/dispatches/check-duplicate', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 /** Зарезервированный к отгрузке остаток по варианту (уже обещан незакрытым отгрузкам). */
