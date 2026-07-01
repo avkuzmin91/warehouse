@@ -68,6 +68,11 @@ export function canCorrectReceived(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_head'
 }
 
+// Историческая коррекция бизнес-даты упаковки из «Производительности упаковки» — менеджер и админ.
+export function canMovePackDate(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+}
+
 export function canPackShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'shift_supervisor' || user?.role === 'warehouse_head'
 }

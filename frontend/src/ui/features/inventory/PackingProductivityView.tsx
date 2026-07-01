@@ -15,6 +15,7 @@ import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
 import { MovePackDateDrawer } from './MovePackDateDrawer'
+import { canMovePackDate } from '../../../utils/access'
 import type { PackingProductivityRow } from '../../../api/shipmentsApi'
 
 // table-layout: fixed фиксирует ширины колонок одинаково для всех дат-групп
@@ -87,7 +88,7 @@ export function PackingProductivityView() {
   const [moveTarget, setMoveTarget] = useState<{ packedDate: string; row: PackingProductivityRow } | null>(null)
 
   const { user } = useCurrentUser()
-  const isAdmin = user?.role === 'admin'
+  const canMoveDate = canMovePackDate(user)
 
   const { clients } = useLookups()
 
@@ -190,7 +191,7 @@ export function PackingProductivityView() {
                   <th colSpan={2} style={{ textAlign: 'center', color: 'var(--c-warning)', borderLeft: BORDER }}>Брак</th>
                   <th rowSpan={2} style={{ width: 84, borderLeft: BORDER }} />
                   <th rowSpan={2} style={{ textAlign: 'right', width: 120, borderLeft: BORDER }}>Итого ₽</th>
-                  {isAdmin && <th rowSpan={2} style={{ width: 40 }} />}
+                  {canMoveDate && <th rowSpan={2} style={{ width: 40 }} />}
                 </tr>
                 <tr>
                   <th style={{ textAlign: 'right', width: 66, borderLeft: BORDER }}>шт</th>
@@ -208,7 +209,7 @@ export function PackingProductivityView() {
                   <th style={{ textAlign: 'right', width: 90, borderLeft: BORDER }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
-                  {isAdmin && <th style={{ width: 40 }} />}
+                  {canMoveDate && <th style={{ width: 40 }} />}
                 </tr>
               </thead>
             )}
@@ -229,7 +230,7 @@ export function PackingProductivityView() {
                       </span>
                     </Td>
                     {showEarn ? <EarnCells m={day} /> : <QtyCells m={day} />}
-                    {isAdmin && <Td />}
+                    {canMoveDate && <Td />}
                   </tr>
                   {open && day.rows.map((row) => {
                     const docId = row.doc_ids?.[0]
@@ -244,7 +245,7 @@ export function PackingProductivityView() {
                         <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
                         <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
                         {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
-                        {isAdmin && (
+                        {canMoveDate && (
                           <Td style={{ textAlign: 'center' }}>
                             <button
                               className="btn ghost icon sm"
@@ -265,7 +266,7 @@ export function PackingProductivityView() {
         </div>
         </>
       )}
-      {isAdmin && moveTarget && (
+      {canMoveDate && moveTarget && (
         <MovePackDateDrawer
           packedDate={moveTarget.packedDate}
           row={moveTarget.row}

@@ -26,6 +26,7 @@ _TODAY = "2026-06-09"
 _ADMIN = {"id": "t-admin", "email": "a@t.com", "role": "admin", "created_at": "2020-01-01T00:00:00", "client_id": None}
 _SHIFT = {"id": "t-shift", "email": "s@t.com", "role": "shift_supervisor", "created_at": "2020-01-01T00:00:00", "client_id": None}
 _WH = {"id": "t-wh", "email": "w@t.com", "role": "warehouse_manager", "created_at": "2020-01-01T00:00:00", "client_id": None}
+_MANAGER = {"id": "t-mgr", "email": "m@t.com", "role": "manager", "created_at": "2020-01-01T00:00:00", "client_id": None}
 
 
 @pytest.fixture
@@ -822,7 +823,7 @@ def test_packing_productivity_report(api, client_id):
 
 
 def test_move_packing_date_admin(api, client_id):
-    """Админ переносит дату упаковки из отчёта: запись (и её сторно) едут на другой день."""
+    """Менеджер/админ переносит дату упаковки из отчёта: запись (и её сторно) едут на другой день."""
     pos = _position()
     intake_zone = str(uuid.uuid4())
     _receive(api, client_id, pos, 40, intake_zone)
@@ -855,8 +856,8 @@ def test_move_packing_date_admin(api, client_id):
     assert api.post("/shipments/packing/productivity/move-date",
                     json={"entry_ids": ["x"], "new_date": d_right}).status_code == 403
 
-    # Админ видит обе записи строки (A помечена отменённой).
-    _as(_ADMIN)
+    # Менеджер (не только админ) видит обе записи строки (A помечена отменённой).
+    _as(_MANAGER)
     ents = api.get("/shipments/packing/productivity/entries",
                    params={"packed_date": d_wrong, "product_id": pos["product_id"], "client_id": client_id}).json()["entries"]
     ids = [e["id"] for e in ents]
@@ -868,8 +869,8 @@ def test_move_packing_date_admin(api, client_id):
                     json={"entry_ids": ids, "new_date": d_wrong})
     assert same.status_code == 200 and same.json()["moved"] == 0, same.text
 
-    # Перенос обеих записей на правильный день: сторно A уезжает вместе с оригиналом,
-    # иначе на d_wrong остался бы орфан-минус.
+    # Менеджер переносит обе записи на правильный день: сторно A уезжает вместе с
+    # оригиналом, иначе на d_wrong остался бы орфан-минус.
     mv = api.post("/shipments/packing/productivity/move-date",
                   json={"entry_ids": ids, "new_date": d_right})
     assert mv.status_code == 200 and mv.json()["moved"] == 2, mv.text

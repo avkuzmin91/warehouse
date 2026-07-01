@@ -117,9 +117,9 @@ def _priority_label(rank: int | None) -> str:
     return SHIPMENT_PRIORITY_LABELS.get(rank, f"#{rank}")
 
 
-def _ensure_strict_admin(user) -> None:
-    if str(user["role"]) != "admin":
-        raise HTTPException(status_code=403, detail="Доступно только администратору")
+def _ensure_pack_date_editor(user) -> None:
+    if str(user["role"]) not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Доступно только менеджеру")
 
 
 def _ensure_can_edit_files(user, status: str) -> None:
@@ -945,7 +945,7 @@ def get_productivity_entries(
     client_id: str | None = Query(None),
     user=Depends(get_current_admin),
 ):
-    _ensure_strict_admin(user)
+    _ensure_pack_date_editor(user)
     with get_connection() as conn:
         entries = list_productivity_entries(
             conn,
@@ -962,7 +962,7 @@ def move_productivity_pack_date(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(get_current_admin),
 ):
-    _ensure_strict_admin(user)
+    _ensure_pack_date_editor(user)
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "pack_date_move")
