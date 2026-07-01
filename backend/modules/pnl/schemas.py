@@ -27,6 +27,62 @@ class PnlResponse(BaseModel):
     expense_categories: list[PnlSeries]
 
 
+class IncomeSourceSeries(BaseModel):
+    key:    str
+    name:   str
+    kind:   str | None = None
+    series: list[int]      # копейки по дням axis
+
+
+class IncomeClientBreakdown(BaseModel):
+    id:     str | None = None
+    name:   str
+    amount: int            # копейки за период
+
+
+class IncomeAnalyticsPoint(BaseModel):
+    date:   str
+    amount: int            # копейки за день
+
+
+class IncomeAnalyticsResponse(BaseModel):
+    date_from:      str
+    date_to:        str
+    days:           int
+    total_amount:   int             # доход за период, копейки
+    avg_per_day:    int
+    max_day_amount: int
+    series:         list[IncomeAnalyticsPoint]
+    sources:        list[IncomeSourceSeries]
+    by_client:      list[IncomeClientBreakdown]
+
+
+class PnlDayItem(BaseModel):
+    type:     str                  # doc | packing | expense | employee | computed
+    label:    str
+    amount:   int                  # копейки
+    ref_id:   str | None = None    # id первоисточника для ссылки (документ/рейс/сотрудник)
+    ref_kind: str | None = None    # dispatch | receipt | trip | expense | employee
+    note:     str | None = None    # пояснение (кол-во шт., доля аренды, защита окладов)
+
+
+class PnlDaySource(BaseModel):
+    key:    str
+    label:  str
+    kind:   str | None = None
+    amount: int                    # копейки за день
+    items:  list[PnlDayItem]
+
+
+class PnlDayResponse(BaseModel):
+    date:               str
+    income_total:       int
+    expense_total:      int
+    net_total:          int
+    income_sources:     list[PnlDaySource]
+    expense_categories: list[PnlDaySource]
+
+
 class TripProfitItem(BaseModel):
     trip_id:       str
     trip_number:   str

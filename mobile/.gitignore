@@ -2,6 +2,7 @@ node_modules
 dist
 *.local
 .DS_Store
+*.tsbuildinfo
 
 # Capacitor native project (генерируется с Android SDK)
 /android

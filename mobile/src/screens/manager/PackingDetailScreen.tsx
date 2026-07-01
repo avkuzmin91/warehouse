@@ -2,9 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
 import { getShipment, SHIPMENT_STATUS_LABELS, type ShipmentDetail } from '../../api/shipmentsApi'
+import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
 import { canCreateDocuments } from '../../utils/access'
+import { balanceKey } from '../../utils/balanceKey'
+import { lineStockChips } from '../../utils/stockChips'
 import { fmtDate } from '../../utils/format'
 
 const STATUS_TONE: Record<string, string> = {
@@ -20,6 +23,8 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Остаток «склад»/«в пути» под строкой — только в черновике (пока планируем).
+  const [plannable, setPlannable] = useState<PlannableItem[]>([])
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -36,7 +41,18 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
     return () => ac.abort()
   }, [load])
 
+  const showAvail = doc?.status === 'draft'
+  useEffect(() => {
+    if (!doc || !showAvail || !doc.client_id) { setPlannable([]); return }
+    const ac = new AbortController()
+    getPlannableItems({ client_id: doc.client_id, cargo_type: doc.cargo_type, limit: 500 }, ac.signal)
+      .then((r) => { if (!ac.signal.aborted) setPlannable(r.items) })
+      .catch(() => {})
+    return () => ac.abort()
+  }, [doc, showAvail])
+
   const tone = doc ? (STATUS_TONE[doc.status] ?? '') : ''
+  const plannableByKey = new Map(plannable.map((p) => [balanceKey(p), p]))
 
   return (
     <div className="screen">
@@ -66,6 +82,13 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                     <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}{l.store_name ? ` · ${l.store_name}` : ''}</div>
                     {(l.packed_good > 0 || l.packed_defect > 0) && (
                       <div className="tile-meta">упаковано: годный {l.packed_good} · брак {l.packed_defect}</div>
+                    )}
+                    {showAvail && (
+                      <div className="stock-row">
+                        {lineStockChips(plannableByKey.get(balanceKey(l)), { source: 'pack', cargoType: doc.cargo_type }).map((c) => (
+                          <span key={c.label} className={`badge ${c.tone}`}>{c.label} <b>{c.value}</b></span>
+                        ))}
+                      </div>
                     )}
                   </div>
                   <div className="docline-qty">

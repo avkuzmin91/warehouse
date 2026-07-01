@@ -10,6 +10,7 @@ import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useFilterParam } from '../../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../../utils/format'
 import { AnalyticsTabs } from '../AnalyticsTabs'
+import { PnlDayDrawer } from './PnlDayDrawer'
 
 const PRESETS = [
   { d: 7, l: 'Неделя' },
@@ -27,7 +28,7 @@ const INCOME_COLOR: Record<string, string> = {
   logistics: 'oklch(0.66 0.13 250)',
   pallets: 'oklch(0.74 0.13 80)',
 }
-function incomeColor(key: string): string {
+export function incomeColor(key: string): string {
   return INCOME_COLOR[key] ?? 'var(--c-accent)'
 }
 function catColor(i: number): string {
@@ -47,16 +48,16 @@ function ddmm(ymd: string): string {
 }
 const MONTHS_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 const DOW_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб']
-function dayFull(ymd: string): string {
+export function dayFull(ymd: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd
   const [y, m, d] = ymd.split('-').map(Number)
   const dt = new Date(Date.UTC(y, m - 1, d))
   return `${d} ${MONTHS_GEN[m - 1]}, ${DOW_SHORT[dt.getUTCDay()]}`
 }
-function fmtRub(kopecks: number): string {
+export function fmtRub(kopecks: number): string {
   return Math.round(kopecks / 100).toLocaleString('ru-RU')
 }
-function fmtSignedRub(kopecks: number): string {
+export function fmtSignedRub(kopecks: number): string {
   const s = kopecks > 0 ? '+' : kopecks < 0 ? '−' : ''
   return s + Math.abs(Math.round(kopecks / 100)).toLocaleString('ru-RU')
 }
@@ -178,6 +179,7 @@ function PnlBody({ data, prev, chartMode, onChartMode }: {
   onChartMode: (m: ChartMode) => void
 }) {
   const cmp = !!prev
+  const [selDay, setSelDay] = useState<number | null>(null)
   const netSeries = useMemo(
     () => data.axis.map((_, i) => (data.income_series[i] ?? 0) - (data.expense_series[i] ?? 0)),
     [data],
@@ -223,7 +225,7 @@ function PnlBody({ data, prev, chartMode, onChartMode }: {
           {data.income_total === 0 && data.expense_total === 0 ? (
             <div style={{ padding: '30px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>За период данных нет</div>
           ) : (
-            <MainChart data={data} netSeries={netSeries} mode={chartMode} expColor={expColor} />
+            <MainChart data={data} netSeries={netSeries} mode={chartMode} expColor={expColor} onSelectDay={setSelDay} />
           )}
         </div>
       </div>
@@ -240,6 +242,14 @@ function PnlBody({ data, prev, chartMode, onChartMode }: {
           prevRows={prev?.expense_categories}
         />
       </div>
+
+      <PnlDayDrawer
+        day={selDay != null ? data.axis[selDay] : null}
+        from={data.date_from}
+        to={data.date_to}
+        expColor={expColor}
+        onClose={() => setSelDay(null)}
+      />
     </>
   )
 }
@@ -336,11 +346,12 @@ function Sparkline({ cur, prev, w = 360, h = 96 }: { cur: number[]; prev: number
 
 type ChartCat = { key: string; label: string; color: string; series: number[]; amount: number }
 
-function MainChart({ data, netSeries, mode, expColor }: {
+function MainChart({ data, netSeries, mode, expColor, onSelectDay }: {
   data: Pnl
   netSeries: number[]
   mode: ChartMode
   expColor: Record<string, string>
+  onSelectDay: (i: number) => void
 }) {
   const [hover, setHover] = useState<number | null>(null)
   const [tipX, setTipX] = useState(0)
@@ -409,7 +420,7 @@ function MainChart({ data, netSeries, mode, expColor }: {
             const net = netSeries[i]
             const dim = hover != null && hover !== i ? 0.45 : 1
             return (
-              <div key={day} className={`pnl-col${hover === i ? ' sel' : ''}`} onMouseEnter={() => setHover(i)}>
+              <div key={day} className={`pnl-col${hover === i ? ' sel' : ''}`} onMouseEnter={() => setHover(i)} onClick={() => onSelectDay(i)}>
                 {mode === 'net' ? (
                   <>
                     <div className="pnl-half up">
@@ -448,6 +459,7 @@ function MainChart({ data, netSeries, mode, expColor }: {
             <div className="pnl-tip-line"><span className="k"><span className="pnl-tip-sw" style={{ background: 'var(--c-success)' }} />Доход</span><span className="v">{fmtRub(tip.income)}</span></div>
             <div className="pnl-tip-line"><span className="k"><span className="pnl-tip-sw" style={{ background: 'var(--c-danger)' }} />Расход</span><span className="v">{fmtRub(tip.expense)}</span></div>
             <div className="pnl-tip-net"><span>Итог за день</span><span className="mono" style={{ color: tip.net >= 0 ? 'var(--c-success)' : 'var(--c-danger)' }}>{fmtSignedRub(tip.net)} ₽</span></div>
+            <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-text-faint)' }}>Нажмите — детализация дня</div>
           </div>
         )}
       </div>

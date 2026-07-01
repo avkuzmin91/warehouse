@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
-import { getDispatch, DISPATCH_STATUS_LABELS, dispatchStatusTone, type DispatchDetail } from '../../api/dispatchApi'
+import { getDispatch, getDispatchReservations, DISPATCH_STATUS_LABELS, dispatchStatusTone, type DispatchDetail } from '../../api/dispatchApi'
+import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { AppBar } from '../../components/AppBar'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { canCreateDocuments } from '../../utils/access'
+import { balanceKey } from '../../utils/balanceKey'
+import { lineStockChips } from '../../utils/stockChips'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function DispatchDetailScreen({ docId }: { docId: string }) {
@@ -15,6 +18,9 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Доступность под строкой (свободно/резерв/склад/в пути) — только в черновике.
+  const [plannable, setPlannable] = useState<PlannableItem[]>([])
+  const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -31,7 +37,27 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
     return () => ac.abort()
   }, [load])
 
+  const showAvail = doc?.status === 'draft'
+  useEffect(() => {
+    if (!doc || !showAvail || !doc.client_id) { setPlannable([]); setReservedMap({}); return }
+    const ac = new AbortController()
+    Promise.all([
+      getPlannableItems({ client_id: doc.client_id, cargo_type: doc.cargo_type, limit: 500 }, ac.signal),
+      getDispatchReservations({ client_id: doc.client_id, cargo_type: doc.cargo_type }, ac.signal).catch(() => ({ items: [] })),
+    ])
+      .then(([pl, rv]) => {
+        if (ac.signal.aborted) return
+        setPlannable(pl.items)
+        const m: Record<string, number> = {}
+        for (const r of rv.items) m[balanceKey(r)] = r.reserved
+        setReservedMap(m)
+      })
+      .catch(() => {})
+    return () => ac.abort()
+  }, [doc, showAvail])
+
   const tone = doc ? dispatchStatusTone(doc.status) : ''
+  const plannableByKey = new Map(plannable.map((p) => [balanceKey(p), p]))
 
   return (
     <div className="screen">
@@ -66,6 +92,13 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                   <div className="docline-main">
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
                     <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}{l.store_name ? ` · ${l.store_name}` : ''}</div>
+                    {showAvail && (
+                      <div className="stock-row">
+                        {lineStockChips(plannableByKey.get(balanceKey(l)), { source: 'dispatch', cargoType: doc.cargo_type, reserved: reservedMap[balanceKey(l)] ?? 0 }).map((c) => (
+                          <span key={c.label} className={`badge ${c.tone}`}>{c.label} <b>{c.value}</b></span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="docline-qty">
                     <div className="big">{l.qty} шт</div>

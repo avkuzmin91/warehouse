@@ -137,6 +137,45 @@ def test_pnl_income_by_trip_day(admin_client, client_id):
     assert body["income_series"][9] == 0
 
 
+def test_pnl_day_detail_matches_bar(admin_client, client_id):
+    # Тот же сценарий: палеты 175000 + логистика 100000, доход лёг на день рейса 12.06.
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 35000, "effective_from": "2026-06-01"})
+    doc_id, _ = _dispatch_in_trip(
+        admin_client, client_id, pallets=[3, 2], logistics_rub=1000.0, trip_cost_rub=400.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+
+    # День детализации считается в окне графика → его доход совпадает со столбиком 12.06.
+    day = admin_client.get(
+        f"/pnl/day?date=2026-06-12&date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    assert day["date"] == "2026-06-12"
+    assert day["income_total"] == 275000
+    assert day["net_total"] == 275000 - day["expense_total"]
+
+    src = {s["key"]: s for s in day["income_sources"]}
+    assert src["logistics"]["amount"] == 100000
+    assert src["pallets"]["amount"] == 175000
+    # Первоисточник логистики ссылается на реальную отгрузку.
+    log_item = src["logistics"]["items"][0]
+    assert log_item["ref_kind"] == "dispatch"
+    assert log_item["ref_id"] == doc_id
+
+    # Пустой день внутри окна: доход нулевой, источников нет.
+    empty = admin_client.get(
+        f"/pnl/day?date=2026-06-10&date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    assert empty["income_total"] == 0
+    assert empty["income_sources"] == []
+
+
+def test_pnl_day_requires_finance_role(warehouse_client, client_id):
+    assert warehouse_client.get(
+        "/pnl/day?date=2026-06-12&date_from=2026-06-01&date_to=2026-06-30"
+    ).status_code == 403
+
+
 def test_pnl_trip_profitability(admin_client, client_id):
     admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
                       json={"price_kop": 35000, "effective_from": "2026-06-01"})
@@ -164,9 +203,57 @@ def test_pnl_empty_window_ok(admin_client, client_id):
     assert body["net_cumulative"][-1] == -body["expense_total"]
 
 
+def test_income_analytics_mirrors_pnl(admin_client, client_id):
+    # Тот же сценарий, что test_pnl_income_by_trip_day: палеты 175000 + логистика 100000.
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 35000, "effective_from": "2026-06-01"})
+    _dispatch_in_trip(
+        admin_client, client_id, pallets=[3, 2], logistics_rub=1000.0, trip_cost_rub=400.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+
+    inc = admin_client.get(
+        f"/pnl/income?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+
+    assert inc["days"] == 30
+    assert len(inc["series"]) == 30
+    # Итог аналитики доходов копейка-в-копейку = income_total из P&L (общий _income_by_source).
+    pnl = admin_client.get(
+        f"/pnl?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    assert inc["total_amount"] == pnl["income_total"] == 275000
+
+    sources = {s["key"]: sum(s["series"]) for s in inc["sources"]}
+    assert sources.get("logistics") == 100000
+    assert sources.get("pallets") == 175000
+
+    # Доход лёг на день рейса (12.06 = индекс 11), а не на дату документа (10.06).
+    assert inc["series"][11]["amount"] == 275000
+    assert inc["series"][9]["amount"] == 0
+
+    # Разрез по клиентам: единственный клиент несёт весь доход.
+    assert len(inc["by_client"]) == 1
+    assert inc["by_client"][0]["id"] == client_id
+    assert inc["by_client"][0]["amount"] == 275000
+
+
+def test_income_analytics_empty_window_ok(admin_client, client_id):
+    inc = admin_client.get(
+        f"/pnl/income?date_from=2026-06-01&date_to=2026-06-07&client_id={client_id}"
+    ).json()
+    assert inc["days"] == 7
+    assert inc["total_amount"] == 0
+    assert inc["sources"] == []
+    assert inc["by_client"] == []
+
+
 def test_pnl_requires_finance_role(warehouse_client, client_id):
     assert warehouse_client.get(
         "/pnl?date_from=2026-06-01&date_to=2026-06-30"
+    ).status_code == 403
+    assert warehouse_client.get(
+        "/pnl/income?date_from=2026-06-01&date_to=2026-06-30"
     ).status_code == 403
     assert warehouse_client.get(
         "/pnl/trips?date_from=2026-06-01&date_to=2026-06-30"

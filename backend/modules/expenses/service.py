@@ -45,7 +45,12 @@ from config import (
 )
 from dbconn import like_substring_param
 from modules.production_calendar.service import working_days_in_range, working_days_of_month
-from modules.timesheet.service import daily_payroll_accruals_split, load_salaries, salary_on
+from modules.timesheet.service import (
+    daily_payroll_accruals_split,
+    daily_payroll_by_employee,
+    load_salaries,
+    salary_on,
+)
 from modules.warehouse_rent.service import current_rent_rates
 
 
@@ -753,6 +758,135 @@ def expense_analytics(
             for s in EXPENSE_PAYMENT_STATUSES_ALL if s in by_status
         ],
     }
+
+
+def expense_day_detail(connection, *, day: str, can_view_salary: bool) -> list[dict]:
+    """Детализация расхода за ОДИН день по категориям с первоисточниками — для P&L-шторки.
+
+    Категории и их суммы совпадают с дневным срезом `expense_analytics` (тот же расчёт:
+    точечные по `spent_on`, аренда — доля дня, ЗП — начисление по табелю). Каждая категория
+    несёт items[] первоисточников:
+      • точечный расход — реальные записи `material_expenses` (type='expense');
+      • аренда — доля месячной суммы, размазанной по рабочим дням (type='computed');
+      • ЗП табель — по сотрудникам (type='employee'); ЗП оклад — по сотрудникам только
+        администратору (can_view_salary), иначе одна строка-агрегат без имён (защита окладов)."""
+    try:
+        d = date.fromisoformat(day[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Укажите день в формате ГГГГ-ММ-ДД") from exc
+    day_iso = d.isoformat()
+
+    cats: dict[str, dict] = {}
+
+    def _cat(name: str, kind: str) -> dict:
+        return cats.setdefault(name, {"key": name, "label": name, "kind": kind, "amount": 0, "items": []})
+
+    # 1) Точечные расходы (всё, кроме аренды и ЗП) — реальные записи по дате операции.
+    point_kinds = [k for k in EXPENSE_KINDS_ALL if k not in (EXPENSE_KIND_SALARY, EXPENSE_KIND_RENT)]
+    if point_kinds:
+        placeholders = ",".join("?" for _ in point_kinds)
+        rows = connection.execute(
+            f"""
+            SELECT e.id, e.kind, e.amount, e.name, e.supplier, e.category_id,
+                   c.name AS category_name
+            FROM material_expenses e
+            LEFT JOIN expense_categories c ON c.id = e.category_id
+            WHERE COALESCE(e.is_deleted, 0) = 0
+              AND e.payment_status != ?
+              AND e.kind IN ({placeholders})
+              AND e.spent_on = ?
+            ORDER BY e.amount DESC
+            """,
+            [EXPENSE_PAYMENT_CANCELLED, *point_kinds, day_iso],
+        ).fetchall()
+        for r in rows:
+            amount = int(r["amount"])
+            if not amount:
+                continue
+            cat_name = str(r["category_name"] or "Без категории")
+            e = _cat(cat_name, str(r["kind"]))
+            e["amount"] += amount
+            label = str(r["name"] or r["supplier"] or EXPENSE_KIND_LABELS.get(str(r["kind"]), cat_name))
+            e["items"].append({
+                "type": "expense", "label": label, "amount": amount,
+                "ref_id": str(r["id"]), "ref_kind": "expense", "note": None,
+            })
+
+    # 2) Аренда — доля дня из месячной суммы, размазанной по рабочим дням периода записи.
+    rent_rows = connection.execute(
+        """
+        SELECT e.amount, e.name, e.period_start, e.period_end, e.spent_on,
+               e.category_id, c.name AS category_name
+        FROM material_expenses e
+        LEFT JOIN expense_categories c ON c.id = e.category_id
+        WHERE COALESCE(e.is_deleted, 0) = 0
+          AND e.payment_status != ?
+          AND e.kind = ?
+          AND COALESCE(e.period_end, e.spent_on) >= ?
+          AND COALESCE(e.period_start, e.spent_on) <= ?
+        """,
+        [EXPENSE_PAYMENT_CANCELLED, EXPENSE_KIND_RENT, day_iso, day_iso],
+    ).fetchall()
+    for r in rent_rows:
+        total = int(r["amount"])
+        try:
+            pstart = date.fromisoformat(str(r["period_start"] or r["spent_on"])[:10])
+            pend = date.fromisoformat(str(r["period_end"] or r["spent_on"])[:10])
+        except ValueError:
+            continue
+        if pend < pstart:
+            pstart, pend = pend, pstart
+        wd = working_days_in_range(connection, pstart, pend)
+        n_days = len(wd)
+        if n_days <= 0 or d not in wd:
+            continue
+        base, rem = divmod(total, n_days)
+        share = base + (1 if wd.index(d) < rem else 0)
+        if not share:
+            continue
+        cat_name = str(r["category_name"] or "Без категории")
+        e = _cat(cat_name, EXPENSE_KIND_RENT)
+        e["amount"] += share
+        e["items"].append({
+            "type": "computed",
+            "label": str(r["name"] or "Аренда"),
+            "amount": share, "ref_id": None, "ref_kind": None,
+            "note": f"Доля дня из месячной суммы {format_kopecks(total)} "
+                    f"({pstart.isoformat()} — {pend.isoformat()}, {n_days} раб. дн.)",
+        })
+
+    # 3) ЗП — начисление по табелю за день, по сотрудникам. Оклад окладников виден
+    # только администратору; менеджеру — общая сумма без имён (нельзя идентифицировать).
+    payroll = daily_payroll_by_employee(connection, day_iso)
+    ts_total = sum(int(x["amount"]) for x in payroll["timesheet"])
+    if ts_total:
+        e = _cat(EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET, EXPENSE_KIND_SALARY)
+        e["amount"] += ts_total
+        for x in payroll["timesheet"]:
+            e["items"].append({
+                "type": "employee", "label": str(x["full_name"]), "amount": int(x["amount"]),
+                "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": None,
+            })
+    fixed_total = sum(int(x["amount"]) for x in payroll["fixed"])
+    if fixed_total:
+        e = _cat(EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED, EXPENSE_KIND_SALARY)
+        e["amount"] += fixed_total
+        if can_view_salary:
+            for x in payroll["fixed"]:
+                e["items"].append({
+                    "type": "employee", "label": str(x["full_name"]), "amount": int(x["amount"]),
+                    "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": None,
+                })
+        else:
+            e["items"].append({
+                "type": "computed", "label": "Начислено окладникам", "amount": fixed_total,
+                "ref_id": None, "ref_kind": None,
+                "note": "Детализация по сотрудникам доступна администратору",
+            })
+
+    out = [c for c in cats.values() if c["amount"] != 0]
+    out.sort(key=lambda c: c["amount"], reverse=True)
+    return out
 
 
 def load_detail(connection, expense_id: str) -> dict:
