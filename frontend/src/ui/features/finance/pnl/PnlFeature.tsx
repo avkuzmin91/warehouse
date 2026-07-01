@@ -19,6 +19,11 @@ const PRESETS = [
 ] as const
 const DEFAULT_PERIOD = 30
 
+// До 22.06.2026 финансовые данные вносились нерегулярно, поэтому совмещённый P&L
+// («доход vs расход») считаем только с этой даты. Отдельные вкладки «Доходы» и
+// «Расходы» её не применяют — там показываем всё как есть.
+const DATA_START = '2026-06-22'
+
 // Цвета источников дохода закреплены по смыслу (упаковка зелёная, логистика синяя,
 // палеты янтарные). Категориальных переменных темы под стопку графика не хватает —
 // задаём тона напрямую (как catColor в аналитике расходов).
@@ -27,6 +32,7 @@ const INCOME_COLOR: Record<string, string> = {
   packing_defect: 'oklch(0.60 0.10 160)',
   logistics: 'oklch(0.66 0.13 250)',
   pallets: 'oklch(0.74 0.13 80)',
+  boxes: 'oklch(0.70 0.14 40)',
 }
 export function incomeColor(key: string): string {
   return INCOME_COLOR[key] ?? 'var(--c-accent)'
@@ -45,6 +51,11 @@ function shiftYmd(ymd: string, deltaDays: number): string {
 }
 function ddmm(ymd: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}` : ymd
+}
+function daysInclusive(from: string, to: string): number {
+  const [fy, fm, fd] = from.split('-').map(Number)
+  const [ty, tm, td] = to.split('-').map(Number)
+  return Math.floor((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000) + 1
 }
 const MONTHS_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 const DOW_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб']
@@ -94,17 +105,21 @@ export function PnlFeature() {
 
   const today = moscowTodayYmd()
   const effTo = today
-  const effFrom = shiftYmd(today, -(period - 1))
+  const rawFrom = shiftYmd(today, -(period - 1))
+  const effFrom = rawFrom < DATA_START ? DATA_START : rawFrom
+  const shownDays = daysInclusive(effFrom, effTo)
   const prevTo = shiftYmd(effFrom, -1)
   const prevFrom = shiftYmd(prevTo, -(period - 1))
+  // Прошлый период сравниваем, только если он целиком после начала корректных данных.
+  const canCompare = prevFrom >= DATA_START
 
   const { data, loading, error } = useApi(
     (s) => getPnl({ date_from: effFrom, date_to: effTo }, s),
     [effFrom, effTo],
   )
   const { data: prevData } = useApi(
-    (s) => (compare ? getPnl({ date_from: prevFrom, date_to: prevTo }, s) : Promise.resolve(null)),
-    [prevFrom, prevTo, compare],
+    (s) => (compare && canCompare ? getPnl({ date_from: prevFrom, date_to: prevTo }, s) : Promise.resolve(null)),
+    [prevFrom, prevTo, compare, canCompare],
   )
 
   if (!isFinance) {
@@ -123,7 +138,12 @@ export function PnlFeature() {
           <button key={p.d} className={period === p.d ? 'on' : ''} onClick={() => setPeriodRaw(String(p.d))}>{p.l}</button>
         ))}
       </div>
-      <button className={`pnl-cmp${compare ? ' on' : ''}`} onClick={() => setCompare((v) => !v)}>
+      <button
+        className={`pnl-cmp${compare && canCompare ? ' on' : ''}`}
+        disabled={!canCompare}
+        title={canCompare ? undefined : `Сравнение доступно, когда прошлый период целиком после ${ddmm(DATA_START)} — до этой даты данные неполные`}
+        onClick={() => setCompare((v) => !v)}
+      >
         <span className="pnl-cmp-sw" />Сравнить с прошлым
       </button>
       <button className="btn" disabled={!data} onClick={() => data && exportCsv(data)}>
@@ -135,7 +155,7 @@ export function PnlFeature() {
   return (
     <ListPage
       title="Доходы и расходы"
-      subtitle={`${ddmm(effFrom)} — ${ddmm(effTo)} · ${period} дн. · заработали ли мы за период`}
+      subtitle={`${ddmm(effFrom)} — ${ddmm(effTo)} · ${shownDays} дн. · заработали ли мы за период`}
       actions={actions}
     >
       <AnalyticsTabs active="pnl" />
@@ -196,7 +216,7 @@ function PnlBody({ data, prev, chartMode, onChartMode }: {
   const incomeDelta = cmp ? pctDelta(data.income_total, prev.income_total) : null
   const expenseDelta = cmp ? pctDelta(data.expense_total, prev.expense_total) : null
   const netDelta = cmp ? pctDelta(data.net_total, prev.net_total) : null
-  const marginDelta = cmp ? pctDelta(data.margin_pct, prev.margin_pct) : null
+  const marginDelta = cmp && data.margin_pct != null && prev.margin_pct != null ? pctDelta(data.margin_pct, prev.margin_pct) : null
 
   return (
     <>
@@ -206,7 +226,7 @@ function PnlBody({ data, prev, chartMode, onChartMode }: {
         <KpiCard icon="coins" label="Доход" value={fmtRub(data.income_total)} unit="₽" sub="за период" delta={incomeDelta} goodIsUp compare={cmp} />
         <KpiCard icon="wallet" label="Расход" value={fmtRub(data.expense_total)} unit="₽" sub="за период" delta={expenseDelta} goodIsUp={false} compare={cmp} />
         <KpiCard icon="pulse" label="Чистая прибыль" value={fmtSignedRub(data.net_total)} unit="₽" sub={data.net_total >= 0 ? 'в плюсе' : 'в минусе'} tone={data.net_total >= 0 ? 'var(--c-success)' : 'var(--c-danger)'} delta={netDelta} goodIsUp compare={cmp} />
-        <KpiCard icon="chart" label="Маржа" value={String(data.margin_pct).replace('.', ',')} unit="%" sub="прибыль / доход" tone={data.margin_pct < 0 ? 'var(--c-danger)' : undefined} delta={marginDelta} goodIsUp compare={cmp} />
+        <KpiCard icon="chart" label="Маржа" value={data.margin_pct == null ? '—' : String(data.margin_pct).replace('.', ',')} unit={data.margin_pct == null ? undefined : '%'} sub="прибыль / доход" tone={data.margin_pct != null && data.margin_pct < 0 ? 'var(--c-danger)' : undefined} delta={marginDelta} goodIsUp compare={cmp} />
       </div>
 
       <div className="an-card" style={{ marginBottom: 16 }}>
@@ -290,7 +310,7 @@ function ResultHero({ data, prev, netDelta, profitDays, lossDays }: {
             <Icon name={plus ? 'arrowUp' : 'arrowDown'} size={13} />{plus ? 'Мы в плюсе' : 'Мы в минусе'}
           </span>
           <span style={{ fontSize: 12.5, color: 'var(--c-text-muted)' }}>
-            маржа <b style={{ color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>{String(data.margin_pct).replace('.', ',')}%</b>
+            маржа <b style={{ color: 'var(--c-text)', fontVariantNumeric: 'tabular-nums' }}>{data.margin_pct == null ? '—' : `${String(data.margin_pct).replace('.', ',')}%`}</b>
           </span>
           {cmp && <Delta delta={netDelta} goodIsUp label="к прошлому периоду" />}
         </div>

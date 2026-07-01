@@ -84,7 +84,8 @@ export function ProductEditFeature({ id }: { id: string }) {
   const [name, setName] = useState('')
   const [skuBase, setSkuBase] = useState('')
   const [weightGrams, setWeightGrams] = useState('')
-  const [itemsPerPallet, setItemsPerPallet] = useState('')
+  const [itemsPerBox, setItemsPerBox] = useState('')
+  const [boxesPerPallet, setBoxesPerPallet] = useState('')
   const [clientId, setClientId] = useState<string | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -120,7 +121,8 @@ export function ProductEditFeature({ id }: { id: string }) {
         setName(p.name)
         setSkuBase(p.sku_base)
         setWeightGrams(p.weight_grams != null ? String(p.weight_grams) : '')
-        setItemsPerPallet(p.items_per_pallet != null ? String(p.items_per_pallet) : '')
+        setItemsPerBox(p.items_per_box != null ? String(p.items_per_box) : '')
+        setBoxesPerPallet(p.boxes_per_pallet != null ? String(p.boxes_per_pallet) : '')
         setClientId(p.client_id)
         setIsActive(p.is_active)
         setImages((p.image_urls ?? []).map((url) => ({ kind: 'url', previewUrl: url, serverUrl: url })))
@@ -241,7 +243,8 @@ export function ProductEditFeature({ id }: { id: string }) {
       // (бэкенд оставит признак ожидания). Непустой SKU у pending-товара снимает ожидание.
       ...(trimmedSku ? { sku_base: trimmedSku } : {}),
       weight_grams: parseOptionalWeight(weightGrams),
-      items_per_pallet: parseOptionalInteger(itemsPerPallet),
+      items_per_box: parseOptionalInteger(itemsPerBox),
+      boxes_per_pallet: parseOptionalInteger(boxesPerPallet),
       client_id: clientId,
       is_active: isActive,
       image_urls,
@@ -512,15 +515,27 @@ export function ProductEditFeature({ id }: { id: string }) {
                   style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                 />
               </Field>
-              <Field label="Количество товаров на паллете">
+              <Field label="Количество товаров в коробе">
                 <Input
                   type="number"
                   min={0}
                   step={1}
                   inputMode="numeric"
-                  value={itemsPerPallet}
+                  value={itemsPerBox}
                   disabled={busy}
-                  onChange={(e) => setItemsPerPallet(e.target.value)}
+                  onChange={(e) => setItemsPerBox(e.target.value)}
+                  style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
+                />
+              </Field>
+              <Field label="Количество коробов на паллете">
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={boxesPerPallet}
+                  disabled={busy}
+                  onChange={(e) => setBoxesPerPallet(e.target.value)}
                   style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                 />
               </Field>

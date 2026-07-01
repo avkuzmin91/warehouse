@@ -36,8 +36,10 @@ from modules.auth.service import (
     get_current_warehouse,
 )
 from modules.receipts.schemas import (
+    DuplicateCheckResponse,
     ReceiptActualArrivalUpdate,
     ReceiptDetailResponse,
+    ReceiptDuplicateCheck,
     ReceiptReceivedCorrection,
     ReceiptDocCreate,
     ReceiptDocResponse,
@@ -59,6 +61,7 @@ from modules.receipts.service import (
     compute_state,
     correct_received,
     ensure_receipt_line_unique,
+    find_duplicate_receipts,
     list_receipt_lines,
     list_receipts_aggregated,
     next_doc_number,
@@ -193,6 +196,21 @@ def create_receipt(
         finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return result
+
+
+@router.post("/receipts/check-duplicate", response_model=DuplicateCheckResponse)
+def check_receipt_duplicate(
+    payload: ReceiptDuplicateCheck,
+    user=Depends(get_current_document_creator),
+):
+    cid = (payload.client_id or "").strip()
+    if not cid or not payload.lines:
+        return {"matches": []}
+    with get_connection() as conn:
+        matches = find_duplicate_receipts(
+            conn, client_id=cid, arrival_date=payload.arrival_date, lines=payload.lines
+        )
+    return {"matches": matches}
 
 
 @router.get("/receipts/summary")

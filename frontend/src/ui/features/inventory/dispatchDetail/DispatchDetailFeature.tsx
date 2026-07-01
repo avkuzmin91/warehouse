@@ -8,10 +8,12 @@ import {
   addDispatchLine,
   updateDispatchLine,
   updateDispatchLinePallets,
+  updateDispatchLineBoxes,
   deleteDispatchLine,
   uploadDispatchLineFile,
   deleteDispatchLineFile,
   recommendedPallets,
+  recommendedBoxes,
 } from '../../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchDetail, DispatchStatus } from '../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../api/balancesApi'
@@ -117,7 +119,8 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         size_id:      item.size_id,
         size_name:    item.size_name,
         qty,
-        pallets_qty:  recommendedPallets(qty, item.items_per_pallet),
+        boxes_qty:    recommendedBoxes(qty, item.items_per_box),
+        pallets_qty:  recommendedPallets(recommendedBoxes(qty, item.items_per_box), item.boxes_per_pallet),
         site_url:     null,
         store_id:     null,
         store_name:   null,
@@ -125,7 +128,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     })
   }
 
-  async function handleUpdateLine(lineId: string, body: { qty?: number; pallets_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }): Promise<boolean> {
+  async function handleUpdateLine(lineId: string, body: { qty?: number; pallets_qty?: number | null; boxes_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }): Promise<boolean> {
     try {
       await updateDispatchLine(docId, lineId, body)
       await load()
@@ -143,6 +146,17 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения палет', 'error')
+      return false
+    }
+  }
+
+  async function handleUpdateBoxes(lineId: string, boxes: number | null): Promise<boolean> {
+    try {
+      await updateDispatchLineBoxes(docId, lineId, boxes)
+      await load()
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка сохранения коробов', 'error')
       return false
     }
   }
@@ -216,8 +230,13 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
   // Палеты менеджер правит на любом статусе, пока по отгрузке не выставлен счёт
-  // (после выставления сумма зафиксирована) и пока отгрузка не аннулирована.
-  const canEditPallets = canEditPlanning && !doc.invoiced && status !== 'cancelled'
+  // (после выставления сумма зафиксирована) и пока отгрузка не аннулирована. Админ
+  // правит палеты и после выставления счёта — сумма счёта авто-скорректируется.
+  const isAdmin = user?.role === 'admin'
+  const canEditPallets = status !== 'cancelled' && (doc.invoiced ? isAdmin : canEditPlanning)
+  const palletsNotice = canEditPallets && doc.invoiced
+    ? 'По отгрузке выставлен счёт: при изменении палет его сумма скорректируется автоматически.'
+    : undefined
 
   const actions = (
     <>
@@ -298,12 +317,16 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           doc={doc}
           onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
           onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
+          onSaveBoxes={canEditPallets ? handleUpdateBoxes : undefined}
+          palletsNotice={palletsNotice}
         />
       ) : (
         <FinalView
           doc={doc}
           onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
           onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
+          onSaveBoxes={canEditPallets ? handleUpdateBoxes : undefined}
+          palletsNotice={palletsNotice}
         />
       )}
 

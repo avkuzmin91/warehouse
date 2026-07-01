@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
@@ -83,6 +84,18 @@ router = APIRouter(tags=["logistics"])
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+_BUSINESS_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _business_now() -> str:
+    """Настенное московское время события (YYYY-MM-DDTHH:mm) — единый базис с вводом пользователя.
+
+    Дата-часть `arrived_at` арендуется аналитикой P&L для дневной атрибуции дохода.
+    UTC-fallback увёл бы прибытие, отмеченное ночью по МСК (00:00–02:59), на предыдущий
+    день, а у границы окна — в предыдущий отчётный период."""
+    return datetime.now(_BUSINESS_TZ).strftime("%Y-%m-%dT%H:%M")
 
 
 def _dt_value(value: str | None) -> datetime | None:
@@ -657,7 +670,7 @@ def trip_arrival(
             from_ru = trip_status_ru(direction, TRIP_STATUS_AWAITING_ARRIVAL)
             verb = "прибытие"
             raise HTTPException(status_code=400, detail=f"Отметить {verb} можно только из статуса '{from_ru}'")
-        arrived_at = (payload.arrived_at or "").strip() or _now()
+        arrived_at = (payload.arrived_at or "").strip() or _business_now()
         from_ru = trip_status_ru(direction, TRIP_STATUS_AWAITING_ARRIVAL)
         to_ru = trip_status_ru(direction, TRIP_STATUS_UNLOADING)
         event = "прибытие отмечено"
@@ -702,9 +715,9 @@ def trip_unload(
             (payload.unload_started_at or "").strip()
             or doc_row["unload_started_at"]
             or doc_row["arrived_at"]
-            or _now()
+            or _business_now()
         )
-        unload_at = (payload.unload_finished_at or "").strip() or _now()
+        unload_at = (payload.unload_finished_at or "").strip() or _business_now()
         _ensure_unload_period(unload_started_at, unload_at, "погрузки" if outbound else "разгрузки")
         done = "погрузка завершена" if outbound else "разгрузка завершена"
         _advance(conn, trip_id, to_status=TRIP_STATUS_COSTING,

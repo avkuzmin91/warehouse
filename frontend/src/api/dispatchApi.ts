@@ -1,5 +1,6 @@
 import { request, requestForm } from './http'
 import type { TripAllocBreakdownItem } from './tripsApi'
+import type { DuplicateCheckResponse } from './domainTypes'
 
 export type DispatchStatus = 'draft' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
@@ -86,8 +87,12 @@ export type DispatchLine = {
   shipped_qty:  number
   /** Количество палет в строке (вводит менеджер; обязательно перед передачей в подготовку). */
   pallets_qty:  number | null
-  /** Кратность товара на палете из карточки товара — для рекомендации. */
-  items_per_pallet: number | null
+  /** Количество коробов в строке (вводит менеджер; обязательно перед передачей в подготовку). */
+  boxes_qty:    number | null
+  /** Кратность товара на короб из карточки товара — для рекомендации числа коробов. */
+  items_per_box: number | null
+  /** Кратность «коробов на палете» из карточки товара — для рекомендации числа палет. */
+  boxes_per_pallet: number | null
   site_url:     string | null
   store_id:     string | null
   store_name:   string | null
@@ -210,6 +215,7 @@ export type DispatchLineIn = {
   size_name?:   string | null
   qty:          number
   pallets_qty?: number | null
+  boxes_qty?:   number | null
   site_url?:    string | null
   store_id?:    string | null
   store_name?:  string | null
@@ -243,16 +249,26 @@ export type DispatchDocUpdate = {
 export type DispatchLineUpdate = {
   qty?:         number
   pallets_qty?: number | null
+  boxes_qty?:   number | null
   site_url?:    string | null
   store_id?:    string | null
   store_name?:  string | null
 }
 
-/** Рекомендованное число палет: кратность товара на палете округляется вверх.
+/** Рекомендованное число коробов: количество штук делится на «штук в коробе» вверх.
  *  null — кратность не задана в карточке товара (менеджер вводит вручную). */
-export function recommendedPallets(qty: number, itemsPerPallet: number | null | undefined): number | null {
-  if (!itemsPerPallet || itemsPerPallet <= 0) return null
-  return Math.max(1, Math.ceil(qty / itemsPerPallet))
+export function recommendedBoxes(qty: number, itemsPerBox: number | null | undefined): number | null {
+  if (!itemsPerBox || itemsPerBox <= 0) return null
+  return Math.max(1, Math.ceil(qty / itemsPerBox))
+}
+
+/** Рекомендованное число палет: число коробов делится на «коробов на палете» вверх.
+ *  Палета меряется в коробах, а не в штуках. null — кратность не задана либо коробов нет
+ *  (менеджер вводит вручную). */
+export function recommendedPallets(boxes: number | null | undefined, boxesPerPallet: number | null | undefined): number | null {
+  if (!boxesPerPallet || boxesPerPallet <= 0) return null
+  if (!boxes || boxes <= 0) return null
+  return Math.max(1, Math.ceil(boxes / boxesPerPallet))
 }
 
 function buildListQuery(params: DispatchListParams): string {
@@ -341,6 +357,22 @@ export function createDispatch(body: DispatchDocCreate) {
   return request<{ message: string }>('/dispatches', { method: 'POST', body: JSON.stringify(body), idempotent: true })
 }
 
+export type DispatchDuplicateCheckPayload = {
+  cargo_type: DispatchCargoType
+  client_id?: string | null
+  ship_date?: string | null
+  lines: { product_id: string; color_id?: string | null; size_id?: string | null; qty: number }[]
+}
+
+/** Ищет сегодняшние отгрузки клиента того же типа с тем же составом — предупреждение о дубле. */
+export function checkDispatchDuplicate(payload: DispatchDuplicateCheckPayload, signal?: AbortSignal) {
+  return request<DuplicateCheckResponse>('/dispatches/check-duplicate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    signal,
+  })
+}
+
 export function updateDispatch(id: string, body: DispatchDocUpdate) {
   return request<{ message: string }>(`/dispatches/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
@@ -365,6 +397,14 @@ export function updateDispatchLinePallets(docId: string, lineId: string, pallets
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/pallets`, {
     method: 'PATCH',
     body: JSON.stringify({ pallets_qty: palletsQty }),
+  })
+}
+
+/** Правка числа коробов по строке на любом статусе (кроме аннулированной/выставленной счётом). */
+export function updateDispatchLineBoxes(docId: string, lineId: string, boxesQty: number | null) {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/boxes`, {
+    method: 'PATCH',
+    body: JSON.stringify({ boxes_qty: boxesQty }),
   })
 }
 

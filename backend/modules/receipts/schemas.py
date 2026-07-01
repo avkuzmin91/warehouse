@@ -220,3 +220,38 @@ class ReceiptLinesResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class ReceiptDuplicateCheckLine(BaseModel):
+    product_id: str
+    color_id: str | None = None
+    size_id: str | None = None
+    planned_qty: int = Field(ge=1)
+
+
+class ReceiptDuplicateCheck(BaseModel):
+    client_id: str
+    arrival_date: str | None = None
+    lines: list[ReceiptDuplicateCheckLine] = []
+
+
+class DuplicateMatchLine(BaseModel):
+    product_sku: str | None = None
+    product_name: str | None = None
+    color_name: str | None = None
+    size_name: str | None = None
+    qty: int
+
+
+class DuplicateMatch(BaseModel):
+    id: str
+    doc_number: str
+    status: str
+    status_label: str
+    created_at: str
+    created_by_name: str | None = None
+    lines: list[DuplicateMatchLine] = []
+
+
+class DuplicateCheckResponse(BaseModel):
+    matches: list[DuplicateMatch] = []

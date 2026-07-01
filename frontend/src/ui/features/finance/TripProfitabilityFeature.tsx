@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { getTripProfitability } from '../../../api/pnlApi'
 import type { TripProfitItem } from '../../../api/pnlApi'
 import { ListPage } from '../../layouts/ListPage'
@@ -83,7 +84,7 @@ export function TripProfitabilityFeature() {
       ) : !data ? null : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-            <KpiCard icon="coins" label="Доход рейсов" value={fmtRub(data.income_total)} unit="₽" sub="логистика клиента + палеты" />
+            <KpiCard icon="coins" label="Доход рейсов" value={fmtRub(data.income_total)} unit="₽" sub="логистика клиента + палеты + короба" />
             <KpiCard icon="wallet" label="Себестоимость" value={fmtRub(data.cost_total)} unit="₽" sub="фактические расходы рейсов" />
             <KpiCard icon="chart" label="Маржа" value={fmtSignedRub(data.margin_total)} unit="₽"
               sub={data.margin_total >= 0 ? 'рейсы в плюсе' : 'рейсы в минусе'}
@@ -117,9 +118,14 @@ export function TripProfitabilityFeature() {
 }
 
 function TripRow({ t }: { t: TripProfitItem }) {
+  const navigate = useNavigate()
   const tone = t.margin_kop >= 0 ? 'var(--c-success)' : 'var(--c-danger)'
   return (
-    <tr>
+    <tr
+      onClick={() => navigate(`/logistics/trips/${t.trip_id}`)}
+      style={{ cursor: 'pointer' }}
+      title="Открыть рейс"
+    >
       <Td>
         <span className="mono" style={{ fontWeight: 600 }}>{t.trip_number}</span>
         <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--c-text-subtle)' }}>
@@ -131,7 +137,7 @@ function TripRow({ t }: { t: TripProfitItem }) {
       <Td style={{ textAlign: 'right' }}><span className="mono">{fmtRub(t.income_kop)}</span></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono">{fmtRub(t.cost_kop)}</span></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono" style={{ color: tone, fontWeight: 600 }}>{fmtSignedRub(t.margin_kop)}</span></Td>
-      <Td style={{ textAlign: 'right' }}><span className="mono" style={{ color: tone }}>{String(t.margin_pct).replace('.', ',')}%</span></Td>
+      <Td style={{ textAlign: 'right' }}><span className="mono" style={{ color: tone }}>{t.margin_pct == null ? '—' : `${String(t.margin_pct).replace('.', ',')}%`}</span></Td>
     </tr>
   )
 }

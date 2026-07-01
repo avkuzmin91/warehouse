@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
-import { recommendedPallets, getDispatchReservations } from '../../../../../api/dispatchApi'
+import { recommendedPallets, recommendedBoxes, getDispatchReservations } from '../../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../../api/balancesApi'
 import { getPlannableItems } from '../../../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../../../api/inventoryLookupsApi'
@@ -19,21 +19,24 @@ import { AssignSkuDrawer } from '../../shared/AssignSkuDrawer'
 import { NumberStep } from '../../shared/NumberStep'
 import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
 import { dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from '../components/DispatchLineFiles'
+import { PackMultiplicity } from '../components/PackMultiplicity'
+import { PackPriceBanner } from '../components/PackPriceBanner'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { AvailabilityCell } from '../../shared/AvailabilityCell'
 import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { fmtYmdAsDmy } from '../../../../../utils/format'
 import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
+import { useToast } from '../../../../feedback/Toast'
 
-type LineDraft = { qty: number; pallets: number | null; palletsTouched: boolean; siteUrl: string; storeId: string; storeName: string | null }
+type LineDraft = { qty: number; pallets: number | null; palletsTouched: boolean; boxes: number | null; boxesTouched: boolean; siteUrl: string; storeId: string; storeName: string | null }
 
 type Props = {
   doc: DispatchDetail
   canEdit: boolean
   acting: boolean
   onAddLine: (item: PlannableItem, qty: number) => Promise<void>
-  onUpdateLine: (lineId: string, body: { qty?: number; pallets_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
+  onUpdateLine: (lineId: string, body: { qty?: number; pallets_qty?: number | null; boxes_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }) => Promise<boolean>
   onDeleteLine: (lineId: string) => Promise<void>
   onUploadFile: (lineId: string, file: File) => Promise<boolean>
   onDeleteFile: (lineId: string, fileId: string) => Promise<boolean>
@@ -51,6 +54,8 @@ function draftFromLine(line: DispatchLine): LineDraft {
     qty:            line.qty,
     pallets:        line.pallets_qty,
     palletsTouched: false,
+    boxes:          line.boxes_qty,
+    boxesTouched:   false,
     siteUrl:        line.site_url ?? '',
     storeId:        line.store_id ?? '',
     storeName:      line.store_name ?? null,
@@ -59,6 +64,7 @@ function draftFromLine(line: DispatchLine): LineDraft {
 
 export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush }: Props) {
   const { user } = useCurrentUser()
+  const toast = useToast()
   const showCosts = canViewCosts(user)
   const isDefectCargo = doc.cargo_type === 'defect'
 
@@ -167,21 +173,31 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   }
 
   function setDraft(lineId: string, patch: Partial<LineDraft>) {
-    setDrafts((prev) => ({ ...prev, [lineId]: { ...(prev[lineId] ?? { qty: 1, pallets: null, palletsTouched: false, siteUrl: '', storeId: '', storeName: null }), ...patch } }))
+    setDrafts((prev) => ({ ...prev, [lineId]: { ...(prev[lineId] ?? { qty: 1, pallets: null, palletsTouched: false, boxes: null, boxesTouched: false, siteUrl: '', storeId: '', storeName: null }), ...patch } }))
   }
 
   function setLineQty(line: DispatchLine, qty: number) {
     const d = getDraft(line)
     const nextQty = Math.max(1, qty)
-    // Пока палеты не правили вручную — держим рекомендацию из кратности товара.
-    const pallets = d.palletsTouched ? d.pallets : (recommendedPallets(nextQty, line.items_per_pallet) ?? d.pallets)
-    setDraft(line.id, { qty: nextQty, pallets })
+    // Пока короба/палеты не правили вручную — держим рекомендацию из кратности товара.
+    // Цепочка: короба из штук, палеты из коробов (палета меряется в коробах).
+    const boxes = d.boxesTouched ? d.boxes : (recommendedBoxes(nextQty, line.items_per_box) ?? d.boxes)
+    const pallets = d.palletsTouched ? d.pallets : (recommendedPallets(boxes, line.boxes_per_pallet) ?? d.pallets)
+    setDraft(line.id, { qty: nextQty, boxes, pallets })
+  }
+
+  function setLineBoxes(line: DispatchLine, value: number | null) {
+    const d = getDraft(line)
+    // Палеты меряются в коробах — при ручной правке коробов освежаем рекомендацию палет.
+    const pallets = d.palletsTouched ? d.pallets : (recommendedPallets(value, line.boxes_per_pallet) ?? d.pallets)
+    setDraft(line.id, { boxes: value, boxesTouched: true, pallets })
   }
 
   function lineDirty(line: DispatchLine): boolean {
     const d = getDraft(line)
     return d.qty !== line.qty
       || (d.pallets ?? null) !== (line.pallets_qty ?? null)
+      || (d.boxes ?? null) !== (line.boxes_qty ?? null)
       || d.siteUrl !== (line.site_url ?? '')
       || d.storeId !== (line.store_id ?? '')
       || d.storeName !== (line.store_name ?? null)
@@ -194,6 +210,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       await onUpdateLine(line.id, {
         qty:         d.qty,
         pallets_qty: d.pallets,
+        boxes_qty:   d.boxes,
         site_url:    d.siteUrl.trim() || null,
         store_id:    d.storeId || null,
         store_name:  d.storeId ? d.storeName : null,
@@ -237,8 +254,25 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     await onReload()
   }
 
+  async function saveMultiplicity(line: DispatchLine, patch: { items_per_box?: number | null; boxes_per_pallet?: number | null }): Promise<boolean> {
+    try {
+      await updateProduct(line.product_id, patch)
+      await onReload()
+      toast('Кратность сохранена', 'success')
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+      return false
+    }
+  }
+
   const totalQty = doc.lines.reduce((s, l) => s + l.qty, 0)
   const totalPallets = doc.lines.reduce((s, l) => s + (getDraft(l).pallets ?? 0), 0)
+  const totalBoxes = doc.lines.reduce((s, l) => s + (getDraft(l).boxes ?? 0), 0)
+  // Цену подсказываем, пока единица «релевантна»: не задана (null) либо >0. Прячем только
+  // когда во всех строках явный 0 — иначе подсказка пропадала при пустых полях (нет кратности).
+  const needBoxPrice = doc.lines.some((l) => (getDraft(l).boxes ?? 1) > 0)
+  const needPalletPrice = doc.lines.some((l) => (getDraft(l).pallets ?? 1) > 0)
   const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size
   const hasPendingSku = doc.lines.some((l) => l.sku_pending)
 
@@ -306,6 +340,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           </div>
         </PhaseBlock>
 
+        {showCosts && canEdit && doc.client_id && (needBoxPrice || needPalletPrice) && (
+          <PackPriceBanner
+            clientId={doc.client_id}
+            needBoxPrice={needBoxPrice}
+            needPalletPrice={needPalletPrice}
+          />
+        )}
+
         <PhaseBlock
           icon="boxes"
           title="Состав отгрузки"
@@ -328,11 +370,10 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                 <tr>
                   <th style={{ width: 32 }} />
                   <th>Товар · вариант</th>
-                  <th style={{ width: 160 }}>Магазин</th>
-                  <th style={{ width: 190 }}>Ссылка</th>
-                  <th style={{ width: 180 }}>Файлы</th>
+                  <th style={{ width: 130 }}>Магазин</th>
+                  <th style={{ width: 220 }}>Ссылка и файлы</th>
                   <th style={{ textAlign: 'right', width: 130 }}>План</th>
-                  <th style={{ textAlign: 'right', width: 120 }}>Палеты</th>
+                  <th style={{ textAlign: 'right', width: 150 }}>Упаковка</th>
                   <th style={{ width: 64 }} />
                 </tr>
               </thead>
@@ -374,27 +415,27 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                         </div>
                       </td>
                       <td>
-                        <input
-                          className="input"
-                          placeholder="https://…"
-                          value={d.siteUrl}
-                          readOnly={!canEdit}
-                          onChange={(e) => setDraft(l.id, { siteUrl: e.target.value })}
-                          style={{ width: '100%' }}
-                        />
-                      </td>
-                      <td>
-                        <LineFilesCell
-                          entries={l.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
-                          canEdit={canEdit}
-                          uploading={uploadingLine === l.id}
-                          accept={DISPATCH_FILE_ACCEPT}
-                          glyphFor={dispatchFileGlyph}
-                          onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
-                          onAdd={(files) => void handleUploadFiles(l.id, files)}
-                          onReplace={(fileId, file) => void handleReplaceFile(l.id, fileId, file)}
-                          onRemove={(fileId) => void onDeleteFile(l.id, fileId)}
-                        />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <input
+                            className="input"
+                            placeholder="https://…"
+                            value={d.siteUrl}
+                            readOnly={!canEdit}
+                            onChange={(e) => setDraft(l.id, { siteUrl: e.target.value })}
+                            style={{ width: '100%' }}
+                          />
+                          <LineFilesCell
+                            entries={l.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
+                            canEdit={canEdit}
+                            uploading={uploadingLine === l.id}
+                            accept={DISPATCH_FILE_ACCEPT}
+                            glyphFor={dispatchFileGlyph}
+                            onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
+                            onAdd={(files) => void handleUploadFiles(l.id, files)}
+                            onReplace={(fileId, file) => void handleReplaceFile(l.id, fileId, file)}
+                            onRemove={(fileId) => void onDeleteFile(l.id, fileId)}
+                          />
+                        </div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -415,26 +456,52 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                         />
                       </td>
                       <td>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                          <input
-                            className="input sm num"
-                            inputMode="numeric"
-                            placeholder="0"
-                            aria-label="Количество палет"
-                            readOnly={!canEdit}
-                            value={d.pallets != null ? String(d.pallets) : ''}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/\D/g, '')
-                              setDraft(l.id, { pallets: raw === '' ? null : Math.max(0, parseInt(raw, 10)), palletsTouched: true })
-                            }}
-                            style={{ width: 64, textAlign: 'right', borderColor: d.pallets == null ? 'var(--c-warning)' : undefined }}
-                          />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11, color: 'var(--c-text-muted)', width: 42, textAlign: 'right' }}>Короба</span>
+                            <input
+                              className="input sm num"
+                              inputMode="numeric"
+                              placeholder="0"
+                              aria-label="Количество коробов"
+                              readOnly={!canEdit}
+                              value={d.boxes != null ? String(d.boxes) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/\D/g, '')
+                                setLineBoxes(l, raw === '' ? null : Math.max(0, parseInt(raw, 10)))
+                              }}
+                              style={{ width: 56, textAlign: 'right', borderColor: d.boxes == null ? 'var(--c-warning)' : undefined }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11, color: 'var(--c-text-muted)', width: 42, textAlign: 'right' }}>Палеты</span>
+                            <input
+                              className="input sm num"
+                              inputMode="numeric"
+                              placeholder="0"
+                              aria-label="Количество палет"
+                              readOnly={!canEdit}
+                              value={d.pallets != null ? String(d.pallets) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/\D/g, '')
+                                setDraft(l.id, { pallets: raw === '' ? null : Math.max(0, parseInt(raw, 10)), palletsTouched: true })
+                              }}
+                              style={{ width: 56, textAlign: 'right', borderColor: d.pallets == null ? 'var(--c-warning)' : undefined }}
+                            />
+                          </div>
                         </div>
-                        <div className="t-sub" style={{ textAlign: 'right', marginTop: 2, whiteSpace: 'nowrap' }}>
-                          {l.items_per_pallet
-                            ? `реком. ${recommendedPallets(d.qty, l.items_per_pallet)}`
-                            : 'кратность не задана'}
-                        </div>
+                        <PackMultiplicity
+                          productName={l.product_name}
+                          itemsPerBox={l.items_per_box}
+                          boxesPerPallet={l.boxes_per_pallet}
+                          qty={d.qty}
+                          pallets={d.pallets}
+                          boxes={d.boxes}
+                          palletsTouched={d.palletsTouched}
+                          boxesTouched={d.boxesTouched}
+                          canEdit={canEdit}
+                          onSaveProduct={(patch) => saveMultiplicity(l, patch)}
+                        />
                       </td>
                       <td>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
@@ -461,11 +528,11 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
               </tbody>
               <tfoot>
                 <tr style={{ background: 'var(--c-bg-sunken)' }}>
-                  <td colSpan={5} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
+                  <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>
                     Итого: {skuCount} SKU
                   </td>
                   <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalQty}</td>
-                  <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 14 }}>{totalPallets}</td>
+                  <td className="num" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>{totalPallets} пал · {totalBoxes} кор</td>
                   <td />
                 </tr>
               </tfoot>
@@ -485,6 +552,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           <div style={{ padding: '0 2px' }}>
             <ReadRow label="SKU" mono>{skuCount}</ReadRow>
             <ReadRow label="Кол-во" mono strong>{totalQty} шт</ReadRow>
+            <ReadRow label="Коробов" mono strong>{totalBoxes}</ReadRow>
             <ReadRow label="Палет" mono strong>{totalPallets}</ReadRow>
             {showCosts && (
               <ReadRow label="Логистика" mono>{doc.logistics_cost != null ? `${doc.logistics_cost.toLocaleString('ru-RU')} ₽` : '—'}</ReadRow>

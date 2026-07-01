@@ -11,6 +11,12 @@ from config import (
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_SHIPPED,
     INVOICE_ACTIVE_STATUSES,
+    INVOICE_OP_AMOUNT_CHANGE,
+    INVOICE_STATUS_CANCELLED,
+    INVOICE_STATUS_CLOSED,
+    INVOICE_STATUS_DRAFT,
+    INVOICE_STATUS_ISSUED,
+    INVOICE_STATUS_PARTIALLY_PAID,
     INVOICE_OP_RECEIPT_LINK,
     INVOICE_OP_SHIPMENT_LINK,
     INVOICE_STATUS_LABELS,
@@ -266,11 +272,13 @@ def list_invoices_aggregated(
     today = date.today().isoformat()
     conds = ["COALESCE(d.is_deleted, 0) = 0"]
     params: list = []
+    status_filter_applied = False
     if status:
         codes = [s.strip() for s in str(status).split(",") if s.strip()]
         if codes:
             conds.append(f"d.status IN ({','.join('?' for _ in codes)})")
             params += codes
+            status_filter_applied = True
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
@@ -282,6 +290,11 @@ def list_invoices_aggregated(
         params.append(today)
         conds.append(f"d.status IN ({','.join('?' for _ in INVOICE_ACTIVE_STATUSES)})")
         params += list(INVOICE_ACTIVE_STATUSES)
+        status_filter_applied = True
+    # Аннулированные скрываются из списка по умолчанию; показать — явным выбором статуса.
+    if not status_filter_applied:
+        conds.append("d.status != ?")
+        params.append(INVOICE_STATUS_CANCELLED)
     where = " AND ".join(conds)
 
     total = int(connection.execute(
@@ -592,10 +605,12 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
     дата отгрузки (или плановая). `has_missing_price` = по части позиций тариф не
     заведён (такие позиции в сумму не вошли) — UI предупреждает менеджера.
 
-    Палеты считаются отдельным компонентом `pallets_amount_kop`: Σ палет документа ×
-    цена палета клиента (client_pallet_prices) на дату отгрузки. Цена палета — по
-    клиенту, без разделения на годный/брак. `has_missing_pallet_price` = у клиента
-    есть палеты, но цена не заведена."""
+    Палеты и короба считаются отдельными компонентами `pallets_amount_kop` /
+    `boxes_amount_kop`: Σ палет (коробов) документа × цена палета (короба) клиента
+    (client_pallet_prices / client_box_prices) на дату отгрузки. Цена — по клиенту, без
+    разделения на годный/брак. `has_missing_pallet_price` / `has_missing_box_price` = у
+    клиента есть палеты (короба), но цена не заведена."""
+    from modules.box_pricing.service import box_price_for_event
     from modules.pallet_pricing.service import pallet_price_for_event
     from modules.pricing.service import price_for_event
     from modules.timesheet.service import business_today
@@ -609,6 +624,7 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         return {
             "amount_kop": 0, "has_missing_price": False, "priced_qty": 0, "unpriced_qty": 0,
             "pallets_amount_kop": 0, "has_missing_pallet_price": False,
+            "boxes_amount_kop": 0, "has_missing_box_price": False,
         }
 
     today = business_today().isoformat()
@@ -624,19 +640,24 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
     unpriced_qty = 0
     pallets_amount = 0
     has_missing_pallet_price = False
+    boxes_amount = 0
+    has_missing_box_price = False
     for doc in docs:
         doc_id = str(doc["id"])
         client_id = doc["client_id"]
         quality = str(doc["cargo_type"] or "good")
         day = str(doc["actual_ship_date"] or doc["ship_date"] or today)[:10]
         lines = connection.execute(
-            "SELECT product_id, qty, COALESCE(pallets_qty, 0) AS pallets_qty FROM dispatch_lines "
+            "SELECT product_id, qty, COALESCE(pallets_qty, 0) AS pallets_qty, "
+            "COALESCE(boxes_qty, 0) AS boxes_qty FROM dispatch_lines "
             "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
             (doc_id,),
         ).fetchall()
         pallets_total = 0
+        boxes_total = 0
         for line in lines:
             pallets_total += int(line["pallets_qty"] or 0)
+            boxes_total += int(line["boxes_qty"] or 0)
             qty = int(line["qty"] or 0)
             if qty <= 0:
                 continue
@@ -654,6 +675,12 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
                 has_missing_pallet_price = True
             else:
                 pallets_amount += pallet_price * pallets_total
+        if boxes_total > 0:
+            box_price = box_price_for_event(connection, str(client_id), day) if client_id else None
+            if box_price is None:
+                has_missing_box_price = True
+            else:
+                boxes_amount += box_price * boxes_total
 
     return {
         "amount_kop": amount,
@@ -662,7 +689,175 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         "unpriced_qty": unpriced_qty,
         "pallets_amount_kop": pallets_amount,
         "has_missing_pallet_price": has_missing_pallet_price,
+        "boxes_amount_kop": boxes_amount,
+        "has_missing_box_price": has_missing_box_price,
     }
+
+
+def adjust_invoice_total_for_pallet_delta(
+    connection, *, dispatch_id: str, delta_pallets: int,
+    product_name: str, uid: str, now: str,
+) -> str | None:
+    """Сдвигает сумму связанного счёта на Δпалет × цену палета клиента.
+
+    Вызывается, когда админ правит палеты у уже отгруженной отгрузки с выставленным
+    счётом (см. `dispatch.router.update_dispatch_line_pallets`). Палеты входят в тариф
+    клиенту, поэтому при их правке сумма выставленного счёта должна поехать на ту же
+    дельту, что и аналитика (та пересчитывается сама из `dispatch_lines`). Дельта =
+    Δпалет × цена палета клиента на дату отгрузки — та же база, что и в
+    `suggested_amount_for_dispatches`. Без commit — коммитит вызывающий.
+
+    Возвращает id счёта, если сумма изменена, иначе None (нет активного счёта, нет
+    клиента или не заведена цена палета). Опустить сумму ниже уже оплаченной нельзя
+    (возвратов в модели нет) — 400.
+    """
+    from modules.pallet_pricing.service import pallet_price_for_event
+    from modules.timesheet.service import business_today
+
+    if delta_pallets == 0:
+        return None
+    link = connection.execute(
+        "SELECT i.id, i.status, i.total_amount, i.paid_amount, i.doc_number "
+        "FROM invoice_shipments s "
+        "JOIN invoice_docs i ON i.id = s.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
+        "WHERE s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0 "
+        "AND i.status NOT IN (?, ?) LIMIT 1",
+        (dispatch_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
+    ).fetchone()
+    if not link:
+        return None
+    doc = connection.execute(
+        "SELECT client_id, actual_ship_date, ship_date FROM dispatch_docs WHERE id = ?",
+        (dispatch_id,),
+    ).fetchone()
+    client_id = doc["client_id"] if doc else None
+    if not client_id:
+        return None
+    day = str(doc["actual_ship_date"] or doc["ship_date"] or business_today().isoformat())[:10]
+    price = pallet_price_for_event(connection, str(client_id), day)
+    if not price:
+        return None
+
+    old_total = int(link["total_amount"])
+    new_total = old_total + price * delta_pallets
+    paid = int(link["paid_amount"])
+    if new_total < paid:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Правка палет опустит сумму счёта {link['doc_number']} ниже уже оплаченной "
+                f"({format_kopecks(paid)}). Сначала оформите возврат."
+            ),
+        )
+    if new_total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Правка палет обнулит сумму счёта {link['doc_number']}.",
+        )
+
+    invoice_id = str(link["id"])
+    # Рост суммы у завершённого счёта снова делает его активным; падение до
+    # оплаченной суммы — завершает. Статус выводим из paid vs new_total.
+    if paid >= new_total:
+        new_status = INVOICE_STATUS_CLOSED
+    elif paid > 0:
+        new_status = INVOICE_STATUS_PARTIALLY_PAID
+    else:
+        new_status = INVOICE_STATUS_ISSUED
+    connection.execute(
+        "UPDATE invoice_docs SET total_amount = ?, status = ?, updated_at = ? WHERE id = ?",
+        (new_total, new_status, now, invoice_id),
+    )
+    sign = "+" if delta_pallets > 0 else "−"
+    connection.execute(
+        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), invoice_id, INVOICE_OP_AMOUNT_CHANGE,
+         f"Сумма (авто, коррекция палет «{product_name}» на {sign}{abs(delta_pallets)}): "
+         f"{format_kopecks(old_total)} → {format_kopecks(new_total)}", now, uid),
+    )
+    return invoice_id
+
+
+def adjust_invoice_total_for_box_delta(
+    connection, *, dispatch_id: str, delta_boxes: int,
+    product_name: str, uid: str, now: str,
+) -> str | None:
+    """Сдвигает сумму связанного счёта на Δкоробов × цену короба клиента.
+
+    Полный аналог `adjust_invoice_total_for_pallet_delta`: вызывается, когда админ правит
+    короба у уже отгруженной отгрузки с выставленным счётом (см.
+    `dispatch.router.update_dispatch_line_boxes`). Короба входят в тариф клиенту наравне
+    с палетами, поэтому при их правке сумма выставленного счёта едет на ту же дельту,
+    что и аналитика. Дельта = Δкоробов × цену короба клиента на дату отгрузки. Без commit.
+
+    Возвращает id счёта, если сумма изменена, иначе None (нет активного счёта, нет
+    клиента или не заведена цена короба). Опустить сумму ниже уже оплаченной нельзя — 400.
+    """
+    from modules.box_pricing.service import box_price_for_event
+    from modules.timesheet.service import business_today
+
+    if delta_boxes == 0:
+        return None
+    link = connection.execute(
+        "SELECT i.id, i.status, i.total_amount, i.paid_amount, i.doc_number "
+        "FROM invoice_shipments s "
+        "JOIN invoice_docs i ON i.id = s.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
+        "WHERE s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0 "
+        "AND i.status NOT IN (?, ?) LIMIT 1",
+        (dispatch_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
+    ).fetchone()
+    if not link:
+        return None
+    doc = connection.execute(
+        "SELECT client_id, actual_ship_date, ship_date FROM dispatch_docs WHERE id = ?",
+        (dispatch_id,),
+    ).fetchone()
+    client_id = doc["client_id"] if doc else None
+    if not client_id:
+        return None
+    day = str(doc["actual_ship_date"] or doc["ship_date"] or business_today().isoformat())[:10]
+    price = box_price_for_event(connection, str(client_id), day)
+    if not price:
+        return None
+
+    old_total = int(link["total_amount"])
+    new_total = old_total + price * delta_boxes
+    paid = int(link["paid_amount"])
+    if new_total < paid:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Правка коробов опустит сумму счёта {link['doc_number']} ниже уже оплаченной "
+                f"({format_kopecks(paid)}). Сначала оформите возврат."
+            ),
+        )
+    if new_total <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Правка коробов обнулит сумму счёта {link['doc_number']}.",
+        )
+
+    invoice_id = str(link["id"])
+    if paid >= new_total:
+        new_status = INVOICE_STATUS_CLOSED
+    elif paid > 0:
+        new_status = INVOICE_STATUS_PARTIALLY_PAID
+    else:
+        new_status = INVOICE_STATUS_ISSUED
+    connection.execute(
+        "UPDATE invoice_docs SET total_amount = ?, status = ?, updated_at = ? WHERE id = ?",
+        (new_total, new_status, now, invoice_id),
+    )
+    sign = "+" if delta_boxes > 0 else "−"
+    connection.execute(
+        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), invoice_id, INVOICE_OP_AMOUNT_CHANGE,
+         f"Сумма (авто, коррекция коробов «{product_name}» на {sign}{abs(delta_boxes)}): "
+         f"{format_kopecks(old_total)} → {format_kopecks(new_total)}", now, uid),
+    )
+    return invoice_id
 
 
 # Лёгкий in-process кеш счётчика алёрта: бейдж опрашивается часто, а сам запрос

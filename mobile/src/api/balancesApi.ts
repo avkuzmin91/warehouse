@@ -44,7 +44,8 @@ export type PlannableItem = {
   storage_good: number
   storage_defect: number
   in_transit: number
-  items_per_pallet: number | null
+  items_per_box: number | null
+  boxes_per_pallet: number | null
 }
 
 export type PlannableParams = { client_id?: string; search?: string; cargo_type?: InvQuality; limit?: number }

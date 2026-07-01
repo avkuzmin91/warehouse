@@ -586,7 +586,7 @@ def test_colors_lookup_by_product_id_for_pending_product(admin_client):
             conn.commit()
 
 
-def test_product_items_per_pallet_roundtrip(admin_client):
+def test_product_boxes_per_pallet_roundtrip(admin_client):
     suffix = uuid.uuid4().hex[:10]
     type_id = f"ptype-pallet-{suffix}"
     client_id = f"client-pallet-{suffix}"
@@ -615,7 +615,7 @@ def test_product_items_per_pallet_roundtrip(admin_client):
                 "sku_base": sku,
                 "client_id": client_id,
                 "weight_grams": 120,
-                "items_per_pallet": 48,
+                "boxes_per_pallet": 48,
                 "is_active": True,
             },
             "colors": [],
@@ -632,18 +632,18 @@ def test_product_items_per_pallet_roundtrip(admin_client):
         items = listed.json()["items"]
         assert len(items) == 1
         product_id = items[0]["id"]
-        assert items[0]["items_per_pallet"] == 48
+        assert items[0]["boxes_per_pallet"] == 48
 
         detail = admin_client.get(f"/products/{product_id}")
         assert detail.status_code == 200, detail.text
-        assert detail.json()["items_per_pallet"] == 48
+        assert detail.json()["boxes_per_pallet"] == 48
 
-        updated = admin_client.patch(f"/products/{product_id}", json={"items_per_pallet": None})
+        updated = admin_client.patch(f"/products/{product_id}", json={"boxes_per_pallet": None})
         assert updated.status_code == 200, updated.text
 
         detail_after_update = admin_client.get(f"/products/{product_id}")
         assert detail_after_update.status_code == 200, detail_after_update.text
-        assert detail_after_update.json()["items_per_pallet"] is None
+        assert detail_after_update.json()["boxes_per_pallet"] is None
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM product_variants WHERE product_id IN (SELECT id FROM products WHERE sku = ?)", (sku,))

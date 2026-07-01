@@ -5,6 +5,7 @@ import {
   getLocationLabels,
   getLocations,
   type LocationItem,
+  type LocationLabel,
 } from '../../../api/locationsApi'
 import type { DictionaryItem } from '../../../api/domainTypes'
 import { Icon } from '../../primitives/Icon'
@@ -50,24 +51,61 @@ function escapeHtml(value: string): string {
 
 // Печать QR-этикеток: отдельное окно, чтобы стили печати не пересекались с SPA.
 // ОДНА этикетка = ОДНА страница (разрыв страницы после каждой) — под этикеточный
-// принтер / поячеечную наклейку. На этикетке — QR (payload «wms:loc:<id>») и код.
-function printLabels(labels: { code: string; qr_svg: string }[]) {
+// принтер / поячеечную наклейку. Макет «Наклейки мест хранения» (Вариант C, ЧБ):
+// QR слева, крупный код + адрес + стрелка «ячейка справа». Наклейка клеится на
+// левую стойку ячейки, стрелка → однозначно указывает на нужную коробку справа.
+// У служебных зон (kind='special') стрелки/адреса нет — только QR и имя.
+
+// Стрелка направления: скруглённый стержень + сплошной наконечник (как в макете).
+const ARROW_SVG =
+  '<svg class="bigarw" viewBox="0 0 150 40" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' +
+  '<line class="shaft" x1="6" y1="20" x2="112" y2="20"/>' +
+  '<path class="head" d="M108 4 L146 20 L108 36 Z"/></svg>'
+
+function labelMeta(l: LocationLabel): string {
+  if (!l.room) return ''
+  const parts = [`Пом.${l.room}`]
+  if (l.rack) parts.push(`Ст.${l.rack}`)
+  if (l.section) parts.push(`Сек.${l.section}`)
+  if (l.floor) parts.push(`Эт.${l.floor}`)
+  return parts.join('·')
+}
+
+function printLabels(labels: LocationLabel[]) {
   const win = window.open('', '_blank', 'width=900,height=700')
   if (!win) return
   const cells = labels
-    .map(
-      (l) => `
-      <div class="label">
+    .map((l) => {
+      if (l.kind !== 'cell') {
+        return `
+      <div class="label special">
         <div class="qr">${l.qr_svg}</div>
-        <div class="code">${escapeHtml(l.code)}</div>
-      </div>`,
-    )
+        <div class="cright center"><div class="code sp">${escapeHtml(l.code)}</div></div>
+      </div>`
+      }
+      const meta = labelMeta(l)
+      return `
+      <div class="label cell">
+        <div class="qr">${l.qr_svg}</div>
+        <div class="cright">
+          <div class="code">${escapeHtml(l.code)}</div>
+          ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}
+          <div class="cdiv"></div>
+          <div class="arrow-row">${ARROW_SVG}<span class="arrow-cap">ячейка<br>справа</span></div>
+        </div>
+      </div>`
+    })
     .join('')
   win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title></title>
     <style>
+      /* Клейкий шрифт проекта: моноширинный «чистый ноль» (RobotoMonoCZ, без слэша). */
+      @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:400; font-display:swap; src:url(/fonts/L0x5DF4xlVMF-BfR8bXMIjhPq3-OXg.woff2) format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+      @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:400; font-display:swap; src:url(/fonts/RobotoMonoCZ-latin-400.woff2) format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+2212,U+2215; }
+      @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:500; font-display:swap; src:url(/fonts/L0x5DF4xlVMF-BfR8bXMIjhPq3-OXg.woff2) format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+      @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:500; font-display:swap; src:url(/fonts/RobotoMonoCZ-latin-500.woff2) format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+2212,U+2215; }
       @page { size: 58mm 40mm; margin: 0mm; }
       * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      html, body { margin: 0; padding: 0; font-family: Arial, system-ui, sans-serif; background: #fff; }
+      html, body { margin: 0; padding: 0; font-family: 'Roboto Mono', ui-monospace, monospace; background: #fff; color: #000; }
       .toolbar {
         padding: 12px 16px;
         border-bottom: 1px solid #ddd;
@@ -78,31 +116,51 @@ function printLabels(labels: { code: string; qr_svg: string }[]) {
       .label {
         width: 58mm;
         height: 40mm;
-        padding: 1.2mm 2mm 1.4mm;
-        display: grid;
-        grid-template-rows: 31.5mm 4.7mm;
-        row-gap: 0.9mm;
+        padding: 3mm 3.5mm;
+        display: flex;
         align-items: center;
-        justify-items: center;
-        text-align: center;
+        gap: 3mm;
         overflow: hidden;
         background: #fff;
+        color: #000;
         break-after: page;
         page-break-after: always;
       }
       .label:last-child { page-break-after: auto; break-after: auto; }
-      .label .qr { line-height: 0; }
-      .label .qr svg {
-        width: 31.5mm !important;
-        height: 31.5mm !important;
-        display: block;
-      }
-      .label .code {
-        max-width: 54mm;
-        font-weight: 800;
-        font-size: 4.6mm;
+      .label .qr { width: 18mm; height: 18mm; flex: 0 0 18mm; line-height: 0; }
+      .label .qr svg { width: 100%; height: 100%; display: block; }
+      .cright { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .cright.center { justify-content: center; }
+      .code {
+        font-weight: 700;
+        font-size: 5mm;
         line-height: 1;
-        letter-spacing: 0.35mm;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .code.sp { font-size: 3.4mm; white-space: normal; line-height: 1.15; }
+      .meta {
+        font-size: 2.2mm;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
+        opacity: 0.72;
+        margin-top: 1.4mm;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .cdiv { height: 0.2mm; background: #000; opacity: 0.35; margin: 2mm 0 1.8mm; }
+      .arrow-row { display: flex; align-items: center; gap: 1.6mm; }
+      .bigarw { flex: 1; height: 5mm; }
+      .bigarw .shaft { stroke: #000; stroke-width: 7; stroke-linecap: round; }
+      .bigarw .head { fill: #000; }
+      .arrow-cap {
+        font-size: 1.7mm;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        line-height: 1.1;
+        text-transform: uppercase;
         white-space: nowrap;
       }
       @media screen {
@@ -132,8 +190,17 @@ function printLabels(labels: { code: string; qr_svg: string }[]) {
     <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • размер 58×40 мм • масштаб 100% / «Реальный размер».</div>
     ${cells}
     <script>
+      function fit(el, minPx, step) {
+        let px = parseFloat(getComputedStyle(el).fontSize);
+        while (el.scrollWidth > el.clientWidth && px > minPx) { px -= step; el.style.fontSize = px + 'px'; }
+      }
+      function fitLabels() {
+        document.querySelectorAll('.label.cell .code').forEach((el) => fit(el, 13, 0.5));
+        document.querySelectorAll('.label.cell .meta').forEach((el) => fit(el, 6.5, 0.3));
+      }
       window.addEventListener('load', () => {
-        setTimeout(() => window.print(), 250)
+        const go = () => { fitLabels(); setTimeout(() => window.print(), 120); };
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(go); else go();
       })
     </script>
     </body></html>`)

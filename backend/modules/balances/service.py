@@ -327,7 +327,8 @@ def get_plannable_items(
     rows = connection.execute(
         f"""
         SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending,
-               prod.items_per_pallet AS items_per_pallet,
+               prod.items_per_box AS items_per_box,
+               prod.boxes_per_pallet AS boxes_per_pallet,
                COALESCE(NULLIF(TRIM(prod.sku), ''), p.product_sku) AS live_sku
         FROM ({query}) p
         LEFT JOIN products prod ON prod.id = p.product_id
@@ -357,7 +358,8 @@ def get_plannable_items(
             storage_good=int(r["storage_good"] or 0),
             storage_defect=int(r["storage_defect"] or 0),
             in_transit=0 if is_defect else int(r["in_transit"] or 0),
-            items_per_pallet=int(r["items_per_pallet"]) if r["items_per_pallet"] is not None else None,
+            items_per_box=int(r["items_per_box"]) if r["items_per_box"] is not None else None,
+            boxes_per_pallet=int(r["boxes_per_pallet"]) if r["boxes_per_pallet"] is not None else None,
         )
         for r in rows
     ]

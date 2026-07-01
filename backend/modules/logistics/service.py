@@ -27,6 +27,7 @@ from config import (
     RECEIPT_STATUS_PLANNED,
     TRIP_OP_RECEIPT_LINK,
     TRIP_OP_SHIPMENT_LINK,
+    TRIP_STATUS_CANCELLED,
 )
 from dbconn import like_substring_param
 
@@ -66,6 +67,7 @@ def list_trips_aggregated(
 ) -> tuple[int, list[dict]]:
     conds = ["d.is_deleted = 0"]
     params: list = []
+    status_filter_applied = False
 
     if direction:
         conds.append("d.direction = ?")
@@ -73,12 +75,14 @@ def list_trips_aggregated(
     if status and status in statuses_all:
         conds.append("d.status = ?")
         params.append(status)
+        status_filter_applied = True
     elif statuses:
         valid = [s for s in statuses if s in statuses_all]
         if valid:
             placeholders = ",".join("?" for _ in valid)
             conds.append(f"d.status IN ({placeholders})")
             params += valid
+            status_filter_applied = True
     if carrier_id:
         conds.append("d.carrier_id = ?")
         params.append(carrier_id.strip())
@@ -103,6 +107,11 @@ def list_trips_aggregated(
             "))"
         )
         params += [s, s, s, s, s, s, s]
+
+    # Аннулированные рейсы скрываются из списка по умолчанию; показать — явным выбором статуса.
+    if not status_filter_applied:
+        conds.append("d.status != ?")
+        params.append(TRIP_STATUS_CANCELLED)
 
     where = " AND ".join(conds)
 

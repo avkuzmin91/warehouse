@@ -297,7 +297,8 @@ export function createProduct(payload: {
       sku_base?: string | null
       sku_pending?: boolean
       weight_grams?: number | null
-      items_per_pallet?: number | null
+      items_per_box?: number | null
+      boxes_per_pallet?: number | null
       client_id: string
       is_active: boolean
       packing_price_good_kop?: number | null
@@ -330,7 +331,8 @@ export function updateProduct(
     sku_base?: string
     sku_pending?: boolean
     weight_grams?: number | null
-    items_per_pallet?: number | null
+    items_per_box?: number | null
+    boxes_per_pallet?: number | null
     image_urls?: string[]
   },
 ) {

@@ -63,7 +63,8 @@ class PlannableItem(BaseModel):
     storage_good: int
     storage_defect: int
     in_transit: int
-    items_per_pallet: int | None = None
+    items_per_box: int | None = None
+    boxes_per_pallet: int | None = None
 
 
 class PlannableListResponse(BaseModel):

@@ -34,11 +34,20 @@ from config import (
 )
 from dbconn import get_connection, like_substring_param
 from modules.auth.service import get_current_manager
+from modules.invoices.service import (
+    adjust_invoice_total_for_box_delta,
+    adjust_invoice_total_for_pallet_delta,
+    invalidate_alerts_cache,
+)
+from security import is_admin
 from modules.dispatch.schemas import (
     DispatchDetailResponse,
     DispatchDocCreate,
     DispatchDocUpdate,
+    DispatchDuplicateCheck,
+    DuplicateCheckResponse,
     DispatchFinishPreparationPayload,
+    DispatchLineBoxesUpdate,
     DispatchLineIn,
     DispatchLinePalletsUpdate,
     DispatchLinesListItem,
@@ -51,10 +60,12 @@ from modules.dispatch.schemas import (
     DispatchReservationsResponse,
 )
 from modules.dispatch.service import (
+    check_lines_have_boxes,
     check_lines_have_pallets,
     check_lines_have_ready,
     check_lines_have_sku,
     dispatch_alloc_remaining,
+    find_duplicate_dispatches,
     dispatch_trip_allocations,
     dispatch_is_invoiced,
     get_dispatch_detail,
@@ -110,11 +121,11 @@ def create_dispatch(
             conn.execute(
                 """INSERT INTO dispatch_lines
                    (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-                    qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    qty,pallets_qty,boxes_qty,shipped_qty,site_url,store_id,store_name,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (str(uuid4()), doc_id, line.product_id, line.product_name, line.product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty,
-                 line.pallets_qty, 0, line.site_url, line.store_id, line.store_name, now),
+                 line.pallets_qty, line.boxes_qty, 0, line.site_url, line.store_id, line.store_name, now),
             )
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
@@ -124,6 +135,21 @@ def create_dispatch(
         finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return result
+
+
+@router.post("/dispatches/check-duplicate", response_model=DuplicateCheckResponse)
+def check_dispatch_duplicate(body: DispatchDuplicateCheck, user=Depends(_get_manager)):
+    if not body.client_id or not body.lines:
+        return {"matches": []}
+    with get_connection() as conn:
+        matches = find_duplicate_dispatches(
+            conn,
+            client_id=body.client_id,
+            cargo_type=normalize_cargo_type(body.cargo_type),
+            ship_date=body.ship_date,
+            lines=body.lines,
+        )
+    return {"matches": matches}
 
 
 @router.get("/dispatches", response_model=DispatchListResponse)
@@ -443,11 +469,11 @@ def add_dispatch_line(doc_id: str, body: DispatchLineIn, user=Depends(_get_manag
         conn.execute(
             """INSERT INTO dispatch_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-                qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                qty,pallets_qty,boxes_qty,shipped_qty,site_url,store_id,store_name,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, body.product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
-             body.pallets_qty, 0, body.site_url, body.store_id, body.store_name, now),
+             body.pallets_qty, body.boxes_qty, 0, body.site_url, body.store_id, body.store_name, now),
         )
         conn.execute(
             "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
@@ -499,14 +525,18 @@ def update_dispatch_line(doc_id: str, line_id: str, body: DispatchLineUpdate, us
 
 @router.patch("/dispatches/{doc_id}/lines/{line_id}/pallets")
 def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePalletsUpdate, user=Depends(_get_manager)):
-    """Менеджер правит число палет по строке на любом статусе отгрузки.
+    """Правка числа палет по строке на любом статусе отгрузки.
 
     Палеты — основа тарификации клиенту, и до выставления счёта менеджер должен иметь
-    возможность их поправить даже после отгрузки. Гейты: нельзя у аннулированной отгрузки
-    и нельзя, если по отгрузке уже выставлен счёт (сумма зафиксирована). Прочие поля строки
-    по-прежнему правятся только в черновике (`update_dispatch_line`)."""
+    возможность их поправить даже после отгрузки. Гейты: нельзя у аннулированной отгрузки;
+    если по отгрузке уже выставлен счёт — менеджеру нельзя (сумма зафиксирована), а
+    админ вправе поправить палеты и после выставления — при этом сумма связанного счёта
+    авто-корректируется на Δпалет × цену палета (аналитика/P&L пересчитываются сами из
+    `dispatch_lines`). Прочие поля строки по-прежнему правятся только в черновике
+    (`update_dispatch_line`)."""
     now = _now()
     uid = str(user["id"])
+    admin = is_admin(user)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
@@ -515,7 +545,8 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
             raise HTTPException(status_code=400, detail="Нельзя менять палеты у аннулированной отгрузки")
-        if dispatch_is_invoiced(conn, doc_id):
+        invoiced = dispatch_is_invoiced(conn, doc_id)
+        if invoiced and not admin:
             raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — палеты изменить нельзя")
         line = conn.execute(
             "SELECT id, product_name, pallets_qty FROM dispatch_lines "
@@ -538,7 +569,73 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
             (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE,
              f"Палеты «{line['product_name']}»: {old_s} → {new_s}", now, uid),
         )
+        adjusted_invoice = None
+        if invoiced:
+            adjusted_invoice = adjust_invoice_total_for_pallet_delta(
+                conn, dispatch_id=doc_id,
+                delta_pallets=(body.pallets_qty or 0) - (old or 0),
+                product_name=str(line["product_name"]), uid=uid, now=now,
+            )
         conn.commit()
+    if adjusted_invoice:
+        invalidate_alerts_cache()
+    return {"message": "ok"}
+
+
+@router.patch("/dispatches/{doc_id}/lines/{line_id}/boxes")
+def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxesUpdate, user=Depends(_get_manager)):
+    """Правка числа коробов по строке на любом статусе отгрузки.
+
+    Полный аналог правки палет: короба — основа тарификации клиенту, и до выставления
+    счёта менеджер должен иметь возможность их поправить даже после отгрузки. Гейты:
+    нельзя у аннулированной отгрузки; если по отгрузке уже выставлен счёт — менеджеру
+    нельзя (сумма зафиксирована), а админ вправе поправить и после выставления — при этом
+    сумма связанного счёта авто-корректируется на Δкоробов × цену короба."""
+    now = _now()
+    uid = str(user["id"])
+    admin = is_admin(user)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
+            raise HTTPException(status_code=400, detail="Нельзя менять короба у аннулированной отгрузки")
+        invoiced = dispatch_is_invoiced(conn, doc_id)
+        if invoiced and not admin:
+            raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — короба изменить нельзя")
+        line = conn.execute(
+            "SELECT id, product_name, boxes_qty FROM dispatch_lines "
+            "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        old = int(line["boxes_qty"]) if line["boxes_qty"] is not None else None
+        if old == body.boxes_qty:
+            return {"message": "ok"}
+        conn.execute(
+            "UPDATE dispatch_lines SET boxes_qty = ? WHERE id = ? AND doc_id = ?",
+            (body.boxes_qty, line_id, doc_id),
+        )
+        old_s = str(old) if old is not None else "—"
+        new_s = str(body.boxes_qty) if body.boxes_qty is not None else "—"
+        conn.execute(
+            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE,
+             f"Короба «{line['product_name']}»: {old_s} → {new_s}", now, uid),
+        )
+        adjusted_invoice = None
+        if invoiced:
+            adjusted_invoice = adjust_invoice_total_for_box_delta(
+                conn, dispatch_id=doc_id,
+                delta_boxes=(body.boxes_qty or 0) - (old or 0),
+                product_name=str(line["product_name"]), uid=uid, now=now,
+            )
+        conn.commit()
+    if adjusted_invoice:
+        invalidate_alerts_cache()
     return {"message": "ok"}
 
 
@@ -674,6 +771,7 @@ def advance_dispatch(
             raise HTTPException(status_code=400, detail="Добавьте товар")
         check_lines_have_sku(conn, doc_id)
         check_lines_have_pallets(conn, doc_id)
+        check_lines_have_boxes(conn, doc_id)
         check_lines_have_ready(conn, doc_id)
         conn.execute(
             "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",

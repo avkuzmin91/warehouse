@@ -444,6 +444,10 @@ def list_expenses_aggregated(
         date_from=date_from, date_to=date_to,
         kind=kind, payment_status=payment_status, kinds=kinds, salary_subtype=salary_subtype,
     )
+    # Аннулированные скрываются из списка по умолчанию; показать — явным выбором статуса оплаты.
+    if not payment_status:
+        where = f"{where} AND e.payment_status != ?"
+        params = [*params, EXPENSE_PAYMENT_CANCELLED]
     total = int(connection.execute(
         f"SELECT COUNT(*) AS n FROM material_expenses e WHERE {where}", params
     ).fetchone()["n"])

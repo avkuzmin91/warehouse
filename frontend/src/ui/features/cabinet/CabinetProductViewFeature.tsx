@@ -124,8 +124,12 @@ export function CabinetProductViewFeature({ productId }: Props) {
                       <div style={{ fontWeight: 500 }}>{product.weight_grams == null ? '—' : `${product.weight_grams.toLocaleString('ru-RU')} г`}</div>
                     </div>
                     <div>
-                      <div className="t-sub">На паллете</div>
-                      <div style={{ fontWeight: 500 }}>{product.items_per_pallet == null ? '—' : `${product.items_per_pallet.toLocaleString('ru-RU')} шт`}</div>
+                      <div className="t-sub">В коробе</div>
+                      <div style={{ fontWeight: 500 }}>{product.items_per_box == null ? '—' : `${product.items_per_box.toLocaleString('ru-RU')} шт`}</div>
+                    </div>
+                    <div>
+                      <div className="t-sub">Коробов на палете</div>
+                      <div style={{ fontWeight: 500 }}>{product.boxes_per_pallet == null ? '—' : `${product.boxes_per_pallet.toLocaleString('ru-RU')} кор`}</div>
                     </div>
                   </div>
                   <div className="mt-20" style={{ paddingTop: 16, borderTop: '1px solid var(--c-border)', display: 'flex', gap: 28 }}>

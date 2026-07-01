@@ -11,6 +11,7 @@ from config import (
     DISPATCH_CARGO_GOOD,
     DISPATCH_OP_PREPARE,
     DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
@@ -57,6 +58,89 @@ def next_doc_number(connection) -> str:
 def normalize_cargo_type(raw: str | None) -> str:
     s = str(raw or DISPATCH_CARGO_GOOD).strip().lower()
     return s if s in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT) else DISPATCH_CARGO_GOOD
+
+
+def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:
+    """Ключ строки для сравнения состава. NULL цвет/размер → ''."""
+    return (str(product_id or ""), str(color_id or ""), str(size_id or ""))
+
+
+def _moscow_day(iso: str | None) -> str:
+    """Московская календарная дата из UTC-ISO (fallback, TZ контейнера = Europe/Moscow)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone().date().isoformat()
+
+
+def find_duplicate_dispatches(connection, *, client_id, cargo_type, ship_date, lines) -> list[dict]:
+    """Отгрузки того же клиента и типа груза за тот же день с ТОЧНО таким же составом.
+
+    День — по плановой дате отгрузки (ship_date); если не задана — по дате создания
+    за сегодня (МСК). Совпадение = равенство {(товар,цвет,размер): кол-во}. Аннулированные исключены.
+    """
+    want: dict[tuple[str, str, str], int] = {}
+    for ln in lines:
+        want[_dup_key(ln.product_id, ln.color_id, ln.size_id)] = int(ln.qty)
+    if not client_id or not want:
+        return []
+
+    ship = (ship_date or "").strip()
+    if ship:
+        docs = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM dispatch_docs "
+            "WHERE client_id = ? AND cargo_type = ? AND ship_date = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, cargo_type, ship, DISPATCH_STATUS_CANCELLED),
+        ).fetchall()
+    else:
+        today = _moscow_day(_now())
+        rows = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM dispatch_docs "
+            "WHERE client_id = ? AND cargo_type = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, cargo_type, DISPATCH_STATUS_CANCELLED),
+        ).fetchall()
+        docs = [r for r in rows if _moscow_day(r["created_at"]) == today]
+
+    matches: list[dict] = []
+    for doc in docs:
+        line_rows = connection.execute(
+            "SELECT product_id, color_id, size_id, qty, product_sku, product_name, color_name, size_name "
+            "FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted,0)=0",
+            (doc["id"],),
+        ).fetchall()
+        have = {_dup_key(r["product_id"], r["color_id"], r["size_id"]): int(r["qty"] or 0) for r in line_rows}
+        if have != want:
+            continue
+        email = None
+        if doc["created_by"]:
+            u = connection.execute("SELECT email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
+            email = u["email"] if u else None
+        matches.append({
+            "id": doc["id"],
+            "doc_number": doc["doc_number"],
+            "status": doc["status"],
+            "status_label": DISPATCH_STATUS_LABELS.get(doc["status"], doc["status"]),
+            "created_at": doc["created_at"],
+            "created_by_name": email,
+            "lines": [
+                {
+                    "product_sku": r["product_sku"],
+                    "product_name": r["product_name"],
+                    "color_name": r["color_name"],
+                    "size_name": r["size_name"],
+                    "qty": int(r["qty"] or 0),
+                }
+                for r in line_rows
+            ],
+        })
+    return matches
 
 
 def _doc_quality(connection, doc_id: str) -> str:
@@ -190,8 +274,9 @@ def check_lines_have_pallets(connection, doc_id: str) -> None:
     """Гейт перевода в подготовку: у каждой строки задано количество палет.
 
     Менеджер обязан осознанно указать число палет при создании отгрузки — это основа
-    тарификации палет клиенту. Рекомендация считается из `products.items_per_pallet`, но
-    финальное число вводит менеджер. Допустим и 0 (например, догруз без отдельного палета);
+    тарификации палет клиенту. Рекомендация считается из числа коробов и
+    `products.boxes_per_pallet`, но финальное число вводит менеджер. Допустим и 0
+    (например, догруз без отдельного палета);
     блокирует только пустое значение (NULL — поле не заполнено).
     """
     rows = connection.execute(
@@ -205,6 +290,28 @@ def check_lines_have_pallets(connection, doc_id: str) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Укажите количество палет для позиций: {names}",
+        )
+
+
+def check_lines_have_boxes(connection, doc_id: str) -> None:
+    """Гейт перевода в подготовку: у каждой строки задано количество коробов.
+
+    Менеджер обязан осознанно указать число коробов при создании отгрузки — это основа
+    тарификации коробов клиенту (наравне с палетами). Рекомендация считается из
+    `products.items_per_box`, но финальное число вводит менеджер. Допустим и 0 (догруз
+    без отдельного короба); блокирует только пустое значение (NULL — поле не заполнено).
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT product_name FROM dispatch_lines "
+        "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 "
+        "AND boxes_qty IS NULL ORDER BY product_name",
+        (doc_id,),
+    ).fetchall()
+    if rows:
+        names = ", ".join(f"«{r['product_name']}»" for r in rows)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Укажите количество коробов для позиций: {names}",
         )
 
 
@@ -803,6 +910,7 @@ def list_dispatches_aggregated(
     conds = ["d.is_deleted = 0"]
     params: list = []
     use_priority_order = False
+    status_filter_applied = False
 
     if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
         conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
@@ -819,15 +927,18 @@ def list_dispatches_aggregated(
         )
         params.append(available_for_trip_id.strip())
         use_priority_order = True
+        status_filter_applied = True
 
     if status:
         requested = [s.strip() for s in status.split(",") if s.strip()]
         allowed = [s for s in requested if s in DISPATCH_STATUSES_ALL]
         if len(allowed) == 1:
             conds.append("d.status = ?"); params.append(allowed[0])
+            status_filter_applied = True
         elif len(allowed) > 1:
             placeholders = ",".join("?" for _ in allowed)
             conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
+            status_filter_applied = True
         if allowed and all(s not in DISPATCH_TERMINAL_STATUSES for s in allowed):
             use_priority_order = True
 
@@ -849,6 +960,10 @@ def list_dispatches_aggregated(
         conds.append("d.ship_date >= ?"); params.append(date_from)
     if date_to:
         conds.append("d.ship_date <= ?"); params.append(date_to)
+
+    # Аннулированные скрываются из списка по умолчанию; показать — явным выбором статуса.
+    if not status_filter_applied:
+        conds.append("d.status != ?"); params.append(DISPATCH_STATUS_CANCELLED)
 
     where = " AND ".join(conds)
     total = int(connection.execute(
@@ -907,7 +1022,8 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
 
     lines_rows = connection.execute(
         "SELECT l.*, COALESCE(p.sku_pending, 0) AS sku_pending, "
-        "p.items_per_pallet AS items_per_pallet, "
+        "p.items_per_box AS items_per_box, "
+        "p.boxes_per_pallet AS boxes_per_pallet, "
         "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS effective_sku "
         "FROM dispatch_lines l "
         "LEFT JOIN products p ON p.id = l.product_id "
@@ -957,7 +1073,9 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
             "qty": int(l["qty"] or 0),
             "shipped_qty": int(l["shipped_qty"] or 0),
             "pallets_qty": int(l["pallets_qty"]) if l["pallets_qty"] is not None else None,
-            "items_per_pallet": int(l["items_per_pallet"]) if l["items_per_pallet"] is not None else None,
+            "boxes_qty": int(l["boxes_qty"]) if l["boxes_qty"] is not None else None,
+            "items_per_box": int(l["items_per_box"]) if l["items_per_box"] is not None else None,
+            "boxes_per_pallet": int(l["boxes_per_pallet"]) if l["boxes_per_pallet"] is not None else None,
             "site_url": l["site_url"],
             "store_id": l["store_id"],
             "store_name": l["store_name"],

@@ -78,7 +78,8 @@ export type DispatchLine = {
   qty: number
   shipped_qty: number
   pallets_qty: number | null
-  items_per_pallet: number | null
+  items_per_box: number | null
+  boxes_per_pallet: number | null
   site_url: string | null
   store_id: string | null
   store_name: string | null
@@ -142,11 +143,19 @@ export type DispatchLineUpdate = {
   store_name?: string | null
 }
 
-/** Рекомендованное число палет: кратность товара на палете округляется вверх.
+/** Рекомендованное число коробов: штук делится на «штук в коробе» вверх.
  *  null — кратность не задана в карточке товара (вводится вручную). */
-export function recommendedPallets(qty: number, itemsPerPallet: number | null | undefined): number | null {
-  if (!itemsPerPallet || itemsPerPallet <= 0) return null
-  return Math.max(1, Math.ceil(qty / itemsPerPallet))
+export function recommendedBoxes(qty: number, itemsPerBox: number | null | undefined): number | null {
+  if (!itemsPerBox || itemsPerBox <= 0) return null
+  return Math.max(1, Math.ceil(qty / itemsPerBox))
+}
+
+/** Рекомендованное число палет: коробов делится на «коробов на палете» вверх.
+ *  Палета меряется в коробах. null — кратность не задана либо коробов нет. */
+export function recommendedPallets(boxes: number | null | undefined, boxesPerPallet: number | null | undefined): number | null {
+  if (!boxesPerPallet || boxesPerPallet <= 0) return null
+  if (!boxes || boxes <= 0) return null
+  return Math.max(1, Math.ceil(boxes / boxesPerPallet))
 }
 
 export function addDispatchLine(docId: string, body: DispatchLineIn): Promise<{ message: string }> {

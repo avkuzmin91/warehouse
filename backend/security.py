@@ -123,6 +123,12 @@ def ensure_finance_access(user: Mapping[str, Any]) -> None:
         )
 
 
+def is_admin(user: Mapping[str, Any]) -> bool:
+    """Только администратор. Для операций, где админ обходит гейт менеджера
+    (например, правка палет по уже отгруженной отгрузке с выставленным счётом)."""
+    return user["role"] == "admin"
+
+
 def can_manage_admin_finance(user: Mapping[str, Any]) -> bool:
     """Расходы-«фиксы» (аренда склада, ЗП) и сводный реестр «Транзакции» —
     только админ. Менеджер их не видит и не заводит."""

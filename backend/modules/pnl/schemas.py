@@ -19,7 +19,7 @@ class PnlResponse(BaseModel):
     income_total:       int
     expense_total:      int
     net_total:          int             # income − expense; <0 — убыток
-    margin_pct:         float           # net / income · 100 (0, если дохода нет)
+    margin_pct:         float | None = None   # net / income · 100; None — дохода нет
     income_series:      list[int]       # доход по дням
     expense_series:     list[int]       # расход по дням
     net_cumulative:     list[int]       # нарастающий итог прибыли по дням
@@ -95,7 +95,7 @@ class TripProfitItem(BaseModel):
     income_kop:    int                  # логистика клиента + палеты
     cost_kop:      int                  # фактическая себестоимость рейса
     margin_kop:    int                  # income − cost; <0 — убыток
-    margin_pct:    float
+    margin_pct:    float | None = None   # None — дохода нет
 
 
 class TripProfitabilityResponse(BaseModel):

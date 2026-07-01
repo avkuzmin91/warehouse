@@ -75,7 +75,8 @@ export function ProductCreateFeature() {
   const [skuBase, setSkuBase] = useState('')
   const [skuPending, setSkuPending] = useState(false)
   const [weightGrams, setWeightGrams] = useState('')
-  const [itemsPerPallet, setItemsPerPallet] = useState('')
+  const [itemsPerBox, setItemsPerBox] = useState('')
+  const [boxesPerPallet, setBoxesPerPallet] = useState('')
   const [priceGood, setPriceGood] = useState('')
   const [priceDefect, setPriceDefect] = useState('')
   const [isActive, setIsActive] = useState(true)
@@ -187,7 +188,8 @@ export function ProductCreateFeature() {
             sku_base: skuPending ? undefined : skuBase.trim(),
             sku_pending: skuPending,
             weight_grams: parseOptionalWeight(weightGrams),
-            items_per_pallet: parseOptionalInteger(itemsPerPallet),
+            items_per_box: parseOptionalInteger(itemsPerBox),
+            boxes_per_pallet: parseOptionalInteger(boxesPerPallet),
             client_id: clientId!,
             is_active: isActive,
             packing_price_good_kop: priceGood.trim() ? parseRublesToKopecks(priceGood) : undefined,
@@ -368,14 +370,25 @@ export function ProductCreateFeature() {
                     style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                   />
                 </Field>
-                <Field label="Количество товаров на паллете">
+                <Field label="Количество товаров в коробе">
                   <Input
                     type="number"
                     min={0}
                     step={1}
                     inputMode="numeric"
-                    value={itemsPerPallet}
-                    onChange={(e) => setItemsPerPallet(e.target.value)}
+                    value={itemsPerBox}
+                    onChange={(e) => setItemsPerBox(e.target.value)}
+                    style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
+                  />
+                </Field>
+                <Field label="Количество коробов на паллете">
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={boxesPerPallet}
+                    onChange={(e) => setBoxesPerPallet(e.target.value)}
                     style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums', fontFeatureSettings: "'tnum' 1" }}
                   />
                 </Field>

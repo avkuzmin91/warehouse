@@ -3,10 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   createReceipt,
   advanceReceiptStatus,
+  checkReceiptDuplicate,
 } from '../../../api/receiptsApi'
 import { linkTripReceipts } from '../../../api/tripsApi'
 import type { ReceiptLineInput } from '../../../api/receiptsApi'
-import type { DictionaryItem } from '../../../api/domainTypes'
+import type { DictionaryItem, DuplicateMatch } from '../../../api/domainTypes'
+import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
 import { Combobox } from '../../data/Combobox'
 import { Alert } from '../../primitives/Alert'
 import { Badge } from '../../primitives/Badge'
@@ -50,6 +52,7 @@ export function ReceiptCreateFeature() {
   const [error, setError] = useState('')
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [dupMatches, setDupMatches] = useState<DuplicateMatch[]>([])
 
   const { clients: clientsAll } = useLookups()
   const { user } = useCurrentUser()
@@ -72,9 +75,7 @@ export function ReceiptCreateFeature() {
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
-  async function handleSave() {
-    if (!clientId) { setError('Укажите клиента'); return }
-    setError('')
+  async function runCreate() {
     setSaving(true)
     try {
       const res = await createReceipt({
@@ -100,6 +101,21 @@ export function ReceiptCreateFeature() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function handleSave() {
+    if (!clientId) { setError('Укажите клиента'); return }
+    setError('')
+    setSaving(true)
+    try {
+      const dup = await checkReceiptDuplicate({
+        client_id: clientId,
+        arrival_date: arrivalDate || null,
+        lines: lines.map((l) => ({ product_id: l.product_id, color_id: l.color_id ?? null, size_id: l.size_id ?? null, planned_qty: l.planned_qty })),
+      })
+      if (dup.matches.length > 0) { setDupMatches(dup.matches); setSaving(false); return }
+    } catch { /* проверка на дубль не критична — не блокируем создание */ }
+    await runCreate()
   }
 
   function handleRemoveLine(id: number) {
@@ -332,6 +348,16 @@ export function ReceiptCreateFeature() {
           ])
           setShowAddLine(false)
         }}
+      />
+
+      <DuplicateWarnModal
+        open={dupMatches.length > 0}
+        matches={dupMatches}
+        entityAccusative="поступление"
+        busy={saving}
+        onOpenExisting={(id) => navigate(`/inventory/receipts/${id}`)}
+        onProceed={() => { setDupMatches([]); void runCreate() }}
+        onCancel={() => setDupMatches([])}
       />
     </div>
   )

@@ -23,6 +23,7 @@ const SOURCE_COLOR: Record<string, string> = {
   packing_defect: 'oklch(0.60 0.10 160)',
   logistics: 'oklch(0.66 0.13 250)',
   pallets: 'oklch(0.74 0.13 80)',
+  boxes: 'oklch(0.70 0.14 40)',
 }
 function sourceColor(key: string): string {
   return SOURCE_COLOR[key] ?? 'var(--c-accent)'

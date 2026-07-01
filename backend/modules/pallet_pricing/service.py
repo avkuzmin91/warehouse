@@ -40,6 +40,30 @@ def load_pallet_price_history(connection, client_id: str) -> list[dict]:
     ]
 
 
+def load_pallet_price_histories(connection, client_ids: list[str]) -> dict[str, list[dict]]:
+    """client_id → история цены палета (свежая первой) одним запросом — без N+1.
+
+    Для построчного расчёта по разным датам событий: вызывающий сам делает
+    `price_on(hist.get(client_id), day)` на нужную дату каждого документа."""
+    ids = list({str(c) for c in client_ids if c})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"SELECT client_id, price_kop, effective_from "
+        f"FROM client_pallet_prices "
+        f"WHERE client_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0 "
+        f"ORDER BY client_id, effective_from DESC, created_at DESC",
+        ids,
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(str(r["client_id"]), []).append(
+            {"price_kop": int(r["price_kop"]), "effective_from": str(r["effective_from"])}
+        )
+    return out
+
+
 def current_pallet_prices(connection, client_ids: list[str], day_iso: str) -> dict[str, int]:
     """client_id → действующая на дату цена палета для набора клиентов (один запрос)."""
     ids = list({str(c) for c in client_ids if c})

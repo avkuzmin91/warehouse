@@ -1,11 +1,11 @@
 """Финрезультат «доходы vs расходы» (P&L) — сборка дохода по дням и сравнение с расходом.
 
-Доход = упаковка (годное/брак) + логистика клиента + палеты. Расход переиспользует
+Доход = упаковка (годное/брак) + логистика клиента + палеты + короба. Расход переиспользует
 `expenses.service.expense_analytics` (ЗП/аренда размазаны по дням, см. там).
 
 Атрибуция по дням:
   • упаковка — по `packed_date` (день перемещения в упаковку), из `packing_productivity`;
-  • логистика и палеты — по ФАКТИЧЕСКОМУ дню рейса `trip_docs.arrived_at`, по документам,
+  • логистика, палеты и короба — по ФАКТИЧЕСКОМУ дню рейса `trip_docs.arrived_at`, по документам,
     привязанным к рейсу. Рейсы со статусом cancelled и без факта прибытия не учитываются.
 
 Документ, привязанный к нескольким рейсам (дробление), относим к самому раннему его рейсу
@@ -32,6 +32,15 @@ def _days_axis(date_from: str, date_to: str) -> list[str]:
     return out
 
 
+def _dt_exclusive(date_to: str) -> str:
+    """Верхняя граница окна для сравнения `arrived_at` как строки (полуинтервал).
+
+    `arrived_at >= date_from AND arrived_at < _dt_exclusive(date_to)` даёт тот же набор,
+    что и `SUBSTR(arrived_at,1,10) BETWEEN date_from AND date_to` (ISO-строки сравнимы
+    лексикографически), но не оборачивает колонку функцией — остаётся использование индекса."""
+    return (date.fromisoformat(date_to[:10]) + timedelta(days=1)).isoformat()
+
+
 def _logistics_income_rows(
     connection, *, date_from: str, date_to: str, client_id: str | None,
 ) -> list[dict]:
@@ -50,10 +59,10 @@ def _logistics_income_rows(
             "tl.is_deleted = 0",
             "t.status != ?",
             "t.arrived_at IS NOT NULL",
-            "SUBSTR(t.arrived_at, 1, 10) >= ?",
-            "SUBSTR(t.arrived_at, 1, 10) <= ?",
+            "t.arrived_at >= ?",
+            "t.arrived_at < ?",
         ]
-        params: list = [TRIP_STATUS_CANCELLED, date_from, date_to]
+        params: list = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
         if client_id and client_id.strip():
             conds.append("d.client_id = ?")
             params.append(client_id.strip())
@@ -91,7 +100,8 @@ def _pallets_income_rows(
     Палеты привязанных к рейсу отгрузок × цена палета клиента (effective-dated) на день
     рейса. Документ относим к самому раннему рейсу в окне. Палеты без заведённой цены
     в доход не входят. Разрез по клиенту нужен для «По клиентам»."""
-    from modules.pallet_pricing.service import pallet_price_for_event
+    from modules.pallet_pricing.service import load_pallet_price_histories
+    from modules.pricing.service import price_on
 
     conds = [
         "COALESCE(d.is_deleted, 0) = 0",
@@ -99,10 +109,10 @@ def _pallets_income_rows(
         "tl.is_deleted = 0",
         "t.status != ?",
         "t.arrived_at IS NOT NULL",
-        "SUBSTR(t.arrived_at, 1, 10) >= ?",
-        "SUBSTR(t.arrived_at, 1, 10) <= ?",
+        "t.arrived_at >= ?",
+        "t.arrived_at < ?",
     ]
-    params: list = [TRIP_STATUS_CANCELLED, date_from, date_to]
+    params: list = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
     if client_id and client_id.strip():
         conds.append("d.client_id = ?")
         params.append(client_id.strip())
@@ -125,6 +135,7 @@ def _pallets_income_rows(
         """,
         params,
     ).fetchall()
+    histories = load_pallet_price_histories(connection, [r["client_id"] for r in rows])
     out: list[dict] = []
     for r in rows:
         pallets = int(r["pallets"] or 0)
@@ -132,7 +143,7 @@ def _pallets_income_rows(
         if pallets <= 0 or not cid:
             continue
         day = str(r["day"])
-        price = pallet_price_for_event(connection, str(cid), day)
+        price = price_on(histories.get(str(cid)), day)
         if price:
             out.append({
                 "day": day, "client_id": cid,
@@ -141,10 +152,70 @@ def _pallets_income_rows(
     return out
 
 
+def _boxes_income_rows(
+    connection, *, date_from: str, date_to: str, client_id: str | None,
+) -> list[dict]:
+    """Строки дохода от коробов: по одной на документ (день факта рейса, клиент, копейки).
+
+    Полный аналог `_pallets_income_rows`: короба привязанных к рейсу отгрузок × цена
+    короба клиента (effective-dated) на день рейса. Документ относим к самому раннему
+    рейсу в окне. Короба без заведённой цены в доход не входят."""
+    from modules.box_pricing.service import load_box_price_histories
+    from modules.pricing.service import price_on
+
+    conds = [
+        "COALESCE(d.is_deleted, 0) = 0",
+        "t.is_deleted = 0",
+        "tl.is_deleted = 0",
+        "t.status != ?",
+        "t.arrived_at IS NOT NULL",
+        "t.arrived_at >= ?",
+        "t.arrived_at < ?",
+    ]
+    params: list = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
+    if client_id and client_id.strip():
+        conds.append("d.client_id = ?")
+        params.append(client_id.strip())
+    where = " AND ".join(conds)
+    rows = connection.execute(
+        f"""
+        SELECT d.id AS doc_id, d.client_id,
+               MIN(cl.name) AS client_name,
+               MIN(SUBSTR(t.arrived_at, 1, 10)) AS day,
+               COALESCE((
+                   SELECT SUM(COALESCE(sl.boxes_qty, 0)) FROM dispatch_lines sl
+                   WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
+               ), 0) AS boxes
+        FROM dispatch_docs d
+        JOIN trip_lines tl ON tl.dispatch_doc_id = d.id
+        JOIN trip_docs t ON t.id = tl.trip_id
+        LEFT JOIN clients cl ON cl.id = d.client_id
+        WHERE {where}
+        GROUP BY d.id, d.client_id
+        """,
+        params,
+    ).fetchall()
+    histories = load_box_price_histories(connection, [r["client_id"] for r in rows])
+    out: list[dict] = []
+    for r in rows:
+        boxes = int(r["boxes"] or 0)
+        cid = r["client_id"]
+        if boxes <= 0 or not cid:
+            continue
+        day = str(r["day"])
+        price = price_on(histories.get(str(cid)), day)
+        if price:
+            out.append({
+                "day": day, "client_id": cid,
+                "client_name": r["client_name"], "kop": price * boxes,
+            })
+    return out
+
+
 def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> dict:
     """Общий расчёт дохода за окно `axis` (единый источник для P&L и аналитики «Доходы»).
 
-    Доход = упаковка (годное/брак) по `packed_date` + логистика клиента + палеты по
+    Доход = упаковка (годное/брак) по `packed_date` + логистика клиента + палеты + короба по
     ФАКТ-дню рейса. Возвращает потоки с посуточными рядами, итоговый ряд/сумму и разрез
     по клиентам. Итог by_client сходится с income_total (те же слагаемые). Копейки INTEGER."""
     from modules.shipments.service import packing_productivity
@@ -198,11 +269,19 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
             pallets[i] += r["kop"]
             _add_client(r["client_id"], r["client_name"], r["kop"])
 
+    boxes = _empty()
+    for r in _boxes_income_rows(connection, date_from=df, date_to=dt, client_id=client_id):
+        i = idx.get(r["day"])
+        if i is not None:
+            boxes[i] += r["kop"]
+            _add_client(r["client_id"], r["client_name"], r["kop"])
+
     income_defs = [
         ("packing_good", "Упаковка (годное)", INV_Q_GOOD, packing_good),
         ("packing_defect", "Упаковка (брак)", INV_Q_DEFECT, packing_defect),
         ("logistics", "Логистика", None, logistics),
         ("pallets", "Палеты", None, pallets),
+        ("boxes", "Короба", None, boxes),
     ]
     sources = [
         {"key": key, "label": label, "kind": kind, "amount": sum(series), "series": series}
@@ -257,7 +336,9 @@ def pnl_report(connection, *, date_from: str, date_to: str, client_id: str | Non
         running += income_series[i] - expense_series[i]
         net_cumulative.append(running)
     net_total = income_total - expense_total
-    margin_pct = round(net_total / income_total * 100, 1) if income_total > 0 else 0.0
+    # Маржа = прибыль/доход. Без дохода отношение не определено — отдаём None («—»),
+    # а не 0.0 (иначе убыточный период без выручки выглядел бы как нулевая маржа).
+    margin_pct = round(net_total / income_total * 100, 1) if income_total > 0 else None
 
     return {
         "date_from": df,
@@ -329,9 +410,11 @@ def pnl_day_detail(
     [date_from..date_to] графика — окно передаётся, чтобы день детализации совпал со столбиком
     (иначе документ с рейсами в разные дни ушёл бы в другой день). Каждый источник несёт
     items[] первоисточников (документ/товар/сотрудник). Копейки INTEGER."""
+    from modules.box_pricing.service import load_box_price_histories
     from modules.expenses.service import expense_day_detail
     from modules.invoices.service import rub_to_kop
-    from modules.pallet_pricing.service import pallet_price_for_event
+    from modules.pallet_pricing.service import load_pallet_price_histories
+    from modules.pricing.service import price_on
     from modules.shipments.service import packing_productivity
 
     cid = (client_id or None)
@@ -348,7 +431,7 @@ def pnl_day_detail(
         ("dispatch_docs", "dispatch_doc_id", "dispatch"),
         ("receipt_docs", "receipt_doc_id", "receipt"),
     ):
-        params: list = [TRIP_STATUS_CANCELLED, date_from, date_to]
+        params: list = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
         cc = _client_cond(params)
         rows = connection.execute(
             f"""
@@ -362,7 +445,7 @@ def pnl_day_detail(
             LEFT JOIN clients cl ON cl.id = d.client_id
             WHERE COALESCE(d.is_deleted, 0) = 0 AND t.is_deleted = 0 AND tl.is_deleted = 0
               AND t.status != ? AND t.arrived_at IS NOT NULL
-              AND SUBSTR(t.arrived_at, 1, 10) >= ? AND SUBSTR(t.arrived_at, 1, 10) <= ?{cc}
+              AND t.arrived_at >= ? AND t.arrived_at < ?{cc}
             GROUP BY d.id, d.doc_number
             """,
             params,
@@ -380,7 +463,7 @@ def pnl_day_detail(
 
     # ── Доход: палеты (по отгрузкам, та же атрибуция) ──
     pallet_items: list[dict] = []
-    params = [TRIP_STATUS_CANCELLED, date_from, date_to]
+    params = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
     cc = _client_cond(params)
     rows = connection.execute(
         f"""
@@ -397,25 +480,65 @@ def pnl_day_detail(
         LEFT JOIN clients cl ON cl.id = d.client_id
         WHERE COALESCE(d.is_deleted, 0) = 0 AND t.is_deleted = 0 AND tl.is_deleted = 0
           AND t.status != ? AND t.arrived_at IS NOT NULL
-          AND SUBSTR(t.arrived_at, 1, 10) >= ? AND SUBSTR(t.arrived_at, 1, 10) <= ?{cc}
+          AND t.arrived_at >= ? AND t.arrived_at < ?{cc}
         GROUP BY d.id, d.doc_number, d.client_id
         """,
         params,
     ).fetchall()
-    for r in rows:
-        if str(r["day"]) != day:
-            continue
+    pallet_rows = [
+        r for r in rows
+        if str(r["day"]) == day and int(r["pallets"] or 0) > 0 and r["client_id"]
+    ]
+    pallet_hist = load_pallet_price_histories(connection, [r["client_id"] for r in pallet_rows])
+    for r in pallet_rows:
         pallets = int(r["pallets"] or 0)
-        pc = r["client_id"]
-        if pallets <= 0 or not pc:
-            continue
-        price = pallet_price_for_event(connection, str(pc), day)
+        price = price_on(pallet_hist.get(str(r["client_id"])), day)
         if not price:
             continue
         pallet_items.append({
             "type": "doc",
             "label": f"{r['doc_number']} · {r['client_name'] or 'Без клиента'} · {pallets} пал.",
             "amount": price * pallets, "ref_id": str(r["doc_id"]), "ref_kind": "dispatch", "note": None,
+        })
+
+    # ── Доход: короба (по отгрузкам, та же атрибуция) ──
+    box_items: list[dict] = []
+    params = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
+    cc = _client_cond(params)
+    rows = connection.execute(
+        f"""
+        SELECT d.id AS doc_id, d.doc_number AS doc_number, d.client_id,
+               MIN(cl.name) AS client_name,
+               MIN(SUBSTR(t.arrived_at, 1, 10)) AS day,
+               COALESCE((
+                   SELECT SUM(COALESCE(sl.boxes_qty, 0)) FROM dispatch_lines sl
+                   WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
+               ), 0) AS boxes
+        FROM dispatch_docs d
+        JOIN trip_lines tl ON tl.dispatch_doc_id = d.id
+        JOIN trip_docs t ON t.id = tl.trip_id
+        LEFT JOIN clients cl ON cl.id = d.client_id
+        WHERE COALESCE(d.is_deleted, 0) = 0 AND t.is_deleted = 0 AND tl.is_deleted = 0
+          AND t.status != ? AND t.arrived_at IS NOT NULL
+          AND t.arrived_at >= ? AND t.arrived_at < ?{cc}
+        GROUP BY d.id, d.doc_number, d.client_id
+        """,
+        params,
+    ).fetchall()
+    box_rows = [
+        r for r in rows
+        if str(r["day"]) == day and int(r["boxes"] or 0) > 0 and r["client_id"]
+    ]
+    box_hist = load_box_price_histories(connection, [r["client_id"] for r in box_rows])
+    for r in box_rows:
+        boxes = int(r["boxes"] or 0)
+        price = price_on(box_hist.get(str(r["client_id"])), day)
+        if not price:
+            continue
+        box_items.append({
+            "type": "doc",
+            "label": f"{r['doc_number']} · {r['client_name'] or 'Без клиента'} · {boxes} кор.",
+            "amount": price * boxes, "ref_id": str(r["doc_id"]), "ref_kind": "dispatch", "note": None,
         })
 
     # ── Доход: упаковка (годное/брак) по строкам товаров за день ──
@@ -448,6 +571,7 @@ def pnl_day_detail(
         ("packing_defect", "Упаковка (брак)", INV_Q_DEFECT, defect_items),
         ("logistics", "Логистика", None, logistics_items),
         ("pallets", "Палеты", None, pallet_items),
+        ("boxes", "Короба", None, box_items),
     ]
     income_sources: list[dict] = []
     for key, label, kind, items in income_defs:
@@ -475,14 +599,16 @@ def pnl_day_detail(
 def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
     """Рентабельность рейсов в окне (по факту прибытия): доход рейса − его себестоимость.
 
-    Доход = логистика клиента (по привязанным отгрузкам и поступлениям) + палеты по
+    Доход = логистика клиента (по привязанным отгрузкам и поступлениям) + палеты + короба по
     привязанным отгрузкам на день рейса. Себестоимость = `trip_docs.logistics_cost_actual`.
     Аннулированные рейсы и рейсы без факта прибытия не учитываются. Документ,
     привязанный к нескольким рейсам, в этой таблице учитывается у каждого рейса —
     это экономика конкретного рейса, не дневной агрегат."""
     from config import TRIP_STATUS_RU_BY_DIRECTION
+    from modules.box_pricing.service import load_box_price_histories
     from modules.invoices.service import rub_to_kop
-    from modules.pallet_pricing.service import pallet_price_for_event
+    from modules.pallet_pricing.service import load_pallet_price_histories
+    from modules.pricing.service import price_on
 
     trips = connection.execute(
         """
@@ -491,51 +617,90 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
                COALESCE(t.logistics_cost_actual, 0) AS cost_actual
         FROM trip_docs t
         WHERE t.is_deleted = 0 AND t.status != ? AND t.arrived_at IS NOT NULL
-          AND SUBSTR(t.arrived_at, 1, 10) >= ? AND SUBSTR(t.arrived_at, 1, 10) <= ?
+          AND t.arrived_at >= ? AND t.arrived_at < ?
         ORDER BY SUBSTR(t.arrived_at, 1, 10) DESC, t.trip_number DESC
         """,
-        (TRIP_STATUS_CANCELLED, date_from, date_to),
+        (TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)),
     ).fetchall()
 
-    items: list[dict] = []
-    income_total = cost_total = 0
-    for t in trips:
-        trip_id = str(t["id"])
-        day = str(t["day"])
-        income = 0
+    # Доход всех рейсов окна собираем оконными запросами (по одному на источник),
+    # а не по O(рейсы)×запросов. Документ учитывается у КАЖДОГО рейса (экономика рейса),
+    # поэтому группировка по (рейс, документ), без дедупа между рейсами.
+    trip_ids = [str(t["id"]) for t in trips]
+    trip_day = {str(t["id"]): str(t["day"]) for t in trips}
+    income_by_trip: dict[str, int] = {}
+
+    def _add_income(tid: str, amount: int) -> None:
+        if amount:
+            income_by_trip[tid] = income_by_trip.get(tid, 0) + amount
+
+    pallets_rows: list = []
+    boxes_rows: list = []
+    if trip_ids:
+        ph = ",".join("?" for _ in trip_ids)
         for table, link_col in (("dispatch_docs", "dispatch_doc_id"), ("receipt_docs", "receipt_doc_id")):
-            rows = connection.execute(
+            for r in connection.execute(
                 f"""
-                SELECT MAX(COALESCE(d.logistics_cost, 0)) AS logistics_cost
+                SELECT tl.trip_id AS trip_id, MAX(COALESCE(d.logistics_cost, 0)) AS logistics_cost
                 FROM {table} d
                 JOIN trip_lines tl ON tl.{link_col} = d.id AND tl.is_deleted = 0
-                WHERE tl.trip_id = ? AND COALESCE(d.is_deleted, 0) = 0
-                GROUP BY d.id
+                WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
+                GROUP BY tl.trip_id, d.id
                 """,
-                (trip_id,),
-            ).fetchall()
-            income += sum(rub_to_kop(r["logistics_cost"]) for r in rows)
-        pallet_rows = connection.execute(
-            """
-            SELECT d.client_id,
+                trip_ids,
+            ).fetchall():
+                _add_income(str(r["trip_id"]), rub_to_kop(r["logistics_cost"]))
+        pallets_rows = connection.execute(
+            f"""
+            SELECT tl.trip_id AS trip_id, d.client_id AS client_id,
                    COALESCE((
                        SELECT SUM(COALESCE(sl.pallets_qty, 0)) FROM dispatch_lines sl
                        WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
                    ), 0) AS pallets
             FROM dispatch_docs d
             JOIN trip_lines tl ON tl.dispatch_doc_id = d.id AND tl.is_deleted = 0
-            WHERE tl.trip_id = ? AND COALESCE(d.is_deleted, 0) = 0
+            WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
+            GROUP BY tl.trip_id, d.id, d.client_id
             """,
-            (trip_id,),
+            trip_ids,
         ).fetchall()
-        for pr in pallet_rows:
-            pallets = int(pr["pallets"] or 0)
-            cid = pr["client_id"]
-            if pallets > 0 and cid:
-                price = pallet_price_for_event(connection, str(cid), day)
-                if price:
-                    income += price * pallets
+        boxes_rows = connection.execute(
+            f"""
+            SELECT tl.trip_id AS trip_id, d.client_id AS client_id,
+                   COALESCE((
+                       SELECT SUM(COALESCE(sl.boxes_qty, 0)) FROM dispatch_lines sl
+                       WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0
+                   ), 0) AS boxes
+            FROM dispatch_docs d
+            JOIN trip_lines tl ON tl.dispatch_doc_id = d.id AND tl.is_deleted = 0
+            WHERE tl.trip_id IN ({ph}) AND COALESCE(d.is_deleted, 0) = 0
+            GROUP BY tl.trip_id, d.id, d.client_id
+            """,
+            trip_ids,
+        ).fetchall()
 
+    client_ids = [r["client_id"] for r in pallets_rows] + [r["client_id"] for r in boxes_rows]
+    pallet_hist = load_pallet_price_histories(connection, client_ids)
+    box_hist = load_box_price_histories(connection, client_ids)
+    for r in pallets_rows:
+        pallets, cid, tid = int(r["pallets"] or 0), r["client_id"], str(r["trip_id"])
+        if pallets > 0 and cid:
+            price = price_on(pallet_hist.get(str(cid)), trip_day.get(tid, ""))
+            if price:
+                _add_income(tid, price * pallets)
+    for r in boxes_rows:
+        boxes, cid, tid = int(r["boxes"] or 0), r["client_id"], str(r["trip_id"])
+        if boxes > 0 and cid:
+            price = price_on(box_hist.get(str(cid)), trip_day.get(tid, ""))
+            if price:
+                _add_income(tid, price * boxes)
+
+    items: list[dict] = []
+    income_total = cost_total = 0
+    for t in trips:
+        trip_id = str(t["id"])
+        day = str(t["day"])
+        income = income_by_trip.get(trip_id, 0)
         cost = rub_to_kop(t["cost_actual"])
         margin = income - cost
         income_total += income
@@ -555,7 +720,7 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
             "income_kop": income,
             "cost_kop": cost,
             "margin_kop": margin,
-            "margin_pct": round(margin / income * 100, 1) if income > 0 else 0.0,
+            "margin_pct": round(margin / income * 100, 1) if income > 0 else None,
         })
 
     return {

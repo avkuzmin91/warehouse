@@ -236,7 +236,7 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
   const { data, loading } = useApi(
     (signal) => shipmentIds.length
       ? getShipmentContents(shipmentIds, signal)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, boxes_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false, has_missing_box_price: false }),
     [key],
   )
   if (shipmentIds.length === 0) return null
@@ -245,6 +245,7 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
   const goods = data?.suggested_amount_kop ?? 0
   const logistics = data?.logistics_amount_kop ?? 0
   const pallets = data?.pallets_amount_kop ?? 0
+  const boxes = data?.boxes_amount_kop ?? 0
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
@@ -257,9 +258,10 @@ export function SelectedContentsRollup({ shipmentIds, label = 'Сводка по
       </div>
       {data && (
         <CostBreakdown
-          goods={goods} logistics={logistics} pallets={pallets}
+          goods={goods} logistics={logistics} pallets={pallets} boxes={boxes}
           hasMissingPrice={data.has_missing_price}
           hasMissingPalletPrice={data.has_missing_pallet_price}
+          hasMissingBoxPrice={data.has_missing_box_price}
           onApplyAmount={onApplyAmount}
         />
       )}
@@ -332,7 +334,7 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
   const { data: ship } = useApi(
     (s) => shipmentIds.length
       ? getShipmentContents(shipmentIds, s)
-      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false }),
+      : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, suggested_amount_kop: 0, logistics_amount_kop: 0, pallets_amount_kop: 0, boxes_amount_kop: 0, has_missing_price: false, has_missing_pallet_price: false, has_missing_box_price: false }),
     [shipKey],
   )
   const { data: rec } = useApi(
@@ -346,27 +348,31 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
   const goods = ship?.suggested_amount_kop ?? 0
   const logistics = (ship?.logistics_amount_kop ?? 0) + (rec?.logistics_amount_kop ?? 0)
   const pallets = ship?.pallets_amount_kop ?? 0
+  const boxes = ship?.boxes_amount_kop ?? 0
   return (
     <CostBreakdown
-      goods={goods} logistics={logistics} pallets={pallets}
+      goods={goods} logistics={logistics} pallets={pallets} boxes={boxes}
       hasMissingPrice={ship?.has_missing_price ?? false}
       hasMissingPalletPrice={ship?.has_missing_pallet_price ?? false}
+      hasMissingBoxPrice={ship?.has_missing_box_price ?? false}
       onApplyAmount={onApplyAmount}
     />
   )
 }
 
 /** Разбивка стоимости Товары / Логистика / Итого + опц. кнопка «В сумму счёта». */
-export function CostBreakdown({ goods, logistics, pallets = 0, hasMissingPrice, hasMissingPalletPrice, onApplyAmount }: {
+export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, hasMissingPrice, hasMissingPalletPrice, hasMissingBoxPrice, onApplyAmount }: {
   goods: number
   logistics: number
   pallets?: number
+  boxes?: number
   hasMissingPrice?: boolean
   hasMissingPalletPrice?: boolean
+  hasMissingBoxPrice?: boolean
   onApplyAmount?: (kopecks: number) => void
 }) {
-  const total = goods + logistics + pallets
-  const hasRows = goods > 0 || logistics > 0 || pallets > 0
+  const total = goods + logistics + pallets + boxes
+  const hasRows = goods > 0 || logistics > 0 || pallets > 0 || boxes > 0
   return (
     <div style={{ padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: 'var(--c-bg-sunken)' }}>
       {goods > 0 && (
@@ -399,6 +405,19 @@ export function CostBreakdown({ goods, logistics, pallets = 0, hasMissingPrice, 
             )}
           </span>
           <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(pallets)}</span>
+        </div>
+      )}
+      {(boxes > 0 || hasMissingBoxPrice) && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: 'var(--c-text-subtle)' }}>
+            Короба
+            {hasMissingBoxPrice && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6, color: 'var(--c-warning)' }}>
+                <Icon name="alert" size={11} />цена не заведена
+              </span>
+            )}
+          </span>
+          <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(boxes)}</span>
         </div>
       )}
       <div style={{

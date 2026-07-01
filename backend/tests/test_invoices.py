@@ -17,6 +17,7 @@ from tests.conftest import (  # noqa: F401
     admin_client,
     cleanup_client,
     make_client_id,
+    manager_client,
     warehouse_client,
 )
 
@@ -147,8 +148,8 @@ def _issued_invoice(admin_client, client_id, ship, *, total_amount=1000, due_dat
     return iid
 
 
-def test_invoiced_dispatch_blocks_pallet_edit(admin_client, client_id):
-    """Палеты отгрузки правятся, пока счёт не выставлен; черновик не блокирует, issued — да."""
+def test_invoiced_dispatch_pallet_edit_manager_vs_admin(admin_client, manager_client, client_id):
+    """Палеты после выставления счёта: менеджеру нельзя, админ вправе поправить."""
     ship = _shipped_shipment(admin_client, client_id)
     line_id = f"{ship}-l0"
     with get_connection() as conn:
@@ -167,12 +168,17 @@ def test_invoiced_dispatch_blocks_pallet_edit(admin_client, client_id):
     ok = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 4})
     assert ok.status_code == 200, ok.text
 
-    # После выставления счёта — палеты заблокированы.
+    # После выставления счёта менеджеру палеты недоступны.
     _attach_file(admin_client, iid)
     assert admin_client.post(f"/invoices/{iid}/issue").status_code == 200
-    blocked = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
+    blocked = manager_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
     assert blocked.status_code == 400, blocked.text
     assert "счёт" in blocked.json()["detail"].lower()
+
+    # Админ вправе поправить палеты и после выставления — правка проходит.
+    allowed = admin_client.patch(f"/dispatches/{ship}/lines/{line_id}/pallets", json={"pallets_qty": 6})
+    assert allowed.status_code == 200, allowed.text
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 6
 
 
 def test_create_invoice_lands_in_draft_then_issues(admin_client, client_id):

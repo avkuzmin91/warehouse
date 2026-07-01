@@ -31,6 +31,95 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:
+    """Ключ строки для сравнения состава. NULL цвет/размер → '' — иначе строки без
+    цвета/размера не совпадали бы между документами."""
+    return (str(product_id or ""), str(color_id or ""), str(size_id or ""))
+
+
+def _moscow_day(iso: str | None) -> str:
+    """Московская календарная дата (YYYY-MM-DD) из UTC-ISO created_at.
+
+    Fallback для документов без плановой даты: TZ контейнера = Europe/Moscow
+    (та же посылка, что у business_today), поэтому astimezone() даёт мск-день.
+    """
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone().date().isoformat()
+
+
+def find_duplicate_receipts(connection, *, client_id, arrival_date, lines) -> list[dict]:
+    """Поступления того же клиента за тот же день с ТОЧНО таким же составом.
+
+    День определяется по плановой дате прибытия (arrival_date); если она не задана —
+    по дате создания за сегодня (МСК). Совпадение состава = равенство словарей
+    {(товар,цвет,размер): план}. Аннулированные исключены.
+    """
+    want: dict[tuple[str, str, str], int] = {}
+    for ln in lines:
+        want[_dup_key(ln.product_id, ln.color_id, ln.size_id)] = int(ln.planned_qty)
+    if not client_id or not want:
+        return []
+
+    arrival = (arrival_date or "").strip()
+    if arrival:
+        docs = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM receipt_docs "
+            "WHERE client_id = ? AND arrival_date = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, arrival, RECEIPT_STATUS_CANCELLED),
+        ).fetchall()
+    else:
+        today = _moscow_day(_now())
+        rows = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM receipt_docs "
+            "WHERE client_id = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, RECEIPT_STATUS_CANCELLED),
+        ).fetchall()
+        docs = [r for r in rows if _moscow_day(r["created_at"]) == today]
+
+    matches: list[dict] = []
+    for doc in docs:
+        line_rows = connection.execute(
+            "SELECT product_id, color_id, size_id, planned_qty, product_sku, product_name, color_name, size_name "
+            "FROM receipt_lines WHERE doc_id = ? AND COALESCE(is_deleted,0)=0",
+            (doc["id"],),
+        ).fetchall()
+        have = {_dup_key(r["product_id"], r["color_id"], r["size_id"]): int(r["planned_qty"] or 0) for r in line_rows}
+        if have != want:
+            continue
+        email = None
+        if doc["created_by"]:
+            u = connection.execute("SELECT email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
+            email = u["email"] if u else None
+        matches.append({
+            "id": doc["id"],
+            "doc_number": doc["doc_number"],
+            "status": doc["status"],
+            "status_label": RECEIPT_STATUS_RU.get(doc["status"], doc["status"]),
+            "created_at": doc["created_at"],
+            "created_by_name": email,
+            "lines": [
+                {
+                    "product_sku": r["product_sku"],
+                    "product_name": r["product_name"],
+                    "color_name": r["color_name"],
+                    "size_name": r["size_name"],
+                    "qty": int(r["planned_qty"] or 0),
+                }
+                for r in line_rows
+            ],
+        })
+    return matches
+
+
 def ensure_receipt_line_unique(
     connection, doc_id: str, product_id: str, color_id, size_id, *, product_name=None
 ) -> None:
@@ -138,6 +227,7 @@ def list_receipts_aggregated(
 
     conds = ["d.is_deleted = 0"]
     params: list = []
+    status_filter_applied = False
 
     if client_id:
         conds.append("d.client_id = ?")
@@ -146,6 +236,7 @@ def list_receipts_aggregated(
         conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
         conds.append("d.arrival_date < ?")
         params.append(today)
+        status_filter_applied = True
     elif status:
         # Поддерживаем как одно значение, так и CSV ("planned,partially_received" —
         # кандидаты для привязки к рейсу).
@@ -154,10 +245,12 @@ def list_receipts_aggregated(
         if len(allowed) == 1:
             conds.append("d.status = ?")
             params.append(allowed[0])
+            status_filter_applied = True
         elif len(allowed) > 1:
             placeholders = ",".join("?" for _ in allowed)
             conds.append(f"d.status IN ({placeholders})")
             params.extend(allowed)
+            status_filter_applied = True
     if search:
         s = like_substring_param(search)
         conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
@@ -192,6 +285,12 @@ def list_receipts_aggregated(
             " AND t.status != ?)"
         )
         params.append(TRIP_STATUS_CANCELLED)
+
+    # Аннулированные скрываются из общего списка по умолчанию; показать их можно только
+    # явным выбором статуса «Аннулирован» в фильтре.
+    if not status_filter_applied:
+        conds.append("d.status != ?")
+        params.append(RECEIPT_STATUS_CANCELLED)
 
     where = " AND ".join(conds)
 

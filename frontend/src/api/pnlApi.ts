@@ -18,7 +18,7 @@ export type Pnl = {
   income_total: number
   expense_total: number
   net_total: number
-  margin_pct: number
+  margin_pct: number | null
   income_series: number[]
   expense_series: number[]
   net_cumulative: number[]
@@ -84,7 +84,7 @@ export type TripProfitItem = {
   income_kop: number
   cost_kop: number
   margin_kop: number
-  margin_pct: number
+  margin_pct: number | null
 }
 
 export type TripProfitability = {

@@ -53,7 +53,17 @@ export type LocationBulkResult = { created: number; skipped: number }
 
 export type LocationLookupResponse = { found: boolean; location: LocationItem | null }
 
-export type LocationLabel = { id: string; code: string; payload: string; qr_svg: string }
+export type LocationLabel = {
+  id: string
+  code: string
+  payload: string
+  qr_svg: string
+  kind: LocationKind
+  room: string | null
+  rack: string | null
+  section: string | null
+  floor: string | null
+}
 export type LocationLabelsResponse = { items: LocationLabel[] }
 
 // --- API functions ---

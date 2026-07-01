@@ -4,49 +4,36 @@ import { Icon } from '../../../../primitives/Icon'
 
 type Props = {
   lines: DispatchLine[]
-  /** Когда задан — колонка «Палеты» становится редактируемой (менеджер, до выставления счёта). */
+  /** Когда задан — палеты в колонке «Упаковка» редактируются инлайн (менеджер, до счёта). */
   onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
+  /** Когда задан — короба в колонке «Упаковка» редактируются инлайн (менеджер, до счёта). */
+  onSaveBoxes?: (lineId: string, boxes: number | null) => Promise<boolean>
+  /** Предупреждение над таблицей при редактируемой упаковке (например, авто-правка счёта). */
+  editNotice?: string
 }
 
 /** Read-only состав отгрузки: вариант, магазин, ссылка на сайт, план/отгружено/остаток.
- *  Если передан `onSavePallets` — колонка палет редактируется инлайн. */
-export function LinesTable({ lines, onSavePallets }: Props) {
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [savingLine, setSavingLine] = useState<string | null>(null)
-
+ *  Колонка «Упаковка» объединяет палеты и короба (два поля в одной ячейке, без расширения
+ *  таблицы). Если передан `onSavePallets`/`onSaveBoxes` — соответствующее поле редактируется. */
+export function LinesTable({ lines, onSavePallets, onSaveBoxes, editNotice }: Props) {
   if (lines.length === 0) {
     return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Нет позиций</div>
   }
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const shippedTotal = lines.reduce((s, l) => s + l.shipped_qty, 0)
   const palletsTotal = lines.reduce((s, l) => s + (l.pallets_qty ?? 0), 0)
+  const boxesTotal = lines.reduce((s, l) => s + (l.boxes_qty ?? 0), 0)
 
-  const editable = !!onSavePallets
-
-  function draftFor(l: DispatchLine): string {
-    return drafts[l.id] ?? (l.pallets_qty != null ? String(l.pallets_qty) : '')
-  }
-
-  function parsed(raw: string): number | null {
-    return raw === '' ? null : Math.max(0, parseInt(raw, 10))
-  }
-
-  function dirty(l: DispatchLine): boolean {
-    return drafts[l.id] !== undefined && parsed(draftFor(l)) !== (l.pallets_qty ?? null)
-  }
-
-  async function save(l: DispatchLine) {
-    if (!onSavePallets) return
-    setSavingLine(l.id)
-    try {
-      const ok = await onSavePallets(l.id, parsed(draftFor(l)))
-      if (ok) setDrafts((prev) => { const next = { ...prev }; delete next[l.id]; return next })
-    } finally {
-      setSavingLine(null)
-    }
-  }
+  const editable = !!(onSavePallets || onSaveBoxes)
 
   return (
+    <>
+      {editable && editNotice && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 10, padding: '8px 10px', borderRadius: 6, background: 'var(--c-bg-sunken)', color: 'var(--c-text-subtle)', fontSize: 11.5, lineHeight: 1.45 }}>
+          <Icon name="alert" size={13} style={{ marginTop: 1, flexShrink: 0, color: 'var(--c-warning)' }} />
+          <span>{editNotice}</span>
+        </div>
+      )}
     <table className="t">
       <thead>
         <tr>
@@ -54,7 +41,7 @@ export function LinesTable({ lines, onSavePallets }: Props) {
           <th style={{ width: 150 }}>Магазин</th>
           <th style={{ width: 80 }}>Ссылка</th>
           <th style={{ textAlign: 'right', width: 70 }}>План</th>
-          <th style={{ textAlign: 'right', width: editable ? 120 : 70 }}>Палеты</th>
+          <th style={{ textAlign: 'right', width: editable ? 150 : 96 }}>Упаковка</th>
           <th style={{ textAlign: 'right', width: 90 }}>Отгружено</th>
           <th style={{ textAlign: 'right', width: 80 }}>Остаток</th>
         </tr>
@@ -80,36 +67,18 @@ export function LinesTable({ lines, onSavePallets }: Props) {
                 )}
               </td>
               <td className="num">{l.qty}</td>
-              {editable ? (
-                <td>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4 }}>
-                    <input
-                      className="input sm num"
-                      inputMode="numeric"
-                      placeholder="0"
-                      aria-label="Количество палет"
-                      value={draftFor(l)}
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/\D/g, '')
-                        setDrafts((prev) => ({ ...prev, [l.id]: raw }))
-                      }}
-                      style={{ width: 56, textAlign: 'right' }}
-                    />
-                    {dirty(l) && (
-                      <button
-                        className="btn ghost icon sm"
-                        title="Сохранить палеты"
-                        disabled={savingLine === l.id}
-                        onClick={() => void save(l)}
-                      >
-                        <Icon name={savingLine === l.id ? 'refresh' : 'save'} size={13} style={savingLine === l.id ? { animation: 'spin 0.7s linear infinite' } : undefined} />
-                      </button>
-                    )}
+              <td>
+                {editable ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
+                    <PackUnitEditor label="Короба" value={l.boxes_qty} onSave={onSaveBoxes ? (v) => onSaveBoxes(l.id, v) : undefined} />
+                    <PackUnitEditor label="Палеты" value={l.pallets_qty} onSave={onSavePallets ? (v) => onSavePallets(l.id, v) : undefined} />
                   </div>
-                </td>
-              ) : (
-                <td className="num">{l.pallets_qty ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</td>
-              )}
+                ) : (
+                  <div className="num" style={{ whiteSpace: 'nowrap' }}>
+                    {l.boxes_qty ?? '—'} кор · {l.pallets_qty ?? '—'} пал
+                  </div>
+                )}
+              </td>
               <td className="num"><span style={{ color: l.shipped_qty > 0 ? 'var(--c-success)' : 'var(--c-text-subtle)' }}>{l.shipped_qty}</span></td>
               <td className="num">{remaining}</td>
             </tr>
@@ -120,11 +89,66 @@ export function LinesTable({ lines, onSavePallets }: Props) {
         <tr style={{ background: 'var(--c-bg-sunken)' }}>
           <td colSpan={3} style={{ padding: '10px 12px', fontWeight: 500, fontSize: 12.5 }}>Итого</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{planTotal}</td>
-          <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{palletsTotal}</td>
+          <td className="num" style={{ padding: '10px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{boxesTotal} кор · {palletsTotal} пал</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{shippedTotal}</td>
           <td className="num" style={{ padding: '10px 12px', fontWeight: 600 }}>{Math.max(0, planTotal - shippedTotal)}</td>
         </tr>
       </tfoot>
     </table>
+    </>
+  )
+}
+
+/** Компактный редактор одной единицы упаковки (палеты ИЛИ короба) в ячейке «Упаковка».
+ *  Кнопка сохранения появляется только при изменении значения. */
+function PackUnitEditor({ label, value, onSave }: {
+  label: string
+  value: number | null
+  onSave?: (v: number | null) => Promise<boolean>
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const shown = draft ?? (value != null ? String(value) : '')
+  const parsed = shown === '' ? null : Math.max(0, parseInt(shown, 10))
+  const dirty = draft !== null && parsed !== (value ?? null)
+
+  async function save() {
+    if (!onSave) return
+    setSaving(true)
+    try {
+      const ok = await onSave(parsed)
+      if (ok) setDraft(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!onSave) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+        <span style={{ color: 'var(--c-text-muted)' }}>{label}</span>
+        <span className="num" style={{ minWidth: 24, textAlign: 'right' }}>{value ?? '—'}</span>
+      </div>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 11, color: 'var(--c-text-muted)', width: 42, textAlign: 'right' }}>{label}</span>
+      <input
+        className="input sm num"
+        inputMode="numeric"
+        placeholder="0"
+        aria-label={`Количество: ${label}`}
+        value={shown}
+        onChange={(e) => setDraft(e.target.value.replace(/\D/g, ''))}
+        style={{ width: 52, textAlign: 'right' }}
+      />
+      {dirty && (
+        <button className="btn ghost icon sm" title={`Сохранить: ${label}`} disabled={saving} onClick={() => void save()}>
+          <Icon name={saving ? 'refresh' : 'save'} size={13} style={saving ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+        </button>
+      )}
+    </div>
   )
 }

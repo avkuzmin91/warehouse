@@ -169,7 +169,8 @@ export function ProductViewFeature({ productId }: Props) {
                   <Info label="Клиент" value={product.client_name ?? '—'} />
                   <Info label="Базовый SKU" value={product.sku_pending ? 'Ожидает уточнения' : product.sku_base} mono={!product.sku_pending} />
                   <Info label="Вес" value={product.weight_grams == null ? '—' : `${product.weight_grams.toLocaleString('ru-RU')} г`} />
-                  <Info label="На паллете" value={product.items_per_pallet == null ? '—' : `${product.items_per_pallet.toLocaleString('ru-RU')} шт`} />
+                  <Info label="В коробе" value={product.items_per_box == null ? '—' : `${product.items_per_box.toLocaleString('ru-RU')} шт`} />
+                  <Info label="Коробов на палете" value={product.boxes_per_pallet == null ? '—' : `${product.boxes_per_pallet.toLocaleString('ru-RU')} кор`} />
                   <Info label="Вариантов" value={product.variant_count.toLocaleString('ru-RU')} />
                 </div>
               </div>

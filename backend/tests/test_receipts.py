@@ -252,3 +252,55 @@ def test_manager_can_edit_planned_arrival(manager_client, client_id):
 
 # Карточная приёмка (/intake, /arrive) удалена: поступления принимаются в рейсе.
 # Приёмка по рейсу покрыта в test_logistics; историческое заведение — в test_balances.
+
+
+def _receipt_dup_check(admin_client, client_id, line, *, arrival_date="2026-05-27"):
+    return admin_client.post("/receipts/check-duplicate", json={
+        "client_id": client_id,
+        "arrival_date": arrival_date,
+        "lines": [{
+            "product_id": line["product_id"],
+            "color_id": line["color_id"],
+            "size_id": line["size_id"],
+            "planned_qty": line["planned_qty"],
+        }],
+    })
+
+
+def test_receipt_duplicate_exact_match(admin_client, client_id):
+    """Тот же клиент + плановая дата прибытия + состав → совпадение."""
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line(5)
+    payload["lines"] = [line]
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+    matches = _receipt_dup_check(admin_client, client_id, line).json()["matches"]
+    assert len(matches) == 1
+    assert matches[0]["id"] == doc_id
+    assert matches[0]["lines"][0]["qty"] == 5
+
+
+def test_receipt_duplicate_qty_differs(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line(5)
+    payload["lines"] = [line]
+    admin_client.post("/receipts", json=payload)
+    other = dict(line, planned_qty=6)
+    assert _receipt_dup_check(admin_client, client_id, other).json()["matches"] == []
+
+
+def test_receipt_duplicate_date_differs(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line(5)
+    payload["lines"] = [line]
+    admin_client.post("/receipts", json=payload)
+    assert _receipt_dup_check(admin_client, client_id, line, arrival_date="2026-05-28").json()["matches"] == []
+
+
+def test_receipt_duplicate_ignores_cancelled(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line(5)
+    payload["lines"] = [line]
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+    assert admin_client.post(f"/receipts/{doc_id}/advance").status_code == 200  # draft → planned
+    assert admin_client.post(f"/receipts/{doc_id}/cancel").status_code == 200
+    assert _receipt_dup_check(admin_client, client_id, line).json()["matches"] == []

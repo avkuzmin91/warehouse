@@ -56,6 +56,11 @@ class LocationLabel(BaseModel):
     code: str
     payload: str  # содержимое QR: «wms:loc:<id>»
     qr_svg: str
+    kind: str  # 'cell' — адресная ячейка (со стрелкой), 'special' — служебная зона
+    room: str | None = None
+    rack: str | None = None
+    section: str | None = None
+    floor: str | None = None
 
 
 class LocationLabelsResponse(BaseModel):

@@ -1,6 +1,7 @@
 import { request } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { TripAllocBreakdownItem } from './tripsApi'
+import type { DuplicateCheckResponse } from './domainTypes'
 
 // --- Types ---
 
@@ -290,6 +291,21 @@ export function createReceipt(payload: ReceiptCreatePayload) {
     method: 'POST',
     body: JSON.stringify(payload),
     idempotent: true,
+  })
+}
+
+export type ReceiptDuplicateCheckPayload = {
+  client_id: string
+  arrival_date?: string | null
+  lines: { product_id: string; color_id?: string | null; size_id?: string | null; planned_qty: number }[]
+}
+
+/** Ищет сегодняшние поступления клиента с тем же составом — предупреждение о дубле. */
+export function checkReceiptDuplicate(payload: ReceiptDuplicateCheckPayload, signal?: AbortSignal) {
+  return request<DuplicateCheckResponse>('/receipts/check-duplicate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    signal,
   })
 }
 

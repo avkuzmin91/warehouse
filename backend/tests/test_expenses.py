@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import date
 
 import pytest
 
@@ -13,6 +14,7 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
+from modules.production_calendar.service import working_days_in_range
 from tests.conftest import (  # noqa: F401
     admin_client,
     manager_client,
@@ -454,23 +456,55 @@ def test_analytics_excludes_cancelled(admin_client, dict_ids):
     assert sum(c["amount"] for c in a["by_category"]) == a["total_amount"]
 
 
+def test_list_hides_cancelled_by_default(admin_client, dict_ids):
+    # Аннулированные скрыты из списка по умолчанию, но доступны по явному фильтру статуса.
+    cat, src = dict_ids
+    keep = _create_expense(admin_client, cat, src, spent_on="2099-11-05", amount=80000, name="Активный")
+    drop = admin_client.post("/expenses", json={
+        "spent_on": "2099-11-05", "category_id": cat, "name": "Отменённый",
+        "quantity": 1, "unit": "шт", "amount": 50000, "kind": "manual", "payment_status": "awaiting",
+    }).json()["message"]
+    assert admin_client.post(f"/expenses/{drop}/cancel").status_code == 200
+
+    default = admin_client.get("/expenses?date_from=2099-11-05&date_to=2099-11-05&limit=200").json()["items"]
+    ids = {e["id"] for e in default}
+    assert keep in ids and drop not in ids
+
+    only_cancelled = admin_client.get(
+        "/expenses?date_from=2099-11-05&date_to=2099-11-05&payment_status=cancelled&limit=200"
+    ).json()["items"]
+    c_ids = {e["id"] for e in only_cancelled}
+    assert drop in c_ids and keep not in c_ids
+
+
 def test_analytics_spreads_rent_over_period(admin_client):
-    # Аренда за месяц размазывается ровно по дням периода (а не пиком в день начисления).
+    # Аренда за месяц размазывается по РАБОЧИМ дням периода (произв. календарь),
+    # а не пиком в день начисления и не по всем календарным дням. Ожидания считаем
+    # тем же оракулом, что и код (working_days_in_range) — иначе тест ломается на
+    # каждом изменении сида календаря.
     rent_id = admin_client.post("/expenses", json={
         "spent_on": "2099-04-01", "name": "Аренда тест", "amount": 300000,
         "kind": "rent", "payment_status": "awaiting",
         "period_start": "2099-04-01", "period_end": "2099-04-30",
     }).json()["message"]
     try:
+        with get_connection() as conn:
+            wd = working_days_in_range(conn, date(2099, 4, 1), date(2099, 4, 30))
+        base, rem = divmod(300000, len(wd))  # остаток целочисленного деления — на первые дни
+        expected = {d.isoformat(): base + (1 if i < rem else 0) for i, d in enumerate(wd)}
+
         a = admin_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-30&kinds=rent").json()
         assert a["total_amount"] == 300000  # вся сумма внутри окна
         by_day = {p["date"]: p["amount"] for p in a["series"]}
-        assert by_day["2099-04-15"] == 10000  # 300000 / 30 дней
+        # По каждому рабочему дню — своя доля, по выходным — 0, сумма == вся аренда.
+        for iso, share in expected.items():
+            assert by_day.get(iso, 0) == share
+        assert sum(by_day.values()) == 300000
         rent = next(k for k in a["by_kind"] if k["kind"] == "rent")
         assert rent["amount"] == 300000 and rent["count"] == 1
-        # Частичное окно (первые 10 дней) — учитывается только попавшая доля.
+        # Частичное окно (первые 10 дней) — только доли рабочих дней, попавших в окно.
         half = admin_client.get("/expenses/analytics?date_from=2099-04-01&date_to=2099-04-10&kinds=rent").json()
-        assert half["total_amount"] == 100000
+        assert half["total_amount"] == sum(s for iso, s in expected.items() if iso <= "2099-04-10")
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM expense_ops WHERE expense_id = ?", (rent_id,))
@@ -706,10 +740,15 @@ def test_salary_reaccrual_after_cancel(admin_client):
         # Аннулируем и начисляем заново → появляется свежая проводка.
         assert admin_client.post(f"/expenses/{exp_id}/cancel").status_code == 200
         assert admin_client.post("/expenses/salary/accruals/run?on_date=2031-03-10").json()["created"] == 1
+        # Список по умолчанию скрывает аннулированные — видна только свежая активная.
         again = admin_client.get("/expenses?kind=salary&limit=200").json()["items"]
         rows = [e for e in again if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
-        assert len(rows) == 2  # одно аннулированное + одно новое
-        assert sorted(e["payment_status"] for e in rows) == ["awaiting", "cancelled"]
+        assert len(rows) == 1
+        assert rows[0]["payment_status"] == "awaiting"
+        # Аннулированная проводка не удалена — доступна по явному фильтру статуса.
+        cancelled = admin_client.get("/expenses?kind=salary&payment_status=cancelled&limit=200").json()["items"]
+        drop_rows = [e for e in cancelled if e.get("source_id") == emp and e["period_start"] == "2031-03-01"]
+        assert len(drop_rows) == 1 and drop_rows[0]["id"] == exp_id
     finally:
         _purge_employee(emp)
 

@@ -51,6 +51,7 @@ import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
 import { PlacePackedDrawer } from './components/PlacePackedDrawer'
+import { FinishPackingConfirmModal } from './components/FinishPackingConfirmModal'
 import { RelocationPanel } from './components/RelocationPanel'
 import { DefectPreparePanel } from './components/DefectPreparePanel'
 import { CompositionTable } from './components/CompositionTable'
@@ -78,6 +79,7 @@ export function ShipmentDetailFeature() {
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [finishConfirm, setFinishConfirm] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
@@ -617,12 +619,25 @@ export function ShipmentDetailFeature() {
     }
   }
 
+  // Недобор по годному при завершении упаковки (брак в выполнение не идёт).
+  const packingGoodShortfall = (doc?.lines ?? []).reduce((s, l) => s + Math.max(0, l.qty - l.packed_good), 0)
+
   function handleAdvanceClick() {
     if (advanceBlockReasons.length > 0) {
       setShowBlockReasons(true)
       return
     }
     setShowBlockReasons(false)
+    // Завершение упаковки с недобором — напоминание упаковать весь доступный объём.
+    if (isOnPacking && packingGoodShortfall > 0) {
+      setFinishConfirm(true)
+      return
+    }
+    runAdvance()
+  }
+
+  function runAdvance() {
+    setFinishConfirm(false)
     void act(async () => {
       if (infoDirty) {
         const saved = await handleInfoSave()
@@ -1231,6 +1246,16 @@ export function ShipmentDetailFeature() {
           onDone={refreshAfterLineChange}
         />
       )}
+
+      <FinishPackingConfirmModal
+        open={finishConfirm}
+        docNumber={doc.doc_number}
+        clientName={doc.client_name}
+        lines={doc.lines}
+        acting={acting}
+        onCancel={() => setFinishConfirm(false)}
+        onConfirm={runAdvance}
+      />
 
     </div>
   )

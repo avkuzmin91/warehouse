@@ -10,17 +10,26 @@ import pytest
 if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
+from uuid import uuid4
+
 from dbconn import get_connection
 from tests.conftest import (  # noqa: F401
     admin_client,
     cleanup_client,
     make_client_id,
+    manager_client,
     warehouse_client,
 )
 
 
 def _cleanup(client_id: str) -> None:
     with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM invoice_ops WHERE invoice_id IN "
+            "(SELECT id FROM invoice_docs WHERE client_id = ?)", (client_id,)
+        )
+        conn.execute("DELETE FROM invoice_shipments WHERE client_id = ?", (client_id,))
+        conn.execute("DELETE FROM invoice_docs WHERE client_id = ?", (client_id,))
         disp_ids = [
             r["id"] for r in conn.execute(
                 "SELECT id FROM dispatch_docs WHERE client_id = ?", (client_id,)
@@ -32,6 +41,37 @@ def _cleanup(client_id: str) -> None:
         conn.execute("DELETE FROM dispatch_docs WHERE client_id = ?", (client_id,))
         conn.execute("DELETE FROM client_pallet_prices WHERE client_id = ?", (client_id,))
         conn.commit()
+
+
+def _issue_invoice(dispatch_id: str, client_id: str, *, total_kop: int,
+                   paid_kop: int = 0, status: str = "issued") -> str:
+    """Прямой INSERT выставленного счёта с привязкой к отгрузке (минует загрузку файла)."""
+    inv_id = str(uuid4())
+    now = "2026-06-11T00:00:00+00:00"
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO invoice_docs "
+            "(id,doc_number,client_id,client_name,status,total_amount,paid_amount,due_date,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (inv_id, f"INV-TST-{inv_id[:8]}", client_id, "Test Client", status,
+             total_kop, paid_kop, "2026-07-01", now, "test-admin-id"),
+        )
+        conn.execute(
+            "INSERT INTO invoice_shipments "
+            "(id,invoice_id,shipment_doc_id,client_id,client_name,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), inv_id, dispatch_id, client_id, "Test Client", now, "test-admin-id"),
+        )
+        conn.commit()
+    return inv_id
+
+
+def _invoice(invoice_id: str) -> dict:
+    with get_connection() as conn:
+        r = conn.execute(
+            "SELECT total_amount, status FROM invoice_docs WHERE id = ?", (invoice_id,)
+        ).fetchone()
+    return {"total_amount": int(r["total_amount"]), "status": str(r["status"])}
 
 
 @pytest.fixture
@@ -129,3 +169,46 @@ def test_invoice_flags_missing_pallet_price(admin_client, client_id):
     body = admin_client.get(f"/invoices/shipment-contents?shipment_ids={ship}").json()
     assert body["pallets_amount_kop"] == 0
     assert body["has_missing_pallet_price"] is True
+
+
+# ── Админ правит палеты по отгрузке с выставленным счётом ─────────────────────
+
+def test_admin_pallet_edit_after_invoice_adjusts_total(admin_client, client_id):
+    # Цена палета 100,00 ₽. Отгрузка с 3 палетами, счёт на 300,00 ₽.
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 10000, "effective_from": "2026-01-01"})
+    ship = _shipped_dispatch_with_pallets(admin_client, client_id, pallets=[3])
+    inv = _issue_invoice(ship, client_id, total_kop=30000)
+    line = admin_client.get(f"/dispatches/{ship}").json()["lines"][0]
+    # 3 → 5 палет: +2 × 100,00 = +200,00 → счёт 500,00.
+    r = admin_client.patch(f"/dispatches/{ship}/lines/{line['id']}/pallets", json={"pallets_qty": 5})
+    assert r.status_code == 200, r.text
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 5
+    assert _invoice(inv)["total_amount"] == 50000
+
+
+def test_manager_pallet_edit_blocked_after_invoice(manager_client, admin_client, client_id):
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 10000, "effective_from": "2026-01-01"})
+    ship = _shipped_dispatch_with_pallets(admin_client, client_id, pallets=[3])
+    inv = _issue_invoice(ship, client_id, total_kop=30000)
+    line = admin_client.get(f"/dispatches/{ship}").json()["lines"][0]
+    r = manager_client.patch(f"/dispatches/{ship}/lines/{line['id']}/pallets", json={"pallets_qty": 5})
+    assert r.status_code == 400, r.text
+    # Ни палеты, ни сумма счёта не изменились.
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 3
+    assert _invoice(inv)["total_amount"] == 30000
+
+
+def test_admin_pallet_edit_blocked_below_paid(admin_client, client_id):
+    # Счёт 300,00, оплачено 250,00. Снижение 3 → 0 палет (−300,00) опустит сумму ниже оплаты.
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 10000, "effective_from": "2026-01-01"})
+    ship = _shipped_dispatch_with_pallets(admin_client, client_id, pallets=[3])
+    inv = _issue_invoice(ship, client_id, total_kop=30000, paid_kop=25000, status="partially_paid")
+    line = admin_client.get(f"/dispatches/{ship}").json()["lines"][0]
+    r = admin_client.patch(f"/dispatches/{ship}/lines/{line['id']}/pallets", json={"pallets_qty": 0})
+    assert r.status_code == 400, r.text
+    # Транзакция откатилась: палеты и сумма счёта на месте.
+    assert admin_client.get(f"/dispatches/{ship}").json()["lines"][0]["pallets_qty"] == 3
+    assert _invoice(inv)["total_amount"] == 30000

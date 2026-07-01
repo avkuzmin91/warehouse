@@ -265,7 +265,7 @@ def list_location_labels(
     where_sql = " AND ".join(conds)
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT id, name FROM unloading_zones WHERE {where_sql} "
+            f"SELECT id, name, kind, room, rack, section, floor FROM unloading_zones WHERE {where_sql} "
             "ORDER BY room IS NULL, room ASC, rack ASC, section ASC, floor ASC, LOWER(name) ASC LIMIT ?",
             [*params, LABELS_LIMIT],
         ).fetchall()
@@ -273,7 +273,12 @@ def list_location_labels(
     for r in rows:
         payload = f"{LOCATION_QR_PREFIX}{r['id']}"
         items.append(
-            LocationLabel(id=str(r["id"]), code=r["name"], payload=payload, qr_svg=_qr_svg(payload))
+            LocationLabel(
+                id=str(r["id"]), code=r["name"], payload=payload, qr_svg=_qr_svg(payload),
+                kind=r.get("kind") or LOCATION_KIND_SPECIAL,
+                room=r.get("room"), rack=r.get("rack"),
+                section=r.get("section"), floor=r.get("floor"),
+            )
         )
     return LocationLabelsResponse(items=items)
 

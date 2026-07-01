@@ -10,6 +10,7 @@ import {
   getDispatch,
   getDispatchReservations,
   recommendedPallets,
+  recommendedBoxes,
   type DispatchLineIn,
   type DispatchCargoType,
 } from '../../api/dispatchApi'
@@ -32,7 +33,8 @@ type DraftLine = DispatchLineIn & {
   onHand: number
   inTransit: number
   sku_pending: boolean
-  itemsPerPallet: number | null
+  itemsPerBox: number | null
+  boxesPerPallet: number | null
   pallets: number | null
   palletsTouched: boolean
 }
@@ -116,7 +118,8 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
             inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
             sku_pending: !!p?.sku_pending,
-            itemsPerPallet: l.items_per_pallet ?? p?.items_per_pallet ?? null,
+            itemsPerBox: l.items_per_box ?? p?.items_per_box ?? null,
+            boxesPerPallet: l.boxes_per_pallet ?? p?.boxes_per_pallet ?? null,
             pallets: l.pallets_qty,
             palletsTouched: false,
             site_url: l.site_url,
@@ -220,8 +223,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
         inTransit: cargoType === 'defect' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
-        itemsPerPallet: b.items_per_pallet,
-        pallets: recommendedPallets(qty, b.items_per_pallet),
+        itemsPerBox: b.items_per_box,
+        boxesPerPallet: b.boxes_per_pallet,
+        pallets: recommendedPallets(recommendedBoxes(qty, b.items_per_box), b.boxes_per_pallet),
         palletsTouched: false,
         site_url: null as string | null,
         store_id: null as string | null,
@@ -235,7 +239,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
     setLines((ls) => ls.map((l) => {
       if (l._uid !== uid) return l
       const nextQty = Math.max(1, Math.floor(qty))
-      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(nextQty, l.itemsPerPallet) ?? l.pallets)
+      const pallets = l.palletsTouched ? l.pallets : (recommendedPallets(recommendedBoxes(nextQty, l.itemsPerBox), l.boxesPerPallet) ?? l.pallets)
       return { ...l, qty: nextQty, pallets }
     }))
   }
@@ -473,8 +477,8 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     }}
                   />
                   <div className="line-sub" style={{ flex: 1 }}>
-                    {l.itemsPerPallet
-                      ? `палеты · реком. ${recommendedPallets(l.qty, l.itemsPerPallet)} (${l.itemsPerPallet}/пал)`
+                    {l.boxesPerPallet && l.itemsPerBox
+                      ? `палеты · реком. ${recommendedPallets(recommendedBoxes(l.qty, l.itemsPerBox), l.boxesPerPallet)} (${l.boxesPerPallet} кор/пал)`
                       : 'палеты · кратность не задана'}
                   </div>
                 </div>

@@ -143,8 +143,10 @@ export type ShipmentContents = {
   suggested_amount_kop: number
   logistics_amount_kop: number
   pallets_amount_kop: number
+  boxes_amount_kop: number
   has_missing_price: boolean
   has_missing_pallet_price: boolean
+  has_missing_box_price: boolean
 }
 
 export type ReceiptContents = {

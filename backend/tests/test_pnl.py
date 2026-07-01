@@ -52,6 +52,7 @@ def _cleanup(client_id: str) -> None:
             conn.execute("DELETE FROM trip_docs WHERE id = ?", (tid,))
         conn.execute("DELETE FROM dispatch_docs WHERE client_id = ?", (client_id,))
         conn.execute("DELETE FROM client_pallet_prices WHERE client_id = ?", (client_id,))
+        conn.execute("DELETE FROM client_box_prices WHERE client_id = ?", (client_id,))
         conn.commit()
 
 
@@ -66,10 +67,10 @@ def client_id():
 def _dispatch_in_trip(
     admin_client, client_id: str, *,
     pallets: list[int], logistics_rub: float, trip_cost_rub: float,
-    ship_date: str, arrived_at: str,
+    ship_date: str, arrived_at: str, boxes: list[int] | None = None,
 ) -> tuple[str, str]:
-    """Отгрузка с палетами и стоимостью логистики, привязанная к закрытому рейсу
-    с фактической датой прибытия. Возвращает (dispatch_id, trip_number)."""
+    """Отгрузка с палетами (и опц. коробами) и стоимостью логистики, привязанная к закрытому
+    рейсу с фактической датой прибытия. Возвращает (dispatch_id, trip_number)."""
     r = admin_client.post("/dispatches", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "Test Client",
         "destination": "Москва", "ship_date": ship_date, "lines": [],
@@ -81,13 +82,14 @@ def _dispatch_in_trip(
     trip_number = f"TR-T{uuid4().hex[:6]}"
     with get_connection() as conn:
         for i, pq in enumerate(pallets):
+            bq = boxes[i] if boxes else None
             conn.execute(
                 "INSERT INTO dispatch_lines "
                 "(id,doc_id,product_id,product_name,product_sku,color_id,color_name,"
-                "size_id,size_name,qty,pallets_qty,shipped_qty,site_url,store_id,store_name,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "size_id,size_name,qty,pallets_qty,boxes_qty,shipped_qty,site_url,store_id,store_name,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (f"{doc_id}-l{i}", doc_id, f"p-{i}", f"Товар {i}", f"P{i}",
-                 None, None, None, None, 10, pq, 10, None, None, None, now),
+                 None, None, None, None, 10, pq, bq, 10, None, None, None, now),
             )
         conn.execute(
             "UPDATE dispatch_docs SET status = 'shipped', logistics_cost = ? WHERE id = ?",
@@ -135,6 +137,40 @@ def test_pnl_income_by_trip_day(admin_client, client_id):
     # Доход лёг на день рейса (12.06 = индекс 11), а не на дату документа (10.06 = индекс 9).
     assert body["income_series"][11] == 275000
     assert body["income_series"][9] == 0
+
+
+def test_pnl_income_includes_boxes(admin_client, client_id):
+    # Короба 10 шт × 9000 коп = 90000 — отдельный источник дохода наравне с палетами.
+    # Палеты 5 × 35000 = 175000, логистика 1000 ₽ = 100000, короба 90000 → итого 365000.
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 35000, "effective_from": "2026-06-01"})
+    admin_client.post(f"/box-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 9000, "effective_from": "2026-06-01"})
+    _, trip_number = _dispatch_in_trip(
+        admin_client, client_id, pallets=[3, 2], boxes=[4, 6],
+        logistics_rub=1000.0, trip_cost_rub=400.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+
+    body = admin_client.get(
+        f"/pnl?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    sources = {s["key"]: s["amount"] for s in body["income_sources"]}
+    assert sources.get("boxes") == 90000
+    assert sources.get("pallets") == 175000
+    assert body["income_total"] == 365000
+
+    # Детализация дня рейса тоже несёт короба отдельным источником.
+    day = admin_client.get(
+        f"/pnl/day?date=2026-06-12&date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    day_src = {s["key"]: s["amount"] for s in day["income_sources"]}
+    assert day_src.get("boxes") == 90000
+
+    # Рентабельность рейса включает короба в доход.
+    trips = admin_client.get("/pnl/trips?date_from=2026-06-01&date_to=2026-06-30").json()
+    row = next(r for r in trips["items"] if r["trip_number"] == trip_number)
+    assert row["income_kop"] == 365000
 
 
 def test_pnl_day_detail_matches_bar(admin_client, client_id):

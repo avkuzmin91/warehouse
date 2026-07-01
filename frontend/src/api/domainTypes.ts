@@ -1,3 +1,27 @@
+/** Строка состава документа-кандидата на дубль (для показа в предупреждении). */
+export type DuplicateMatchLine = {
+  product_sku: string | null
+  product_name: string | null
+  color_name: string | null
+  size_name: string | null
+  qty: number
+}
+
+/** Найденный сегодняшний документ с тем же составом (потенциальный дубль). */
+export type DuplicateMatch = {
+  id: string
+  doc_number: string
+  status: string
+  status_label: string
+  created_at: string
+  created_by_name: string | null
+  lines: DuplicateMatchLine[]
+}
+
+export type DuplicateCheckResponse = {
+  matches: DuplicateMatch[]
+}
+
 export type DictionaryItem = {
   id: string
   name: string
@@ -104,7 +128,8 @@ export type ProductItem = {
   sku_base: string
   sku_pending?: boolean
   weight_grams: number | null
-  items_per_pallet: number | null
+  items_per_box: number | null
+  boxes_per_pallet: number | null
   requires_color: boolean
   requires_size: boolean
   client_id: string | null

@@ -5,9 +5,9 @@ import { PnlFeature } from '../features/finance/pnl/PnlFeature'
 import { TripProfitabilityFeature } from '../features/finance/TripProfitabilityFeature'
 
 export function AnalyticsPage() {
-  const [tab] = useFilterParam('tab', 'income')
+  const [tab] = useFilterParam('tab', 'pnl')
+  if (tab === 'income') return <IncomeAnalyticsFeature />
   if (tab === 'expenses') return <ExpensesAnalyticsFeature />
-  if (tab === 'pnl') return <PnlFeature />
   if (tab === 'trips') return <TripProfitabilityFeature />
-  return <IncomeAnalyticsFeature />
+  return <PnlFeature />
 }

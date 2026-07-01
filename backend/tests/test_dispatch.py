@@ -111,7 +111,7 @@ def _payload(client_id, product_id, sku, qty, site_url=None) -> dict:
         "comment": "Тех. задание: упаковать аккуратно",
         "lines": [{
             "product_id": product_id, "product_name": "Product", "product_sku": sku,
-            "qty": qty, "pallets_qty": 1, "site_url": site_url,
+            "qty": qty, "pallets_qty": 1, "boxes_qty": 1, "site_url": site_url,
         }],
     }
 
@@ -314,6 +314,30 @@ def test_advance_blocked_without_pallets(admin_client, client_id):
     assert "палет" in r.json()["detail"].lower()
 
 
+def test_advance_allows_zero_boxes(admin_client, client_id):
+    """0 коробов — валидное осознанное значение, гейт пропускает."""
+    pid = _make_product(client_id, sku="DSP-B0")
+    _seed_ready(client_id, product_id=pid, sku="DSP-B0", qty=5)
+    payload = _payload(client_id, pid, "DSP-B0", 5)
+    payload["lines"][0]["boxes_qty"] = 0
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "preparing"
+
+
+def test_advance_blocked_without_boxes(admin_client, client_id):
+    """Пустое (NULL) количество коробов блокирует передачу в подготовку."""
+    pid = _make_product(client_id, sku="DSP-BN")
+    _seed_ready(client_id, product_id=pid, sku="DSP-BN", qty=5)
+    payload = _payload(client_id, pid, "DSP-BN", 5)
+    payload["lines"][0]["boxes_qty"] = None
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+    assert "короб" in r.json()["detail"].lower()
+
+
 def test_advance_blocked_without_comment(admin_client, client_id):
     """ТЗ (comment) обязательно при передаче отгрузки в подготовку — для товара и брака."""
     pid = _make_product(client_id, sku="DSP-TZ1")
@@ -483,7 +507,7 @@ def test_lines_editable_only_in_draft(admin_client, client_id):
     doc_id = _create(admin_client, client_id, pid, "DSP-T8", 2)
     # в черновике добавление строки доступно
     add = admin_client.post(f"/dispatches/{doc_id}/lines", json={
-        "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1, "pallets_qty": 1,
+        "product_id": pid, "product_name": "Product", "product_sku": "DSP-T8", "qty": 1, "pallets_qty": 1, "boxes_qty": 1,
     })
     assert add.status_code == 200, add.text
     # после передачи в подготовку состав не правится
@@ -516,6 +540,29 @@ def test_pallets_blocked_on_cancelled(admin_client, client_id):
     line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
     assert admin_client.post(f"/dispatches/{doc_id}/cancel").status_code == 200
     r = admin_client.patch(f"/dispatches/{doc_id}/lines/{line['id']}/pallets", json={"pallets_qty": 5})
+    assert r.status_code == 400, r.text
+
+
+def test_boxes_editable_after_advance(admin_client, client_id):
+    # Короба правятся на любом не-черновом статусе (тут — «Подготовка отгрузки»).
+    pid = _make_product(client_id, sku="DSP-BOX")
+    _seed_ready(client_id, product_id=pid, sku="DSP-BOX", qty=3)
+    doc_id = _create(admin_client, client_id, pid, "DSP-BOX", 3)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    r = admin_client.patch(f"/dispatches/{doc_id}/lines/{line['id']}/boxes", json={"boxes_qty": 12})
+    assert r.status_code == 200, r.text
+    updated = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert updated["boxes_qty"] == 12
+
+
+def test_boxes_blocked_on_cancelled(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-BOX2")
+    _seed_ready(client_id, product_id=pid, sku="DSP-BOX2", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-BOX2", 2)
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert admin_client.post(f"/dispatches/{doc_id}/cancel").status_code == 200
+    r = admin_client.patch(f"/dispatches/{doc_id}/lines/{line['id']}/boxes", json={"boxes_qty": 5})
     assert r.status_code == 400, r.text
 
 
@@ -570,16 +617,25 @@ def test_line_file_rejects_bad_extension(admin_client, client_id):
     assert bad.status_code == 400, bad.text
 
 
-def test_line_file_only_in_draft(admin_client, client_id):
-    """Прикреплять файлы можно только в черновике — после передачи в подготовку нельзя."""
+def test_line_file_editable_until_prepared(admin_client, client_id):
+    """Файлы прикрепляются в черновике и на подготовке (кладовщик собирает отгрузку);
+    после завершения подготовки (awaiting_trip) — уже нельзя."""
     pid = _make_product(client_id, sku="DSP-F3")
     _seed_ready(client_id, product_id=pid, sku="DSP-F3", qty=2)
     doc_id = _create(admin_client, client_id, pid, "DSP-F3", 2)
     line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
     assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
-    blocked = admin_client.post(
+    # На подготовке прикрепить ещё можно.
+    ok = admin_client.post(
         f"/dispatches/{doc_id}/lines/{line_id}/files",
         files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+    assert ok.status_code == 200, ok.text
+    # После завершения подготовки — нельзя.
+    assert _finish_prep(admin_client, doc_id).status_code == 200
+    blocked = admin_client.post(
+        f"/dispatches/{doc_id}/lines/{line_id}/files",
+        files={"file": ("doc2.pdf", b"%PDF-1.4", "application/pdf")},
     )
     assert blocked.status_code == 400, blocked.text
 
@@ -689,3 +745,53 @@ def test_good_prepare_then_consume(admin_client, client_id):
     assert _ready_net(client_id, pid) == 0
     line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
     assert line["shipped_qty"] == 5
+
+
+def _dup_check(admin_client, client_id, product_id, qty, *, ship_date="2026-07-01", cargo_type="good"):
+    return admin_client.post("/dispatches/check-duplicate", json={
+        "cargo_type": cargo_type,
+        "client_id": client_id,
+        "ship_date": ship_date,
+        "lines": [{"product_id": product_id, "color_id": None, "size_id": None, "qty": qty}],
+    })
+
+
+def test_duplicate_check_exact_match(admin_client, client_id):
+    """Тот же клиент + плановая дата + состав → совпадение 100%."""
+    pid = _make_product(client_id, sku="DSP-DUP1")
+    doc_id = _create(admin_client, client_id, pid, "DSP-DUP1", 10)
+    r = _dup_check(admin_client, client_id, pid, 10)
+    assert r.status_code == 200, r.text
+    matches = r.json()["matches"]
+    assert len(matches) == 1
+    assert matches[0]["id"] == doc_id
+    assert matches[0]["lines"][0]["qty"] == 10
+
+
+def test_duplicate_check_qty_differs(admin_client, client_id):
+    """Другое количество — состав не совпадает, дубля нет."""
+    pid = _make_product(client_id, sku="DSP-DUP2")
+    _create(admin_client, client_id, pid, "DSP-DUP2", 10)
+    assert _dup_check(admin_client, client_id, pid, 11).json()["matches"] == []
+
+
+def test_duplicate_check_date_differs(admin_client, client_id):
+    """Другая плановая дата — за тот день дубля нет."""
+    pid = _make_product(client_id, sku="DSP-DUP3")
+    _create(admin_client, client_id, pid, "DSP-DUP3", 10)
+    assert _dup_check(admin_client, client_id, pid, 10, ship_date="2026-07-02").json()["matches"] == []
+
+
+def test_duplicate_check_ignores_cancelled(admin_client, client_id):
+    """Аннулированная отгрузка не считается дублем."""
+    pid = _make_product(client_id, sku="DSP-DUP4")
+    doc_id = _create(admin_client, client_id, pid, "DSP-DUP4", 10)
+    assert admin_client.post(f"/dispatches/{doc_id}/cancel").status_code == 200
+    assert _dup_check(admin_client, client_id, pid, 10).json()["matches"] == []
+
+
+def test_duplicate_check_cargo_type_differs(admin_client, client_id):
+    """Годная и брак с одинаковым составом — разные типы, не дубль."""
+    pid = _make_product(client_id, sku="DSP-DUP5")
+    _create(admin_client, client_id, pid, "DSP-DUP5", 10)
+    assert _dup_check(admin_client, client_id, pid, 10, cargo_type="defect").json()["matches"] == []

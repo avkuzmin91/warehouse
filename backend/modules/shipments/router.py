@@ -287,6 +287,7 @@ def list_shipments(
         conds = ["d.is_deleted = 0"]
         params: list = []
         use_priority_order = overdue
+        status_filter_applied = False
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
             conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if status:
@@ -295,9 +296,11 @@ def list_shipments(
             allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
             if len(allowed) == 1:
                 conds.append("d.status = ?"); params.append(allowed[0])
+                status_filter_applied = True
             elif len(allowed) > 1:
                 placeholders = ",".join("?" for _ in allowed)
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
+                status_filter_applied = True
             if allowed and all(
                 s not in SHIPMENT_TERMINAL_STATUSES for s in allowed
             ):
@@ -308,6 +311,7 @@ def list_shipments(
             params.append(SHIPMENT_STATUS_PACKING)
             conds.append("d.ship_date IS NOT NULL")
             conds.append("d.ship_date < ?"); params.append(today)
+            status_filter_applied = True
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
@@ -326,6 +330,9 @@ def list_shipments(
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
             conds.append("d.ship_date <= ?"); params.append(date_to)
+        # Аннулированные скрываются из списка по умолчанию; показать — явным выбором статуса.
+        if not status_filter_applied:
+            conds.append("d.status != ?"); params.append(SHIPMENT_STATUS_CANCELLED)
         where = " AND ".join(conds)
         total = int(conn.execute(
             f"SELECT COUNT(*) AS cnt FROM shipment_docs d WHERE {where}", params

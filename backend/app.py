@@ -25,6 +25,7 @@ from modules.inventory.router import router as inventory_router
 from modules.invoices.router import router as invoices_router
 from modules.expenses.router import router as expenses_router
 from modules.timesheet.router import router as timesheet_router
+from modules.box_pricing.router import router as box_pricing_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.pallet_pricing.router import router as pallet_pricing_router
@@ -547,6 +548,27 @@ def _ensure_runtime_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_client_pallet_prices_lookup "
             "ON client_pallet_prices (client_id, effective_from)"
         )
+        # Короба: кол-во в строке отгрузки + кратность на короб + цена короба по клиенту.
+        conn.execute("ALTER TABLE IF EXISTS dispatch_lines ADD COLUMN IF NOT EXISTS boxes_qty INTEGER")
+        conn.execute("ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS items_per_box INTEGER")
+        # Кратность «коробов на палете»: палета меряется в коробах (шт → короба → палеты).
+        conn.execute("ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS boxes_per_pallet INTEGER")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS client_box_prices (
+                id             TEXT PRIMARY KEY,
+                client_id      TEXT NOT NULL,
+                price_kop      INTEGER NOT NULL,
+                effective_from TEXT NOT NULL,
+                note           TEXT,
+                created_at     TEXT NOT NULL,
+                created_by     TEXT,
+                is_deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_box_prices_lookup "
+            "ON client_box_prices (client_id, effective_from)"
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS recurring_expenses (
                 id                TEXT PRIMARY KEY,
@@ -778,6 +800,7 @@ app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(pricing_router)
 app.include_router(pallet_pricing_router)
+app.include_router(box_pricing_router)
 app.include_router(production_calendar_router)
 app.include_router(warehouse_rent_router)
 app.include_router(receipts_router)

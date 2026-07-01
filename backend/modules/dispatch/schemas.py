@@ -13,6 +13,7 @@ class DispatchLineIn(BaseModel):
     size_name:    str | None = None
     qty:          int = Field(ge=1)
     pallets_qty:  int | None = Field(default=None, ge=0)
+    boxes_qty:    int | None = Field(default=None, ge=0)
     site_url:     str | None = None
     store_id:     str | None = None
     store_name:   str | None = None
@@ -46,6 +47,7 @@ class DispatchDocUpdate(BaseModel):
 class DispatchLineUpdate(BaseModel):
     qty:         int | None = Field(default=None, ge=1)
     pallets_qty: int | None = Field(default=None, ge=0)
+    boxes_qty:   int | None = Field(default=None, ge=0)
     site_url:    str | None = None
     store_id:    str | None = None
     store_name:  str | None = None
@@ -53,6 +55,10 @@ class DispatchLineUpdate(BaseModel):
 
 class DispatchLinePalletsUpdate(BaseModel):
     pallets_qty: int | None = Field(default=None, ge=0)
+
+
+class DispatchLineBoxesUpdate(BaseModel):
+    boxes_qty: int | None = Field(default=None, ge=0)
 
 
 class DispatchPriorityUpdate(BaseModel):
@@ -95,7 +101,9 @@ class DispatchLineItem(BaseModel):
     qty:          int
     shipped_qty:  int
     pallets_qty:      int | None = None
-    items_per_pallet: int | None = None
+    boxes_qty:        int | None = None
+    items_per_box:    int | None = None
+    boxes_per_pallet: int | None = None
     site_url:     str | None = None
     store_id:     str | None
     store_name:   str | None
@@ -166,6 +174,42 @@ class DispatchLinesResponse(BaseModel):
     total: int
     page:  int
     limit: int
+
+
+class DispatchDuplicateCheckLine(BaseModel):
+    product_id: str
+    color_id:   str | None = None
+    size_id:    str | None = None
+    qty:        int = Field(ge=1)
+
+
+class DispatchDuplicateCheck(BaseModel):
+    cargo_type: str = "good"
+    client_id:  str | None = None
+    ship_date:  str | None = None
+    lines:      list[DispatchDuplicateCheckLine] = []
+
+
+class DuplicateMatchLine(BaseModel):
+    product_sku:  str | None = None
+    product_name: str | None = None
+    color_name:   str | None = None
+    size_name:    str | None = None
+    qty:          int
+
+
+class DuplicateMatch(BaseModel):
+    id:              str
+    doc_number:      str
+    status:          str
+    status_label:    str
+    created_at:      str
+    created_by_name: str | None = None
+    lines:           list[DuplicateMatchLine] = []
+
+
+class DuplicateCheckResponse(BaseModel):
+    matches: list[DuplicateMatch] = []
 
 
 class DispatchOpItem(BaseModel):
