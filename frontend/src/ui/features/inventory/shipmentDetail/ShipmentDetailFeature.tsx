@@ -695,7 +695,9 @@ export function ShipmentDetailFeature() {
       title: 'Аннулировать отгрузку?',
       body: isDefectCargo && isRelocating
         ? 'Отгрузка будет аннулирована, подготовленный брак вернётся на исходные места. Это действие нельзя отменить.'
-        : 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
+        : isOnPacking
+          ? 'Задача будет аннулирована, переданный на упаковку товар вернётся на исходные места. Это действие нельзя отменить.'
+          : 'Отгрузка будет аннулирована. Это действие нельзя отменить.',
       danger: true,
       confirmLabel: 'Аннулировать',
     })
@@ -793,7 +795,11 @@ export function ShipmentDetailFeature() {
                 <Icon name="arrowLeft" size={14} />Отклонить
               </button>
             )}
-            {canEdit && (isPacking || (isDefectCargo && isRelocating)) && (
+            {(
+              (canEdit && (isPacking || (isDefectCargo && isRelocating)))
+              // «На упаковке» менеджер может аннулировать, только пока ничего не упаковано.
+              || (canEditPlanning && isOnPacking && packedGood + packedDefect === 0)
+            ) && (
               <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
                 <Icon name="x" size={14} />Аннулировать
               </button>

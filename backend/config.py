@@ -220,11 +220,13 @@ SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
 # склада и менеджерский состав (см. примечание о роли в SHIPMENT_TRANSITION_ROLES).
 SHIPMENT_ACCEPT_ROLES: frozenset[str] = frozenset({"manager", "admin", "warehouse_head"})
 
-# Аннулировать можно только до передачи на упаковку включительно.
+# Аннулировать можно до передачи на упаковку включительно; в «На упаковке» — только
+# пока нет ни одной упакованной единицы (гейт по факту упаковки — в роутере).
 SHIPMENT_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_ON_PACKING,
 })
 
 SHIPMENT_REVERT_TRANSITIONS: dict[str, str] = {}

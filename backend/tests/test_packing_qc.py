@@ -284,6 +284,43 @@ def test_replenish_during_packing_reaches_plan_good(api, client_id):
     assert _balance(client_id, pos) == (10, 3, 0, 0)
 
 
+def test_cancel_on_packing_without_packed_returns_pool(api, client_id):
+    """«На упаковке» без единой упакованной единицы: менеджер аннулирует, пул возвращается на места."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+
+    _as(_MANAGER)
+    r = api.post(f"/shipments/{doc_id}/cancel")
+    assert r.status_code == 200, r.text
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "cancelled"
+    assert _balance(client_id, pos) == (0, 0, 10, 0)  # пул вернулся на хранение
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 10
+
+
+def test_cancel_on_packing_blocked_when_packed(api, client_id):
+    """«На упаковке» с упакованным товаром (годным или браком) аннулировать нельзя."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"defect_delta": 2, "packed_date": _TODAY})
+
+    _as(_MANAGER)
+    r = api.post(f"/shipments/{doc_id}/cancel")
+    assert r.status_code == 400, r.text
+    assert "упакованный товар" in r.json()["detail"]
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
+
+
 def test_multizone_transfer_via_allocations(api, client_id):
     """Передача из нескольких мест: явная разбивка allocations по зонам."""
     pos = _position()

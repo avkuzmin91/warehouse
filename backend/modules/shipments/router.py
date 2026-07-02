@@ -25,6 +25,7 @@ from config import (
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
+    SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_TERMINAL_STATUSES,
@@ -69,6 +70,7 @@ from modules.shipments.schemas import (
 )
 from modules.shipments.service import (
     _check_lines_covered_by_stock,
+    _doc_packed_qty,
     advance_shipment,
     finish_defect_relocation,
     finish_relocation,
@@ -1134,6 +1136,13 @@ def cancel_shipment(
         cancellable = SHIPMENT_CANCELLABLE_STATUSES_DEFECT if is_defect_cargo else SHIPMENT_CANCELLABLE_STATUSES
         if str(row["status"]) not in cancellable:
             raise HTTPException(status_code=400, detail="Документ нельзя аннулировать в текущем статусе")
+        if not is_defect_cargo and str(row["status"]) == SHIPMENT_STATUS_ON_PACKING:
+            packed = _doc_packed_qty(conn, doc_id)
+            if packed["good"] > 0 or packed["defect"] > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="В задаче уже есть упакованный товар — аннулировать нельзя",
+                )
         cancel_comment = None
         if is_defect_cargo:
             returned = return_defect_to_storage(conn, doc_id, uid)
