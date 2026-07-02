@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import {
   bulkCreateLocations,
   deleteLocation,
@@ -51,16 +51,31 @@ function escapeHtml(value: string): string {
 
 // Печать QR-этикеток: отдельное окно, чтобы стили печати не пересекались с SPA.
 // ОДНА этикетка = ОДНА страница (разрыв страницы после каждой) — под этикеточный
-// принтер / поячеечную наклейку. Макет «Наклейки мест хранения» (Вариант C, ЧБ):
-// QR слева, крупный код + адрес + стрелка «ячейка справа». Наклейка клеится на
-// левую стойку ячейки, стрелка → однозначно указывает на нужную коробку справа.
+// принтер / поячеечную наклейку. Лента остаётся 58×40 мм, но макет ВЕРТИКАЛЬНЫЙ:
+// контент повёрнут на 90° внутри страницы, наклейка клеится на стойку стеллажа.
+// Сверху QR, ниже код + адрес, внизу стрелка на ячейку. Направление стрелки
+// (слева-направо / справа-налево) пользователь выбирает перед печатью; для ячеек
+// 3-го этажа и выше стрелка идёт по диагонали вверх с наклоном в выбранную сторону.
 // У служебных зон (kind='special') стрелки/адреса нет — только QR и имя.
 
+export type LabelArrowDir = 'right' | 'left'
+
 // Стрелка направления: скруглённый стержень + сплошной наконечник (как в макете).
-const ARROW_SVG =
-  '<svg class="bigarw" viewBox="0 0 150 40" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' +
-  '<line class="shaft" x1="6" y1="20" x2="112" y2="20"/>' +
-  '<path class="head" d="M108 4 L146 20 L108 36 Z"/></svg>'
+// up=true — диагональ вверх (этаж ≥ 3), left=true — зеркало (ячейка слева).
+function arrowSvg(up: boolean, left: boolean): string {
+  const shapes =
+    '<line class="shaft" x1="6" y1="20" x2="112" y2="20"/>' +
+    '<path class="head" d="M108 4 L146 20 L108 36 Z"/>'
+  let g = up ? `<g transform="rotate(-30 75 20)">${shapes}</g>` : shapes
+  if (left) g = `<g transform="translate(150 0) scale(-1 1)">${g}</g>`
+  const viewBox = up ? '0 -40 150 105' : '0 0 150 40'
+  return `<svg class="bigarw${up ? ' up' : ''}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${g}</svg>`
+}
+
+function arrowCaption(up: boolean, left: boolean): string {
+  const side = left ? 'слева' : 'справа'
+  return up ? `ячейка<br>сверху ${side}` : `ячейка<br>${side}`
+}
 
 function labelMeta(l: LocationLabel): string {
   if (!l.room) return ''
@@ -71,27 +86,31 @@ function labelMeta(l: LocationLabel): string {
   return parts.join('·')
 }
 
-function printLabels(labels: LocationLabel[]) {
+function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
   const win = window.open('', '_blank', 'width=900,height=700')
   if (!win) return
+  const left = dir === 'left'
   const cells = labels
     .map((l) => {
       if (l.kind !== 'cell') {
         return `
       <div class="label special">
-        <div class="qr">${l.qr_svg}</div>
-        <div class="cright center"><div class="code sp">${escapeHtml(l.code)}</div></div>
+        <div class="rot center">
+          <div class="qr">${l.qr_svg}</div>
+          <div class="code sp">${escapeHtml(l.code)}</div>
+        </div>
       </div>`
       }
       const meta = labelMeta(l)
+      const up = Number(l.floor) >= 3
       return `
       <div class="label cell">
-        <div class="qr">${l.qr_svg}</div>
-        <div class="cright">
+        <div class="rot">
+          <div class="qr">${l.qr_svg}</div>
           <div class="code">${escapeHtml(l.code)}</div>
           ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}
           <div class="cdiv"></div>
-          <div class="arrow-row">${ARROW_SVG}<span class="arrow-cap">ячейка<br>справа</span></div>
+          <div class="arrow-zone">${arrowSvg(up, left)}<span class="arrow-cap">${arrowCaption(up, left)}</span></div>
         </div>
       </div>`
     })
@@ -116,10 +135,7 @@ function printLabels(labels: LocationLabel[]) {
       .label {
         width: 58mm;
         height: 40mm;
-        padding: 3mm 3.5mm;
-        display: flex;
-        align-items: center;
-        gap: 3mm;
+        position: relative;
         overflow: hidden;
         background: #fff;
         color: #000;
@@ -127,20 +143,39 @@ function printLabels(labels: LocationLabel[]) {
         page-break-after: always;
       }
       .label:last-child { page-break-after: auto; break-after: auto; }
-      .label .qr { width: 18mm; height: 18mm; flex: 0 0 18mm; line-height: 0; }
+      /* Вертикальный макет: лента 58×40, контент повёрнут на 90° — наклейка
+         клеится на стойку стеллажа боком, читается как 40×58 (портрет). */
+      .rot {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 40mm;
+        height: 58mm;
+        transform-origin: 0 0;
+        transform: translateX(58mm) rotate(90deg);
+        padding: 3mm 3mm 2.5mm;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .rot.center { justify-content: center; gap: 2mm; }
+      .label .qr { width: 18mm; height: 18mm; flex: 0 0 auto; line-height: 0; }
       .label .qr svg { width: 100%; height: 100%; display: block; }
-      .cright { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-      .cright.center { justify-content: center; }
       .code {
+        width: 100%;
+        text-align: center;
         font-weight: 700;
         font-size: 5mm;
         line-height: 1;
         letter-spacing: 0.02em;
         white-space: nowrap;
         overflow: hidden;
+        margin-top: 1.8mm;
       }
-      .code.sp { font-size: 3.4mm; white-space: normal; line-height: 1.15; }
+      .code.sp { font-size: 3.4mm; white-space: normal; line-height: 1.15; margin-top: 0; }
       .meta {
+        width: 100%;
+        text-align: center;
         font-size: 2.2mm;
         font-weight: 500;
         letter-spacing: 0.01em;
@@ -150,12 +185,23 @@ function printLabels(labels: LocationLabel[]) {
         white-space: nowrap;
         overflow: hidden;
       }
-      .cdiv { height: 0.2mm; background: #000; opacity: 0.35; margin: 2mm 0 1.8mm; }
-      .arrow-row { display: flex; align-items: center; gap: 1.6mm; }
-      .bigarw { flex: 1; height: 5mm; }
+      .cdiv { width: 100%; height: 0.2mm; background: #000; opacity: 0.35; margin: 1.8mm 0 1.4mm; }
+      .arrow-zone {
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.2mm;
+      }
+      .bigarw { width: 26mm; height: 5mm; flex: 0 0 auto; }
+      .bigarw.up { width: 24mm; height: 15mm; }
       .bigarw .shaft { stroke: #000; stroke-width: 7; stroke-linecap: round; }
       .bigarw .head { fill: #000; }
       .arrow-cap {
+        text-align: center;
         font-size: 1.7mm;
         font-weight: 700;
         letter-spacing: 0.06em;
@@ -187,7 +233,7 @@ function printLabels(labels: LocationLabel[]) {
         }
       }
     </style></head><body>
-    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • размер 58×40 мм • масштаб 100% / «Реальный размер».</div>
+    <div class="toolbar"><button onclick="window.print()">Печать</button> &nbsp; Этикеток: ${labels.length} • лента 58×40 мм, макет вертикальный • стрелка ${left ? 'справа-налево' : 'слева-направо'} • масштаб 100% / «Реальный размер».</div>
     ${cells}
     <script>
       function fit(el, minPx, step) {
@@ -223,6 +269,7 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
   const [printing, setPrinting] = useState(false)
   const [sheet, setSheet] = useState<{ isNew: boolean; initial: DictionaryItem | null } | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [dirLabels, setDirLabels] = useState<LocationLabel[] | null>(null)
 
   const toggleOne = (id: string) =>
     setSelected((prev) => {
@@ -288,7 +335,9 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
         toast(selected.size ? 'Не удалось получить выбранные этикетки' : 'Нет ячеек для печати по текущему фильтру', 'info')
         return
       }
-      printLabels(res.items)
+      // У служебных зон стрелки нет — направление спрашиваем только если есть ячейки.
+      if (res.items.some((l) => l.kind === 'cell')) setDirLabels(res.items)
+      else printLabels(res.items, 'right')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось получить этикетки', 'error')
     } finally {
@@ -397,6 +446,15 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
         onDone={() => { setGenOpen(false); void load(); reloadLookups() }}
       />
 
+      <ArrowDirModal
+        labels={dirLabels}
+        onClose={() => setDirLabels(null)}
+        onPick={(dir) => {
+          if (dirLabels) printLabels(dirLabels, dir)
+          setDirLabels(null)
+        }}
+      />
+
       {sheet && (
         <SimpleDictSheet
           open
@@ -409,6 +467,60 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
         />
       )}
     </div>
+  )
+}
+
+function ArrowDirModal({
+  labels,
+  onClose,
+  onPick,
+}: {
+  labels: LocationLabel[] | null
+  onClose: () => void
+  onPick: (dir: LabelArrowDir) => void
+}) {
+  const hasUpper = (labels ?? []).some((l) => l.kind === 'cell' && Number(l.floor) >= 3)
+  const dirBtn: CSSProperties = {
+    flex: 1,
+    display: 'grid',
+    justifyItems: 'center',
+    gap: 6,
+    padding: '14px 10px',
+    height: 'auto',
+  }
+  return (
+    <Modal
+      open={labels !== null}
+      onClose={onClose}
+      title="Направление стрелки"
+      subtitle="Наклейка клеится на стойку — стрелка указывает, с какой стороны ячейка"
+      width={420}
+      footer={
+        <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn ghost" onClick={onClose}>Отмена</button>
+        </div>
+      }
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div className="row gap-8">
+          <button className="btn" style={dirBtn} onClick={() => onPick('right')}>
+            <span style={{ fontSize: 26, lineHeight: 1 }}>→</span>
+            <span>Слева направо</span>
+            <span className="text-xs subtle">ячейка справа от наклейки</span>
+          </button>
+          <button className="btn" style={dirBtn} onClick={() => onPick('left')}>
+            <span style={{ fontSize: 26, lineHeight: 1 }}>←</span>
+            <span>Справа налево</span>
+            <span className="text-xs subtle">ячейка слева от наклейки</span>
+          </button>
+        </div>
+        {hasUpper && (
+          <div className="text-xs subtle">
+            Для ячеек 3-го этажа и выше стрелка будет направлена вверх с наклоном в выбранную сторону.
+          </div>
+        )}
+      </div>
+    </Modal>
   )
 }
 
