@@ -52,7 +52,8 @@ function escapeHtml(value: string): string {
 // Печать QR-этикеток: отдельное окно, чтобы стили печати не пересекались с SPA.
 // ОДНА этикетка = ОДНА страница (разрыв страницы после каждой) — под этикеточный
 // принтер / поячеечную наклейку. Лента остаётся 58×40 мм, но макет ВЕРТИКАЛЬНЫЙ:
-// контент повёрнут на 90° внутри страницы, наклейка клеится на стойку стеллажа.
+// контент верстается портретно 40×58, страница поворачивается через
+// @page page-orientation; наклейка клеится на стойку стеллажа.
 // Сверху QR, ниже код + адрес, внизу стрелка на ячейку. Направление стрелки
 // (слева-направо / справа-налево) пользователь выбирает перед печатью; для ячеек
 // 3-го этажа и выше стрелка идёт по диагонали вверх с наклоном в выбранную сторону.
@@ -95,23 +96,19 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
       if (l.kind !== 'cell') {
         return `
       <div class="label special">
-        <div class="rot center">
-          <div class="qr">${l.qr_svg}</div>
-          <div class="code sp">${escapeHtml(l.code)}</div>
-        </div>
+        <div class="qr">${l.qr_svg}</div>
+        <div class="code sp">${escapeHtml(l.code)}</div>
       </div>`
       }
       const meta = labelMeta(l)
       const up = Number(l.floor) >= 3
       return `
       <div class="label cell">
-        <div class="rot">
-          <div class="qr">${l.qr_svg}</div>
-          <div class="code">${escapeHtml(l.code)}</div>
-          ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}
-          <div class="cdiv"></div>
-          <div class="arrow-zone">${arrowSvg(up, left)}<span class="arrow-cap">${arrowCaption(up, left)}</span></div>
-        </div>
+        <div class="qr">${l.qr_svg}</div>
+        <div class="code">${escapeHtml(l.code)}</div>
+        ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}
+        <div class="cdiv"></div>
+        <div class="arrow-zone">${arrowSvg(up, left)}<span class="arrow-cap">${arrowCaption(up, left)}</span></div>
       </div>`
     })
     .join('')
@@ -122,7 +119,11 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
       @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:400; font-display:swap; src:url(/fonts/RobotoMonoCZ-latin-400.woff2) format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+2212,U+2215; }
       @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:500; font-display:swap; src:url(/fonts/L0x5DF4xlVMF-BfR8bXMIjhPq3-OXg.woff2) format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
       @font-face { font-family:'Roboto Mono'; font-style:normal; font-weight:500; font-display:swap; src:url(/fonts/RobotoMonoCZ-latin-500.woff2) format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+2212,U+2215; }
-      @page { size: 58mm 40mm; margin: 0mm; }
+      /* Контент верстается портретно 40×58, а страница поворачивается на выходе
+         (page-orientation) — лента остаётся 58×40. Раньше поворот делался
+         transform'ом, но Chrome при печати режет страницы ДО трансформации и
+         отрезал низ этикетки (стрелку) на всех страницах, кроме последней. */
+      @page { size: 40mm 58mm; margin: 0mm; page-orientation: rotate-right; }
       * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       html, body { margin: 0; padding: 0; font-family: 'Roboto Mono', ui-monospace, monospace; background: #fff; color: #000; }
       .toolbar {
@@ -133,9 +134,12 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
       }
       .toolbar button { font-size: 14px; padding: 6px 14px; cursor: pointer; }
       .label {
-        width: 58mm;
-        height: 40mm;
-        position: relative;
+        width: 40mm;
+        height: 58mm;
+        padding: 3mm 3mm 2.5mm;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
         overflow: hidden;
         background: #fff;
         color: #000;
@@ -143,22 +147,7 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
         page-break-after: always;
       }
       .label:last-child { page-break-after: auto; break-after: auto; }
-      /* Вертикальный макет: лента 58×40, контент повёрнут на 90° — наклейка
-         клеится на стойку стеллажа боком, читается как 40×58 (портрет). */
-      .rot {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 40mm;
-        height: 58mm;
-        transform-origin: 0 0;
-        transform: translateX(58mm) rotate(90deg);
-        padding: 3mm 3mm 2.5mm;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-      }
-      .rot.center { justify-content: center; gap: 2mm; }
+      .label.special { justify-content: center; gap: 2mm; }
       .label .qr { width: 18mm; height: 18mm; flex: 0 0 auto; line-height: 0; }
       .label .qr svg { width: 100%; height: 100%; display: block; }
       .code {
@@ -215,8 +204,8 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
       }
       @media print {
         html, body {
-          width: 58mm;
-          min-width: 58mm;
+          width: 40mm;
+          min-width: 40mm;
           margin: 0 !important;
           padding: 0 !important;
           background: #fff !important;
@@ -224,8 +213,8 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
         }
         .toolbar { display: none !important; }
         .label {
-          width: 58mm !important;
-          height: 40mm !important;
+          width: 40mm !important;
+          height: 58mm !important;
           margin: 0 !important;
           box-shadow: none !important;
           break-inside: avoid;
