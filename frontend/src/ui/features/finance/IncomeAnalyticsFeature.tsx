@@ -3,15 +3,17 @@ import { getIncomeAnalytics } from '../../../api/pnlApi'
 import type { IncomeAnalytics } from '../../../api/pnlApi'
 import { ListPage } from '../../layouts/ListPage'
 import { FiltersBar, FilterCombobox } from '../../data/FiltersBar'
+import { DateRange } from '../../data/DateRange'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useLookups } from '../../../hooks/useLookups'
-import { useFilterParam } from '../../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
 import { AnalyticsTabs } from './AnalyticsTabs'
+import { PnlDayDrawer } from './pnl/PnlDayDrawer'
 
 const PRESETS = [7, 14, 30] as const
 const DEFAULT_PERIOD = 30
@@ -42,6 +44,13 @@ function shiftYmd(ymd: string, deltaDays: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`
 }
+
+function ymdToUtc(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return Date.UTC(y, m - 1, d)
+}
+
+const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 
 const MONTHS_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 const DOW_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб']
@@ -79,13 +88,22 @@ export function IncomeAnalyticsFeature() {
   const isAdmin = user?.role === 'admin'
   const { clients } = useLookups()
 
-  const [periodRaw, setPeriodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
+  const [periodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
   const period = PRESETS.includes(Number(periodRaw) as 7 | 14 | 30) ? Number(periodRaw) : DEFAULT_PERIOD
   const [clientId, setClientId] = useFilterParam('client', '')
+  const [fromRaw, setFromRaw] = useFilterParam('from', '')
+  const [toRaw, setToRaw] = useFilterParam('to', '')
+  const { setMany } = useFilterParamsActions()
+
+  const customFrom = isYmd(fromRaw) ? fromRaw : ''
+  const customTo = isYmd(toRaw) ? toRaw : ''
+  const hasCustom = Boolean(customFrom || customTo)
 
   const today = moscowTodayYmd()
-  const effTo = today
-  const effFrom = shiftYmd(today, -(period - 1))
+  let effFrom = hasCustom ? (customFrom || customTo) : shiftYmd(today, -(period - 1))
+  let effTo = hasCustom ? (customTo || customFrom) : today
+  if (effFrom > effTo) [effFrom, effTo] = [effTo, effFrom]
+  const periodDays = Math.round((ymdToUtc(effTo) - ymdToUtc(effFrom)) / 86_400_000) + 1
 
   const { data, loading, error } = useApi(
     (s) => getIncomeAnalytics({ date_from: effFrom, date_to: effTo, client_id: clientId || undefined }, s),
@@ -97,6 +115,7 @@ export function IncomeAnalyticsFeature() {
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set())
   const [hoverSrc, setHoverSrc] = useState<string | null>(null)
   const [hoverDay, setHoverDay] = useState<number | null>(null)
+  const [selDay, setSelDay] = useState<string | null>(null)
   const [tipX, setTipX] = useState(0)
   const plotRef = useRef<HTMLDivElement>(null)
 
@@ -130,10 +149,17 @@ export function IncomeAnalyticsFeature() {
     <>
       <div className="preset">
         {PRESETS.map((p) => (
-          <button key={p} className={period === p ? 'on' : ''}
-            onClick={() => { setPeriodRaw(String(p)); setHoverDay(null) }}>{p} дн.</button>
+          <button key={p} className={!hasCustom && period === p ? 'on' : ''}
+            onClick={() => { setMany({ days: p === DEFAULT_PERIOD ? null : String(p), from: null, to: null }); setHoverDay(null); setSelDay(null) }}>{p} дн.</button>
         ))}
       </div>
+      <DateRange
+        from={customFrom}
+        to={customTo}
+        onFromChange={(v) => { setFromRaw(v); setHoverDay(null); setSelDay(null) }}
+        onToChange={(v) => { setToRaw(v); setHoverDay(null); setSelDay(null) }}
+        onClear={() => { setMany({ from: null, to: null }); setHoverDay(null); setSelDay(null) }}
+      />
       {isAdmin && (
         <button className="btn" onClick={exportCsv} disabled={!data || data.sources.length === 0}>
           <Icon name="download" size={14} />Выгрузить
@@ -145,7 +171,7 @@ export function IncomeAnalyticsFeature() {
   return (
     <ListPage
       title="Аналитика доходов"
-      subtitle={`Период: ${ddmm(effFrom)} — ${ddmm(effTo)} · ${period} дн.`}
+      subtitle={`Период: ${ddmm(effFrom)} — ${ddmm(effTo)} · ${periodDays} дн.`}
       actions={actions}
     >
       <AnalyticsTabs active="income" />
@@ -163,15 +189,26 @@ export function IncomeAnalyticsFeature() {
       ) : error ? (
         <EmptyState title="Не удалось загрузить аналитику" sub={error.message} />
       ) : !data ? null : (
-        <AnalyticsBody
-          data={data}
-          period={period}
-          disabled={disabled} setDisabled={setDisabled}
-          hoverSrc={hoverSrc} setHoverSrc={setHoverSrc}
-          hoverDay={hoverDay} setHoverDay={setHoverDay}
-          tipX={tipX} setTipX={setTipX}
-          plotRef={plotRef}
-        />
+        <>
+          <AnalyticsBody
+            data={data}
+            period={periodDays}
+            disabled={disabled} setDisabled={setDisabled}
+            hoverSrc={hoverSrc} setHoverSrc={setHoverSrc}
+            hoverDay={hoverDay} setHoverDay={setHoverDay}
+            tipX={tipX} setTipX={setTipX}
+            plotRef={plotRef}
+            onSelectDay={setSelDay}
+          />
+          <PnlDayDrawer
+            day={selDay}
+            from={effFrom}
+            to={effTo}
+            mode="income"
+            clientId={clientId || undefined}
+            onClose={() => setSelDay(null)}
+          />
+        </>
       )}
     </ListPage>
   )
@@ -179,7 +216,7 @@ export function IncomeAnalyticsFeature() {
 
 function AnalyticsBody({
   data, period,
-  disabled, setDisabled, hoverSrc, setHoverSrc, hoverDay, setHoverDay, tipX, setTipX, plotRef,
+  disabled, setDisabled, hoverSrc, setHoverSrc, hoverDay, setHoverDay, tipX, setTipX, plotRef, onSelectDay,
 }: {
   data: IncomeAnalytics
   period: number
@@ -192,6 +229,7 @@ function AnalyticsBody({
   tipX: number
   setTipX: (n: number) => void
   plotRef: React.RefObject<HTMLDivElement | null>
+  onSelectDay: (day: string) => void
 }) {
   const sources = data.sources
   const days = data.series.map((p) => p.date)
@@ -318,7 +356,7 @@ function AnalyticsBody({
                     {days.map((day, di) => {
                       const total = dayTotals[di]
                       return (
-                        <div key={day} className={`bcol${hoverDay === di ? ' sel' : ''}`} onMouseEnter={() => setHoverDay(di)}>
+                        <div key={day} className={`bcol${hoverDay === di ? ' sel' : ''}`} onMouseEnter={() => setHoverDay(di)} onClick={() => onSelectDay(day)}>
                           <div className="bstack" style={{ height: `${axisMax > 0 ? (total / axisMax) * 100 : 0}%` }}>
                             {renderSrc.map((s) => {
                               const v = s.series[di] ?? 0
@@ -347,6 +385,7 @@ function AnalyticsBody({
                         </div>
                       ))}
                       {tip.segs.length === 0 && <div className="an-tip-more">Дохода нет</div>}
+                      <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-text-faint)' }}>Нажмите — детализация дня</div>
                     </div>
                   )}
                 </div>

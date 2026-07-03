@@ -57,6 +57,7 @@ def list_trips_aggregated(
     status: str | None,
     statuses: list[str] | None,
     carrier_id: str | None,
+    client_id: str | None,
     search: str | None,
     eta_from: str | None,
     eta_to: str | None,
@@ -83,6 +84,12 @@ def list_trips_aggregated(
     if carrier_id:
         conds.append("d.carrier_id = ?")
         params.append(carrier_id.strip())
+    if client_id:
+        conds.append(
+            "EXISTS (SELECT 1 FROM trip_lines tlc"
+            " WHERE tlc.trip_id = d.id AND tlc.is_deleted = 0 AND tlc.client_id = ?)"
+        )
+        params.append(client_id.strip())
     if eta_from:
         conds.append("SUBSTR(d.eta, 1, 10) >= ?")
         params.append(eta_from)

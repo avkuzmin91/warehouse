@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from dbconn import get_connection
 from modules.auth.service import get_current_manager
-from modules.expenses.service import validate_date
+from modules.expenses.service import ensure_analytics_window, validate_date
 from modules.pnl.schemas import (
     IncomeAnalyticsResponse,
     PnlDayResponse,
@@ -18,18 +16,9 @@ from security import can_view_salary, ensure_finance_access
 
 router = APIRouter(tags=["pnl"])
 
-_MAX_WINDOW_DAYS = 731  # ~2 года — потолок против гигантских диапазонов (память/latency рядов)
-
-
 def _get_finance(user=Depends(get_current_manager)):
     ensure_finance_access(user)
     return user
-
-
-def _ensure_window(date_from: str, date_to: str) -> None:
-    span = abs((date.fromisoformat(date_from) - date.fromisoformat(date_to)).days) + 1
-    if span > _MAX_WINDOW_DAYS:
-        raise HTTPException(status_code=400, detail=f"Слишком широкий период (максимум {_MAX_WINDOW_DAYS} дн.)")
 
 
 @router.get("/pnl", response_model=PnlResponse)
@@ -44,7 +33,7 @@ def get_pnl(
     Видна финансовым ролям (админ/менеджер), как и аналитика расходов."""
     df = validate_date(date_from)
     dt = validate_date(date_to)
-    _ensure_window(df, dt)
+    ensure_analytics_window(df, dt)
     with get_connection() as conn:
         data = pnl_report(conn, date_from=df, date_to=dt, client_id=(client_id or None))
     return PnlResponse(**data)
@@ -62,7 +51,7 @@ def get_income_analytics(
     расчётом, что и в P&L. Видна финансовым ролям (админ/менеджер)."""
     df = validate_date(date_from)
     dt = validate_date(date_to)
-    _ensure_window(df, dt)
+    ensure_analytics_window(df, dt)
     with get_connection() as conn:
         data = income_analytics(conn, date_from=df, date_to=dt, client_id=(client_id or None))
     return IncomeAnalyticsResponse(**data)
@@ -82,7 +71,7 @@ def get_pnl_day(
     day = validate_date(date)
     df = validate_date(date_from)
     dt = validate_date(date_to)
-    _ensure_window(df, dt)
+    ensure_analytics_window(df, dt)
     with get_connection() as conn:
         data = pnl_day_detail(
             conn, day=day, date_from=df, date_to=dt,
@@ -101,7 +90,7 @@ def get_trip_profitability(
     доля документа по перевезённому количеству) против фактической себестоимости рейса."""
     df = validate_date(date_from)
     dt = validate_date(date_to)
-    _ensure_window(df, dt)
+    ensure_analytics_window(df, dt)
     with get_connection() as conn:
         data = trip_profitability(conn, date_from=df, date_to=dt)
     return TripProfitabilityResponse(**data)

@@ -248,6 +248,7 @@ def list_trips(
     status: str | None = Query(None),
     statuses: list[str] | None = Query(None),
     carrier_id: str | None = Query(None),
+    client_id: str | None = Query(None),
     search: str | None = Query(None),
     eta_from: str | None = Query(None),
     eta_to: str | None = Query(None),
@@ -259,7 +260,7 @@ def list_trips(
     with get_connection() as conn:
         total, rows = list_trips_aggregated(
             conn, page=page, limit=limit, direction=direction, status=status, statuses=statuses,
-            carrier_id=carrier_id, search=search, eta_from=eta_from, eta_to=eta_to,
+            carrier_id=carrier_id, client_id=client_id, search=search, eta_from=eta_from, eta_to=eta_to,
             statuses_all=TRIP_STATUSES_ALL,
         )
     items = [

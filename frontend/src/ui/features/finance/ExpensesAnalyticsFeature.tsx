@@ -5,12 +5,14 @@ import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
+import { DateRange } from '../../data/DateRange'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { useFilterParam } from '../../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
 import { foldCiSearch } from '../../../utils/foldCiSearch'
 import { AnalyticsTabs } from './AnalyticsTabs'
+import { PnlDayDrawer } from './pnl/PnlDayDrawer'
 
 const PRESETS = [7, 14, 30] as const
 const DEFAULT_PERIOD = 30
@@ -38,6 +40,13 @@ function shiftYmd(ymd: string, deltaDays: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`
 }
+
+function ymdToUtc(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return Date.UTC(y, m - 1, d)
+}
+
+const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 
 const MONTHS_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 const DOW_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб']
@@ -76,12 +85,21 @@ export function ExpensesAnalyticsFeature() {
   const isFinance = user?.role === 'admin' || user?.role === 'manager'
   const isAdmin = user?.role === 'admin'
 
-  const [periodRaw, setPeriodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
+  const [periodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
   const period = PRESETS.includes(Number(periodRaw) as 7 | 14 | 30) ? Number(periodRaw) : DEFAULT_PERIOD
+  const [fromRaw, setFromRaw] = useFilterParam('from', '')
+  const [toRaw, setToRaw] = useFilterParam('to', '')
+  const { setMany } = useFilterParamsActions()
+
+  const customFrom = isYmd(fromRaw) ? fromRaw : ''
+  const customTo = isYmd(toRaw) ? toRaw : ''
+  const hasCustom = Boolean(customFrom || customTo)
 
   const today = moscowTodayYmd()
-  const effTo = today
-  const effFrom = shiftYmd(today, -(period - 1))
+  let effFrom = hasCustom ? (customFrom || customTo) : shiftYmd(today, -(period - 1))
+  let effTo = hasCustom ? (customTo || customFrom) : today
+  if (effFrom > effTo) [effFrom, effTo] = [effTo, effFrom]
+  const periodDays = Math.round((ymdToUtc(effTo) - ymdToUtc(effFrom)) / 86_400_000) + 1
 
   const { data, loading, error } = useApi(
     (s) => getExpenseAnalytics({ date_from: effFrom, date_to: effTo }, s),
@@ -96,8 +114,17 @@ export function ExpensesAnalyticsFeature() {
   const [groupTail, setGroupTail] = useState(false)
   const [hoverCat, setHoverCat] = useState<string | null>(null)
   const [hoverDay, setHoverDay] = useState<number | null>(null)
+  const [selDay, setSelDay] = useState<string | null>(null)
   const [tipX, setTipX] = useState(0)
   const plotRef = useRef<HTMLDivElement>(null)
+
+  // Шторка детализации дня красит категории теми же тонами, что и легенда графика
+  // (цвет закреплён за позицией категории в ответе).
+  const drawerColors = useMemo(() => {
+    const m: Record<string, string> = {}
+    ;(data?.categories ?? []).forEach((c, i) => { m[c.name] = catColor(i) })
+    return m
+  }, [data])
 
   if (!isFinance) {
     return (
@@ -129,10 +156,17 @@ export function ExpensesAnalyticsFeature() {
     <>
       <div className="preset">
         {PRESETS.map((p) => (
-          <button key={p} className={period === p ? 'on' : ''}
-            onClick={() => { setPeriodRaw(String(p)); setHoverDay(null) }}>{p} дн.</button>
+          <button key={p} className={!hasCustom && period === p ? 'on' : ''}
+            onClick={() => { setMany({ days: p === DEFAULT_PERIOD ? null : String(p), from: null, to: null }); setHoverDay(null); setSelDay(null) }}>{p} дн.</button>
         ))}
       </div>
+      <DateRange
+        from={customFrom}
+        to={customTo}
+        onFromChange={(v) => { setFromRaw(v); setHoverDay(null); setSelDay(null) }}
+        onToChange={(v) => { setToRaw(v); setHoverDay(null); setSelDay(null) }}
+        onClear={() => { setMany({ from: null, to: null }); setHoverDay(null); setSelDay(null) }}
+      />
       {isAdmin && (
         <button className="btn" onClick={exportCsv} disabled={!data || data.categories.length === 0}>
           <Icon name="download" size={14} />Выгрузить
@@ -144,7 +178,7 @@ export function ExpensesAnalyticsFeature() {
   return (
     <ListPage
       title="Аналитика расходов"
-      subtitle={`Период: ${ddmm(effFrom)} — ${ddmm(effTo)} · ${period} дн.`}
+      subtitle={`Период: ${ddmm(effFrom)} — ${ddmm(effTo)} · ${periodDays} дн.`}
       actions={actions}
     >
       <AnalyticsTabs active="expenses" />
@@ -153,19 +187,30 @@ export function ExpensesAnalyticsFeature() {
       ) : error ? (
         <EmptyState title="Не удалось загрузить аналитику" sub={error.message} />
       ) : !data ? null : (
-        <AnalyticsBody
-          cats={data.categories}
-          days={data.series.map((p) => p.date)}
-          period={period}
-          byStatus={data.by_status}
-          disabled={disabled} setDisabled={setDisabled}
-          query={query} setQuery={setQuery}
-          groupTail={groupTail} setGroupTail={setGroupTail}
-          hoverCat={hoverCat} setHoverCat={setHoverCat}
-          hoverDay={hoverDay} setHoverDay={setHoverDay}
-          tipX={tipX} setTipX={setTipX}
-          plotRef={plotRef}
-        />
+        <>
+          <AnalyticsBody
+            cats={data.categories}
+            days={data.series.map((p) => p.date)}
+            period={periodDays}
+            byStatus={data.by_status}
+            disabled={disabled} setDisabled={setDisabled}
+            query={query} setQuery={setQuery}
+            groupTail={groupTail} setGroupTail={setGroupTail}
+            hoverCat={hoverCat} setHoverCat={setHoverCat}
+            hoverDay={hoverDay} setHoverDay={setHoverDay}
+            tipX={tipX} setTipX={setTipX}
+            plotRef={plotRef}
+            onSelectDay={setSelDay}
+          />
+          <PnlDayDrawer
+            day={selDay}
+            from={effFrom}
+            to={effTo}
+            mode="expense"
+            expColor={drawerColors}
+            onClose={() => setSelDay(null)}
+          />
+        </>
       )}
     </ListPage>
   )
@@ -174,7 +219,7 @@ export function ExpensesAnalyticsFeature() {
 function AnalyticsBody({
   cats, days, period, byStatus,
   disabled, setDisabled, query, setQuery, groupTail, setGroupTail,
-  hoverCat, setHoverCat, hoverDay, setHoverDay, tipX, setTipX, plotRef,
+  hoverCat, setHoverCat, hoverDay, setHoverDay, tipX, setTipX, plotRef, onSelectDay,
 }: {
   cats: ExpenseAnalyticsCategory[]
   days: string[]
@@ -193,6 +238,7 @@ function AnalyticsBody({
   tipX: number
   setTipX: (n: number) => void
   plotRef: React.RefObject<HTMLDivElement | null>
+  onSelectDay: (day: string) => void
 }) {
   // Цвет закреплён за категорией по её позиции в ответе (бэкенд сортирует по сумме убыв.).
   const colorByName = useMemo(() => {
@@ -367,7 +413,7 @@ function AnalyticsBody({
                     {days.map((day, di) => {
                       const total = dayTotals[di]
                       return (
-                        <div key={day} className={`bcol${hoverDay === di ? ' sel' : ''}`} onMouseEnter={() => setHoverDay(di)}>
+                        <div key={day} className={`bcol${hoverDay === di ? ' sel' : ''}`} onMouseEnter={() => setHoverDay(di)} onClick={() => onSelectDay(day)}>
                           <div className="bstack" style={{ height: `${axisMax > 0 ? (total / axisMax) * 100 : 0}%` }}>
                             {renderCats.map((c) => {
                               const v = c.at(di)
@@ -397,6 +443,7 @@ function AnalyticsBody({
                       ))}
                       {tip.segs.length > 6 && <div className="an-tip-more">…и ещё {tip.segs.length - 6}</div>}
                       {tip.segs.length === 0 && <div className="an-tip-more">Расходов нет</div>}
+                      <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-text-faint)' }}>Нажмите — детализация дня</div>
                     </div>
                   )}
                 </div>

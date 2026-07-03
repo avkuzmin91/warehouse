@@ -52,6 +52,7 @@ from modules.expenses.service import (
     carrier_outstanding_logistics,
     expense_analytics,
     expense_summary,
+    ensure_analytics_window,
     format_kopecks,
     list_expenses_aggregated,
     load_detail,
@@ -227,6 +228,7 @@ def expenses_analytics(
     расходы от менеджера (в отличие от реестра)."""
     df = validate_date(date_from)
     dt = validate_date(date_to)
+    ensure_analytics_window(df, dt)
     with get_connection() as conn:
         data = expense_analytics(
             conn, date_from=df, date_to=dt, kinds=_resolve_kinds_analytics(kinds),

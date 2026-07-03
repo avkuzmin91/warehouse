@@ -103,6 +103,15 @@ def validate_date(raw: str | None) -> str:
     return s
 
 
+MAX_ANALYTICS_WINDOW_DAYS = 731  # ~2 года — потолок против гигантских диапазонов (память/latency рядов)
+
+
+def ensure_analytics_window(date_from: str, date_to: str) -> None:
+    span = abs((date.fromisoformat(date_from) - date.fromisoformat(date_to)).days) + 1
+    if span > MAX_ANALYTICS_WINDOW_DAYS:
+        raise HTTPException(status_code=400, detail=f"Слишком широкий период (максимум {MAX_ANALYTICS_WINDOW_DAYS} дн.)")
+
+
 def next_expense_number(connection) -> str:
     """Следующий номер расхода `EXP-NNNN` (MAX, не COUNT — без дублей при дырках)."""
     # Advisory-lock сериализует генерацию номера внутри транзакции — иначе два

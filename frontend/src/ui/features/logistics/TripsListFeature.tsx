@@ -202,7 +202,7 @@ function groupTripsByDay(trips: TripListItem[], todayYmd: string): TripDayGroup[
 
 export function TripsListFeature() {
   const navigate = useNavigate()
-  const { carriers } = useLookups()
+  const { carriers, clients } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const canCreate = canCreateDocuments(user)
@@ -212,6 +212,7 @@ export function TripsListFeature() {
   const typeFilter: '' | TripDirection = typeRaw === 'outbound' || typeRaw === 'inbound' ? typeRaw : ''
   const [group, setGroup] = useFilterParam('group', 'all')
   const [carrier, setCarrier] = useFilterParam('carrier', '')
+  const [client, setClient] = useFilterParam('client', '')
   const [from, setFrom] = useFilterParam('from', '')
   const [to, setTo] = useFilterParam('to', '')
   const [page, setPage] = usePageParam()
@@ -238,11 +239,12 @@ export function TripsListFeature() {
       direction: typeFilter || undefined,
       statuses,
       carrier_id: carrier || undefined,
+      client_id: client || undefined,
       search: search.trim() || undefined,
       eta_from: from || undefined,
       eta_to: to || undefined,
     }, signal),
-    [typeFilter, group, carrier, search, from, to, page],
+    [typeFilter, group, carrier, client, search, from, to, page],
   )
   const trips: TripListItem[] = data?.items ?? []
   const total = data?.total ?? 0
@@ -315,6 +317,13 @@ export function TripsListFeature() {
             onChange={(v) => setGroup(v || 'all')}
           />
           <FilterCombobox
+            label="Клиент"
+            value={client}
+            options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+            onChange={(v) => setClient(v)}
+            placeholder="Поиск клиента…"
+          />
+          <FilterCombobox
             label="Перевозчик"
             value={carrier}
             options={[{ value: '', label: 'Все перевозчики' }, ...carriers.map((c) => ({ value: c.id, label: c.name }))]}
@@ -327,8 +336,8 @@ export function TripsListFeature() {
             onToChange={(v) => setTo(v)}
             onClear={() => setMany({ from: '', to: '' })}
           />
-          {(typeFilter || carrier || from || to || search || group !== 'all') && (
-            <button className="btn ghost sm" onClick={() => setMany({ type: '', carrier: '', from: '', to: '', search: '', group: '' })}>
+          {(typeFilter || carrier || client || from || to || search || group !== 'all') && (
+            <button className="btn ghost sm" onClick={() => setMany({ type: '', carrier: '', client: '', from: '', to: '', search: '', group: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

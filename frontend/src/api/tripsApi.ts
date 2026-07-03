@@ -199,6 +199,7 @@ export type TripListParams = {
   status?: TripStatus
   statuses?: TripStatus[]
   carrier_id?: string
+  client_id?: string
   search?: string
   eta_from?: string
   eta_to?: string
@@ -214,6 +215,7 @@ export function getTrips(params: TripListParams = {}, signal?: AbortSignal) {
   if (params.status) sp.set('status', params.status)
   if (params.statuses) params.statuses.forEach((s) => sp.append('statuses', s))
   if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
+  if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search) sp.set('search', params.search)
   if (params.eta_from) sp.set('eta_from', params.eta_from)
   if (params.eta_to) sp.set('eta_to', params.eta_to)

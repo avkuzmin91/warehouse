@@ -90,16 +90,18 @@ function Section({ title, total, sources, colorFor, onNavigate }: {
   )
 }
 
-export function PnlDayDrawer({ day, from, to, expColor, onClose }: {
+export function PnlDayDrawer({ day, from, to, expColor = {}, mode = 'both', clientId, onClose }: {
   day: string | null
   from: string
   to: string
-  expColor: Record<string, string>
+  expColor?: Record<string, string>
+  mode?: 'both' | 'income' | 'expense'
+  clientId?: string
   onClose: () => void
 }) {
   const { data, loading, error } = useApi(
-    (s) => (day ? getPnlDay({ date: day, date_from: from, date_to: to }, s) : Promise.resolve(null)),
-    [day, from, to],
+    (s) => (day ? getPnlDay({ date: day, date_from: from, date_to: to, client_id: clientId || undefined }, s) : Promise.resolve(null)),
+    [day, from, to, clientId],
   )
 
   return (
@@ -108,7 +110,7 @@ export function PnlDayDrawer({ day, from, to, expColor, onClose }: {
       onClose={onClose}
       closeOnBackdrop
       title={day ? dayFull(day) : ''}
-      subtitle="Из чего сложился доход и расход дня"
+      subtitle={mode === 'income' ? 'Из чего сложился доход дня' : mode === 'expense' ? 'Из чего сложился расход дня' : 'Из чего сложился доход и расход дня'}
       width={440}
     >
       {loading && !data ? (
@@ -117,26 +119,32 @@ export function PnlDayDrawer({ day, from, to, expColor, onClose }: {
         <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--c-danger)', fontSize: 13 }}>{error.message}</div>
       ) : !data ? null : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            <KpiMini label="Доход" value={fmtRub(data.income_total)} tone="var(--c-success)" />
-            <KpiMini label="Расход" value={fmtRub(data.expense_total)} tone="var(--c-danger)" />
-            <KpiMini label="Итог" value={fmtSignedRub(data.net_total)} tone={data.net_total >= 0 ? 'var(--c-success)' : 'var(--c-danger)'} />
-          </div>
+          {mode === 'both' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <KpiMini label="Доход" value={fmtRub(data.income_total)} tone="var(--c-success)" />
+              <KpiMini label="Расход" value={fmtRub(data.expense_total)} tone="var(--c-danger)" />
+              <KpiMini label="Итог" value={fmtSignedRub(data.net_total)} tone={data.net_total >= 0 ? 'var(--c-success)' : 'var(--c-danger)'} />
+            </div>
+          )}
 
-          <Section
-            title="Доход · как посчитан"
-            total={data.income_total}
-            sources={data.income_sources}
-            colorFor={(s) => incomeColor(s.key)}
-            onNavigate={onClose}
-          />
-          <Section
-            title="Расход · как посчитан"
-            total={data.expense_total}
-            sources={data.expense_categories}
-            colorFor={(s) => expColor[s.key] ?? 'var(--c-text-faint)'}
-            onNavigate={onClose}
-          />
+          {mode !== 'expense' && (
+            <Section
+              title="Доход · как посчитан"
+              total={data.income_total}
+              sources={data.income_sources}
+              colorFor={(s) => incomeColor(s.key)}
+              onNavigate={onClose}
+            />
+          )}
+          {mode !== 'income' && (
+            <Section
+              title="Расход · как посчитан"
+              total={data.expense_total}
+              sources={data.expense_categories}
+              colorFor={(s) => expColor[s.key] ?? 'var(--c-text-faint)'}
+              onNavigate={onClose}
+            />
+          )}
 
           <div style={{ marginTop: 14, fontSize: 11.5, color: 'var(--c-text-faint)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <Icon name="arrowRight" size={12} />
