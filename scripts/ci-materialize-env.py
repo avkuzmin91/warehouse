@@ -41,15 +41,14 @@ def _cors_allow_origins() -> str:
         return explicit
     api = _req("VITE_API_BASE_URL")
     parsed = urllib.parse.urlsplit(api)
-    if not parsed.scheme or not parsed.netloc:
-        print(
-            "ERROR: не удалось вывести origin из VITE_API_BASE_URL "
-            f"({api!r}); задайте секрет CORS_ALLOW_ORIGINS явно.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    web_origin = f"{parsed.scheme}://{parsed.netloc}"
-    origins = [web_origin, "https://localhost", "http://localhost"]
+    origins: list[str] = []
+    if parsed.scheme and parsed.netloc:
+        origins.append(f"{parsed.scheme}://{parsed.netloc}")
+    else:
+        # Относительный VITE_API_BASE_URL (например /api) — веб ходит same-origin
+        # через nginx-прокси, CORS для веба не нужен; остаются только мобильные origins.
+        print("VITE_API_BASE_URL относительный — веб same-origin, в CORS только мобильные origins.")
+    origins += ["https://localhost", "http://localhost"]
     return ",".join(dict.fromkeys(origins))
 
 
