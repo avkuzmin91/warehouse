@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import { createTrip, handoffTrip, tripLexicon, isOutbound, linkTripDispatches, linkTripReceipts } from '../../../api/tripsApi'
 import type { TripReceiptItem, TripReceiptLinkItem, TripDispatchItem, TripDispatchLinkItem, TripDirection, TripCargoType } from '../../../api/tripsApi'
 import { getReceipts, RECEIPT_TRIP_SELECTABLE_STATUSES } from '../../../api/receiptsApi'
@@ -46,6 +47,7 @@ function fmtDay(d: string | null): string | undefined {
 
 export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }: { direction?: TripDirection; cargoType?: TripCargoType }) {
   const navigate = useNavigate()
+  const goBack = useBackNav(`/logistics/trips?dir=${direction}`)
   const { warehouses, carriers, vehicleTypes } = useLookups()
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
@@ -246,7 +248,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       if (outbound && shipDist.length) await linkTripDispatches(res.message, shipDist)
       if (!outbound && recvDist.length) await linkTripReceipts(res.message, recvDist)
       if (handoff) await handoffTrip(res.message)
-      navigate(`/logistics/trips/${res.message}`)
+      navigate(`/logistics/trips/${res.message}`, { replace: true })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка')
       setSaving(false)
@@ -276,7 +278,7 @@ export function TripCreateFeature({ direction = 'inbound', cargoType = 'good' }:
       }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            <button className="btn ghost icon sm" onClick={() => navigate(`/logistics/trips?dir=${direction}`)}><Icon name="arrowLeft" size={14} /></button>
+            <button className="btn ghost icon sm" onClick={goBack}><Icon name="arrowLeft" size={14} /></button>
             <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{outbound ? (defect ? 'Новый рейс отгрузки брака' : 'Новый рейс отгрузки товара') : 'Новый рейс поступления'}</span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>Новый рейс</div>

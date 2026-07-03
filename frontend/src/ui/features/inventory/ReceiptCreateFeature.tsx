@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import {
   createReceipt,
   advanceReceiptStatus,
@@ -42,6 +43,7 @@ export function ReceiptCreateFeature() {
   const tripParam = searchParams.get('trip')
   const returnToParam = searchParams.get('returnTo')
   const backTarget = tripParam ? `/logistics/trips/${tripParam}` : (returnToParam || '/inventory/receipts')
+  const goBack = useBackNav(backTarget)
 
   const [clientId, setClientId] = useState('')
   const [arrivalDate, setArrivalDate] = useState('')
@@ -90,11 +92,11 @@ export function ReceiptCreateFeature() {
       if (tripParam) {
         // Создано из рейса — привязываем и возвращаемся к рейсу.
         try { await linkTripReceipts(tripParam, [{ receipt_doc_id: docId, allocations: [] }]) } catch { /* поступление создано; привязку можно повторить из рейса */ }
-        navigate(`/logistics/trips/${tripParam}`)
+        navigate(`/logistics/trips/${tripParam}`, { replace: true })
       } else if (returnToParam) {
-        navigate(returnToParam)
+        navigate(returnToParam, { replace: true })
       } else {
-        navigate(`/inventory/receipts/${docId}`)
+        navigate(`/inventory/receipts/${docId}`, { replace: true })
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -129,7 +131,7 @@ export function ReceiptCreateFeature() {
   if (!canCreate) {
     return (
       <div className="page">
-        <DocHeader badges={null} role="manager" title="Новое поступление" onBack={() => navigate(backTarget)} />
+        <DocHeader badges={null} role="manager" title="Новое поступление" onBack={goBack} />
         <div style={{ padding: 32, color: 'var(--c-text-subtle)' }}>Недостаточно прав для создания поступлений.</div>
       </div>
     )
@@ -142,11 +144,11 @@ export function ReceiptCreateFeature() {
         role="manager"
         title="Новое поступление"
         subtitle="номер присвоится при сохранении"
-        onBack={() => navigate(backTarget)}
+        onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
           <>
-            <button className="btn" onClick={() => navigate(backTarget)} disabled={saving}>
+            <button className="btn" onClick={goBack} disabled={saving}>
               Отмена
             </button>
             <PrimaryAction

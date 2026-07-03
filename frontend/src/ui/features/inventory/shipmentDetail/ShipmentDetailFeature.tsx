@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../../hooks/useBackNav'
 import {
   getShipment,
   advanceShipment,
@@ -61,6 +62,7 @@ type ReadinessCheck = { ok: boolean; label: string; error: string }
 export function ShipmentDetailFeature() {
   const { docId } = useParams<{ docId: string }>()
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/shipments')
   const confirm = useConfirm()
   const toast = useToast()
   const { user } = useCurrentUser()
@@ -795,7 +797,7 @@ export function ShipmentDetailFeature() {
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
         subtitle={`${isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
-        onBack={() => navigate('/inventory/shipments')}
+        onBack={goBack}
         blockReasons={showBlockReasons ? advanceBlockReasons : []}
         priority={
           <ShipmentPriorityControl

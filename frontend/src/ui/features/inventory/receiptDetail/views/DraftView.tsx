@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../../../hooks/useBackNav'
 import {
   RECEIPT_STATUS_LABELS,
   deleteReceiptLine,
@@ -41,6 +42,7 @@ type Props = {
 
 export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Props) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/receipts')
   const confirm = useConfirm()
   const { doc, lines } = detail
 
@@ -141,7 +143,7 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         role="manager"
         title={doc.doc_number}
         subtitle={`Поступление · создано ${fmtDate(doc.created_at)}${doc.created_by ? ` · ${doc.created_by}` : ''}`}
-        onBack={() => navigate('/inventory/receipts')}
+        onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
           <>

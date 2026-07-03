@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Icon } from '../primitives/Icon'
+import { useBackNav } from '../../hooks/useBackNav'
 
 interface FormPageProps {
   title: string
@@ -11,13 +11,13 @@ interface FormPageProps {
 }
 
 export function FormPage({ title, subtitle, backTo, actions, children }: FormPageProps) {
-  const navigate = useNavigate()
+  const goBack = useBackNav(backTo ?? '/')
   return (
     <div className="page">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           {backTo && (
-            <button className="btn ghost icon" style={{ marginTop: 2 }} onClick={() => navigate(backTo)}>
+            <button className="btn ghost icon" style={{ marginTop: 2 }} onClick={goBack}>
               <Icon name="arrowLeft" size={16} />
             </button>
           )}

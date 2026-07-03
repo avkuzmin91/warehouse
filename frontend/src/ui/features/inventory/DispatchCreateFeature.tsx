@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import { createDispatch, advanceDispatch, getDispatch, uploadDispatchLineFile, recommendedPallets, recommendedBoxes, getDispatchReservations, checkDispatchDuplicate } from '../../../api/dispatchApi'
 import type { DispatchCargoType, DispatchLineIn } from '../../../api/dispatchApi'
 import type { PlannableItem } from '../../../api/balancesApi'
@@ -45,6 +46,7 @@ function variantKey(productId: string, colorId: string | null | undefined, sizeI
 
 export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoType }) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/dispatches')
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
@@ -364,7 +366,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         await uploadDraftFiles(docId)
       }
       if (toAwaiting) await advanceDispatch(docId)
-      navigate(`/inventory/dispatches/${docId}`)
+      navigate(`/inventory/dispatches/${docId}`, { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -396,11 +398,11 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         cargoType={cargoType}
         title={isDefectCargo ? 'Новая отгрузка брака' : 'Новая отгрузка'}
         subtitle="номер присвоится при сохранении"
-        onBack={() => navigate('/inventory/dispatches')}
+        onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
           <>
-            <button className="btn" disabled={saving} onClick={() => navigate('/inventory/dispatches')}>Отмена</button>
+            <button className="btn" disabled={saving} onClick={goBack}>Отмена</button>
             <button
               className="btn"
               disabled={saving || !clientId || lines.length === 0}

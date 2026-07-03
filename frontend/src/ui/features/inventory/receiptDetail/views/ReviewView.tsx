@@ -15,6 +15,7 @@ import { ReadOnlyField } from '../../../inventory/shared/ReadOnlyField'
 import { fmtDate } from '../../../../../utils/format'
 import { canCorrectReceived, canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
+import { useBackNav } from '../../../../../hooks/useBackNav'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { DocHeader } from '../../../shared/process/DocHeader'
 import { Panel, ReadRow } from '../../../shared/process/processUI'
@@ -39,6 +40,7 @@ type Props = {
 // принятого менеджер может закрыть его с недопоставкой.
 export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRedelivery, advancing }: Props) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/receipts')
   const { doc, lines, ops } = detail
 
   const [filterLine, setFilterLine] = useState<string | null>(null)
@@ -81,7 +83,7 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
         role={receiptStatusRole(doc.status)}
         title={doc.doc_number}
         subtitle={`Поступление · ${doc.client_name ?? '—'}`}
-        onBack={() => navigate('/inventory/receipts')}
+        onBack={goBack}
         actions={
           <>
             <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>

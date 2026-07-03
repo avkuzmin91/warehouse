@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import {
   cancelTrip,
   closeTrip,
@@ -66,6 +67,7 @@ function todayYmd(): string {
 
 export function TripDetailFeature({ tripId }: { tripId: string }) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/logistics/trips')
   const confirm = useConfirm()
   const { warehouses, carriers, vehicleTypes, unloadingZones } = useLookups()
   const { user } = useCurrentUser()
@@ -358,7 +360,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
 
   const { doc, receipts, dispatches } = detail
   const status = doc.status
-  const onBack = () => navigate('/logistics/trips')
+  const onBack = goBack
   const onOpenReceipt = (id: string) => navigate(`/inventory/receipts/${id}`)
   const onOpenDispatch = (id: string) => navigate(`/inventory/dispatches/${id}`)
 

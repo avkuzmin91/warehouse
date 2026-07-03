@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import {
   cancelInvoice,
   deleteInvoiceFile,
@@ -46,6 +47,7 @@ type DraftSaveResult = { total_amount: number; due_date: string | null } | null
 
 export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/finance/invoices')
   const toast = useToast()
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
@@ -209,7 +211,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
         role={cancelled ? null : 'manager'}
         title={inv.doc_number}
         subtitle={inv.client_name ?? undefined}
-        onBack={() => navigate('/finance/invoices')}
+        onBack={goBack}
         blockReasons={headerReasons}
         actions={
           draft ? (

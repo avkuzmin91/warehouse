@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import { getPackingProductivity } from '../../../api/shipmentsApi'
 import type { PackingProductivityDay } from '../../../api/shipmentsApi'
 import { ListPage } from '../../layouts/ListPage'
@@ -75,6 +76,7 @@ function weekdayShort(ymd: string): string {
 
 export function PackingProductivityView() {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/packing')
   const defFrom = weekAgo()
   const defTo = today()
 
@@ -126,7 +128,7 @@ export function PackingProductivityView() {
         ? `За период: ${data.total.toLocaleString('ru-RU')} шт (годный ${data.total_good.toLocaleString('ru-RU')} · брак ${data.total_defect.toLocaleString('ru-RU')})`
         : undefined}
       actions={
-        <button className="btn ghost" onClick={() => navigate('/inventory/packing')}>
+        <button className="btn ghost" onClick={goBack}>
           <Icon name="arrowLeft" size={14} />Задачи упаковки
         </button>
       }

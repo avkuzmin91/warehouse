@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../../../hooks/useBackNav'
 import {
   RECEIPT_STATUS_LABELS,
   deleteReceiptLine,
@@ -42,6 +43,7 @@ type Props = {
  *  рейсом. Карточной приёмки больше нет — приёмка идёт при разгрузке рейса. */
 export function PlannedView({ docId, detail, onReload, onCancel, advancing }: Props) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/receipts')
   const confirm = useConfirm()
   const { doc, lines } = detail
   const status = doc.status
@@ -129,7 +131,7 @@ export function PlannedView({ docId, detail, onReload, onCancel, advancing }: Pr
         role={receiptStatusRole(status, hasTrip)}
         title={doc.doc_number}
         subtitle={`Поступление · ${doc.client_name ?? '—'}`}
-        onBack={() => navigate('/inventory/receipts')}
+        onBack={goBack}
         actions={
           <>
             <button className="btn ghost" onClick={() => setOpsDrawerOpen(true)}>

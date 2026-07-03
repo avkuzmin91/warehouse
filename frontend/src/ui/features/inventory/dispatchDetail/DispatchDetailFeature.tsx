@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../../hooks/useBackNav'
 import {
   getDispatch,
   advanceDispatch,
@@ -35,6 +36,7 @@ import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 
 export function DispatchDetailFeature({ docId }: { docId: string }) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/dispatches')
   const confirm = useConfirm()
   const toast = useToast()
   const { user } = useCurrentUser()
@@ -268,7 +270,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         cargoType={cargoType}
         title={doc.doc_number}
         subtitle={`${cargoType === 'defect' ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
-        onBack={() => navigate('/inventory/dispatches')}
+        onBack={goBack}
         priority={
           <DispatchPriorityControl
             dispatch={doc}

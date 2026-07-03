@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
@@ -192,7 +192,7 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
 }
 
 export function EmployeeCardFeature({ empId }: { empId: string }) {
-  const navigate = useNavigate()
+  const goBack = useBackNav('/timesheet/employees')
   const toast = useToast()
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
@@ -263,7 +263,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, paddingBottom: 16, marginBottom: 18, borderBottom: '1px solid var(--c-border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <button className="btn ghost icon sm" onClick={() => navigate('/timesheet/employees')}><Icon name="arrowLeft" size={14} /></button>
+          <button className="btn ghost icon sm" onClick={goBack}><Icon name="arrowLeft" size={14} /></button>
           <EmpAvatar name={e.full_name} size={44} />
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

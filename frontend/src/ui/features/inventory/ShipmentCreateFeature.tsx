@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useBackNav } from '../../../hooks/useBackNav'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile } from '../../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
 import type { PlannableItem } from '../../../api/balancesApi'
@@ -35,6 +36,7 @@ type DraftLineFilePreview = FilePreviewMeta & { file: File }
 
 export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
   const navigate = useNavigate()
+  const goBack = useBackNav('/inventory/shipments')
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
@@ -222,7 +224,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       const docId = res.message
       await uploadDraftFiles(docId)
       if (toPacking) await advanceShipment(docId)
-      navigate(`/inventory/shipments/${docId}`)
+      navigate(`/inventory/shipments/${docId}`, { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {
@@ -254,11 +256,11 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         cargoType={cargoType}
         title={isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
         subtitle="номер присвоится при сохранении"
-        onBack={() => navigate('/inventory/shipments')}
+        onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
           <>
-            <button className="btn" disabled={saving} onClick={() => navigate('/inventory/shipments')}>Отмена</button>
+            <button className="btn" disabled={saving} onClick={goBack}>Отмена</button>
             <button
               className="btn"
               disabled={saving || !clientId || lines.length === 0}

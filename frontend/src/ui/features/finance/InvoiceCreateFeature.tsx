@@ -112,7 +112,7 @@ export function InvoiceCreateFeature() {
         // Поступления привязываются вторым вызовом — схема создания принимает только отгрузки.
         if (selectedRec.size > 0) await attachInvoiceReceipts(r.message, [...selectedRec])
         toast('Черновик создан', 'success')
-        navigate(`/finance/invoices/${r.message}`)
+        navigate(`/finance/invoices/${r.message}`, { replace: true })
       })
       .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
       .finally(() => setSubmitting(false))
