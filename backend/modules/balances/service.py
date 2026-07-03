@@ -13,6 +13,7 @@ from config import (
     INV_OP_SINKS,
     INV_OP_STORAGE,
     INV_OP_WRITTEN_OFF,
+    INV_OP_LABELS,
     INV_Q_DEFECT,
     INV_Q_GOOD,
     INV_QUALITY_LABELS,
@@ -23,7 +24,7 @@ from config import (
     SHIPMENT_CARGO_DEFECT,
     WRITEOFF_REASON_OTHER,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
 from modules.balances.schemas import (
     BalanceItem,
     BalanceListResponse,
@@ -105,10 +106,18 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
         pos_conds.append("u.client_id = ?")
         line_params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ? OR u.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        s = ci_like_substring_param(search)
+        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
         line_params += [s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
+
+    # Пушдаун клиента в полный GROUP BY журнала: client_id — ключ группировки и
+    # join'а (IS NOT DISTINCT FROM), поэтому фильтр по нему результат не меняет.
+    # Поиск (по денормализованным name/sku) в журнал не проталкиваем — имена не ключ.
+    conv_where = ""
+    if client_id:
+        conv_where = "WHERE client_id = ?"
+        line_params.append(client_id.strip())
 
     net_cols = ",\n                   ".join(
         f"SUM(CASE WHEN to_op='{op}' AND to_quality='{q}' THEN qty ELSE 0 END)"
@@ -151,6 +160,7 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             SELECT product_id, client_id, color_id, size_id,
                    {net_cols}
             FROM zone_relocations
+            {conv_where}
             GROUP BY product_id, client_id, color_id, size_id
         )
         SELECT
@@ -245,6 +255,14 @@ def get_plannable_items(
     """
     is_defect = cargo_type == SHIPMENT_CARGO_DEFECT
 
+    # Пушдаун клиента в полный GROUP BY журнала: client_id — ключ группировки,
+    # внешний фильтр p.client_id = ? отбросил бы остальные группы всё равно.
+    stock_where = ""
+    stock_params: list = []
+    if client_id:
+        stock_where = "WHERE client_id = ?"
+        stock_params.append(client_id.strip())
+
     query = f"""
         WITH stock AS (
             SELECT product_id, client_id, color_id, size_id,
@@ -264,6 +282,7 @@ def get_plannable_items(
                    GREATEST(0, SUM(CASE WHEN to_op='{INV_OP_PACKING}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)
                              - SUM(CASE WHEN from_op='{INV_OP_PACKING}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END)) AS packing_good
             FROM zone_relocations
+            {stock_where}
             GROUP BY product_id, client_id, color_id, size_id
         ),
         incoming AS (
@@ -315,8 +334,8 @@ def get_plannable_items(
         conds.append("p.client_id = ?")
         params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(p.product_name LIKE ? OR p.product_sku LIKE ? OR prod.sku LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(p.product_name) LIKE ? OR fold_ci(p.product_sku) LIKE ? OR fold_ci(prod.sku) LIKE ?)")
         params += [s, s, s]
     conds.append(
         "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
@@ -336,7 +355,7 @@ def get_plannable_items(
         ORDER BY p.product_name, p.color_name, p.size_name
         LIMIT ?
         """,
-        params + [limit],
+        stock_params + params + [limit],
     ).fetchall()
 
     items = [
@@ -434,10 +453,19 @@ def get_balances_by_zone(
         pos_conds.append("u.client_id = ?")
         line_params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        pos_conds.append("(u.product_name LIKE ? OR u.product_sku LIKE ? OR u.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        s = ci_like_substring_param(search)
+        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
         line_params += [s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
+
+    # Пушдаун клиента в полные GROUP BY журнала (gain/lose): client_id — ключ
+    # группировки и join'а с position_meta (IS NOT DISTINCT FROM), результат не меняется.
+    gain_client = ""
+    lose_client = ""
+    if client_id:
+        gain_client = " AND client_id = ?"
+        lose_client = "WHERE client_id = ?"
+        line_params += [client_id.strip(), client_id.strip()]
 
     pos_join = (
         "pm.product_id = x.product_id "
@@ -481,13 +509,14 @@ def get_balances_by_zone(
             SELECT product_id, client_id, color_id, size_id,
                    to_zone_id AS loc_id, to_op AS op, to_quality AS quality, SUM(qty) AS qty
             FROM zone_relocations
-            WHERE to_op NOT IN ({_SINKS_SQL})
+            WHERE to_op NOT IN ({_SINKS_SQL}){gain_client}
             GROUP BY product_id, client_id, color_id, size_id, to_zone_id, to_op, to_quality
         ),
         lose AS (
             SELECT product_id, client_id, color_id, size_id,
                    from_zone_id AS loc_id, from_op AS op, from_quality AS quality, SUM(qty) AS qty
             FROM zone_relocations
+            {lose_client}
             GROUP BY product_id, client_id, color_id, size_id, from_zone_id, from_op, from_quality
         ),
         locs AS (
@@ -513,8 +542,8 @@ def get_balances_by_zone(
     extra = ""
     extra_params: list = []
     if location and location.strip():
-        extra += " AND b.actual_location_name ILIKE ?"
-        extra_params.append(like_substring_param(location))
+        extra += " AND fold_ci(b.actual_location_name) LIKE ?"
+        extra_params.append(ci_like_substring_param(location))
     if op_status and str(op_status).strip():
         extra += " AND b.op_status = ?"
         extra_params.append(str(op_status).strip())
@@ -632,6 +661,7 @@ def insert_inventory_move(
     packed_date: str | None = None, pack_entry_id: str | None = None,
     reverses_id: str | None = None, receipt_line_id: str | None = None,
     reason: str | None = None, trip_id: str | None = None,
+    dispatch_line_id: str | None = None,
 ) -> None:
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
@@ -651,13 +681,13 @@ def insert_inventory_move(
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
             client_id,client_name,from_op,to_op,from_quality,to_quality,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
-            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id,dispatch_line_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_op, to_op, from_quality, to_quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
-         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id),
+         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id, dispatch_line_id),
     )
 
 
@@ -875,16 +905,90 @@ def ready_available_for_dispatch(
     return max(0, ready - reserved)
 
 
-def create_zone_relocation(connection, payload, user_id: str) -> None:
-    """Перемещение товара между местами (оси статуса не меняются).
+# Бакеты, доступные ручным операциям с остатками: терминальные стоки не трогаем,
+# intake — не бакет (товар ещё не принят рейсом, приёмка сама кладёт его на место).
+MANUAL_STOCK_OPS: tuple[str, ...] = (INV_OP_STORAGE, INV_OP_PACKING, INV_OP_PACKED, INV_OP_READY)
 
-    Перемещать можно только товар «На хранении» — упаковка и «Готов к отгрузке»
-    двигаются своими процессами в отгрузке.
+
+def _bucket_attribution_nets(
+    connection, *,
+    product_id: str, color_id: str | None, size_id: str | None, client_id: str | None,
+    zone_id: str | None, op: str, quality: str,
+) -> list[dict]:
+    """Нетто корзины (op, quality) в месте с разбивкой по атрибуции к строкам документов.
+
+    Товар вне «На хранении» привязан журналом к строкам задач упаковки/отгрузок
+    (shipment_line_id / dispatch_line_id) — на этом держатся пулы строк
+    (line_on_packing_qty, line_packed_pending) и раскладка по ячейкам в карточках.
+    Ручная операция обязана унаследовать атрибуцию, иначе пулы и ячейки разойдутся
+    с журналом. Возвращает [{shipment_line_id, dispatch_line_id, net}] с net > 0
+    по убыванию нетто (для FIFO-потребления).
+    """
+    variant_conds_to: list[str] = []
+    variant_conds_from: list[str] = []
+    params_to: list = [op, quality]
+    params_from: list = [op, quality]
+    for col, val in (
+        ("product_id", product_id),
+        ("color_id", color_id),
+        ("size_id", size_id),
+        ("client_id", client_id),
+    ):
+        cond, p = _eq_or_null(col, val)
+        variant_conds_to.append(cond)
+        variant_conds_from.append(cond)
+        params_to += p
+        params_from += p
+    zone_cond_to, zone_p_to = _eq_or_null("to_zone_id", zone_id)
+    zone_cond_from, zone_p_from = _eq_or_null("from_zone_id", zone_id)
+    rows = connection.execute(
+        f"""SELECT shipment_line_id, dispatch_line_id, SUM(net) AS net FROM (
+               SELECT shipment_line_id, dispatch_line_id, qty AS net
+               FROM zone_relocations
+               WHERE to_op = ? AND to_quality = ? AND {' AND '.join(variant_conds_to)} AND {zone_cond_to}
+               UNION ALL
+               SELECT shipment_line_id, dispatch_line_id, -qty
+               FROM zone_relocations
+               WHERE from_op = ? AND from_quality = ? AND {' AND '.join(variant_conds_from)} AND {zone_cond_from}
+           ) t
+           GROUP BY shipment_line_id, dispatch_line_id
+           HAVING SUM(net) > 0
+           ORDER BY SUM(net) DESC""",
+        (*params_to, *zone_p_to, *params_from, *zone_p_from),
+    ).fetchall()
+    return [
+        {
+            "shipment_line_id": r["shipment_line_id"],
+            "dispatch_line_id": r["dispatch_line_id"],
+            "net": int(r["net"]),
+        }
+        for r in rows
+    ]
+
+
+def _manual_op(payload) -> str:
+    """Операционный статус ручной операции из payload (по умолчанию — «На хранении»)."""
+    from fastapi import HTTPException
+
+    op = str(getattr(payload, "op", None) or INV_OP_STORAGE)
+    if op not in MANUAL_STOCK_OPS:
+        raise HTTPException(status_code=400, detail="Операция недоступна для этого статуса товара")
+    return op
+
+
+def create_zone_relocation(connection, payload, user_id: str) -> None:
+    """Перемещение товара между местами (оси статуса и качества не меняются).
+
+    Разрешено для любого нетерминального бакета: товар можно физически переставить,
+    даже когда он на упаковке или подготовлен к отгрузке — процессы считают пулы по
+    суммам бакетов и перестановку не замечают. Товар вне «На хранении» привязан к
+    строкам документов, поэтому движение дробится по атрибуции FIFO.
     """
     from fastapi import HTTPException
 
     if payload.quality not in (INV_Q_GOOD, INV_Q_DEFECT):
         raise HTTPException(status_code=400, detail="Перемещать можно только годный товар или брак")
+    op = _manual_op(payload)
 
     from_id = (payload.from_zone_id or "").strip() or None
     to_id = (payload.to_zone_id or "").strip() or None
@@ -900,7 +1004,7 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
         size_id=payload.size_id,
         client_id=payload.client_id,
         zone_id=from_id,
-        op=INV_OP_STORAGE,
+        op=op,
         quality=payload.quality,
     )
     if available < payload.qty:
@@ -909,32 +1013,85 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
             detail=f"Недостаточно товара в месте для перемещения (доступно {available}, нужно {payload.qty})",
         )
 
-    insert_inventory_move(
-        connection,
-        product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
-        color_id=payload.color_id, color_name=payload.color_name,
-        size_id=payload.size_id, size_name=payload.size_name,
-        client_id=payload.client_id, client_name=payload.client_name,
-        from_op=INV_OP_STORAGE, to_op=INV_OP_STORAGE,
-        from_quality=payload.quality, to_quality=payload.quality,
-        from_zone_id=from_id, from_zone_name=_zone_name(connection, from_id),
-        to_zone_id=to_id, to_zone_name=_zone_name(connection, to_id),
-        qty=payload.qty, user_id=user_id,
-        comment=(payload.comment or "").strip() or None,
-    )
+    comment = (payload.comment or "").strip() or None
+    if op != INV_OP_STORAGE:
+        prefix = f"Ручное перемещение ({INV_OP_LABELS[op]})"
+        comment = f"{prefix}. {comment}" if comment else prefix
+
+    from_name = _zone_name(connection, from_id)
+    to_name = _zone_name(connection, to_id)
+    for shipment_line_id, dispatch_line_id, take in _split_by_attribution(
+        connection, payload, op=op, quality=payload.quality, zone_id=from_id,
+    ):
+        insert_inventory_move(
+            connection,
+            product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
+            color_id=payload.color_id, color_name=payload.color_name,
+            size_id=payload.size_id, size_name=payload.size_name,
+            client_id=payload.client_id, client_name=payload.client_name,
+            from_op=op, to_op=op,
+            from_quality=payload.quality, to_quality=payload.quality,
+            from_zone_id=from_id, from_zone_name=from_name,
+            to_zone_id=to_id, to_zone_name=to_name,
+            qty=take, user_id=user_id,
+            shipment_line_id=shipment_line_id, dispatch_line_id=dispatch_line_id,
+            comment=comment,
+        )
     connection.commit()
 
 
-def create_quality_change(connection, payload, user_id: str) -> None:
-    """Смена качества товара на хранении (Брак ↔ Годный) в пределах одного места.
+def _split_by_attribution(connection, payload, *, op: str, quality: str, zone_id: str | None):
+    """FIFO-дробление количества ручной операции по атрибуции бакета-источника.
 
-    Используется для исправления брака после доработки/перепроверки. Журналируется
-    как движение (storage, from_quality) → (storage, to_quality) с тем же местом.
+    Для «На хранении» атрибуция не нужна (пулы строк считаются по packing/packed/ready) —
+    одна запись без привязки, как и раньше. Доступность проверена вызывающим, поэтому
+    положительных нетто всегда хватает на payload.qty.
+    """
+    if op == INV_OP_STORAGE:
+        return [(None, None, int(payload.qty))]
+    sources = _bucket_attribution_nets(
+        connection,
+        product_id=payload.product_id, color_id=payload.color_id,
+        size_id=payload.size_id, client_id=payload.client_id,
+        zone_id=zone_id, op=op, quality=quality,
+    )
+    parts: list[tuple[str | None, str | None, int]] = []
+    remaining = int(payload.qty)
+    for src in sources:
+        if remaining <= 0:
+            break
+        take = min(remaining, src["net"])
+        parts.append((src["shipment_line_id"], src["dispatch_line_id"], take))
+        remaining -= take
+    if remaining > 0:
+        # Недостижимо после проверки доступности; страховка от гонки параллельных операций.
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail="Остаток в месте изменился — обновите данные и повторите")
+    return parts
+
+
+def create_quality_change(connection, payload, user_id: str) -> None:
+    """Смена качества товара (Брак ↔ Годный) в пределах одного места.
+
+    «На хранении» — обе стороны, движение (storage, from_q) → (storage, to_q).
+    Вне хранения (упаковка / упаковано / готов к отгрузке) — только перевод годного
+    в брак: брак не должен уехать клиенту, поэтому товар выбывает из процесса
+    движением (op, good) → (storage, defect) в том же месте (зеркало раскладки брака
+    в finish_relocation). Атрибуция к строкам документов наследуется FIFO, чтобы
+    пулы строк (line_on_packing_qty / line_packed_pending) уменьшились корректно.
     """
     from fastapi import HTTPException
 
     if payload.from_quality == payload.to_quality:
         raise HTTPException(status_code=400, detail="Выберите другое качество")
+    op = _manual_op(payload)
+    if op != INV_OP_STORAGE and not (
+        payload.from_quality == INV_Q_GOOD and payload.to_quality == INV_Q_DEFECT
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Вне «На хранении» доступен только перевод годного в брак",
+        )
 
     zone_id = (payload.zone_id or "").strip() or None
     if not zone_id:
@@ -947,7 +1104,7 @@ def create_quality_change(connection, payload, user_id: str) -> None:
         size_id=payload.size_id,
         client_id=payload.client_id,
         zone_id=zone_id,
-        op=INV_OP_STORAGE,
+        op=op,
         quality=payload.from_quality,
     )
     if available < payload.qty:
@@ -958,32 +1115,40 @@ def create_quality_change(connection, payload, user_id: str) -> None:
 
     zone_name = _zone_name(connection, zone_id)
     label = f"{INV_QUALITY_LABELS[payload.from_quality]} → {INV_QUALITY_LABELS[payload.to_quality]}"
+    if op != INV_OP_STORAGE:
+        label = f"{label} ({INV_OP_LABELS[op]} → {INV_OP_LABELS[INV_OP_STORAGE]})"
     comment = (payload.comment or "").strip()
-    insert_inventory_move(
-        connection,
-        product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
-        color_id=payload.color_id, color_name=payload.color_name,
-        size_id=payload.size_id, size_name=payload.size_name,
-        client_id=payload.client_id, client_name=payload.client_name,
-        from_op=INV_OP_STORAGE, to_op=INV_OP_STORAGE,
-        from_quality=payload.from_quality, to_quality=payload.to_quality,
-        from_zone_id=zone_id, from_zone_name=zone_name,
-        to_zone_id=zone_id, to_zone_name=zone_name,
-        qty=payload.qty, user_id=user_id,
-        comment=f"Смена качества: {label}" + (f". {comment}" if comment else ""),
-    )
+    for shipment_line_id, dispatch_line_id, take in _split_by_attribution(
+        connection, payload, op=op, quality=payload.from_quality, zone_id=zone_id,
+    ):
+        insert_inventory_move(
+            connection,
+            product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
+            color_id=payload.color_id, color_name=payload.color_name,
+            size_id=payload.size_id, size_name=payload.size_name,
+            client_id=payload.client_id, client_name=payload.client_name,
+            from_op=op, to_op=INV_OP_STORAGE,
+            from_quality=payload.from_quality, to_quality=payload.to_quality,
+            from_zone_id=zone_id, from_zone_name=zone_name,
+            to_zone_id=zone_id, to_zone_name=zone_name,
+            qty=take, user_id=user_id,
+            shipment_line_id=shipment_line_id, dispatch_line_id=dispatch_line_id,
+            comment=f"Смена качества: {label}" + (f". {comment}" if comment else ""),
+        )
     connection.commit()
 
 
 def create_write_off(connection, payload, user_id: str) -> None:
-    """Ручное списание остатков: (storage, quality)@место → (written_off, quality).
+    """Ручное списание остатков: (op, quality)@место → (written_off, quality).
 
-    Терминальный сток — товар уходит с остатков насовсем. Списывать можно только
-    товар «На хранении»: упаковка и «Готов к отгрузке» управляются процессом
-    отгрузки. Причина обязательна, для «Прочее» обязателен комментарий.
+    Терминальный сток — товар уходит с остатков насовсем. Списать можно из любого
+    нетерминального бакета (хранение / упаковка / упаковано / готов к отгрузке);
+    атрибуция к строкам документов наследуется FIFO, чтобы пулы строк уменьшились.
+    Причина обязательна, для «Прочее» обязателен комментарий.
     """
     from fastapi import HTTPException
 
+    op = _manual_op(payload)
     zone_id = (payload.zone_id or "").strip() or None
     if not zone_id:
         raise HTTPException(status_code=400, detail="Укажите место, из которого списывается товар")
@@ -991,6 +1156,9 @@ def create_write_off(connection, payload, user_id: str) -> None:
     comment = (payload.comment or "").strip()
     if payload.reason == WRITEOFF_REASON_OTHER and not comment:
         raise HTTPException(status_code=400, detail="Для причины «Прочее» укажите комментарий")
+    if op != INV_OP_STORAGE:
+        prefix = f"Списание ({INV_OP_LABELS[op]})"
+        comment = f"{prefix}. {comment}" if comment else prefix
 
     available = get_available_in_zone(
         connection,
@@ -999,7 +1167,7 @@ def create_write_off(connection, payload, user_id: str) -> None:
         size_id=payload.size_id,
         client_id=payload.client_id,
         zone_id=zone_id,
-        op=INV_OP_STORAGE,
+        op=op,
         quality=payload.quality,
     )
     if available < payload.qty:
@@ -1008,20 +1176,25 @@ def create_write_off(connection, payload, user_id: str) -> None:
             detail=f"Недостаточно товара в месте для списания (доступно {available}, нужно {payload.qty})",
         )
 
-    insert_inventory_move(
-        connection,
-        product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
-        color_id=payload.color_id, color_name=payload.color_name,
-        size_id=payload.size_id, size_name=payload.size_name,
-        client_id=payload.client_id, client_name=payload.client_name,
-        from_op=INV_OP_STORAGE, to_op=INV_OP_WRITTEN_OFF,
-        from_quality=payload.quality, to_quality=payload.quality,
-        from_zone_id=zone_id, from_zone_name=_zone_name(connection, zone_id),
-        to_zone_id=None, to_zone_name=None,
-        qty=payload.qty, user_id=user_id,
-        reason=payload.reason,
-        comment=comment or None,
-    )
+    zone_name = _zone_name(connection, zone_id)
+    for shipment_line_id, dispatch_line_id, take in _split_by_attribution(
+        connection, payload, op=op, quality=payload.quality, zone_id=zone_id,
+    ):
+        insert_inventory_move(
+            connection,
+            product_id=payload.product_id, product_name=payload.product_name, product_sku=payload.product_sku,
+            color_id=payload.color_id, color_name=payload.color_name,
+            size_id=payload.size_id, size_name=payload.size_name,
+            client_id=payload.client_id, client_name=payload.client_name,
+            from_op=op, to_op=INV_OP_WRITTEN_OFF,
+            from_quality=payload.quality, to_quality=payload.quality,
+            from_zone_id=zone_id, from_zone_name=zone_name,
+            to_zone_id=None, to_zone_name=None,
+            qty=take, user_id=user_id,
+            shipment_line_id=shipment_line_id, dispatch_line_id=dispatch_line_id,
+            reason=payload.reason,
+            comment=comment or None,
+        )
     connection.commit()
 
 
@@ -1096,8 +1269,8 @@ def list_zone_relocations(
         conds.append("r.client_id = ?")
         params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(r.product_name LIKE ? OR r.product_sku LIKE ? OR r.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(r.product_name) LIKE ? OR fold_ci(r.product_sku) LIKE ? OR r.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
         params += [s, s, s]
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
 

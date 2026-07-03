@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -23,10 +22,8 @@ from .schemas import (
     ProductVariantsPatchRequest,
     MessageResponse,
 )
+from utils import now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _normalize_name(name: str) -> str:

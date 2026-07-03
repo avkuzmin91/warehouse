@@ -2,19 +2,36 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import os
+import re
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import UPLOADS_DIR
+from config import EXPENSE_KINDS_ADMIN_ONLY, UPLOADS_DIR
 from dbconn import close_pool, get_connection, init_pool
-from rate_limit.login_rate_limit import check_login_rate_limits, check_refresh_rate_limit, close_login_redis
+from modules.auth.service import get_current_user
+from security import can_manage_admin_finance
+from rate_limit.login_rate_limit import (
+    check_login_rate_limits,
+    check_refresh_rate_limit,
+    check_register_rate_limit,
+    close_login_redis,
+)
+
+# Uvicorn настраивает только свои логгеры: без basicConfig INFO-логи приложения
+# (wms.*, warehouse.auth) уходили бы в «handler последней надежды» (WARNING+).
+logging.basicConfig(
+    level=(os.environ.get("LOG_LEVEL") or "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from modules.auth.router import router as auth_router
 from modules.balances.router import router as balances_router
@@ -24,6 +41,7 @@ from modules.dictionaries.router import router as dictionaries_router
 from modules.inventory.router import router as inventory_router
 from modules.invoices.router import router as invoices_router
 from modules.expenses.router import router as expenses_router
+from modules.extra_income.router import router as extra_income_router
 from modules.timesheet.router import router as timesheet_router
 from modules.box_pricing.router import router as box_pricing_router
 from modules.locations.router import router as locations_router
@@ -54,12 +72,14 @@ def _seed_expense_dictionaries(conn) -> None:
         EXPENSE_CATEGORY_SEED,
         EXPENSE_PAYMENT_SOURCE_SEED,
         EXPENSE_SYSTEM_CATEGORY_SEED,
+        EXTRA_INCOME_CATEGORY_SEED,
     )
 
     now = datetime.now(UTC).isoformat()
     for table, names in (
         ("expense_categories", EXPENSE_CATEGORY_SEED + EXPENSE_SYSTEM_CATEGORY_SEED),
         ("expense_payment_sources", EXPENSE_PAYMENT_SOURCE_SEED),
+        ("extra_income_categories", EXTRA_INCOME_CATEGORY_SEED),
     ):
         empty = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
         if int(empty) > 0:
@@ -73,6 +93,10 @@ def _seed_expense_dictionaries(conn) -> None:
 
 def _ensure_runtime_schema() -> None:
     """Small guard for direct dev starts that bypass `alembic upgrade head`."""
+    # На test/prod схему ведёт исключительно alembic (docker-start.sh запускает
+    # upgrade head перед uvicorn); дубль DDL здесь маскировал бы дрейф от миграций.
+    if _app_environment() != "dev":
+        return
     with get_connection() as conn:
         conn.execute("""
             ALTER TABLE IF EXISTS receipt_lines
@@ -619,6 +643,66 @@ def _ensure_runtime_schema() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_production_calendar_date "
             "ON production_calendar (cal_date) WHERE is_deleted = 0"
         )
+        # Доп. работы (прочие доходы) + привязка к счёту (0081).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extra_income_categories (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                updated_at TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_extra_income_categories_name "
+            "ON extra_income_categories (LOWER(name)) WHERE COALESCE(is_deleted, 0) = 0"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extra_income_entries (
+                id          TEXT PRIMARY KEY,
+                entry_date  TEXT NOT NULL,
+                client_id   TEXT NOT NULL,
+                category_id TEXT,
+                qty         INTEGER,
+                amount_kop  INTEGER NOT NULL DEFAULT 0,
+                comment     TEXT,
+                created_at  TEXT NOT NULL,
+                created_by  TEXT,
+                updated_at  TEXT,
+                is_deleted  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_extra_income_entries_date ON extra_income_entries(entry_date)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extra_income_ops (
+                id         TEXT PRIMARY KEY,
+                entry_id   TEXT NOT NULL,
+                op_type    TEXT NOT NULL,
+                comment    TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_extra_income (
+                id          TEXT PRIMARY KEY,
+                invoice_id  TEXT NOT NULL,
+                entry_id    TEXT NOT NULL,
+                client_id   TEXT,
+                client_name TEXT,
+                created_at  TEXT NOT NULL,
+                created_by  TEXT,
+                is_deleted  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_extra_income_entry_unique "
+            "ON invoice_extra_income(entry_id) WHERE is_deleted = 0"
+        )
         conn.commit()
 
 
@@ -647,7 +731,9 @@ async def _accrual_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            # Не роняем цикл, но сбой начислений обязан попасть в лог — иначе
+            # пропущенные ЗП/аренда/регулярные расходы остаются незамеченными.
+            logging.getLogger("wms.accrual").exception("Сбой фонового начисления, повтор через час")
         await asyncio.sleep(3600)
 
 
@@ -721,6 +807,12 @@ app = FastAPI(
 )
 
 _cors_allow_origins = [o.strip() for o in (os.environ.get("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+if not _cors_allow_origins and _app_environment() == "prod":
+    # Fail-closed: в prod нельзя откатываться на localhost-regex с credentials —
+    # это открыло бы credentialed-запросы с любого localhost в браузере жертвы.
+    raise RuntimeError(
+        "CORS_ALLOW_ORIGINS обязателен в prod: задайте явный список разрешённых origins."
+    )
 if _cors_allow_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -738,7 +830,38 @@ else:
         allow_headers=["*"],
     )
 
-app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+# Вложения раздаются только аутентифицированным пользователям (сессия/refresh-cookie
+# на пути /api), а не публичным StaticFiles-mount'ом. Картинки отдаём inline (с nosniff —
+# браузер не переинтерпретирует их как HTML), всё прочее (pdf/zip/office) — как attachment,
+# чтобы исключить stored-XSS при inline-рендере полиглотов.
+_UPLOAD_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+_INLINE_UPLOAD_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp", ".gif"}
+
+
+@app.get("/uploads/{filename}", include_in_schema=False)
+def serve_upload(filename: str, user=Depends(get_current_user)):
+    if not _UPLOAD_NAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    file_path = (UPLOADS_DIR / filename).resolve()
+    if file_path.parent != UPLOADS_DIR.resolve() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    # Вложения admin-only расходов (аренда/ЗП) не видны менеджеру даже по прямому URL.
+    if not can_manage_admin_finance(user):
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT e.kind FROM expense_files f "
+                "JOIN material_expenses e ON e.id = f.expense_id "
+                "WHERE f.url = ? AND COALESCE(f.is_deleted, 0) = 0",
+                (f"/uploads/{filename}",),
+            ).fetchone()
+        if row and str(row["kind"]) in EXPENSE_KINDS_ADMIN_ONLY:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if file_path.suffix.lower() not in _INLINE_UPLOAD_EXTS:
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return FileResponse(file_path, headers=headers)
 
 
 # ── Rate limiting middleware ───────────────────────────────────────────────────
@@ -755,7 +878,41 @@ async def _auth_rate_limit_middleware(request: Request, call_next):
             rl_resp = await check_refresh_rate_limit(request)
             if rl_resp is not None:
                 return rl_resp
+        elif p == "/auth/register":
+            rl_resp = await check_register_rate_limit(request)
+            if rl_resp is not None:
+                return rl_resp
     return await call_next(request)
+
+
+# ── Журнал write-запросов ─────────────────────────────────────────────────────
+
+_api_log = logging.getLogger("wms.api")
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# У auth свой лог (warehouse.auth) — не дублируем; тела и заголовки не логируются
+# нигде: там пароли, токены и персональные данные.
+_API_LOG_SKIP_PREFIX = "/auth/"
+
+
+@app.middleware("http")
+async def _write_audit_middleware(request: Request, call_next):
+    """Каждая мутация — строка в логе (метод, путь, статус, длительность).
+
+    Единственный сквозной след действий на backend: без него разбор инцидентов
+    («кто и когда двинул документ») опирается только на журналы *_ops в БД."""
+    if request.method not in _WRITE_METHODS or request.url.path.startswith(_API_LOG_SKIP_PREFIX):
+        return await call_next(request)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _api_log.exception("%s %s → необработанная ошибка", request.method, request.url.path)
+        raise
+    duration_ms = (time.perf_counter() - started) * 1000
+    level = logging.WARNING if response.status_code >= 500 else logging.INFO
+    _api_log.log(level, "%s %s → %s (%.0f мс)",
+                 request.method, request.url.path, response.status_code, duration_ms)
+    return response
 
 
 # ── System endpoints ──────────────────────────────────────────────────────────
@@ -810,6 +967,7 @@ app.include_router(balances_router)
 app.include_router(cabinet_router)
 app.include_router(invoices_router)
 app.include_router(expenses_router)
+app.include_router(extra_income_router)
 app.include_router(recurring_expenses_router)
 app.include_router(pnl_router)
 app.include_router(timesheet_router)

@@ -15,6 +15,8 @@ from config import (
     RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
+    RECEIPT_STATUS_ON_INTAKE,
+    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
@@ -24,11 +26,15 @@ from config import (
     TRIP_STATUS_DRAFT,
     TRIP_STATUS_UNLOADING,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
+from utils import next_doc_number as _next_doc_number, now_iso as _now
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
+
+# Статусы, в которых поступление может «просрочиться» (план есть, приёмка не завершена).
+_OVERDUE_STATUSES_SQL = ", ".join(
+    f"'{s}'" for s in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW)
+)
 
 
 def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:
@@ -152,20 +158,8 @@ def ensure_receipt_line_unique(
 
 
 def next_doc_number(connection) -> str:
-    """Генерирует следующий номер документа поступления.
-
-    Использует MAX вместо COUNT, чтобы не давать дубликатов при пустых дырках.
-    UNIQUE constraint на doc_number в baseline-миграции гарантирует атомарность.
-    """
-    row = connection.execute(
-        """
-        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 4) AS INTEGER)), 0) AS max_n
-        FROM receipt_docs
-        WHERE doc_number LIKE 'WH-%' AND SUBSTR(doc_number, 4) ~ '^[0-9]+$'
-        """
-    ).fetchone()
-    n = (row["max_n"] if row else 0) + 1
-    return f"WH-{n:05d}"
+    """Следующий номер документа поступления (WH-NNNNN)."""
+    return _next_doc_number(connection, table="receipt_docs", prefix="WH-", width=5)
 
 
 def compute_state(connection, doc_id: str) -> dict:
@@ -233,7 +227,7 @@ def list_receipts_aggregated(
         conds.append("d.client_id = ?")
         params.append(client_id.strip())
     if overdue:
-        conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
+        conds.append(f"d.status IN ({_OVERDUE_STATUSES_SQL})")
         conds.append("d.arrival_date < ?")
         params.append(today)
         status_filter_applied = True
@@ -252,16 +246,16 @@ def list_receipts_aggregated(
             params.extend(allowed)
             status_filter_applied = True
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(cl.name) LIKE ?)")
         params += [s, s]
     if sku:
         conds.append(
             "EXISTS (SELECT 1 FROM receipt_lines rl"
             " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0"
-            " AND (rl.product_sku LIKE ? OR rl.product_name LIKE ?))"
+            " AND (fold_ci(rl.product_sku) LIKE ? OR fold_ci(rl.product_name) LIKE ?))"
         )
-        s = like_substring_param(sku)
+        s = ci_like_substring_param(sku)
         params += [s, s]
     if date_from:
         conds.append("d.arrival_date >= ?")
@@ -395,7 +389,7 @@ def list_receipt_lines(
         conds.append("d.client_id = ?")
         params.append(client_id.strip())
     if overdue:
-        conds.append("d.status IN ('planned', 'on_intake', 'on_review')")
+        conds.append(f"d.status IN ({_OVERDUE_STATUSES_SQL})")
         conds.append("d.arrival_date < ?")
         params.append(today)
     elif status:
@@ -411,12 +405,12 @@ def list_receipt_lines(
             conds.append(f"d.status IN ({placeholders})")
             params.extend(allowed)
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(cl.name) LIKE ?)")
         params += [s, s]
     if sku:
-        s = like_substring_param(sku)
-        conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ?)")
+        s = ci_like_substring_param(sku)
+        conds.append("(fold_ci(l.product_sku) LIKE ? OR fold_ci(l.product_name) LIKE ?)")
         params += [s, s]
     if date_from:
         conds.append("d.arrival_date >= ?")

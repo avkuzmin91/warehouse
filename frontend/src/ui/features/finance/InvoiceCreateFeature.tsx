@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { attachInvoiceReceipts, createInvoice, getUninvoicedReceipts, getUninvoicedShipments } from '../../../api/invoicesApi'
-import type { UninvoicedReceipt, UninvoicedShipment } from '../../../api/invoicesApi'
+import { attachInvoiceReceipts, createInvoice, getUninvoicedExtraIncome, getUninvoicedReceipts, getUninvoicedShipments } from '../../../api/invoicesApi'
+import type { UninvoicedExtraIncome, UninvoicedReceipt, UninvoicedShipment } from '../../../api/invoicesApi'
 import { FormPage } from '../../layouts/FormPage'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
@@ -28,6 +28,7 @@ export function InvoiceCreateFeature() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedRec, setSelectedRec] = useState<Set<string>>(new Set())
+  const [selectedExtra, setSelectedExtra] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [showErrors, setShowErrors] = useState(false)
 
@@ -47,7 +48,15 @@ export function InvoiceCreateFeature() {
   )
   const receipts: UninvoicedReceipt[] = uninvRec?.items ?? []
 
-  useEffect(() => { setSelected(new Set()); setSelectedRec(new Set()) }, [clientId])
+  const { data: uninvExtra, loading: loadingExtra } = useApi(
+    (signal) => clientId
+      ? getUninvoicedExtraIncome({ client_id: clientId, limit: 200 }, signal)
+      : Promise.resolve({ items: [], total: 0, page: 1, limit: 200 }),
+    [clientId],
+  )
+  const extraEntries: UninvoicedExtraIncome[] = uninvExtra?.items ?? []
+
+  useEffect(() => { setSelected(new Set()); setSelectedRec(new Set()); setSelectedExtra(new Set()) }, [clientId])
 
   const kopecks = parseRublesToKopecks(amount)
   const clientName = clients.find((c) => c.id === clientId)?.name ?? null
@@ -77,6 +86,14 @@ export function InvoiceCreateFeature() {
   function toggleAllRec() {
     setSelectedRec((prev) => prev.size === receipts.length ? new Set() : new Set(receipts.map((r) => r.id)))
   }
+  function toggleExtra(id: string) {
+    setSelectedExtra((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleAllExtra() {
+    setSelectedExtra((prev) => prev.size === extraEntries.length ? new Set() : new Set(extraEntries.map((e) => e.id)))
+  }
+
+  const extraAmountKop = extraEntries.filter((e) => selectedExtra.has(e.id)).reduce((a, e) => a + e.amount_kop, 0)
 
   function submit() {
     if (blockReasons.length) { setShowErrors(true); toast(blockReasons[0], 'error'); return }
@@ -89,6 +106,7 @@ export function InvoiceCreateFeature() {
       total_amount: kopecks ?? 0,
       comment: comment.trim() || null,
       shipment_ids: [...selected],
+      extra_income_ids: [...selectedExtra],
     })
       .then(async (r) => {
         // Поступления привязываются вторым вызовом — схема создания принимает только отгрузки.
@@ -279,6 +297,78 @@ export function InvoiceCreateFeature() {
             )}
           </PhaseBlock>
 
+          <PhaseBlock
+            icon="briefcase" title="Доп. работы без счёта" role="manager" state="active"
+            hint={clientId ? `доступно: ${extraEntries.length}` : 'сначала выберите клиента'}
+            right={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {selectedExtra.size > 0 && <Badge tone="info">Выбрано: {selectedExtra.size}</Badge>}
+                {extraEntries.length > 0 && (
+                  <button className="btn ghost sm" onClick={toggleAllExtra}>
+                    {selectedExtra.size === extraEntries.length ? 'Снять все' : 'Выбрать все'}
+                  </button>
+                )}
+              </span>
+            }
+          >
+            {!clientId ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                Выберите клиента выше, чтобы увидеть его невыставленные доп. работы.
+              </div>
+            ) : loadingExtra ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>Загрузка…</div>
+            ) : extraEntries.length === 0 ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                У клиента нет невыставленных доп. работ. Заводятся в разделе «Финансы → Доп. работы».
+              </div>
+            ) : (
+              <>
+                <div style={{ margin: '0 -14px' }}>
+                  {extraEntries.map((ex) => {
+                    const on = selectedExtra.has(ex.id)
+                    return (
+                      <div key={ex.id} style={{
+                        borderBottom: '1px solid var(--c-border)',
+                        background: on ? 'var(--c-accent-bg)' : undefined,
+                      }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+                          <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {on && <Icon name="check" size={10} />}
+                          </span>
+                          <input type="checkbox" checked={on} onChange={() => toggleExtra(ex.id)} style={{ display: 'none' }} />
+                          <span className="mono" style={{ minWidth: 92, fontSize: 12.5 }}>{fmtDate(ex.entry_date)}</span>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ display: 'block', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {ex.category_name ?? 'Доп. работа'}
+                              {ex.qty != null && <span style={{ color: 'var(--c-text-subtle)' }}> · {ex.qty} шт.</span>}
+                            </span>
+                            {ex.comment && (
+                              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--c-text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {ex.comment}
+                              </span>
+                            )}
+                          </span>
+                          <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                            {formatMoneyKopecks(ex.amount_kop)}
+                          </span>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+                {selectedExtra.size > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12.5 }}>
+                    <span style={{ color: 'var(--c-text-subtle)' }}>Выбрано доп. работ на:</span>
+                    <span className="mono" style={{ fontWeight: 600 }}>{formatMoneyKopecks(extraAmountKop)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                  <Icon name="lock" size={12} />Доп. работа входит не более чем в один счёт.
+                </div>
+              </>
+            )}
+          </PhaseBlock>
+
           <PhaseBlock icon="receipt" title="Параметры счёта" role="manager" state="active">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <div>
@@ -311,6 +401,8 @@ export function InvoiceCreateFeature() {
             clientName={clientName}
             shipmentCount={selected.size}
             receiptCount={selectedRec.size}
+            extraCount={selectedExtra.size}
+            extraAmountKop={extraAmountKop}
             totalQty={selQty}
             dueDateText={dueDate ? fmtDate(dueDate) : '—'}
             amountKop={kopecks ?? 0}

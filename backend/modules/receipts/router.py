@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -29,7 +28,8 @@ from config import (
     TRIP_STATUS_DRAFT,
     TRIP_STATUS_UNLOADING,
 )
-from dbconn import get_connection, like_substring_param
+from dbconn import get_connection, ci_like_substring_param
+from utils import now_iso as _now, validate_business_date
 from modules.auth.service import (
     get_current_document_creator,
     get_current_manager,
@@ -83,9 +83,6 @@ router = APIRouter(tags=["receipts"])
 _get_manager = get_current_manager
 _get_warehouse = get_current_warehouse
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _line_label(product_sku, color_name, size_name, qty) -> str:
@@ -148,7 +145,7 @@ def create_receipt(
             (
                 doc_id, doc_num, cid,
                 (payload.supplier_name or "").strip() or None,
-                (payload.arrival_date or "").strip() or None,
+                validate_business_date(payload.arrival_date, field_ru="Дата прибытия"),
                 (payload.comment or "").strip() or None,
                 RECEIPT_STATUS_DRAFT,
                 (payload.zone_id or "").strip() or None,
@@ -231,16 +228,16 @@ def receipts_summary(
             conds.append("d.client_id = ?")
             params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR COALESCE(cl.name,'') LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(cl.name) LIKE ?)")
             params += [s, s]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM receipt_lines rl"
                 " WHERE rl.doc_id = d.id AND COALESCE(rl.is_deleted,0)=0"
-                " AND (rl.product_sku LIKE ? OR rl.product_name LIKE ?))"
+                " AND (fold_ci(rl.product_sku) LIKE ? OR fold_ci(rl.product_name) LIKE ?))"
             )
-            s = like_substring_param(sku)
+            s = ci_like_substring_param(sku)
             params += [s, s]
         if date_from:
             conds.append("d.arrival_date >= ?")
@@ -551,7 +548,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
             updates.append("supplier_name = ?"); params.append(v)
             _diff("Поставщик", doc_row["supplier_name"], v)
         if payload.arrival_date is not None:
-            v = (payload.arrival_date or "").strip() or None
+            v = validate_business_date(payload.arrival_date, field_ru="Дата прибытия")
             updates.append("arrival_date = ?"); params.append(v)
             _diff("Дата прибытия", doc_row["arrival_date"], v, fmt=_fmt_date)
         if "comment" in payload.model_fields_set:

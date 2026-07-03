@@ -13,6 +13,8 @@ export type InvoiceOpType =
   | 'shipment_unlink'
   | 'receipt_link'
   | 'receipt_unlink'
+  | 'extra_income_link'
+  | 'extra_income_unlink'
   | 'payment'
   | 'due_date_change'
   | 'amount_change'
@@ -42,6 +44,15 @@ export type InvoiceReceipt = {
   sku_count: number
   total_qty: number
   logistics_cost_kop: number
+}
+
+export type InvoiceExtraIncome = {
+  entry_id: string
+  entry_date: string
+  category_name: string | null
+  qty: number | null
+  amount_kop: number
+  comment: string | null
 }
 
 export type InvoicePayment = {
@@ -89,8 +100,10 @@ export type InvoiceDetail = {
   updated_at: string | null
   dispatch_logistics_kop: number
   receipt_logistics_kop: number
+  extra_income_kop: number
   shipments: InvoiceShipment[]
   receipts: InvoiceReceipt[]
+  extra_income: InvoiceExtraIncome[]
   payments: InvoicePayment[]
   files: InvoiceFile[]
   ops: InvoiceOp[]
@@ -109,6 +122,7 @@ export type InvoiceListItem = {
   overdue: boolean
   shipment_count: number
   receipt_count: number
+  extra_count: number
   created_at: string
 }
 
@@ -184,6 +198,25 @@ export type UninvoicedReceiptsResponse = {
   limit: number
 }
 
+export type UninvoicedExtraIncome = {
+  id: string
+  entry_date: string
+  client_id: string | null
+  client_name: string | null
+  category_name: string | null
+  qty: number | null
+  amount_kop: number
+  comment: string | null
+  created_at: string
+}
+
+export type UninvoicedExtraIncomeResponse = {
+  items: UninvoicedExtraIncome[]
+  total: number
+  page: number
+  limit: number
+}
+
 export type InvoiceAlerts = {
   due_count: number
   overdue_count: number
@@ -198,6 +231,7 @@ export type InvoiceCreatePayload = {
   total_amount?: number
   comment?: string | null
   shipment_ids?: string[]
+  extra_income_ids?: string[]
 }
 
 export type InvoiceUpdatePayload = {
@@ -280,6 +314,17 @@ export function getReceiptContents(receiptIds: string[], signal?: AbortSignal) {
   return request<ReceiptContents>(`/invoices/receipt-contents?${sp.toString()}`, { signal })
 }
 
+export function getUninvoicedExtraIncome(params: UninvoicedParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to) sp.set('date_to', params.date_to)
+  const q = sp.toString()
+  return request<UninvoicedExtraIncomeResponse>(`/invoices/uninvoiced-extra-income${q ? `?${q}` : ''}`, { signal })
+}
+
 export function getInvoice(invoiceId: string, signal?: AbortSignal) {
   return request<InvoiceDetail>(`/invoices/${invoiceId}`, { signal })
 }
@@ -325,6 +370,19 @@ export function attachInvoiceReceipts(invoiceId: string, receiptIds: string[]) {
 
 export function detachInvoiceReceipt(invoiceId: string, receiptDocId: string) {
   return request<{ message: string }>(`/invoices/${invoiceId}/receipts/${receiptDocId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function attachInvoiceExtraIncome(invoiceId: string, entryIds: string[]) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/extra-income`, {
+    method: 'POST',
+    body: JSON.stringify({ entry_ids: entryIds }),
+  })
+}
+
+export function detachInvoiceExtraIncome(invoiceId: string, entryId: string) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/extra-income/${entryId}`, {
     method: 'DELETE',
   })
 }
@@ -400,6 +458,8 @@ export const INVOICE_OP_LABELS: Record<InvoiceOpType, string> = {
   shipment_unlink: 'Отвязана отгрузка',
   receipt_link: 'Привязано поступление',
   receipt_unlink: 'Отвязано поступление',
+  extra_income_link: 'Привязана доп. работа',
+  extra_income_unlink: 'Отвязана доп. работа',
   payment: 'Оплата',
   due_date_change: 'Перенос срока',
   amount_change: 'Корректировка суммы',

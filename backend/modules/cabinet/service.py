@@ -12,14 +12,18 @@ from config import (
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
+    INV_OP_INTAKE,
+    INV_OP_SINKS,
     INV_OP_WRITTEN_OFF,
+    INV_Q_DEFECT,
+    INV_Q_GOOD,
     PRODUCT_LIST_SORT_COLUMNS,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     TRIP_STATUS_CANCELLED,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
 from modules.cabinet.schemas import (
     CabinetBalanceTotals,
     CabinetEventItem,
@@ -55,6 +59,8 @@ from modules.products.service import (
     _order_sql_from_sort_param,
     _row_to_product_item,
 )
+
+_SINKS_SQL = ", ".join(f"'{s}'" for s in INV_OP_SINKS)
 
 
 def list_cabinet_products(
@@ -175,7 +181,7 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Товар не найден")
 
     rows = connection.execute(
-        """
+        f"""
         SELECT v.id, v.color_id, col.name AS color_name,
                v.size_id, sz.name AS size_name,
                v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
@@ -195,10 +201,10 @@ def list_cabinet_product_variants(connection, *, client_id: str, product_id: str
         LEFT JOIN sizes sz ON sz.id = v.size_id
         LEFT JOIN (
             SELECT product_id, color_id, size_id,
-                   SUM(CASE WHEN to_quality='good' AND to_op NOT IN ('shipped','written_off') THEN qty ELSE 0 END)
-                     - SUM(CASE WHEN from_quality='good' AND from_op<>'intake' THEN qty ELSE 0 END) AS good_in,
-                   SUM(CASE WHEN to_quality='defect' AND to_op NOT IN ('shipped','written_off') THEN qty ELSE 0 END)
-                     - SUM(CASE WHEN from_quality='defect' AND from_op<>'intake' THEN qty ELSE 0 END) AS defect_in
+                   SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS good_in,
+                   SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
+                     - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS defect_in
             FROM zone_relocations
             WHERE product_id = ? AND client_id = ?
             GROUP BY product_id, color_id, size_id
@@ -279,8 +285,8 @@ def list_cabinet_receipts(
         conds.append(cond)
         params.extend(status_params)
     if search and search.strip():
-        s = like_substring_param(search)
-        conds.append("d.doc_number LIKE ?")
+        s = ci_like_substring_param(search)
+        conds.append("fold_ci(d.doc_number) LIKE ?")
         params.append(s)
     if date_from:
         conds.append("d.arrival_date >= ?")
@@ -352,8 +358,8 @@ def list_cabinet_receipt_lines(
     conds.append(cond)
     params.extend(status_params)
     if search and search.strip():
-        s = like_substring_param(search)
-        conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ? OR d.doc_number LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(l.product_sku) LIKE ? OR fold_ci(l.product_name) LIKE ? OR fold_ci(d.doc_number) LIKE ?)")
         params += [s, s, s]
     if date_from:
         conds.append("d.arrival_date >= ?")
@@ -496,10 +502,10 @@ def list_cabinet_shipments(
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():
-        s = like_substring_param(search)
+        s = ci_like_substring_param(search)
         conds.append(
-            "(d.doc_number LIKE ? OR EXISTS (SELECT 1 FROM dispatch_lines l"
-            " WHERE l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0 AND COALESCE(l.store_name,'') LIKE ?))"
+            "(fold_ci(d.doc_number) LIKE ? OR EXISTS (SELECT 1 FROM dispatch_lines l"
+            " WHERE l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0 AND fold_ci(l.store_name) LIKE ?))"
         )
         params += [s, s]
     if date_from:
@@ -579,8 +585,8 @@ def list_cabinet_shipment_lines(
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():
-        s = like_substring_param(search)
-        conds.append("(l.product_sku LIKE ? OR l.product_name LIKE ? OR d.doc_number LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(l.product_sku) LIKE ? OR fold_ci(l.product_name) LIKE ? OR fold_ci(d.doc_number) LIKE ?)")
         params += [s, s, s]
     if date_from:
         conds.append("d.ship_date >= ?")

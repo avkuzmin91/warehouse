@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +16,7 @@ from config import (
     INVOICE_OP_DOC_CREATE,
     INVOICE_OP_DOC_UPDATE,
     INVOICE_OP_DUE_DATE_CHANGE,
+    INVOICE_OP_EXTRA_UNLINK,
     INVOICE_OP_ISSUE,
     INVOICE_OP_PAYMENT,
     INVOICE_OP_RECEIPT_UNLINK,
@@ -35,12 +35,14 @@ from dbconn import get_connection
 from modules.auth.service import get_current_manager
 from modules.invoices.schemas import (
     InvoiceAlertsResponse,
+    InvoiceAttachExtraIncome,
     InvoiceAttachReceipts,
     InvoiceAttachShipments,
     InvoiceAmountUpdate,
     InvoiceCreate,
     InvoiceDetailResponse,
     InvoiceDueDateUpdate,
+    InvoiceExtraIncomeItem,
     InvoiceFileItem,
     InvoiceListItem,
     InvoiceListResponse,
@@ -52,6 +54,8 @@ from modules.invoices.schemas import (
     InvoiceUpdate,
     ReceiptContentsResponse,
     ShipmentContentsResponse,
+    UninvoicedExtraIncomeItem,
+    UninvoicedExtraIncomeResponse,
     UninvoicedReceiptItem,
     UninvoicedReceiptsResponse,
     UninvoicedShipmentItem,
@@ -61,6 +65,7 @@ from modules.invoices.service import (
     aggregate_receipt_contents,
     aggregate_shipment_contents,
     alerts_counts,
+    attach_extra_income,
     attach_receipts,
     attach_shipments,
     format_kopecks,
@@ -68,6 +73,7 @@ from modules.invoices.service import (
     is_due_reached,
     is_overdue,
     list_invoices_aggregated,
+    list_uninvoiced_extra_income,
     list_uninvoiced_receipts,
     list_uninvoiced_shipments,
     logistics_amount_for_docs,
@@ -77,6 +83,7 @@ from modules.invoices.service import (
     suggested_amount_for_dispatches,
 )
 from security import ensure_finance_access
+from utils import now_iso as _now
 
 router = APIRouter(tags=["invoices"])
 
@@ -87,9 +94,6 @@ def _get_finance(user=Depends(get_current_manager)):
     ensure_finance_access(user)
     return user
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _status_label(status: str) -> str:
@@ -183,6 +187,31 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     dispatch_logistics_kop = sum(s.logistics_cost_kop for s in shipments)
     receipt_logistics_kop = sum(r.logistics_cost_kop for r in receipts)
 
+    extra_rows = conn.execute(
+        """
+        SELECT l.entry_id, e.entry_date, e.qty, e.amount_kop, e.comment,
+               c.name AS category_name
+        FROM invoice_extra_income l
+        JOIN extra_income_entries e ON e.id = l.entry_id
+        LEFT JOIN extra_income_categories c ON c.id = e.category_id
+        WHERE l.invoice_id = ? AND COALESCE(l.is_deleted, 0) = 0
+        ORDER BY e.entry_date, e.created_at
+        """,
+        (invoice_id,),
+    ).fetchall()
+    extra_income = [
+        InvoiceExtraIncomeItem(
+            entry_id=str(r["entry_id"]),
+            entry_date=str(r["entry_date"]),
+            category_name=r["category_name"],
+            qty=(int(r["qty"]) if r["qty"] is not None else None),
+            amount_kop=int(r["amount_kop"]),
+            comment=r["comment"],
+        )
+        for r in extra_rows
+    ]
+    extra_income_kop = sum(x.amount_kop for x in extra_income)
+
     pay_rows = conn.execute(
         """
         SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by,
@@ -265,8 +294,10 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
         updated_at=doc["updated_at"],
         dispatch_logistics_kop=dispatch_logistics_kop,
         receipt_logistics_kop=receipt_logistics_kop,
+        extra_income_kop=extra_income_kop,
         shipments=shipments,
         receipts=receipts,
+        extra_income=extra_income,
         payments=payments,
         files=files,
         ops=ops,
@@ -316,6 +347,15 @@ def create_invoice(
                 invoice_id=invoice_id,
                 client_id=client_id,
                 shipment_ids=body.shipment_ids,
+                uid=uid,
+                now=now,
+            )
+        if [s for s in body.extra_income_ids if str(s or "").strip()]:
+            attach_extra_income(
+                conn,
+                invoice_id=invoice_id,
+                client_id=client_id,
+                entry_ids=body.extra_income_ids,
                 uid=uid,
                 now=now,
             )
@@ -411,6 +451,25 @@ def list_uninvoiced_receipt_docs(
         )
     return UninvoicedReceiptsResponse(
         items=[UninvoicedReceiptItem(**it) for it in items], total=total, page=page, limit=limit,
+    )
+
+
+@router.get("/invoices/uninvoiced-extra-income", response_model=UninvoicedExtraIncomeResponse)
+def list_uninvoiced_extra_income_entries(
+    page:      int = Query(1, ge=1),
+    limit:     int = Query(25, ge=1, le=200),
+    client_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to:   str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    with get_connection() as conn:
+        items, total = list_uninvoiced_extra_income(
+            conn, page=page, limit=limit, client_id=client_id,
+            date_from=date_from, date_to=date_to,
+        )
+    return UninvoicedExtraIncomeResponse(
+        items=[UninvoicedExtraIncomeItem(**it) for it in items], total=total, page=page, limit=limit,
     )
 
 
@@ -551,6 +610,71 @@ def detach_invoice_receipt(invoice_id: str, receipt_doc_id: str, user=Depends(_g
     return {"message": "ok"}
 
 
+# ── Extra income link/unlink ────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/extra-income")
+def attach_invoice_extra_income(invoice_id: str, body: InvoiceAttachExtraIncome, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, client_id FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        if not [s for s in body.entry_ids if str(s or "").strip()]:
+            raise HTTPException(status_code=400, detail="Не выбрано ни одной доп. работы")
+        attach_extra_income(
+            conn,
+            invoice_id=invoice_id,
+            client_id=doc["client_id"],
+            entry_ids=body.entry_ids,
+            uid=uid,
+            now=now,
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
+@router.delete("/invoices/{invoice_id}/extra-income/{entry_id}")
+def detach_invoice_extra_income(invoice_id: str, entry_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        link = conn.execute(
+            """
+            SELECT l.id, e.entry_date, e.amount_kop, c.name AS category_name
+            FROM invoice_extra_income l
+            JOIN extra_income_entries e ON e.id = l.entry_id
+            LEFT JOIN extra_income_categories c ON c.id = e.category_id
+            WHERE l.invoice_id = ? AND l.entry_id = ? AND COALESCE(l.is_deleted, 0) = 0
+            """,
+            (invoice_id, entry_id),
+        ).fetchone()
+        if not link:
+            raise HTTPException(status_code=404, detail="Доп. работа не привязана к счёту")
+        conn.execute("UPDATE invoice_extra_income SET is_deleted = 1 WHERE id = ?", (str(link["id"]),))
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_EXTRA_UNLINK,
+             f"Отвязана доп. работа: {link['category_name'] or 'Доп. работа'} · {link['entry_date']} · "
+             f"{format_kopecks(int(link['amount_kop']))}",
+             now, uid),
+        )
+        conn.commit()
+    return {"message": "ok"}
+
+
 # ── Draft: правка реквизитов и выставление ───────────────────────────────────────
 
 @router.patch("/invoices/{invoice_id}")
@@ -578,13 +702,15 @@ def update_invoice(invoice_id: str, body: InvoiceUpdate, user=Depends(_get_finan
                 linked = conn.execute(
                     "SELECT 1 FROM invoice_shipments WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 "
                     "UNION ALL "
-                    "SELECT 1 FROM invoice_receipts WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
-                    (invoice_id, invoice_id),
+                    "SELECT 1 FROM invoice_receipts WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 "
+                    "UNION ALL "
+                    "SELECT 1 FROM invoice_extra_income WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (invoice_id, invoice_id, invoice_id),
                 ).fetchone()
                 if linked:
                     raise HTTPException(
                         status_code=400,
-                        detail="Сначала отвяжите отгрузки и поступления прежнего клиента",
+                        detail="Сначала отвяжите отгрузки, поступления и доп. работы прежнего клиента",
                     )
             sets.append("client_id = ?"); params.append(new_client)
         if "client_name" in fields:
@@ -646,8 +772,16 @@ def issue_invoice(
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         ).fetchone()["n"])
-        if n_ship == 0 and n_rec == 0:
-            raise HTTPException(status_code=400, detail="Добавьте хотя бы одну отгрузку или поступление")
+        n_extra = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM invoice_extra_income "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()["n"])
+        if n_ship == 0 and n_rec == 0 and n_extra == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Добавьте хотя бы одну отгрузку, поступление или доп. работу",
+            )
         n_files = int(conn.execute(
             "SELECT COUNT(*) AS n FROM invoice_files "
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -900,6 +1034,11 @@ def cancel_invoice(
         )
         conn.execute(
             "UPDATE invoice_receipts SET is_deleted = 1 "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        )
+        conn.execute(
+            "UPDATE invoice_extra_income SET is_deleted = 1 "
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         )

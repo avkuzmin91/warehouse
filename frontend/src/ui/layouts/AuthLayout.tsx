@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
 import { ensureSessionBootstrapped, me } from '../../api/sessionAuth'
 import { postAuthLandingPath } from '../../utils/postLoginRedirect'
+import { LoadingScreen } from '../feedback/LoadingScreen'
 
 type CheckState = 'pending' | 'guest' | 'authed'
 
@@ -29,11 +30,7 @@ export function AuthLayout() {
   }, [])
 
   if (state === 'pending') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh', color: 'var(--c-text-muted)', fontSize: 13 }}>
-        Проверка сессии…
-      </div>
-    )
+    return <LoadingScreen label="Проверка сессии…" />
   }
 
   if (state === 'authed') {

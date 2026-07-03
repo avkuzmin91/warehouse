@@ -4,6 +4,7 @@ import { Kbd } from '../primitives/Kbd'
 import { Icon } from '../primitives/Icon'
 import { useCurrentUser } from '../../hooks/useCurrentUser'
 import { canCreateDocuments, canManageUsers } from '../../utils/access'
+import { foldCiSearch } from '../../utils/foldCiSearch'
 
 interface CmdItem {
   section: string
@@ -46,12 +47,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
   }, [open])
 
-  const lq = q.toLowerCase()
+  const lq = foldCiSearch(q.trim())
   const filtered = ALL_CMDS.filter(
     (c) =>
       (!c.usersAdminOnly || canManageUsers(user)) &&
       (!c.createOnly || canCreateDocuments(user)) &&
-      (!lq || c.label.toLowerCase().includes(lq) || c.sub.toLowerCase().includes(lq)),
+      (!lq || foldCiSearch(c.label).includes(lq) || foldCiSearch(c.sub).includes(lq)),
   )
 
   const grouped = filtered.reduce<Record<string, CmdItem[]>>((acc, c) => {

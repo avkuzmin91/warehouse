@@ -41,6 +41,8 @@ export type AllocLine = {
   store?: string | null
   /** В какие активные рейсы уже ушло количество — для поповера на теге «распределено». */
   allocations?: TripAllocBreakdownItem[]
+  /** Весь план строки уже отгружен другими рейсами — тег «Отгружен» вместо «распределено». */
+  shipped?: boolean
 }
 
 export type AllocItem = { doc_id: string; allocations: { line_id: string; qty: number }[] }
@@ -150,7 +152,7 @@ function DocChip({ doc, lines, qty, active, onClick, onRemove }: {
 }
 
 /* ---------------- distributed tag with per-trip breakdown popover ---------------- */
-function DistributedTag({ allocations }: { allocations?: TripAllocBreakdownItem[] }) {
+function DistributedTag({ allocations, shipped }: { allocations?: TripAllocBreakdownItem[]; shipped?: boolean }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -192,11 +194,11 @@ function DistributedTag({ allocations }: { allocations?: TripAllocBreakdownItem[
         type="button"
         className="line-tag done"
         onClick={toggle}
-        title={has ? 'В какие рейсы распределено' : undefined}
+        title={has ? (shipped ? 'Какими рейсами отгружено' : 'В какие рейсы распределено') : undefined}
         style={{ appearance: 'none', border: 0, background: 'none', padding: 0, margin: 0, fontFamily: 'inherit', cursor: has ? 'pointer' : 'default' }}
       >
-        {has && <Icon name="check" size={12} />}
-        <span style={has ? { marginLeft: 2 } : undefined}>{has ? 'распределено' : 'нет остатка'}</span>
+        {(has || shipped) && <Icon name="check" size={12} />}
+        <span style={has || shipped ? { marginLeft: 2 } : undefined}>{shipped ? 'Отгружен' : has ? 'распределено' : 'нет остатка'}</span>
         {has && <Icon name={open ? 'chevUp' : 'chevDown'} size={12} style={{ marginLeft: 2 }} />}
       </button>
       {open && has && pos && (
@@ -211,7 +213,7 @@ function DistributedTag({ allocations }: { allocations?: TripAllocBreakdownItem[
           }}
         >
           <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginBottom: 8 }}>
-            Распределено по рейсам · {total} шт
+            {shipped ? 'Отгружено рейсами' : 'Распределено по рейсам'} · {total} шт
           </div>
           {(allocations ?? []).map((a, i) => (
             <div
@@ -304,7 +306,7 @@ function LinesTable({ lines, qty, setQty, query }: {
                   {disabled ? (
                     <>
                       <span className="qty-of" />
-                      <DistributedTag allocations={l.allocations} />
+                      <DistributedTag allocations={l.allocations} shipped={l.shipped} />
                     </>
                   ) : (
                     <>

@@ -32,6 +32,8 @@ AUTH_CLIENT_MOBILE = "mobile"
 
 AUTH_RL_REFRESH_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REFRESH_MAX", "60"))
 AUTH_RL_REFRESH_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REFRESH_WINDOW_SEC", "60"))
+AUTH_RL_REGISTER_MAX = int(os.environ.get("AUTH_RATE_LIMIT_REGISTER_MAX", "5"))
+AUTH_RL_REGISTER_WINDOW_SEC = float(os.environ.get("AUTH_RATE_LIMIT_REGISTER_WINDOW_SEC", "60"))
 AUTH_REPLAY_REVOKE_MIN_SECONDS = float(os.environ.get("AUTH_REPLAY_REVOKE_MIN_SECONDS", "30"))
 AUTH_JTI_DENYLIST_MAX = int(os.environ.get("AUTH_JTI_DENYLIST_MAX", "5000"))
 
@@ -625,6 +627,31 @@ INVOICE_OP_AMOUNT_CHANGE   = "amount_change"
 INVOICE_OP_PAYMENT         = "payment"
 INVOICE_OP_CLOSE           = "close"
 INVOICE_OP_CANCEL          = "cancel"
+INVOICE_OP_EXTRA_LINK      = "extra_income_link"
+INVOICE_OP_EXTRA_UNLINK    = "extra_income_unlink"
+
+# ---------------------------------------------------------------------------
+# Доп. работы (прочие доходы): переборка брака, переклейка ШК и т.п.
+# ---------------------------------------------------------------------------
+# Суммы (extra_income_entries.amount_kop) — КОПЕЙКИ INTEGER, как счета и расходы.
+# Запись атрибутируется в P&L по entry_date (день работы) и может входить
+# не более чем в один активный счёт (invoice_extra_income).
+
+EXTRA_INCOME_OP_CREATE = "create"
+EXTRA_INCOME_OP_UPDATE = "update"
+EXTRA_INCOME_OP_DELETE = "delete"
+
+EXTRA_INCOME_OP_LABELS: dict[str, str] = {
+    EXTRA_INCOME_OP_CREATE: "Создание",
+    EXTRA_INCOME_OP_UPDATE: "Изменение",
+    EXTRA_INCOME_OP_DELETE: "Удаление",
+}
+
+EXTRA_INCOME_CATEGORY_SEED: tuple[str, ...] = (
+    "Переборка брака",
+    "Переклейка ШК",
+    "Прочие работы",
+)
 
 # ---------------------------------------------------------------------------
 # Расходы на материалы (хозрасходы)

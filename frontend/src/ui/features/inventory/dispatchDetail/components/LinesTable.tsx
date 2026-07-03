@@ -8,14 +8,12 @@ type Props = {
   onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
   /** Когда задан — короба в колонке «Упаковка» редактируются инлайн (менеджер, до счёта). */
   onSaveBoxes?: (lineId: string, boxes: number | null) => Promise<boolean>
-  /** Предупреждение над таблицей при редактируемой упаковке (например, авто-правка счёта). */
-  editNotice?: string
 }
 
 /** Read-only состав отгрузки: вариант, магазин, ссылка на сайт, план/отгружено/остаток.
  *  Колонка «Упаковка» объединяет палеты и короба (два поля в одной ячейке, без расширения
  *  таблицы). Если передан `onSavePallets`/`onSaveBoxes` — соответствующее поле редактируется. */
-export function LinesTable({ lines, onSavePallets, onSaveBoxes, editNotice }: Props) {
+export function LinesTable({ lines, onSavePallets, onSaveBoxes }: Props) {
   if (lines.length === 0) {
     return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Нет позиций</div>
   }
@@ -28,12 +26,6 @@ export function LinesTable({ lines, onSavePallets, onSaveBoxes, editNotice }: Pr
 
   return (
     <>
-      {editable && editNotice && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 10, padding: '8px 10px', borderRadius: 6, background: 'var(--c-bg-sunken)', color: 'var(--c-text-subtle)', fontSize: 11.5, lineHeight: 1.45 }}>
-          <Icon name="alert" size={13} style={{ marginTop: 1, flexShrink: 0, color: 'var(--c-warning)' }} />
-          <span>{editNotice}</span>
-        </div>
-      )}
     <table className="t">
       <thead>
         <tr>

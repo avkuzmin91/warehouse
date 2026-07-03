@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
@@ -17,17 +17,16 @@ from config import (
     INVOICE_STATUS_DRAFT,
     INVOICE_STATUS_ISSUED,
     INVOICE_STATUS_PARTIALLY_PAID,
+    INVOICE_OP_EXTRA_LINK,
     INVOICE_OP_RECEIPT_LINK,
     INVOICE_OP_SHIPMENT_LINK,
     INVOICE_STATUS_LABELS,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_LABELS,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
+from utils import now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def format_kopecks(kopecks: int) -> str:
@@ -233,6 +232,138 @@ def attach_receipts(
         )
 
 
+def attach_extra_income(
+    connection,
+    *,
+    invoice_id: str,
+    client_id: str | None,
+    entry_ids: list[str],
+    uid: str,
+    now: str,
+) -> None:
+    """Привязывает записи доп. работ к счёту с валидацией инвариантов.
+
+    Зеркало `attach_shipments`: только записи того же клиента, ещё не входящие
+    ни в один активный счёт. Уникальный частичный индекс
+    `idx_invoice_extra_income_entry_unique` страхует от гонок.
+    """
+    seen: set[str] = set()
+    for raw in entry_ids:
+        eid = str(raw or "").strip()
+        if not eid or eid in seen:
+            continue
+        seen.add(eid)
+
+        entry = connection.execute(
+            """
+            SELECT e.id, e.entry_date, e.client_id, e.qty, e.amount_kop,
+                   c.name AS category_name
+            FROM extra_income_entries e
+            LEFT JOIN extra_income_categories c ON c.id = e.category_id
+            WHERE e.id = ? AND COALESCE(e.is_deleted, 0) = 0
+            """,
+            (eid,),
+        ).fetchone()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Запись доп. работы не найдена")
+
+        label = str(entry["category_name"] or "Доп. работа")
+        if str(entry["client_id"] or "") != str(client_id or ""):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Доп. работа «{label}» принадлежит другому клиенту",
+            )
+
+        busy = connection.execute(
+            "SELECT 1 FROM invoice_extra_income "
+            "WHERE entry_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (eid,),
+        ).fetchone()
+        if busy:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Доп. работа «{label}» уже привязана к счёту",
+            )
+
+        connection.execute(
+            "INSERT INTO invoice_extra_income "
+            "(id,invoice_id,entry_id,client_id,client_name,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, eid, entry["client_id"], None, now, uid),
+        )
+        bits = [label, str(entry["entry_date"])]
+        if entry["qty"]:
+            bits.append(f"{int(entry['qty'])} шт.")
+        bits.append(format_kopecks(int(entry["amount_kop"])))
+        connection.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_EXTRA_LINK,
+             "Привязана доп. работа: " + " · ".join(bits), now, uid),
+        )
+
+
+def list_uninvoiced_extra_income(
+    connection,
+    *,
+    page: int,
+    limit: int,
+    client_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[list[dict], int]:
+    """Записи доп. работ, не входящие ни в один активный счёт."""
+    conds = [
+        "COALESCE(e.is_deleted, 0) = 0",
+        "NOT EXISTS (SELECT 1 FROM invoice_extra_income l "
+        "WHERE l.entry_id = e.id AND COALESCE(l.is_deleted, 0) = 0)",
+    ]
+    params: list = []
+    if client_id:
+        conds.append("e.client_id = ?"); params.append(client_id.strip())
+    if date_from:
+        conds.append("e.entry_date >= ?"); params.append(date_from)
+    if date_to:
+        conds.append("e.entry_date <= ?"); params.append(date_to)
+    where = " AND ".join(conds)
+
+    total = int(connection.execute(
+        f"SELECT COUNT(*) AS n FROM extra_income_entries e WHERE {where}", params
+    ).fetchone()["n"])
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        f"""
+        SELECT e.id, e.entry_date, e.client_id, cl.name AS client_name,
+               e.qty, e.amount_kop, e.comment, e.created_at,
+               c.name AS category_name
+        FROM extra_income_entries e
+        LEFT JOIN clients cl ON cl.id = e.client_id
+        LEFT JOIN extra_income_categories c ON c.id = e.category_id
+        WHERE {where}
+        ORDER BY e.entry_date DESC, e.created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        [*params, limit, offset],
+    ).fetchall()
+
+    items = [
+        {
+            "id": str(r["id"]),
+            "entry_date": str(r["entry_date"]),
+            "client_id": r["client_id"],
+            "client_name": r["client_name"],
+            "category_name": r["category_name"],
+            "qty": int(r["qty"]) if r["qty"] is not None else None,
+            "amount_kop": int(r["amount_kop"]),
+            "comment": r["comment"],
+            "created_at": str(r["created_at"]),
+        }
+        for r in rows
+    ]
+    return items, total
+
+
 def logistics_amount_for_docs(
     connection, *, dispatch_ids: list[str] | None = None, receipt_ids: list[str] | None = None
 ) -> dict:
@@ -282,8 +413,8 @@ def list_invoices_aggregated(
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ?)")
         params += [s, s]
     if overdue:
         conds.append("d.due_date IS NOT NULL AND d.due_date < ?")
@@ -308,7 +439,9 @@ def list_invoices_aggregated(
                (SELECT COUNT(*) FROM invoice_shipments s
                 WHERE s.invoice_id = d.id AND COALESCE(s.is_deleted, 0) = 0) AS shipment_count,
                (SELECT COUNT(*) FROM invoice_receipts r
-                WHERE r.invoice_id = d.id AND COALESCE(r.is_deleted, 0) = 0) AS receipt_count
+                WHERE r.invoice_id = d.id AND COALESCE(r.is_deleted, 0) = 0) AS receipt_count,
+               (SELECT COUNT(*) FROM invoice_extra_income x
+                WHERE x.invoice_id = d.id AND COALESCE(x.is_deleted, 0) = 0) AS extra_count
         FROM invoice_docs d
         WHERE {where}
         ORDER BY d.due_date DESC NULLS LAST, d.created_at DESC
@@ -331,6 +464,7 @@ def list_invoices_aggregated(
             "overdue": is_overdue(str(r["status"]), r["due_date"]),
             "shipment_count": int(r["shipment_count"]),
             "receipt_count": int(r["receipt_count"]),
+            "extra_count": int(r["extra_count"]),
             "created_at": str(r["created_at"]),
         }
         for r in rows
@@ -359,8 +493,8 @@ def list_uninvoiced_shipments(
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
         params += [s, s, s]
     if date_from:
         conds.append("d.ship_date >= ?"); params.append(date_from)
@@ -489,8 +623,8 @@ def list_uninvoiced_receipts(
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR d.supplier_name LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.supplier_name) LIKE ?)")
         params += [s, s]
     if date_from:
         conds.append("d.arrival_date >= ?"); params.append(date_from)
@@ -692,172 +826,6 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         "boxes_amount_kop": boxes_amount,
         "has_missing_box_price": has_missing_box_price,
     }
-
-
-def adjust_invoice_total_for_pallet_delta(
-    connection, *, dispatch_id: str, delta_pallets: int,
-    product_name: str, uid: str, now: str,
-) -> str | None:
-    """Сдвигает сумму связанного счёта на Δпалет × цену палета клиента.
-
-    Вызывается, когда админ правит палеты у уже отгруженной отгрузки с выставленным
-    счётом (см. `dispatch.router.update_dispatch_line_pallets`). Палеты входят в тариф
-    клиенту, поэтому при их правке сумма выставленного счёта должна поехать на ту же
-    дельту, что и аналитика (та пересчитывается сама из `dispatch_lines`). Дельта =
-    Δпалет × цена палета клиента на дату отгрузки — та же база, что и в
-    `suggested_amount_for_dispatches`. Без commit — коммитит вызывающий.
-
-    Возвращает id счёта, если сумма изменена, иначе None (нет активного счёта, нет
-    клиента или не заведена цена палета). Опустить сумму ниже уже оплаченной нельзя
-    (возвратов в модели нет) — 400.
-    """
-    from modules.pallet_pricing.service import pallet_price_for_event
-    from modules.timesheet.service import business_today
-
-    if delta_pallets == 0:
-        return None
-    link = connection.execute(
-        "SELECT i.id, i.status, i.total_amount, i.paid_amount, i.doc_number "
-        "FROM invoice_shipments s "
-        "JOIN invoice_docs i ON i.id = s.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
-        "WHERE s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0 "
-        "AND i.status NOT IN (?, ?) LIMIT 1",
-        (dispatch_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
-    ).fetchone()
-    if not link:
-        return None
-    doc = connection.execute(
-        "SELECT client_id, actual_ship_date, ship_date FROM dispatch_docs WHERE id = ?",
-        (dispatch_id,),
-    ).fetchone()
-    client_id = doc["client_id"] if doc else None
-    if not client_id:
-        return None
-    day = str(doc["actual_ship_date"] or doc["ship_date"] or business_today().isoformat())[:10]
-    price = pallet_price_for_event(connection, str(client_id), day)
-    if not price:
-        return None
-
-    old_total = int(link["total_amount"])
-    new_total = old_total + price * delta_pallets
-    paid = int(link["paid_amount"])
-    if new_total < paid:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Правка палет опустит сумму счёта {link['doc_number']} ниже уже оплаченной "
-                f"({format_kopecks(paid)}). Сначала оформите возврат."
-            ),
-        )
-    if new_total <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Правка палет обнулит сумму счёта {link['doc_number']}.",
-        )
-
-    invoice_id = str(link["id"])
-    # Рост суммы у завершённого счёта снова делает его активным; падение до
-    # оплаченной суммы — завершает. Статус выводим из paid vs new_total.
-    if paid >= new_total:
-        new_status = INVOICE_STATUS_CLOSED
-    elif paid > 0:
-        new_status = INVOICE_STATUS_PARTIALLY_PAID
-    else:
-        new_status = INVOICE_STATUS_ISSUED
-    connection.execute(
-        "UPDATE invoice_docs SET total_amount = ?, status = ?, updated_at = ? WHERE id = ?",
-        (new_total, new_status, now, invoice_id),
-    )
-    sign = "+" if delta_pallets > 0 else "−"
-    connection.execute(
-        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
-        "VALUES (?,?,?,?,?,?)",
-        (str(uuid4()), invoice_id, INVOICE_OP_AMOUNT_CHANGE,
-         f"Сумма (авто, коррекция палет «{product_name}» на {sign}{abs(delta_pallets)}): "
-         f"{format_kopecks(old_total)} → {format_kopecks(new_total)}", now, uid),
-    )
-    return invoice_id
-
-
-def adjust_invoice_total_for_box_delta(
-    connection, *, dispatch_id: str, delta_boxes: int,
-    product_name: str, uid: str, now: str,
-) -> str | None:
-    """Сдвигает сумму связанного счёта на Δкоробов × цену короба клиента.
-
-    Полный аналог `adjust_invoice_total_for_pallet_delta`: вызывается, когда админ правит
-    короба у уже отгруженной отгрузки с выставленным счётом (см.
-    `dispatch.router.update_dispatch_line_boxes`). Короба входят в тариф клиенту наравне
-    с палетами, поэтому при их правке сумма выставленного счёта едет на ту же дельту,
-    что и аналитика. Дельта = Δкоробов × цену короба клиента на дату отгрузки. Без commit.
-
-    Возвращает id счёта, если сумма изменена, иначе None (нет активного счёта, нет
-    клиента или не заведена цена короба). Опустить сумму ниже уже оплаченной нельзя — 400.
-    """
-    from modules.box_pricing.service import box_price_for_event
-    from modules.timesheet.service import business_today
-
-    if delta_boxes == 0:
-        return None
-    link = connection.execute(
-        "SELECT i.id, i.status, i.total_amount, i.paid_amount, i.doc_number "
-        "FROM invoice_shipments s "
-        "JOIN invoice_docs i ON i.id = s.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
-        "WHERE s.shipment_doc_id = ? AND COALESCE(s.is_deleted, 0) = 0 "
-        "AND i.status NOT IN (?, ?) LIMIT 1",
-        (dispatch_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
-    ).fetchone()
-    if not link:
-        return None
-    doc = connection.execute(
-        "SELECT client_id, actual_ship_date, ship_date FROM dispatch_docs WHERE id = ?",
-        (dispatch_id,),
-    ).fetchone()
-    client_id = doc["client_id"] if doc else None
-    if not client_id:
-        return None
-    day = str(doc["actual_ship_date"] or doc["ship_date"] or business_today().isoformat())[:10]
-    price = box_price_for_event(connection, str(client_id), day)
-    if not price:
-        return None
-
-    old_total = int(link["total_amount"])
-    new_total = old_total + price * delta_boxes
-    paid = int(link["paid_amount"])
-    if new_total < paid:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Правка коробов опустит сумму счёта {link['doc_number']} ниже уже оплаченной "
-                f"({format_kopecks(paid)}). Сначала оформите возврат."
-            ),
-        )
-    if new_total <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Правка коробов обнулит сумму счёта {link['doc_number']}.",
-        )
-
-    invoice_id = str(link["id"])
-    if paid >= new_total:
-        new_status = INVOICE_STATUS_CLOSED
-    elif paid > 0:
-        new_status = INVOICE_STATUS_PARTIALLY_PAID
-    else:
-        new_status = INVOICE_STATUS_ISSUED
-    connection.execute(
-        "UPDATE invoice_docs SET total_amount = ?, status = ?, updated_at = ? WHERE id = ?",
-        (new_total, new_status, now, invoice_id),
-    )
-    sign = "+" if delta_boxes > 0 else "−"
-    connection.execute(
-        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
-        "VALUES (?,?,?,?,?,?)",
-        (str(uuid4()), invoice_id, INVOICE_OP_AMOUNT_CHANGE,
-         f"Сумма (авто, коррекция коробов «{product_name}» на {sign}{abs(delta_boxes)}): "
-         f"{format_kopecks(old_total)} → {format_kopecks(new_total)}", now, uid),
-    )
-    return invoice_id
 
 
 # Лёгкий in-process кеш счётчика алёрта: бейдж опрашивается часто, а сам запрос

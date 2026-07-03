@@ -25,15 +25,12 @@ from config import (
     TIMESHEET_DAY_WORKED,
     TIMESHEET_LUNCH_HOURS,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
 from modules.production_calendar.service import load_overrides, working_days_of_month
+from utils import now_iso
 
 RU_MON = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 RU_DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]  # date.weekday(): Mon=0..Sun=6
-
-
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def business_today() -> date:
@@ -821,8 +818,8 @@ def list_employees(
         conds.append("e.status = ?")
         params.append(status)
     if search:
-        s = like_substring_param(search)
-        conds.append("(e.full_name LIKE ? OR COALESCE(p.name, e.position) LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(e.full_name) LIKE ? OR fold_ci(COALESCE(p.name, e.position)) LIKE ?)")
         params += [s, s]
     where = " AND ".join(conds)
     rows = connection.execute(

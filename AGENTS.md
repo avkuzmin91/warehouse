@@ -22,7 +22,7 @@
 Перед любым изменением кода:
 
 1. Прочитать `CLAUDE.md` и `AGENTS.md` целиком.
-2. Найти **похожую реализацию** в проекте — `receipts` и `shipments` эталонные домены и для backend, и для frontend.
+2. Найти **похожую реализацию** в проекте — эталонные домены: `receipts` (поступления), `dispatch` (отгрузка клиенту), `shipments` (задача упаковки). «Отгрузка клиенту» — это `dispatch`, не `shipments`.
 3. Изучить связанные backend/frontend файлы (router → service → schemas → `<domain>Api.ts` → feature).
 4. Сделать **минимально необходимое** изменение в рамках существующих слоёв и паттернов.
 5. **Не менять архитектуру** (слои, структуру модулей, базовые хелперы) без явного запроса пользователя.
@@ -36,7 +36,7 @@
 
 - Сначала прочитать `CLAUDE.md`.
 - Следовать текущей архитектуре слоёв (`pages` / `features` / `ui/{primitives,data,layouts,shell}` / `hooks` / `api` / `utils` / `auth` на фронте; `backend/modules/<domain>/{router,service,schemas}.py` на бэке).
-- Перед написанием нового кода — искать **похожую реализацию** в `receipts` или `shipments` и копировать паттерн.
+- Перед написанием нового кода — искать **похожую реализацию** в `receipts`, `dispatch` или `shipments` и копировать паттерн.
 - Любую feature-логику добавлять в `ui/features/<domain>/`.
 - Все запросы — через `request<T>` из `frontend/src/api/http.ts`.
 - Все справочники брать через `useLookups()`.
@@ -62,7 +62,7 @@
   - `frontend/src/ui/data/SortableTh.tsx`
   - `frontend/src/ui/primitives/Tabs.tsx`
   - Таблицы `inventory_operations`, `app_migrations`, имена `receipt2_*` / `shipment2_*`
-  - Эндпоинты `/import/*`, `/analytics/*`, `/client-portal/*`
+  - Backend-эндпоинты `/import/*`, `/analytics/*`, `/client-portal/*` (410-заглушки; живые `/expenses/analytics`, `/pnl/*`, `/cabinet/*` и фронтовая страница `/analytics` — НЕ они, их трогать можно)
 - **Не** использовать `window.confirm` / `window.alert` — только `useConfirm()` / `useToast()`.
 - **Не** хардкодить цвета — только `var(--c-*)`.
 - **Не** хардкодить строковые статусы / op_type на backend — импорт из `config.py`.

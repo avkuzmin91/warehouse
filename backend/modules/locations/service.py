@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import re
-from datetime import UTC, datetime
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -23,14 +22,12 @@ from .schemas import (
     LocationLookupResponse,
 )
 from modules.dictionaries.schemas import MessageResponse
+from utils import now_iso as _now
 
 # Этикеток за один лист печати не безгранично: тот же потолок, что у остатков
 # по местам (ZONE_ROWS_LIMIT). Печать сужают фильтром по помещению/стеллажу.
 LABELS_LIMIT = 2000
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _norm_segment(raw: object, label: str) -> str:

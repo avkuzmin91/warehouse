@@ -10,15 +10,13 @@
 from __future__ import annotations
 
 import calendar
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from uuid import uuid4
+from utils import now_iso as _now
 
 # Python date.weekday(): Mon=0 … Sun=6. По умолчанию нерабочее — воскресенье.
 _DEFAULT_OFF_WEEKDAY = 6
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _default_is_working(d: date) -> bool:

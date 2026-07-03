@@ -41,6 +41,7 @@ from .service import (
     optional_bearer,
     set_refresh_cookie,
     verify_password,
+    verify_password_dummy,
 )
 
 import secrets
@@ -57,14 +58,13 @@ def _is_mobile_client(x_client: str | None) -> bool:
 
 @router.post("/register", response_model=RegisterResponse)
 def register(payload: RegisterRequest):
-    existing_user = get_user_by_email(payload.email)
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email уже зарегистрирован",
-        )
-    user_id = str(uuid4())
+    # Анти-enumeration: ответ одинаков для нового и уже занятого email — существующий
+    # аккаунт не создаётся повторно, но и не раскрывается. bcrypt считаем всегда, чтобы
+    # тайминг не выдавал занятость email.
     password_hash = hash_password(payload.password)
+    if get_user_by_email(payload.email):
+        return RegisterResponse(success=True)
+    user_id = str(uuid4())
     with get_connection() as connection:
         connection.execute(
             "INSERT INTO users (id, email, password_hash, role, created_at) VALUES (?, ?, ?, 'user', ?)",
@@ -77,7 +77,13 @@ def register(payload: RegisterRequest):
 @router.post("/login", response_model=AuthTokenResponse)
 def login(payload: LoginRequest, response: Response, x_client: str | None = Header(default=None)):
     user = get_user_by_email(payload.email)
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    if not user:
+        verify_password_dummy()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный email или пароль",
+        )
+    if not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный email или пароль",

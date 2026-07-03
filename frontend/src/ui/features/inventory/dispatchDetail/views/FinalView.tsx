@@ -12,10 +12,9 @@ type Props = {
   onOpenTrip: (id: string) => void
   onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
   onSaveBoxes?: (lineId: string, boxes: number | null) => Promise<boolean>
-  palletsNotice?: string
 }
 
-export function FinalView({ doc, onOpenTrip, onSavePallets, onSaveBoxes, palletsNotice }: Props) {
+export function FinalView({ doc, onOpenTrip, onSavePallets, onSaveBoxes }: Props) {
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
   const isCancelled = doc.status === 'cancelled'
@@ -50,7 +49,7 @@ export function FinalView({ doc, onOpenTrip, onSavePallets, onSaveBoxes, pallets
           </Panel>
 
           <Panel icon="boxes" title="Состав отгрузки">
-            <LinesTable lines={doc.lines} onSavePallets={onSavePallets} onSaveBoxes={onSaveBoxes} editNotice={palletsNotice} />
+            <LinesTable lines={doc.lines} onSavePallets={onSavePallets} onSaveBoxes={onSaveBoxes} />
           </Panel>
         </div>
 

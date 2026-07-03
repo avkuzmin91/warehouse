@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../primitives/Icon'
 import { Tag } from '../primitives/Tag'
+import { foldCiSearch } from '../../utils/foldCiSearch'
 
 export interface MultiSelectOption {
   value: string | number
@@ -25,9 +26,9 @@ export function MultiSelect({ value, onChange, options, placeholder = 'Выбр�
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const filtered = useMemo(() => {
-    if (!query) return options
-    const lq = query.toLowerCase()
-    return options.filter((o) => o.label.toLowerCase().includes(lq))
+    const lq = foldCiSearch(query.trim())
+    if (!lq) return options
+    return options.filter((o) => foldCiSearch(o.label).includes(lq))
   }, [options, query])
 
   useEffect(() => {

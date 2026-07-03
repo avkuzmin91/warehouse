@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -33,10 +32,8 @@ from .schemas import (
     SizeListResponse,
     SizeUpdateRequest,
 )
+from utils import now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _ensure_dictionary_table(table_name: str) -> None:

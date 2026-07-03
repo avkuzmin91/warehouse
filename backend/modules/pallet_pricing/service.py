@@ -1,98 +1,48 @@
 """Стоимость палета по клиенту (effective-dated).
 
-Чистая логика поверх client_pallet_prices: одна цена палета на клиента, история
-append-only. Действующая цена ищется тем же правилом, что и тариф упаковки
-(`pricing.service.price_on`): последняя запись с effective_from <= дата события,
-самая ранняя тянется назад. Деньги — копейки INTEGER.
+Тонкие обёртки над общей реализацией «цена единицы упаковки по клиенту»
+(`modules.pricing.service.*client_unit_price*`): у палет и коробов одна логика,
+различается только таблица. Деньги — копейки INTEGER.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from uuid import uuid4
+from modules.pricing.service import (
+    add_client_unit_price,
+    client_unit_price_for_event,
+    current_client_unit_prices,
+    delete_client_unit_price,
+    load_client_unit_price_histories,
+    load_client_unit_price_history,
+    price_on,
+)
 
-from modules.pricing.service import price_on
+__all__ = [
+    "load_pallet_price_history", "load_pallet_price_histories", "current_pallet_prices",
+    "pallet_price_for_event", "add_pallet_price", "delete_pallet_price", "price_on",
+]
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
+_TABLE = "client_pallet_prices"
 
 
 def load_pallet_price_history(connection, client_id: str) -> list[dict]:
     """Записи цены палета по клиенту, свежая первой."""
-    rows = connection.execute(
-        "SELECT id, price_kop, effective_from, note, created_at, created_by "
-        "FROM client_pallet_prices "
-        "WHERE client_id = ? AND COALESCE(is_deleted, 0) = 0 "
-        "ORDER BY effective_from DESC, created_at DESC",
-        (client_id,),
-    ).fetchall()
-    return [
-        {
-            "id": str(r["id"]),
-            "price_kop": int(r["price_kop"]),
-            "effective_from": str(r["effective_from"]),
-            "note": r["note"],
-            "created_at": str(r["created_at"]),
-            "created_by": r["created_by"],
-        }
-        for r in rows
-    ]
+    return load_client_unit_price_history(connection, _TABLE, client_id)
 
 
 def load_pallet_price_histories(connection, client_ids: list[str]) -> dict[str, list[dict]]:
-    """client_id → история цены палета (свежая первой) одним запросом — без N+1.
-
-    Для построчного расчёта по разным датам событий: вызывающий сам делает
-    `price_on(hist.get(client_id), day)` на нужную дату каждого документа."""
-    ids = list({str(c) for c in client_ids if c})
-    if not ids:
-        return {}
-    placeholders = ",".join("?" for _ in ids)
-    rows = connection.execute(
-        f"SELECT client_id, price_kop, effective_from "
-        f"FROM client_pallet_prices "
-        f"WHERE client_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0 "
-        f"ORDER BY client_id, effective_from DESC, created_at DESC",
-        ids,
-    ).fetchall()
-    out: dict[str, list[dict]] = {}
-    for r in rows:
-        out.setdefault(str(r["client_id"]), []).append(
-            {"price_kop": int(r["price_kop"]), "effective_from": str(r["effective_from"])}
-        )
-    return out
+    """client_id → история цены палета (свежая первой) одним запросом — без N+1."""
+    return load_client_unit_price_histories(connection, _TABLE, client_ids)
 
 
 def current_pallet_prices(connection, client_ids: list[str], day_iso: str) -> dict[str, int]:
     """client_id → действующая на дату цена палета для набора клиентов (один запрос)."""
-    ids = list({str(c) for c in client_ids if c})
-    if not ids:
-        return {}
-    placeholders = ",".join("?" for _ in ids)
-    rows = connection.execute(
-        f"SELECT client_id, price_kop, effective_from, created_at "
-        f"FROM client_pallet_prices "
-        f"WHERE client_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0 "
-        f"ORDER BY client_id, effective_from DESC, created_at DESC",
-        ids,
-    ).fetchall()
-    hist: dict[str, list[dict]] = {}
-    for r in rows:
-        hist.setdefault(str(r["client_id"]), []).append(
-            {"price_kop": int(r["price_kop"]), "effective_from": str(r["effective_from"])}
-        )
-    out: dict[str, int] = {}
-    for cid in ids:
-        val = price_on(hist.get(cid), day_iso)
-        if val is not None:
-            out[cid] = val
-    return out
+    return current_client_unit_prices(connection, _TABLE, client_ids, day_iso)
 
 
 def pallet_price_for_event(connection, client_id: str, day_iso: str) -> int | None:
     """Действующая цена палета клиента на дату события. None — цена не заведена."""
-    return price_on(load_pallet_price_history(connection, client_id), day_iso)
+    return client_unit_price_for_event(connection, _TABLE, client_id, day_iso)
 
 
 def add_pallet_price(
@@ -100,28 +50,13 @@ def add_pallet_price(
     user_id: str, note: str | None = None,
 ) -> str:
     """Добавить запись цены палета (append-only). Без commit — вызывающий коммитит."""
-    new_id = str(uuid4())
-    connection.execute(
-        "INSERT INTO client_pallet_prices "
-        "(id, client_id, price_kop, effective_from, note, created_at, created_by) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (new_id, client_id, int(price_kop), effective_from, (note or None), _now(), user_id),
+    return add_client_unit_price(
+        connection, _TABLE,
+        client_id=client_id, price_kop=price_kop, effective_from=effective_from,
+        user_id=user_id, note=note,
     )
-    return new_id
 
 
 def delete_pallet_price(connection, *, client_id: str, price_id: str) -> bool:
-    """Мягко удалить запись истории (ошибочный ввод). Без commit.
-
-    False, если запись не найдена / уже удалена / не принадлежит клиенту."""
-    row = connection.execute(
-        "SELECT id FROM client_pallet_prices "
-        "WHERE id = ? AND client_id = ? AND COALESCE(is_deleted, 0) = 0",
-        (price_id, client_id),
-    ).fetchone()
-    if not row:
-        return False
-    connection.execute(
-        "UPDATE client_pallet_prices SET is_deleted = 1 WHERE id = ?", (price_id,)
-    )
-    return True
+    """Мягко удалить запись истории (ошибочный ввод). Без commit."""
+    return delete_client_unit_price(connection, _TABLE, client_id=client_id, price_id=price_id)

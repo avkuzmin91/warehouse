@@ -22,7 +22,12 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from config import AUTH_RL_REFRESH_MAX, AUTH_RL_REFRESH_WINDOW_SEC
+from config import (
+    AUTH_RL_REFRESH_MAX,
+    AUTH_RL_REFRESH_WINDOW_SEC,
+    AUTH_RL_REGISTER_MAX,
+    AUTH_RL_REGISTER_WINDOW_SEC,
+)
 from rate_limit.client_ip import client_ip_from_request
 from rate_limit import metrics as rl_metrics
 from rate_limit.rl_log import log_auth_rate_limit
@@ -337,6 +342,66 @@ async def check_refresh_rate_limit(request: Request) -> JSONResponse | None:
                     "ip": ip,
                     "reason": "after_redis_error",
                 },
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+    return None
+
+
+def _key_register_ip(ip: str) -> str:
+    return f"rl:register:ip:{ip}"
+
+
+async def check_register_rate_limit(request: Request) -> JSONResponse | None:
+    """
+    Для POST /auth/register: лимит по IP (общий счётчик в Redis, in-memory fallback).
+    Регистрация публична и запускает bcrypt, поэтому лимит жёстче refresh.
+    """
+    ip = client_ip_from_request(request)
+
+    redis_client, script = await _ensure_redis()
+    if redis_client is None or script is None:
+        if not _fallback_consume(f"mem:register:{ip}", AUTH_RL_REGISTER_MAX, AUTH_RL_REGISTER_WINDOW_SEC):
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {"type": "register_ip_memory", "blocked": True, "ip": ip, "reason": "no_redis_or_disabled"},
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+        return None
+
+    try:
+        ok = await _redis_allow(
+            script,
+            _key_register_ip(ip),
+            int(AUTH_RL_REGISTER_WINDOW_SEC),
+            AUTH_RL_REGISTER_MAX,
+        )
+        if not ok:
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {"type": "register_ip", "blocked": True, "ip": ip, "limit": AUTH_RL_REGISTER_MAX},
+            )
+            return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if _is_redis_infrastructure_error(exc):
+            await _invalidate_redis_after_error()
+        log_auth_rate_limit(
+            _log,
+            logging.ERROR,
+            {"type": "redis_error", "blocked": False, "ip": ip, "error": str(exc)},
+            exc_info=True,
+        )
+        if AUTH_LOGIN_RL_FAIL_CLOSED:
+            return JSONResponse({"detail": "Rate limit service temporarily unavailable"}, status_code=503)
+        rl_metrics.increment("auth_rl_redis_fallback_total")
+        if not _fallback_consume(f"mem:register:{ip}", AUTH_RL_REGISTER_MAX, AUTH_RL_REGISTER_WINDOW_SEC):
+            log_auth_rate_limit(
+                _log,
+                logging.WARNING,
+                {"type": "register_ip_memory", "blocked": True, "ip": ip, "reason": "after_redis_error"},
             )
             return JSONResponse(REFRESH_TOO_MANY_BODY, status_code=429)
     return None

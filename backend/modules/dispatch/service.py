@@ -31,28 +31,14 @@ from config import (
     TRIP_STATUS_DRAFT,
     TRIP_STATUS_UNLOADING,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
+from utils import next_doc_number as _next_doc_number, now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def next_doc_number(connection) -> str:
-    """Следующий номер документа отгрузки клиенту (DSP-NNNN).
-
-    MAX подстроки вместо COUNT, чтобы дырки в нумерации не давали дубликатов;
-    UNIQUE на doc_number гарантирует атомарность.
-    """
-    row = connection.execute(
-        """
-        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
-        FROM dispatch_docs
-        WHERE doc_number LIKE 'DSP-%' AND SUBSTR(doc_number, 5) ~ '^[0-9]+$'
-        """
-    ).fetchone()
-    n = (row["max_n"] if row else 0) + 1
-    return f"DSP-{n:04d}"
+    """Следующий номер документа отгрузки клиенту (DSP-NNNN)."""
+    return _next_doc_number(connection, table="dispatch_docs", prefix="DSP-", width=4)
 
 
 def normalize_cargo_type(raw: str | None) -> str:
@@ -185,10 +171,15 @@ def _packed_lines_for_variant(
     не уменьшится, и финальное «Готово к рейсу» переразложит уже отгруженное → отрицательный
     остаток. `packed` физически лежит только в зоне упаковки, поэтому зону не фильтруем.
     """
+    # Плюс и минус — отдельными суммами: ручное перемещение упакованного по ячейкам
+    # (packed→packed) обязано дать нетто 0, а не задвоить остаток строки.
+    net_sql = (
+        "COALESCE(SUM(CASE WHEN to_op = ? AND to_quality = ? THEN qty ELSE 0 END), 0)"
+        " - COALESCE(SUM(CASE WHEN from_op = ? AND from_quality = ? THEN qty ELSE 0 END), 0)"
+    )
     rows = connection.execute(
-        """SELECT shipment_line_id AS sl,
-              COALESCE(SUM(CASE WHEN to_op = ?   AND to_quality = ?   THEN qty
-                                WHEN from_op = ? AND from_quality = ? THEN -qty ELSE 0 END), 0) AS net,
+        f"""SELECT shipment_line_id AS sl,
+              {net_sql} AS net,
               MIN(created_at) AS first_at
            FROM zone_relocations
            WHERE product_id = ?
@@ -197,8 +188,7 @@ def _packed_lines_for_variant(
              AND client_id IS NOT DISTINCT FROM ?
              AND shipment_line_id IS NOT NULL
            GROUP BY shipment_line_id
-           HAVING COALESCE(SUM(CASE WHEN to_op = ?   AND to_quality = ?   THEN qty
-                                    WHEN from_op = ? AND from_quality = ? THEN -qty ELSE 0 END), 0) > 0
+           HAVING {net_sql} > 0
            ORDER BY MIN(created_at)""",
         (INV_OP_PACKED, INV_Q_GOOD, INV_OP_PACKED, INV_Q_GOOD,
          product_id, color_id, size_id, client_id,
@@ -841,14 +831,23 @@ def consume_stock_for_dispatch(
             if remaining <= 0:
                 break
             take = min(remaining, net)
-            _insert_shipped_move(
-                connection,
-                line=line, client_id=client_id, client_name=client_name, quality=quality,
-                from_op=INV_OP_PACKED,
-                from_zone_id=packing_id, from_zone_name=packing_name,
-                qty=take, user_id=user_id, dispatch_line_id=line_id, trip_id=trip_id,
-                comment=f"{comment_prefix} (из упаковки): {take} шт.", shipment_line_id=sl_id,
+            # Упакованное могли вручную переставить из зоны упаковки — списываем из
+            # фактических ячеек корзины `packed` строки упаковки (FIFO).
+            from modules.shipments.service import _consume_zone_sources, line_bucket_zone_sources
+            packed_sources = line_bucket_zone_sources(
+                connection, sl_id, op=INV_OP_PACKED, quality=quality, prefer_zone_id=packing_id,
             )
+            for src_zone_id, src_zone_name, part in _consume_zone_sources(
+                packed_sources, take, fallback=(packing_id, packing_name)
+            ):
+                _insert_shipped_move(
+                    connection,
+                    line=line, client_id=client_id, client_name=client_name, quality=quality,
+                    from_op=INV_OP_PACKED,
+                    from_zone_id=src_zone_id, from_zone_name=src_zone_name,
+                    qty=part, user_id=user_id, dispatch_line_id=line_id, trip_id=trip_id,
+                    comment=f"{comment_prefix} (из упаковки): {part} шт.", shipment_line_id=sl_id,
+                )
             shipped_total += take
             remaining -= take
             drained_shipment_lines.add(sl_id)
@@ -905,6 +904,7 @@ def list_dispatches_aggregated(
     date_to: str | None = None,
     cargo_type: str | None = None,
     available_for_trip_id: str | None = None,
+    show_costs: bool = True,
 ) -> tuple[list[dict], int]:
     """Агрегирующий список отгрузок (один SQL, без replay по строкам)."""
     conds = ["d.is_deleted = 0"]
@@ -945,17 +945,17 @@ def list_dispatches_aggregated(
     if client_id:
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
-        s = like_substring_param(search)
-        conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
         params += [s, s, s]
     if sku:
         conds.append(
             "EXISTS (SELECT 1 FROM dispatch_lines dl"
             " LEFT JOIN products p ON p.id = dl.product_id"
             " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
-            " AND (COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ? OR dl.product_name LIKE ?))"
+            " AND (fold_ci(COALESCE(NULLIF(p.sku, ''), dl.product_sku)) LIKE ? OR fold_ci(dl.product_name) LIKE ?))"
         )
-        s = like_substring_param(sku); params += [s, s]
+        s = ci_like_substring_param(sku); params += [s, s]
     if date_from:
         conds.append("d.ship_date >= ?"); params.append(date_from)
     if date_to:
@@ -995,7 +995,7 @@ def list_dispatches_aggregated(
             "client_name": r["client_name"],
             "destination": r["destination"],
             "carrier": r["carrier"],
-            "logistics_cost": float(r["logistics_cost"]) if r.get("logistics_cost") is not None else None,
+            "logistics_cost": float(r["logistics_cost"]) if show_costs and r.get("logistics_cost") is not None else None,
             "ship_date": r["ship_date"],
             "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
             "status": str(r["status"]),
@@ -1010,7 +1010,7 @@ def list_dispatches_aggregated(
     return items, total
 
 
-def get_dispatch_detail(connection, doc_id: str) -> dict | None:
+def get_dispatch_detail(connection, doc_id: str, *, show_costs: bool = True) -> dict | None:
     """Документ + строки (sku_pending, remaining) + ops (email) + рейсы. None если нет."""
     row = connection.execute(
         "SELECT * FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
@@ -1105,7 +1105,7 @@ def get_dispatch_detail(connection, doc_id: str) -> dict | None:
         "client_name": row["client_name"],
         "destination": row["destination"],
         "carrier": row["carrier"],
-        "logistics_cost": float(row["logistics_cost"]) if row.get("logistics_cost") is not None else None,
+        "logistics_cost": float(row["logistics_cost"]) if show_costs and row.get("logistics_cost") is not None else None,
         "ship_date": row["ship_date"],
         "priority_rank": int(row["priority_rank"]) if row.get("priority_rank") is not None else None,
         "actual_ship_date": row.get("actual_ship_date"),

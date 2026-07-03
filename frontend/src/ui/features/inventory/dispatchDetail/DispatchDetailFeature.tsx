@@ -230,11 +230,8 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
   // Палеты/короба менеджер правит на любом статусе (включая отгруженные), пока отгрузка
-  // не аннулирована. Если по отгрузке уже выставлен счёт — его сумма авто-скорректируется.
+  // не аннулирована. Правка палет/коробов не влияет на сумму выставленных счетов.
   const canEditPallets = status !== 'cancelled' && canEditPlanning
-  const palletsNotice = canEditPallets && doc.invoiced
-    ? 'По отгрузке выставлен счёт: при изменении палет его сумма скорректируется автоматически.'
-    : undefined
 
   const actions = (
     <>
@@ -316,7 +313,6 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
           onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
           onSaveBoxes={canEditPallets ? handleUpdateBoxes : undefined}
-          palletsNotice={palletsNotice}
         />
       ) : (
         <FinalView
@@ -324,7 +320,6 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onOpenTrip={(id) => navigate(`/logistics/trips/${id}`)}
           onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
           onSaveBoxes={canEditPallets ? handleUpdateBoxes : undefined}
-          palletsNotice={palletsNotice}
         />
       )}
 

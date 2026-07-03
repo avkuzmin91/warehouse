@@ -96,18 +96,20 @@ def _insert_move(
     conn, client_id: str, product_ids, qty: int,
     *, from_op: str, to_op: str, from_quality: str, to_quality: str,
     from_zone_id: str | None = None, to_zone_id: str | None = None,
-    product_sku: str = "TST-SKU",
+    product_sku: str = "TST-SKU", shipment_line_id: str | None = None,
 ) -> None:
     """Произвольное движение в журнале (две оси статуса)."""
     pid, color_id, size_id = product_ids
     conn.execute(
         """INSERT INTO zone_relocations
            (id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
-            client_id, from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty, created_at)
+            client_id, from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty,
+            shipment_line_id, created_at)
            VALUES (?, ?, 'Test Product', ?, ?, 'Red', ?, NULL,
-                   ?, ?, ?, ?, ?, ?, ?, ?, NOW())""",
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())""",
         (str(uuid.uuid4()), pid, product_sku, color_id, size_id, client_id,
-         from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty),
+         from_op, to_op, from_quality, to_quality, from_zone_id, to_zone_id, qty,
+         shipment_line_id),
     )
 
 
@@ -755,6 +757,221 @@ def test_quality_change_defect_to_good(admin_client, client_id, product_ids):
             "zone_id": zone, "from_quality": "defect", "to_quality": "good", "qty": 100,
         })
         assert over.status_code == 400, over.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+# ── ручные операции из любого операционного статуса ──────────────────────────
+
+def test_relocation_from_packing_inherits_attribution(admin_client, client_id, product_ids):
+    """Товар «На упаковке» перемещается по ячейкам: пул строки не меняется,
+    атрибуция к строке задачи упаковки наследуется журнальной записью."""
+    pid, color_id, size_id = product_ids
+    zone_a, packing_zone, zone_b = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, 10, zone_a)
+        s_doc = _insert_shipment(conn, client_id, "good", "on_packing")
+        _insert_shipment_line(conn, s_doc, pid, color_id, size_id, 10)
+        line_id = conn.execute(
+            "SELECT id FROM shipment_lines WHERE doc_id = ?", (s_doc,)
+        ).fetchone()["id"]
+        _insert_move(
+            conn, client_id, product_ids, 10,
+            from_op="storage", to_op="packing", from_quality="good", to_quality="good",
+            from_zone_id=zone_a, to_zone_id=packing_zone, shipment_line_id=str(line_id),
+        )
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "packing", "quality": "good",
+            "from_zone_id": packing_zone, "to_zone_id": zone_b, "qty": 4,
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, packing_zone, "packing", "good") == 6
+        assert _zone_bucket(items, zone_b, "packing", "good") == 4
+
+        with get_connection() as conn:
+            move = conn.execute(
+                "SELECT shipment_line_id FROM zone_relocations "
+                "WHERE product_id = ? AND from_zone_id = ? AND to_zone_id = ?",
+                (pid, packing_zone, zone_b),
+            ).fetchone()
+            assert move and str(move["shipment_line_id"]) == str(line_id)
+            # Пул строки на упаковке не изменился — перемещение нейтрально для процесса.
+            from modules.shipments.service import line_on_packing_qty
+            assert line_on_packing_qty(conn, str(line_id)) == 10
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_ready_splits_by_attribution_fifo(admin_client, client_id, product_ids):
+    """Перемещение «Готов к отгрузке» дробится FIFO по строкам-источникам."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        s_doc = _insert_shipment(conn, client_id, "good", "packed")
+        _insert_shipment_line(conn, s_doc, pid, color_id, size_id, 3)
+        _insert_shipment_line(conn, s_doc, pid, color_id, size_id, 2)
+        lines = [str(r["id"]) for r in conn.execute(
+            "SELECT id FROM shipment_lines WHERE doc_id = ? ORDER BY qty DESC", (s_doc,)
+        ).fetchall()]
+        _insert_move(conn, client_id, product_ids, 3,
+                     from_op="packed", to_op="ready", from_quality="good", to_quality="good",
+                     from_zone_id=None, to_zone_id=zone_a, shipment_line_id=lines[0])
+        _insert_move(conn, client_id, product_ids, 2,
+                     from_op="packed", to_op="ready", from_quality="good", to_quality="good",
+                     from_zone_id=None, to_zone_id=zone_a, shipment_line_id=lines[1])
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "ready", "quality": "good",
+            "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 4,
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone_a, "ready", "good") == 1
+        assert _zone_bucket(items, zone_b, "ready", "good") == 4
+
+        with get_connection() as conn:
+            moves = conn.execute(
+                "SELECT shipment_line_id, qty FROM zone_relocations "
+                "WHERE product_id = ? AND from_zone_id = ? AND to_zone_id = ? ORDER BY qty DESC",
+                (pid, zone_a, zone_b),
+            ).fetchall()
+            # FIFO по убыванию нетто: 3 из большей строки + 1 из меньшей.
+            assert [(str(m["shipment_line_id"]), int(m["qty"])) for m in moves] == [
+                (lines[0], 3), (lines[1], 1),
+            ]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_quality_change_from_ready_moves_defect_to_storage(admin_client, client_id, product_ids):
+    """Перевод в брак из «Готов к отгрузке»: товар выбывает в storage/defect в том же месте."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _insert_move(conn, client_id, product_ids, 5,
+                     from_op="packed", to_op="ready", from_quality="good", to_quality="good",
+                     from_zone_id=None, to_zone_id=zone)
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/quality-changes", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "ready", "zone_id": zone, "from_quality": "good", "to_quality": "defect", "qty": 2,
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone, "ready", "good") == 3
+        assert _zone_bucket(items, zone, "storage", "defect") == 2
+
+        # Обратный перевод (брак → годный) вне «На хранении» запрещён.
+        back = admin_client.post("/balances/quality-changes", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "ready", "zone_id": zone, "from_quality": "defect", "to_quality": "good", "qty": 1,
+        })
+        assert back.status_code == 400, back.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_write_off_from_packed_bucket(admin_client, client_id, product_ids):
+    """Списание из «Упаковано» уменьшает бакет и уменьшает pending строки упаковки."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        s_doc = _insert_shipment(conn, client_id, "good", "on_packing")
+        _insert_shipment_line(conn, s_doc, pid, color_id, size_id, 6)
+        line_id = str(conn.execute(
+            "SELECT id FROM shipment_lines WHERE doc_id = ?", (s_doc,)
+        ).fetchone()["id"])
+        _insert_move(conn, client_id, product_ids, 6,
+                     from_op="packing", to_op="packed", from_quality="good", to_quality="good",
+                     from_zone_id=zone, to_zone_id=zone, shipment_line_id=line_id)
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "packed", "zone_id": zone, "quality": "good", "qty": 2, "reason": "damage",
+        })
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone, "packed", "good") == 4
+
+        with get_connection() as conn:
+            move = conn.execute(
+                "SELECT shipment_line_id, from_op, to_op FROM zone_relocations "
+                "WHERE product_id = ? AND to_op = 'written_off'", (pid,),
+            ).fetchone()
+            assert move and str(move["shipment_line_id"]) == line_id
+            assert str(move["from_op"]) == "packed"
+            from modules.shipments.service import line_packed_pending
+            assert line_packed_pending(conn, line_id)["good"] == 4
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_relocation_rejects_terminal_and_intake_ops(admin_client, client_id, product_ids):
+    """intake и терминальные стоки не перемещаются (422 от валидации схемы)."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    for op in ("intake", "shipped", "written_off"):
+        r = admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": op, "quality": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 1,
+        })
+        assert r.status_code == 422, f"{op}: {r.text}"
+
+
+def test_shift_supervisor_can_do_stock_operations(shift_supervisor_client, client_id, product_ids):
+    """Начальник смены выполняет перемещение/перевод в брак/списание (раньше — 403)."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 9)
+    try:
+        r = shift_supervisor_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "quality": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 3,
+        })
+        assert r.status_code == 200, r.text
+
+        q = shift_supervisor_client.post("/balances/quality-changes", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone_a, "from_quality": "good", "to_quality": "defect", "qty": 2,
+        })
+        assert q.status_code == 200, q.text
+
+        w = shift_supervisor_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone_a, "quality": "good", "qty": 1, "reason": "shortage",
+        })
+        assert w.status_code == 200, w.text
+
+        j = shift_supervisor_client.get(f"/balances/relocations?client_id={client_id}")
+        assert j.status_code == 200, j.text
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))

@@ -1,12 +1,14 @@
 """Финрезультат «доходы vs расходы» (P&L) — сборка дохода по дням и сравнение с расходом.
 
-Доход = упаковка (годное/брак) + логистика клиента + палеты + короба. Расход переиспользует
-`expenses.service.expense_analytics` (ЗП/аренда размазаны по дням, см. там).
+Доход = упаковка (годное/брак) + логистика клиента + палеты + короба + доп. работы.
+Расход переиспользует `expenses.service.expense_analytics` (ЗП/аренда размазаны по дням, см. там).
 
 Атрибуция по дням:
   • упаковка — по `packed_date` (день перемещения в упаковку), из `packing_productivity`;
   • логистика, палеты и короба — по ФАКТИЧЕСКОМУ дню рейса `trip_docs.arrived_at`, по документам,
-    привязанным к рейсу. Рейсы со статусом cancelled и без факта прибытия не учитываются.
+    привязанным к рейсу. Рейсы со статусом cancelled и без факта прибытия не учитываются;
+  • доп. работы (extra_income_entries) — по `entry_date` (бизнес-дата работы). Учёт по
+    начислению: попадание записи в счёт клиенту на доход P&L не влияет.
 
 Документ, привязанный к нескольким рейсам (дробление), относим к самому раннему его рейсу
 в окне — чтобы стоимость логистики/палет документа не задвоилась. Деньги — копейки INTEGER.
@@ -216,8 +218,10 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
     """Общий расчёт дохода за окно `axis` (единый источник для P&L и аналитики «Доходы»).
 
     Доход = упаковка (годное/брак) по `packed_date` + логистика клиента + палеты + короба по
-    ФАКТ-дню рейса. Возвращает потоки с посуточными рядами, итоговый ряд/сумму и разрез
-    по клиентам. Итог by_client сходится с income_total (те же слагаемые). Копейки INTEGER."""
+    ФАКТ-дню рейса + доп. работы по `entry_date`. Возвращает потоки с посуточными рядами,
+    итоговый ряд/сумму и разрез по клиентам. Итог by_client сходится с income_total
+    (те же слагаемые). Копейки INTEGER."""
+    from modules.extra_income.service import extra_income_rows
     from modules.shipments.service import packing_productivity
 
     idx = {d: i for i, d in enumerate(axis)}
@@ -276,12 +280,20 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
             boxes[i] += r["kop"]
             _add_client(r["client_id"], r["client_name"], r["kop"])
 
+    extra = _empty()
+    for r in extra_income_rows(connection, date_from=df, date_to=dt, client_id=client_id):
+        i = idx.get(r["day"])
+        if i is not None:
+            extra[i] += r["kop"]
+            _add_client(r["client_id"], r["client_name"], r["kop"])
+
     income_defs = [
         ("packing_good", "Упаковка (годное)", INV_Q_GOOD, packing_good),
         ("packing_defect", "Упаковка (брак)", INV_Q_DEFECT, packing_defect),
         ("logistics", "Логистика", None, logistics),
         ("pallets", "Палеты", None, pallets),
         ("boxes", "Короба", None, boxes),
+        ("extra", "Доп. работы", None, extra),
     ]
     sources = [
         {"key": key, "label": label, "kind": kind, "amount": sum(series), "series": series}
@@ -412,6 +424,7 @@ def pnl_day_detail(
     items[] первоисточников (документ/товар/сотрудник). Копейки INTEGER."""
     from modules.box_pricing.service import load_box_price_histories
     from modules.expenses.service import expense_day_detail
+    from modules.extra_income.service import extra_income_day_items
     from modules.invoices.service import rub_to_kop
     from modules.pallet_pricing.service import load_pallet_price_histories
     from modules.pricing.service import price_on
@@ -566,12 +579,15 @@ def pnl_day_detail(
                     "ref_kind": None, "note": f"{int(row.get('defect', 0) or 0)} шт.",
                 })
 
+    extra_items = extra_income_day_items(connection, day=day, client_id=cid)
+
     income_defs = [
         ("packing_good", "Упаковка (годное)", INV_Q_GOOD, good_items),
         ("packing_defect", "Упаковка (брак)", INV_Q_DEFECT, defect_items),
         ("logistics", "Логистика", None, logistics_items),
         ("pallets", "Палеты", None, pallet_items),
         ("boxes", "Короба", None, box_items),
+        ("extra", "Доп. работы", None, extra_items),
     ]
     income_sources: list[dict] = []
     for key, label, kind, items in income_defs:

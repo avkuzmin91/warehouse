@@ -2274,3 +2274,69 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .global-busy-bar.active::before { animation-duration: 2.2s; }
 }
+
+/* Полноэкранная загрузка (LoadingScreen): бутстрап сессии, lazy-роуты */
+.load-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--c-bg);
+}
+.load-screen-mark {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.load-screen-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #4338ca 0%, #6366f1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 18px rgba(67, 56, 202, 0.28);
+  animation: load-logo-pulse 2.4s ease-in-out infinite;
+}
+.load-screen-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--c-accent-bg);
+  border-top-color: var(--c-accent);
+  animation: load-ring-spin 0.9s linear infinite;
+}
+.load-screen-label {
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--c-text-muted);
+  letter-spacing: -0.01em;
+}
+.load-screen-hint {
+  min-height: 36px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--c-text-subtle);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+.load-screen-hint.visible { opacity: 1; }
+@keyframes load-logo-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 6px 18px rgba(67, 56, 202, 0.28); }
+  50%      { transform: scale(1.05); box-shadow: 0 9px 26px rgba(67, 56, 202, 0.4); }
+}
+@keyframes load-ring-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .load-screen-logo { animation: none; }
+  .load-screen-ring { animation-duration: 2.4s; }
+}

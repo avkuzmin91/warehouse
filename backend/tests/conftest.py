@@ -2,11 +2,19 @@
 
 Требует переменной окружения DATABASE_URL (PostgreSQL).
 Если DATABASE_URL не задан — интеграционные тесты пропускаются.
+
+Изоляция: по умолчанию прогон создаёт СВОЮ одноразовую БД на том же сервере
+(<dbname>_test_<hex>), накатывает alembic upgrade head и удаляет её в конце.
+Это делает результат воспроизводимым (общая dev-БД замусорена и флачит list-тесты)
+и позволяет параллельные прогоны (в т.ч. pytest -n: каждый worker — своя БД).
+TEST_DB_ISOLATION=0 — гонять прямо в DATABASE_URL (старое поведение).
 """
 from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -17,14 +25,70 @@ if not os.environ.get("DATABASE_URL"):
         allow_module_level=True,
     )
 
+_TEST_DB_NAME: str | None = None
+_ADMIN_URL: str | None = None
+
+
+# Ключ-маркер в env: conftest импортируется ДВАЖДЫ (как pytest-plugin и как
+# tests.conftest из test-файлов) — без маркера изоляция создала бы две БД и
+# одна осталась бы висеть. Для pytest -n ключ включает id воркера: каждый
+# воркер xdist — отдельный процесс со своим PYTEST_XDIST_WORKER → своя БД.
+_MARKER = f"WMS_TEST_DB_NAME_{os.environ.get('PYTEST_XDIST_WORKER', 'main')}"
+
+
+def _isolate_database() -> None:
+    """Создать одноразовую БД и перенаправить DATABASE_URL до импорта app/dbconn."""
+    global _TEST_DB_NAME, _ADMIN_URL
+    if os.environ.get("TEST_DB_ISOLATION", "1") == "0":
+        return
+    if os.environ.get(_MARKER):
+        # Уже изолировано вторым экземпляром модуля в этом же процессе.
+        _TEST_DB_NAME = os.environ[_MARKER]
+        _ADMIN_URL = os.environ[f"{_MARKER}_ADMIN_URL"]
+        return
+    import psycopg
+
+    base = os.environ["DATABASE_URL"]
+    parts = urlsplit(base)
+    src_db = (parts.path.lstrip("/") or "postgres")[:40]
+    _TEST_DB_NAME = f"{src_db}_test_{uuid.uuid4().hex[:8]}"
+    _ADMIN_URL = base
+    with psycopg.connect(base, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{_TEST_DB_NAME}"')
+    os.environ["DATABASE_URL"] = urlunsplit(parts._replace(path=f"/{_TEST_DB_NAME}"))
+    os.environ[_MARKER] = _TEST_DB_NAME
+    os.environ[f"{_MARKER}_ADMIN_URL"] = _ADMIN_URL
+
+    from alembic import command
+    from alembic.config import Config
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+    command.upgrade(cfg, "head")
+
+
+_isolate_database()
+
 from fastapi.testclient import TestClient
 
 # Фоновый планировщик ЗП не должен писать в тестовую БД при старте lifespan.
 os.environ["SALARY_SCHEDULER"] = "0"
 
 from app import app
-from dbconn import get_connection
+from dbconn import close_pool, get_connection
 from modules.auth.service import get_current_user
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Удалить одноразовую БД (FORCE рвёт оставшиеся коннекты пула)."""
+    if not _TEST_DB_NAME:
+        return
+    import psycopg
+
+    close_pool()
+    with psycopg.connect(_ADMIN_URL, autocommit=True) as conn:
+        conn.execute(f'DROP DATABASE IF EXISTS "{_TEST_DB_NAME}" WITH (FORCE)')
 
 
 def _admin_user_row():

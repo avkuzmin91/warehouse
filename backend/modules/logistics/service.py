@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -29,13 +28,11 @@ from config import (
     TRIP_OP_SHIPMENT_LINK,
     TRIP_STATUS_CANCELLED,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
+from utils import now_iso as _now
 
 _CARGO_RU = {DISPATCH_CARGO_GOOD: "товар", DISPATCH_CARGO_DEFECT: "брак"}
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def next_trip_number(connection) -> str:
@@ -93,17 +90,17 @@ def list_trips_aggregated(
         conds.append("SUBSTR(d.eta, 1, 10) <= ?")
         params.append(eta_to)
     if search:
-        s = like_substring_param(search)
+        s = ci_like_substring_param(search)
         conds.append(
-            "(d.trip_number LIKE ? OR COALESCE(d.origin_name,'') LIKE ? OR COALESCE(d.carrier_name,'') LIKE ?"
+            "(fold_ci(d.trip_number) LIKE ? OR fold_ci(d.origin_name) LIKE ? OR fold_ci(d.carrier_name) LIKE ?"
             " OR EXISTS ("
             "   SELECT 1 FROM trip_lines tl"
             "   JOIN trip_alloc ta ON ta.trip_line_id = tl.id AND COALESCE(ta.is_deleted, 0) = 0"
             "   LEFT JOIN receipt_lines rl ON rl.id = ta.receipt_line_id"
             "   LEFT JOIN dispatch_lines sl ON sl.id = ta.dispatch_line_id"
             "   WHERE tl.trip_id = d.id AND tl.is_deleted = 0"
-            "     AND (rl.product_sku LIKE ? OR rl.product_name LIKE ?"
-            "          OR sl.product_sku LIKE ? OR sl.product_name LIKE ?)"
+            "     AND (fold_ci(rl.product_sku) LIKE ? OR fold_ci(rl.product_name) LIKE ?"
+            "          OR fold_ci(sl.product_sku) LIKE ? OR fold_ci(sl.product_name) LIKE ?)"
             "))"
         )
         params += [s, s, s, s, s, s, s]

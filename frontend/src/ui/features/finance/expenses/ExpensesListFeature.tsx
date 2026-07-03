@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   EXPENSE_KIND_LABELS,
   EXPENSE_PAYMENT_STATUS_LABELS,
@@ -116,6 +116,17 @@ export function ExpensesListFeature() {
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
+
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
 
   // Активный тип в фильтре задаёт первичное действие: логистика заводится из рейса
   // (создавать нельзя), аренда/ЗП — только под фильтром нужного типа, иначе хозрасход.
@@ -273,15 +284,15 @@ export function ExpensesListFeature() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
               placeholder="Наименование, поставщик, №…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => { setSearchInput(''); setSearch('') }}
               ><Icon name="x" size={12} /></button>
             )}
           </div>

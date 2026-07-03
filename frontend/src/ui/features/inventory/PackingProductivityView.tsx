@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getPackingProductivity } from '../../../api/shipmentsApi'
 import type { PackingProductivityDay } from '../../../api/shipmentsApi'
@@ -83,6 +83,18 @@ export function PackingProductivityView() {
   const [dateFrom, setDateFrom] = useFilterParam('from', defFrom)
   const [dateTo, setDateTo] = useFilterParam('to', defTo)
   const { setMany } = useFilterParamsActions()
+
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
+
   const [reloadTick, setReloadTick] = useState(0)
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
   const [moveTarget, setMoveTarget] = useState<{ packedDate: string; row: PackingProductivityRow } | null>(null)
@@ -124,15 +136,15 @@ export function PackingProductivityView() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
               placeholder="SKU или название товара…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => { setSearchInput(''); setSearch('') }}
               >
                 <Icon name="x" size={12} />
               </button>

@@ -46,6 +46,15 @@ def like_substring_param(raw: str) -> str:
     return f"%{escape_like(str(raw).strip())}%"
 
 
+def ci_like_substring_param(raw: str) -> str:
+    """%...% для поиска через `fold_ci(col) LIKE ?`: экранирование + lower + ё→е.
+
+    Зеркалит SQL-функцию fold_ci (см. 0001_baseline). Обе стороны сравнения
+    должны быть свёрнуты одинаково, иначе совпадений не будет.
+    """
+    return f"%{escape_like(str(raw).strip().lower().replace('ё', 'е'))}%"
+
+
 class _ConnAdapter:
     """Оборачивает psycopg-соединение, заменяя ? на %s в запросах."""
 

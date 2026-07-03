@@ -31,17 +31,16 @@ from security import (
     ensure_manager_staff,
     ensure_packing_access,
     ensure_shipment_view_access,
+    ensure_stock_write_access,
     ensure_warehouse_staff,
     user_client_id_opt,
 )
+from utils import now_iso as _now
 
 
 optional_bearer = HTTPBearer(auto_error=False)
 bearer_scheme = HTTPBearer()
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def create_token(user_id: str, email: str, role: str) -> str:
@@ -61,6 +60,16 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+# Фиктивный bcrypt-хэш для несуществующих пользователей при логине: прогон checkpw
+# держит время ответа одинаковым и не даёт по таймингу отличить занятый email от свободного.
+_DUMMY_PASSWORD_HASH = hash_password("timing-attack-dummy-password")
+
+
+def verify_password_dummy() -> None:
+    """Прогнать bcrypt вхолостую (константное время логина для неизвестного email)."""
+    bcrypt.checkpw(b"timing-attack-dummy-password", _DUMMY_PASSWORD_HASH.encode("utf-8"))
 
 
 def _hash_refresh_token(raw: str) -> str:
@@ -266,6 +275,12 @@ def get_current_shipment_viewer(user=Depends(get_current_user)):
 
 def get_current_packer(user=Depends(get_current_user)):
     ensure_packing_access(user)
+    return user
+
+
+def get_current_stock_operator(user=Depends(get_current_user)):
+    """Ручные операции с остатками — складской состав вместе с начальником смены."""
+    ensure_stock_write_access(user)
     return user
 
 

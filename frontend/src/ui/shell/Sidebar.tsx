@@ -26,6 +26,7 @@ const OPS_NAV: NavItem[] = [
 
 const FINANCE_NAV: NavItem[] = [
   { to: '/finance/invoices', icon: 'ruble', label: 'Счета' },
+  { to: '/finance/extra-income', icon: 'briefcase', label: 'Доп. работы' },
   { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
   { to: '/finance/recurring', icon: 'refresh', label: 'Регулярные расходы' },
   { to: '/finance/pricing', icon: 'tag', label: 'Стоимость упаковки' },

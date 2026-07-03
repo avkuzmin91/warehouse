@@ -7,6 +7,7 @@ export type ShipmentStatus =
   | 'packing'
   | 'on_packing'
   | 'relocating'
+  | 'packed'
   | 'awaiting_trip'
   | 'partially_shipped'
   | 'shipped'
@@ -269,9 +270,10 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
+  packed: 'Упакован',
   awaiting_trip: 'Ожидает рейс',
   partially_shipped: 'Частично отгружено',
-  shipped: 'Отгружено',
+  shipped: 'Завершён',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
 }

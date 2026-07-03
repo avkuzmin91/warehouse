@@ -9,20 +9,13 @@ import { timesheetRoutes } from './routes/timesheet'
 import { cabinetRoutes } from './routes/cabinet'
 import { adminRoutes } from './routes/admin'
 import { AppLayout } from './layouts/AppLayout'
-
-function LoadingFallback() {
-  return (
-    <div style={{ height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ width: 24, height: 24, border: '2px solid var(--c-border)', borderTopColor: 'var(--c-accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-    </div>
-  )
-}
+import { LoadingScreen } from './feedback/LoadingScreen'
 
 export function App() {
   return (
     <>
       <AuthTabSync />
-      <Suspense fallback={<LoadingFallback />}>
+      <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route path="/" element={<Navigate to="/auth" replace />} />
           {authRoutes}

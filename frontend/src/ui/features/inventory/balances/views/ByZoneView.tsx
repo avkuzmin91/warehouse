@@ -63,7 +63,8 @@ export function ByZoneView() {
   const { clients, unloadingZones } = useLookups()
   const toast = useToast()
 
-  // Перемещение между местоположениями: только товар «На хранении».
+  // Перемещение между местоположениями: любой нетерминальный статус — товар можно
+  // временно переставить, даже когда он на упаковке или готов к отгрузке.
   const [reloc, setReloc] = useState<BalanceZoneItem | null>(null)
   const [toZoneId, setToZoneId] = useState('')
   const [relocQty, setRelocQty] = useState(0)
@@ -71,14 +72,15 @@ export function ByZoneView() {
   const [relocSaving, setRelocSaving] = useState(false)
   const [relocError, setRelocError] = useState('')
 
-  // Смена качества (Брак ↔ Годный) в пределах места: только товар «На хранении».
+  // Смена качества в пределах места: «На хранении» — обе стороны, вне хранения —
+  // только годный → брак (товар выбывает из процесса и возвращается на хранение).
   const [qual, setQual] = useState<BalanceZoneItem | null>(null)
   const [qualQty, setQualQty] = useState(0)
   const [qualComment, setQualComment] = useState('')
   const [qualSaving, setQualSaving] = useState(false)
   const [qualError, setQualError] = useState('')
 
-  // Списание с остатков (терминальное): только товар «На хранении».
+  // Списание с остатков (терминальное): из любого нетерминального статуса.
   const confirm = useConfirm()
   const [woff, setWoff] = useState<BalanceZoneItem | null>(null)
   const [woffQty, setWoffQty] = useState(0)
@@ -131,6 +133,7 @@ export function ByZoneView() {
         size_name:    reloc.size_name,
         client_id:    reloc.client_id,
         client_name:  reloc.client_name,
+        op:           reloc.op_status,
         quality:      reloc.quality,
         from_zone_id: reloc.location_id,
         to_zone_id:   toZoneId,
@@ -162,6 +165,7 @@ export function ByZoneView() {
         size_name:    qual.size_name,
         client_id:    qual.client_id,
         client_name:  qual.client_name,
+        op:           qual.op_status,
         zone_id:      qual.location_id,
         from_quality: qual.quality,
         to_quality:   qual.quality === 'defect' ? 'good' : 'defect',
@@ -202,6 +206,7 @@ export function ByZoneView() {
         size_name:    woff.size_name,
         client_id:    woff.client_id,
         client_name:  woff.client_name,
+        op:           woff.op_status,
         zone_id:      woff.location_id,
         quality:      woff.quality,
         qty:          woffQty,
@@ -218,7 +223,7 @@ export function ByZoneView() {
     }
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     try {
       const [res, sum] = await Promise.all([
@@ -230,21 +235,30 @@ export function ByZoneView() {
           quality: (qualityFilter || undefined) as InvQuality | undefined,
           page,
           limit: ZONE_PAGE_SIZE,
-        }),
+        }, signal),
         getBalancesSummary({
           search: search || undefined,
           client_id: clientId || undefined,
-        }),
+        }, signal),
       ])
+      if (signal?.aborted) return
       setItems(res.items)
       setTotal(res.total)
       setSummary(sum)
+    } catch (e) {
+      if (signal?.aborted) return
+      throw e
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [search, clientId, place, opFilter, qualityFilter, page])
 
-  useEffect(() => { load() }, [load])
+  // Debounce поиска: отмена предыдущего запроса + пауза перед новым при вводе текста
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => void load(ctrl.signal), search || place ? 250 : 0)
+    return () => { clearTimeout(timer); ctrl.abort() }
+  }, [load, search, place])
 
   const groups = useMemo<LocationGroup[]>(() => {
     const map = new Map<string, LocationGroup>()
@@ -474,35 +488,33 @@ export function ByZoneView() {
                         {item.qty.toLocaleString('ru-RU')}
                       </Td>
                       <Td>
-                        {item.op_status === 'storage' && (
-                          <div style={{ display: 'flex', gap: 2 }}>
+                        <div style={{ display: 'flex', gap: 2 }}>
+                          <button
+                            className="btn ghost icon sm"
+                            title="Переместить в другое местоположение"
+                            onClick={() => openReloc(item)}
+                          >
+                            <Icon name="arrowRight" size={14} />
+                          </button>
+                          {item.location_id && (item.op_status === 'storage' || item.quality === 'good') && (
                             <button
                               className="btn ghost icon sm"
-                              title="Переместить в другое местоположение"
-                              onClick={() => openReloc(item)}
+                              title={item.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
+                              onClick={() => openQual(item)}
                             >
-                              <Icon name="arrowRight" size={14} />
+                              <Icon name="refresh" size={14} />
                             </button>
-                            {item.location_id && (
-                              <button
-                                className="btn ghost icon sm"
-                                title={item.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
-                                onClick={() => openQual(item)}
-                              >
-                                <Icon name="refresh" size={14} />
-                              </button>
-                            )}
-                            {item.location_id && (
-                              <button
-                                className="btn ghost icon sm"
-                                title="Списать с остатков"
-                                onClick={() => openWoff(item)}
-                              >
-                                <Icon name="trash" size={14} />
-                              </button>
-                            )}
-                          </div>
-                        )}
+                          )}
+                          {item.location_id && (
+                            <button
+                              className="btn ghost icon sm"
+                              title="Списать с остатков"
+                              onClick={() => openWoff(item)}
+                            >
+                              <Icon name="trash" size={14} />
+                            </button>
+                          )}
+                        </div>
                       </Td>
                     </tr>
                   ))}
@@ -536,6 +548,8 @@ export function ByZoneView() {
         {reloc && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 8, columnGap: 14, fontSize: 13 }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>Статус</span>
+              <span><Badge tone={OP_TONE[reloc.op_status]}>{INV_OP_LABELS[reloc.op_status]}</Badge></span>
               <span style={{ color: 'var(--c-text-muted)' }}>Качество</span>
               <span><Badge tone={QUALITY_TONE[reloc.quality]}>{INV_QUALITY_LABELS[reloc.quality]}</Badge></span>
               <span style={{ color: 'var(--c-text-muted)' }}>Клиент</span>
@@ -545,6 +559,12 @@ export function ByZoneView() {
               <span style={{ color: 'var(--c-text-muted)' }}>Доступно</span>
               <span className="mono" style={{ fontWeight: 600 }}>{reloc.qty.toLocaleString('ru-RU')} шт</span>
             </div>
+
+            {reloc.op_status !== 'storage' && (
+              <div className="t-sub" style={{ fontSize: 12.5, color: 'var(--c-warning)' }}>
+                Товар привязан к задаче упаковки или отгрузке — перемещается только место хранения, статус и резерв документа сохраняются.
+              </div>
+            )}
 
             <div>
               <label className="field-label"><span>Местоположение назначения <span style={{ color: 'var(--c-danger)' }}>*</span></span></label>
@@ -596,6 +616,8 @@ export function ByZoneView() {
         {qual && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 8, columnGap: 14, fontSize: 13 }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>Статус</span>
+              <span><Badge tone={OP_TONE[qual.op_status]}>{INV_OP_LABELS[qual.op_status]}</Badge></span>
               <span style={{ color: 'var(--c-text-muted)' }}>Качество</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <Badge tone={QUALITY_TONE[qual.quality]}>{INV_QUALITY_LABELS[qual.quality]}</Badge>
@@ -611,6 +633,12 @@ export function ByZoneView() {
               <span style={{ color: 'var(--c-text-muted)' }}>Доступно</span>
               <span className="mono" style={{ fontWeight: 600 }}>{qual.qty.toLocaleString('ru-RU')} шт</span>
             </div>
+
+            {qual.op_status !== 'storage' && (
+              <div className="t-sub" style={{ fontSize: 12.5, color: 'var(--c-warning)' }}>
+                Товар привязан к задаче упаковки или отгрузке. Брак выбывает из процесса и вернётся «На хранение» в этом же месте — документ уедет без него.
+              </div>
+            )}
 
             <div>
               <label className="field-label"><span>Количество</span></label>
@@ -651,6 +679,8 @@ export function ByZoneView() {
         {woff && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 8, columnGap: 14, fontSize: 13 }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>Статус</span>
+              <span><Badge tone={OP_TONE[woff.op_status]}>{INV_OP_LABELS[woff.op_status]}</Badge></span>
               <span style={{ color: 'var(--c-text-muted)' }}>Качество</span>
               <span><Badge tone={QUALITY_TONE[woff.quality]}>{INV_QUALITY_LABELS[woff.quality]}</Badge></span>
               <span style={{ color: 'var(--c-text-muted)' }}>Клиент</span>
@@ -663,6 +693,7 @@ export function ByZoneView() {
 
             <div className="t-sub" style={{ fontSize: 12.5, color: 'var(--c-warning)' }}>
               Товар будет списан безвозвратно и исчезнет с остатков. Списание попадёт в журнал движений и будет видно клиенту.
+              {woff.op_status !== 'storage' && ' Товар привязан к задаче упаковки или отгрузке — документ уедет без него.'}
             </div>
 
             <div>

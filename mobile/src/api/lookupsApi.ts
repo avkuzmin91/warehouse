@@ -87,9 +87,17 @@ export function createSize(name: string, requestId?: string): Promise<{ message:
   })
 }
 
-export function getProducts(clientId?: string | null, signal?: AbortSignal): Promise<ProductLookup[]> {
-  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
-  return request<ProductLookup[]>(`/inventory/lookups/products${q}`, { signal })
+export type ProductLookupParams = { client_id?: string | null; search?: string; limit?: number }
+
+// Признака усечения в ответе нет (список, совместимость с вебом) — кому он нужен,
+// тот запрашивает limit = N+1 и сравнивает длину ответа с N (см. ProductsCatalogScreen).
+export function getProducts(params: ProductLookupParams = {}, signal?: AbortSignal): Promise<ProductLookup[]> {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.limit) sp.set('limit', String(params.limit))
+  const q = sp.toString()
+  return request<ProductLookup[]>(`/inventory/lookups/products${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getProductVariants(productId: string, signal?: AbortSignal): Promise<ProductVariantPair[]> {

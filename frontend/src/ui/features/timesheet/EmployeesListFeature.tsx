@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
@@ -20,6 +20,17 @@ export function EmployeesListFeature() {
   const [tick, setTick] = useState(0)
   const [adding, setAdding] = useState(false)
 
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
+
   const { data, loading, error } = useApi<EmployeeListResponse>(
     (signal) => getEmployees({ status: status || undefined, search: search.trim() || undefined }, signal),
     [status, search, tick],
@@ -36,7 +47,7 @@ export function EmployeesListFeature() {
       actions={<button className="btn primary" onClick={() => setAdding(true)}><Icon name="userPlus" size={14} />Добавить сотрудника</button>}
       filters={
         <div className="filters" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input className="input sm" style={{ minWidth: 240 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ФИО или должность…" />
+          <input className="input sm" style={{ minWidth: 240 }} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="ФИО или должность…" />
           {statusTab('active', 'Активные')}
           {statusTab('archived', 'В архиве')}
         </div>

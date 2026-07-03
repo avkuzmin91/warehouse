@@ -196,6 +196,7 @@ export function DispatchesBlock({ title = 'Отгрузки в рейсе', righ
                 max: l.remaining + addBack,
                 preset,
                 allocations: l.allocations?.filter((a) => a.trip_number !== link.tripNumber),
+                shipped: l.qty > 0 && l.shipped_qty >= l.qty,
               }
             })
           }}

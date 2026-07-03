@@ -169,6 +169,31 @@ def test_receipt_list_returns_pagination(admin_client):
     assert data["page"] == 1
 
 
+def test_receipt_search_is_case_and_yo_insensitive(admin_client, client_id):
+    """Поиск по списку должен быть регистронезависимым и сворачивать ё↔е."""
+    payload = _make_receipt_payload(client_id)
+    line = _make_receipt_line()
+    line["product_name"] = "Ёлка Праздничная"
+    payload["lines"] = [line]
+    r = admin_client.post("/receipts", json=payload)
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+    doc_number = admin_client.get(f"/receipts/{doc_id}").json()["doc"]["doc_number"]
+
+    def _ids(**qs: str) -> list[str]:
+        query = "&".join(f"{k}={v}" for k, v in {"client_id": client_id, **qs}.items())
+        res = admin_client.get(f"/receipts?{query}")
+        assert res.status_code == 200, res.text
+        return [it["id"] for it in res.json()["items"]]
+
+    # doc_number генерируется в верхнем регистре (WH-…) — ищем нижним.
+    assert doc_id in _ids(search=doc_number.lower())
+    # product_name с «ё» — ищем через «е» и разным регистром.
+    assert doc_id in _ids(sku="елка")
+    assert doc_id in _ids(sku="ЕЛКА")
+    assert doc_id in _ids(sku="Ёлка")
+
+
 def _insert_receipt_with_cost(client_id: str, logistics_cost: float) -> str:
     """Создаёт receipt_docs напрямую в БД с заданной стоимостью логистики.
 
@@ -294,6 +319,81 @@ def test_receipt_duplicate_date_differs(admin_client, client_id):
     payload["lines"] = [line]
     admin_client.post("/receipts", json=payload)
     assert _receipt_dup_check(admin_client, client_id, line, arrival_date="2026-05-28").json()["matches"] == []
+
+
+def test_create_receipt_rejects_out_of_range_arrival_date(admin_client, client_id):
+    """Явная опечатка в годе (1991) не должна протекать в документ."""
+    payload = _make_receipt_payload(client_id)
+    payload["arrival_date"] = "1991-06-15"
+    r = admin_client.post("/receipts", json=payload)
+    assert r.status_code == 400, r.text
+    assert "вне допустимого диапазона" in r.json()["detail"]
+
+
+def test_create_receipt_rejects_garbage_arrival_date(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    payload["arrival_date"] = "15.06.2026"
+    r = admin_client.post("/receipts", json=payload)
+    assert r.status_code == 400, r.text
+    assert "ГГГГ-ММ-ДД" in r.json()["detail"]
+
+
+def test_create_receipt_allows_empty_arrival_date(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    payload["arrival_date"] = ""
+    r = admin_client.post("/receipts", json=payload)
+    assert r.status_code == 200, r.text
+    doc = admin_client.get(f"/receipts/{r.json()['message']}").json()["doc"]
+    assert doc["arrival_date"] is None
+
+
+def test_update_receipt_rejects_far_future_arrival_date(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+    r = admin_client.patch(f"/receipts/{doc_id}", json={"arrival_date": "3000-01-01"})
+    assert r.status_code == 400, r.text
+    assert "вне допустимого диапазона" in r.json()["detail"]
+
+
+def test_receipt_doc_numbers_increase(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    id1 = admin_client.post("/receipts", json=payload).json()["message"]
+    id2 = admin_client.post("/receipts", json=payload).json()["message"]
+    n1 = admin_client.get(f"/receipts/{id1}").json()["doc"]["doc_number"]
+    n2 = admin_client.get(f"/receipts/{id2}").json()["doc"]["doc_number"]
+    assert n1.startswith("WH-") and n2.startswith("WH-")
+    assert int(n2[3:]) == int(n1[3:]) + 1
+
+
+def test_update_cancelled_receipt_forbidden(admin_client, client_id):
+    payload = _make_receipt_payload(client_id)
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+    assert admin_client.post(f"/receipts/{doc_id}/advance").status_code == 200  # draft → planned
+    assert admin_client.post(f"/receipts/{doc_id}/cancel").status_code == 200
+    r = admin_client.patch(f"/receipts/{doc_id}", json={"supplier_name": "X"})
+    assert r.status_code == 400, r.text
+
+
+def test_receipt_overdue_filter(admin_client, client_id):
+    """overdue=true отдаёт запланированные с прошедшей датой прибытия (SQL на константах)."""
+    from datetime import date, timedelta
+
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    payload = _make_receipt_payload(client_id)
+    payload["arrival_date"] = yesterday
+    doc_id = admin_client.post("/receipts", json=payload).json()["message"]
+    assert admin_client.post(f"/receipts/{doc_id}/advance").status_code == 200  # draft → planned
+
+    r = admin_client.get(f"/receipts?overdue=true&client_id={client_id}")
+    assert r.status_code == 200, r.text
+    assert doc_id in [it["id"] for it in r.json()["items"]]
+
+    # Черновик (не planned) в просроченные не попадает.
+    draft_payload = _make_receipt_payload(client_id)
+    draft_payload["arrival_date"] = yesterday
+    draft_id = admin_client.post("/receipts", json=draft_payload).json()["message"]
+    r2 = admin_client.get(f"/receipts?overdue=true&client_id={client_id}")
+    assert draft_id not in [it["id"] for it in r2.json()["items"]]
 
 
 def test_receipt_duplicate_ignores_cancelled(admin_client, client_id):

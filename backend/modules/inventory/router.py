@@ -5,7 +5,7 @@ from typing import Any, Mapping
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from dbconn import get_connection
+from dbconn import ci_like_substring_param, get_connection
 from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.dictionaries.schemas import ClientStoreItem, DictionaryBaseItem
 
@@ -203,6 +203,8 @@ def lookup_product_types(user=Depends(get_current_manager)):
 @router.get("/lookups/products", response_model=list[InventoryProductLookup])
 def lookup_products(
     client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=500),
     user=Depends(get_current_manager),
 ):
     _ = user
@@ -211,7 +213,17 @@ def lookup_products(
     if client_id and client_id.strip():
         conds.append("p.client_id = ?")
         params.append(client_id.strip())
+    if search and search.strip():
+        like = ci_like_substring_param(search)
+        conds.append("(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?)")
+        params.extend([like, like])
     where_sql = " AND ".join(conds)
+    # Без limit — полная выдача (веб-frontend зовёт без параметров). Клиент,
+    # которому нужен признак усечения, запрашивает limit = N+1 и сравнивает длину.
+    limit_sql = ""
+    if limit is not None:
+        limit_sql = "LIMIT ?"
+        params.append(limit)
     with get_connection() as connection:
         rows = connection.execute(
             f"""
@@ -227,6 +239,7 @@ def lookup_products(
               AND pt.is_active = 1
               AND COALESCE(pt.is_deleted, 0) = 0
             ORDER BY LOWER(p.name) ASC, LOWER(p.sku) ASC
+            {limit_sql}
             """,
             params,
         ).fetchall()

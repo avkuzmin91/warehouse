@@ -12,14 +12,11 @@ own_warehouses.rent_monthly_kopecks — денормализованный кэ�
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from modules.pricing.service import price_on
+from utils import now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def load_rent_history(connection, warehouse_id: str) -> list[dict]:

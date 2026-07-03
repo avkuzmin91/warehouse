@@ -76,7 +76,7 @@ export function getBalancesByZone(
 }
 
 // Перемещение остатка между местами (оси статуса/качества не меняются). Доступно
-// складскому составу — бэк гейтит get_current_manager (включает кладовщика).
+// складскому составу, включая начальника смены (бэк гейтит get_current_stock_operator).
 export type RelocationPayload = {
   product_id: string
   product_name?: string | null
@@ -87,6 +87,8 @@ export type RelocationPayload = {
   size_name?: string | null
   client_id?: string | null
   client_name?: string | null
+  /** Статус перемещаемого товара; меняется только место (по умолчанию storage). */
+  op?: InvOpStatus
   quality: InvQuality
   from_zone_id: string | null
   to_zone_id: string | null
@@ -99,6 +101,69 @@ export function createRelocation(payload: RelocationPayload, requestId: string):
     method: 'POST',
     body: JSON.stringify(payload),
     headers: requestIdHeaders(requestId),
+  })
+}
+
+export type WriteOffReason = 'shortage' | 'damage' | 'disposal' | 'client_return' | 'other'
+
+export const WRITEOFF_REASON_LABELS: Record<WriteOffReason, string> = {
+  shortage:      'Недостача',
+  damage:        'Порча',
+  disposal:      'Утилизация брака',
+  client_return: 'Возврат клиенту',
+  other:         'Прочее',
+}
+
+// Смена качества в пределах места: «На хранении» — обе стороны, вне хранения — только
+// годный → брак (товар выбывает из процесса и возвращается «На хранение»).
+export type QualityChangePayload = {
+  product_id: string
+  product_name?: string | null
+  product_sku?: string | null
+  color_id?: string | null
+  color_name?: string | null
+  size_id?: string | null
+  size_name?: string | null
+  client_id?: string | null
+  client_name?: string | null
+  op?: InvOpStatus
+  zone_id: string
+  from_quality: InvQuality
+  to_quality: InvQuality
+  qty: number
+  comment?: string | null
+}
+
+export function createQualityChange(payload: QualityChangePayload): Promise<{ message: string }> {
+  return request<{ message: string }>('/balances/quality-changes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// Списание с остатков (терминальное) — из любого нетерминального статуса.
+export type WriteOffPayload = {
+  product_id: string
+  product_name?: string | null
+  product_sku?: string | null
+  color_id?: string | null
+  color_name?: string | null
+  size_id?: string | null
+  size_name?: string | null
+  client_id?: string | null
+  client_name?: string | null
+  op?: InvOpStatus
+  zone_id: string
+  quality: InvQuality
+  qty: number
+  reason: WriteOffReason
+  comment?: string | null
+}
+
+export function createWriteOff(payload: WriteOffPayload): Promise<{ message: string }> {
+  return request<{ message: string }>('/balances/write-offs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

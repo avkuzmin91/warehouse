@@ -124,6 +124,9 @@ class ZoneRelocationCreate(BaseModel):
     size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    # Операционный статус перемещаемого товара: меняется только место, статус и
+    # качество фиксированы. Терминальные стоки и intake не перемещаются.
+    op: Literal["storage", "packing", "packed", "ready"] = "storage"
     quality: Literal["good", "defect"]
     from_zone_id: str | None = None
     to_zone_id: str | None = None
@@ -141,6 +144,9 @@ class QualityChangeCreate(BaseModel):
     size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    # Статус товара, у которого меняется качество. Вне «На хранении» разрешён только
+    # перевод good → defect: брак выбывает из процесса и возвращается на хранение.
+    op: Literal["storage", "packing", "packed", "ready"] = "storage"
     zone_id: str
     from_quality: Literal["good", "defect"]
     to_quality: Literal["good", "defect"]
@@ -158,6 +164,8 @@ class WriteOffCreate(BaseModel):
     size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    # Статус списываемого товара: списать можно из любого нетерминального бакета.
+    op: Literal["storage", "packing", "packed", "ready"] = "storage"
     zone_id: str
     quality: Literal["good", "defect"]
     qty: int = Field(ge=1)

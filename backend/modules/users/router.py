@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from dbconn import get_connection
@@ -14,12 +13,10 @@ from .schemas import (
     UserDeletePatchRequest,
     UserListItem,
 )
+from utils import now_iso as _now
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _get_users_admin(user=Depends(get_current_user)):
@@ -51,11 +48,14 @@ def _revoke_user_sessions(connection, user_id: str) -> None:
     )
 
 
-def _disable_user_access(user_id: str, admin: dict) -> MessageResponse:
+def _soft_delete_user(user_id: str, admin: dict) -> MessageResponse:
+    """Мягкое удаление: is_deleted=1 + отзыв сессий. Роль и привязка к клиенту
+    сохраняются, чтобы восстановление (PATCH is_deleted=false) вернуло пользователя
+    в исходном виде. Auth фильтрует is_deleted во всех выборках — доступ закрыт."""
     if user_id == admin["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Нельзя отключить доступ самому себе",
+            detail="Нельзя удалить самого себя",
         )
     with get_connection() as connection:
         target_user = connection.execute(
@@ -67,20 +67,20 @@ def _disable_user_access(user_id: str, admin: dict) -> MessageResponse:
         if target_user["role"] == "admin":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Нельзя отключить доступ администратора",
+                detail="Нельзя удалить администратора",
             )
         connection.execute(
-            "UPDATE users SET role = 'user', client_id = NULL WHERE id = ?",
-            (user_id,),
+            "UPDATE users SET is_deleted = 1, deleted_at = ?, deleted_by_id = ? WHERE id = ?",
+            (_now(), admin["id"], user_id),
         )
         _revoke_user_sessions(connection, user_id)
         connection.commit()
-    return MessageResponse(message="Доступ отключён")
+    return MessageResponse(message="Пользователь удалён")
 
 
 def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> MessageResponse:
     if is_deleted:
-        return _disable_user_access(user_id, admin)
+        return _soft_delete_user(user_id, admin)
     with get_connection() as connection:
         target_user = connection.execute(
             "SELECT id, role, COALESCE(is_deleted, 0) AS del FROM users WHERE id = ?",
@@ -193,4 +193,4 @@ def patch_user_deleted_flag(user_id: str, payload: UserDeletePatchRequest, admin
 
 @router.delete("/{user_id}", response_model=MessageResponse)
 def delete_user(user_id: str, admin=Depends(_get_users_admin)):
-    return _disable_user_access(user_id, admin)
+    return _soft_delete_user(user_id, admin)

@@ -144,7 +144,7 @@ def _packing_shipment(api, client_id, pos, qty):
     line = {**pos, "product_name": "P", "product_sku": "SKU", "color_name": "Red", "size_name": None, "qty": qty}
     doc_id = api.post("/shipments", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
-        "ship_date": "2000-01-01", "comment": "ТЗ", "lines": [line],
+        "ship_date": "2026-05-27", "comment": "ТЗ", "lines": [line],
     }).json()["message"]
     api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
     api.post(f"/shipments/{doc_id}/advance")  # assigned → packing (приёмка нач. склада)
@@ -401,6 +401,54 @@ def test_return_from_packing_restores_source_zones(api, client_id):
     assert _zone_qty(client_id, pos, zone_a, "on_review") == 4
     assert _zone_qty(client_id, pos, zone_b, "on_review") == 6
     assert _zone_qty(client_id, pos, packing_id, "on_packing") == 0
+
+
+def test_manual_relocation_of_packing_pool_keeps_zone_integrity(api, client_id):
+    """Пул «На упаковке» вручную переставили в ячейку-буфер: упаковка списывает пул
+    из фактической ячейки, раскладка — упакованное; по местам не остаётся фантомов."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    buffer_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+    with get_connection() as c:
+        packing_id, _ = get_packing_zone(c)
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+
+    # Стол упаковки занят — кладовщик вручную переставил пул в ячейку-буфер.
+    r = api.post("/balances/relocations", json={
+        **pos, "client_id": client_id, "op": "packing", "quality": "good",
+        "from_zone_id": packing_id, "to_zone_id": buffer_zone, "qty": 10,
+    })
+    assert r.status_code == 200, r.text
+    assert _zone_qty(client_id, pos, buffer_zone, "on_packing") == 10
+    assert _zone_qty(client_id, pos, packing_id, "on_packing") == 0
+
+    _as(_SHIFT)
+    g = api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
+    assert g.status_code == 200, g.text
+    # Упаковка списала пул из фактической ячейки (буфера), а не из зоны упаковки.
+    assert _zone_qty(client_id, pos, buffer_zone, "on_packing") == 0
+    assert _zone_qty(client_id, pos, packing_id, "good") == 10  # упакованное — на столе упаковки
+
+    _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    fin = _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
+    ])
+    assert fin.status_code == 200, fin.text
+    assert _zone_qty(client_id, pos, good_zone, "good") == 10
+    # В буфере и зоне упаковки по позиции ничего не осталось — ни фантомов, ни минусов.
+    with get_connection() as c:
+        bz = get_balances_by_zone(c, client_id=client_id, search=None, only_positive=False)
+    residues = [
+        (i.location_id, i.op_status, i.quality, i.qty) for i in bz.items
+        if i.product_id == pos["product_id"] and i.qty != 0
+        and i.location_id in (packing_id, buffer_zone)
+    ]
+    assert residues == [], residues
 
 
 def _ready_qty(client_id, pos, zone_id):
@@ -715,7 +763,7 @@ def test_relocate_partial_lines_skips_unpacked_line(api, client_id):
     ]
     doc_id = api.post("/shipments", json={
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
-        "ship_date": "2000-01-01", "comment": "ТЗ", "lines": lines,
+        "ship_date": "2026-05-27", "comment": "ТЗ", "lines": lines,
     }).json()["message"]
     api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
     api.post(f"/shipments/{doc_id}/advance")  # assigned → packing
@@ -1100,7 +1148,7 @@ def test_return_to_packing_rejected_for_defect_cargo(api, client_id):
     _as(_ADMIN)
     doc_id = api.post("/shipments", json={
         "cargo_type": "defect", "client_id": client_id, "client_name": "C",
-        "ship_date": "2000-01-01", "comment": "ТЗ", "lines": [line],
+        "ship_date": "2026-05-27", "comment": "ТЗ", "lines": [line],
     }).json()["message"]
     ret = api.post(f"/shipments/{doc_id}/return-to-packing")
     assert ret.status_code == 400, ret.text

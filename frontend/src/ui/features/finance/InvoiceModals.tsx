@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import {
   addInvoicePayment,
+  attachInvoiceExtraIncome,
   attachInvoiceReceipts,
   attachInvoiceShipments,
+  getUninvoicedExtraIncome,
   getUninvoicedReceipts,
   getUninvoicedShipments,
   parseDueHistory,
@@ -381,6 +383,101 @@ export function AttachModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
 }
 
 // ── Привязать поступления (завершённые поступления клиента без счёта) ───────────
+export function AttachExtraIncomeModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const { data, loading } = useApi(
+    (s) => invoice.client_id
+      ? getUninvoicedExtraIncome({ client_id: invoice.client_id, limit: 200 }, s)
+      : Promise.resolve({ items: [], total: 0, page: 1, limit: 200 }),
+    [invoice.client_id],
+  )
+  const entries = data?.items ?? []
+  const selectedAmount = entries.filter((e) => selected.has(e.id)).reduce((a, e) => a + e.amount_kop, 0)
+
+  function toggle(id: string) {
+    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  function toggleAll() {
+    setSelected((prev) => prev.size === entries.length ? new Set() : new Set(entries.map((e) => e.id)))
+  }
+
+  function submit() {
+    if (selected.size === 0) { toast('Выберите хотя бы одну доп. работу', 'error'); return }
+    setBusy(true)
+    attachInvoiceExtraIncome(invoice.id, [...selected])
+      .then(() => { toast('Доп. работы добавлены', 'success'); onDone() })
+      .catch((e) => toast(e.message, 'error'))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} title="Добавить доп. работы" width={560}
+      subtitle={`Невыставленные доп. работы клиента ${invoice.client_name ?? ''}`}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, width: '100%' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
+            Выбрано: <b>{selected.size}</b>{selected.size > 0 && <> на <b className="mono">{formatMoneyKopecks(selectedAmount)}</b></>}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn ghost" onClick={onClose}>Отмена</button>
+            <button className="btn primary" onClick={submit} disabled={busy}>
+              <Icon name="plus" size={14} />Добавить ({selected.size})
+            </button>
+          </div>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+        <Icon name="lock" size={12} />Доп. работа входит не более чем в один счёт.
+        {entries.length > 0 && (
+          <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={toggleAll}>
+            {selected.size === entries.length ? 'Снять все' : 'Выбрать все'}
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка…</div>
+      ) : entries.length === 0 ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+          Нет невыставленных доп. работ — заводятся в разделе «Финансы → Доп. работы»
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
+          {entries.map((ex) => {
+            const on = selected.has(ex.id)
+            return (
+              <div key={ex.id} style={{
+                borderRadius: 'var(--r-md)',
+                border: `1px solid ${on ? 'var(--c-accent-border)' : 'var(--c-border)'}`,
+                background: on ? 'var(--c-accent-bg)' : 'var(--c-bg-elev)',
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', cursor: 'pointer' }}>
+                  <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {on && <Icon name="check" size={10} />}
+                  </span>
+                  <input type="checkbox" checked={on} onChange={() => toggle(ex.id)} style={{ display: 'none' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13 }}>
+                      {ex.category_name ?? 'Доп. работа'}
+                      {ex.qty != null && <span style={{ color: 'var(--c-text-subtle)' }}> · {ex.qty} шт.</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 2 }}>{fmtDate(ex.entry_date)}{ex.comment ? ` · ${ex.comment}` : ''}</div>
+                  </div>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>{formatMoneyKopecks(ex.amount_kop)}</span>
+                </label>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+
 export function AttachReceiptsModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
   const toast = useToast()
   const [selected, setSelected] = useState<Set<string>>(new Set())

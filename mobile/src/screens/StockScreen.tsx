@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getUnloadingZones, type Zone } from '../api/lookupsApi'
 import {
+  createQualityChange,
   createRelocation,
+  createWriteOff,
   getBalancesByZone,
   OP_STATUS_LABELS,
   OP_STATUS_TONE,
   QUALITY_LABELS,
+  WRITEOFF_REASON_LABELS,
+  type WriteOffReason,
   type ZoneBalance,
 } from '../api/balancesApi'
 import { newRequestId } from '../api/http'
@@ -28,8 +32,8 @@ function variantLabel(it: { color_name: string | null; size_name: string | null 
   return [it.color_name, it.size_name].filter(Boolean).join(' · ')
 }
 
-// Сортировка строк места: сначала «На хранении» (перемещаемое), потом по качеству.
-const OP_ORDER: Record<string, number> = { storage: 0, packing: 1, ready: 2 }
+// Сортировка строк места: сначала «На хранении», потом по процессу, потом по качеству.
+const OP_ORDER: Record<string, number> = { storage: 0, packing: 1, packed: 2, ready: 3 }
 function rowSort(a: ZoneBalance, b: ZoneBalance): number {
   const o = (OP_ORDER[a.op_status] ?? 9) - (OP_ORDER[b.op_status] ?? 9)
   if (o !== 0) return o
@@ -48,6 +52,8 @@ export function StockScreen() {
 
   const [selected, setSelected] = useState<string | null>(null)
   const [moveFrom, setMoveFrom] = useState<ZoneBalance | null>(null)
+  const [qualFrom, setQualFrom] = useState<ZoneBalance | null>(null)
+  const [woffFrom, setWoffFrom] = useState<ZoneBalance | null>(null)
 
   const load = useCallback((q: string, signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true)
@@ -240,6 +246,14 @@ export function StockScreen() {
                   setOkMsg('')
                   setMoveFrom(r)
                 }}
+                onQuality={() => {
+                  setOkMsg('')
+                  setQualFrom(r)
+                }}
+                onWriteOff={() => {
+                  setOkMsg('')
+                  setWoffFrom(r)
+                }}
               />
             ))}
           </>
@@ -258,15 +272,51 @@ export function StockScreen() {
           }}
         />
       )}
+
+      {qualFrom && (
+        <QualitySheet
+          from={qualFrom}
+          onClose={() => setQualFrom(null)}
+          onDone={(qty) => {
+            setQualFrom(null)
+            setOkMsg(`Качество изменено: ${qty} шт`)
+            reload()
+          }}
+        />
+      )}
+
+      {woffFrom && (
+        <WriteOffSheet
+          from={woffFrom}
+          onClose={() => setWoffFrom(null)}
+          onDone={(qty) => {
+            setWoffFrom(null)
+            setOkMsg(`Списано ${qty} шт`)
+            reload()
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function RowCard({ row, onMove }: { row: ZoneBalance; onMove: () => void }) {
+function RowCard({
+  row,
+  onMove,
+  onQuality,
+  onWriteOff,
+}: {
+  row: ZoneBalance
+  onMove: () => void
+  onQuality: () => void
+  onWriteOff: () => void
+}) {
   // Место уже в заголовке экрана — в строке показываем товар.
   const primary = [row.product_name, variantLabel(row)].filter(Boolean).join(' · ')
-  // Перемещать можно только товар «На хранении» с привязкой к месту (бэк требует from_zone).
-  const movable = row.op_status === 'storage' && !!row.location_id && row.qty > 0
+  // Действия доступны для любого нетерминального статуса с привязкой к месту
+  // (бэк требует зону-источник). Вне «На хранении» качество меняется только good → defect.
+  const actionable = !!row.location_id && row.qty > 0
+  const qualityAllowed = actionable && (row.op_status === 'storage' || row.quality === 'good')
   return (
     <div className="line">
       <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
@@ -282,10 +332,27 @@ function RowCard({ row, onMove }: { row: ZoneBalance; onMove: () => void }) {
           {row.qty}
           <span className="u">шт</span>
         </span>
-        {movable && (
-          <button className="icon-btn" onClick={onMove} aria-label="Переместить" title="Переместить">
-            <Icon name="arrowRight" size={18} />
-          </button>
+        {actionable && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <button className="icon-btn" onClick={onMove} aria-label="Переместить" title="Переместить">
+              <Icon name="arrowRight" size={18} />
+            </button>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {qualityAllowed && (
+                <button
+                  className="icon-btn"
+                  onClick={onQuality}
+                  aria-label={row.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
+                  title={row.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
+                >
+                  <Icon name="refresh" size={18} />
+                </button>
+              )}
+              <button className="icon-btn" onClick={onWriteOff} aria-label="Списать" title="Списать">
+                <Icon name="trash" size={18} />
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -339,6 +406,7 @@ function MoveSheet({
         size_name: from.size_name,
         client_id: from.client_id,
         client_name: from.client_name,
+        op: from.op_status,
         quality: from.quality,
         from_zone_id: from.location_id,
         to_zone_id: toZoneId,
@@ -365,6 +433,10 @@ function MoveSheet({
 
         <div className="summary" style={{ marginBottom: 16 }}>
           <div className="kv">
+            <span className="k">Статус</span>
+            <span className="v">{OP_STATUS_LABELS[from.op_status]}</span>
+          </div>
+          <div className="kv">
             <span className="k">Откуда</span>
             <span className="v">{from.location_name ?? 'Без места'}</span>
           </div>
@@ -373,6 +445,13 @@ function MoveSheet({
             <span className="v mono">{from.qty} шт</span>
           </div>
         </div>
+
+        {from.op_status !== 'storage' && (
+          <div className="alert warn" style={{ marginBottom: 12 }}>
+            <Icon name="alert" size={15} />
+            Товар привязан к задаче упаковки или отгрузке — меняется только место, статус и резерв сохраняются.
+          </div>
+        )}
 
         <div className="field">
           <div className="flabel">
@@ -436,6 +515,325 @@ function MoveSheet({
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
             {saving ? '…' : 'Переместить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function QualitySheet({
+  from,
+  onClose,
+  onDone,
+}: {
+  from: ZoneBalance
+  onClose: () => void
+  onDone: (qty: number) => void
+}) {
+  const [qty, setQty] = useState(from.qty)
+  const [comment, setComment] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const toQuality = from.quality === 'defect' ? 'good' : 'defect'
+  const variant = variantLabel(from)
+
+  async function submit() {
+    if (saving) return
+    if (!from.location_id) return
+    if (qty < 1 || qty > from.qty) {
+      setError(`Укажите количество от 1 до ${from.qty}`)
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await createQualityChange({
+        product_id: from.product_id,
+        product_name: from.product_name,
+        product_sku: from.product_sku,
+        color_id: from.color_id,
+        color_name: from.color_name,
+        size_id: from.size_id,
+        size_name: from.size_name,
+        client_id: from.client_id,
+        client_name: from.client_name,
+        op: from.op_status,
+        zone_id: from.location_id,
+        from_quality: from.quality,
+        to_quality: toQuality,
+        qty,
+        comment: comment.trim() || null,
+      })
+      onDone(qty)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось изменить качество')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <h3>{toQuality === 'defect' ? 'Перевести в брак' : 'Перевести в годный'}</h3>
+        <div className="line-sub" style={{ marginBottom: 14 }}>
+          {variant ? `${from.product_name} · ${variant}` : from.product_name}
+        </div>
+
+        <div className="summary" style={{ marginBottom: 16 }}>
+          <div className="kv">
+            <span className="k">Статус</span>
+            <span className="v">{OP_STATUS_LABELS[from.op_status]}</span>
+          </div>
+          <div className="kv">
+            <span className="k">Качество</span>
+            <span className="v">{QUALITY_LABELS[from.quality]} → {QUALITY_LABELS[toQuality]}</span>
+          </div>
+          <div className="kv">
+            <span className="k">Место</span>
+            <span className="v">{from.location_name ?? 'Без места'}</span>
+          </div>
+          <div className="kv">
+            <span className="k">Доступно</span>
+            <span className="v mono">{from.qty} шт</span>
+          </div>
+        </div>
+
+        {from.op_status !== 'storage' && (
+          <div className="alert warn" style={{ marginBottom: 12 }}>
+            <Icon name="alert" size={15} />
+            Товар привязан к задаче упаковки или отгрузке. Брак вернётся «На хранение» в этом же месте — документ уедет без него.
+          </div>
+        )}
+
+        <div className="field">
+          <div className="flabel">Сколько</div>
+          <div className="line-row" style={{ marginTop: 0 }}>
+            <input
+              className="input num"
+              type="text"
+              inputMode="numeric"
+              min={1}
+              max={from.qty}
+              value={qty}
+              onChange={(e) => setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+            />
+            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setQty(from.qty)}>
+              Всё ({from.qty})
+            </button>
+          </div>
+        </div>
+
+        <div className="field">
+          <div className="flabel">Комментарий (необязательно)</div>
+          <input
+            className="input"
+            type="text"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder={toQuality === 'good' ? 'Например: брак исправлен' : 'Например: найдено повреждение'}
+          />
+        </div>
+
+        {error && (
+          <div className="alert" style={{ marginTop: 4 }}>
+            <Icon name="alert" size={15} />
+            {error}
+          </div>
+        )}
+
+        <div className="line-row" style={{ marginTop: 4 }}>
+          <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
+            {saving ? '…' : toQuality === 'defect' ? 'В брак' : 'В годный'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function WriteOffSheet({
+  from,
+  onClose,
+  onDone,
+}: {
+  from: ZoneBalance
+  onClose: () => void
+  onDone: (qty: number) => void
+}) {
+  const [qty, setQty] = useState(from.qty)
+  const [reason, setReason] = useState<WriteOffReason | ''>('')
+  const [comment, setComment] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  const variant = variantLabel(from)
+
+  async function submit() {
+    if (saving) return
+    if (!from.location_id) return
+    if (!reason) {
+      setError('Укажите причину списания')
+      return
+    }
+    if (reason === 'other' && !comment.trim()) {
+      setError('Для причины «Прочее» укажите комментарий')
+      return
+    }
+    if (qty < 1 || qty > from.qty) {
+      setError(`Укажите количество от 1 до ${from.qty}`)
+      return
+    }
+    if (!confirming) {
+      setError('')
+      setConfirming(true)
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await createWriteOff({
+        product_id: from.product_id,
+        product_name: from.product_name,
+        product_sku: from.product_sku,
+        color_id: from.color_id,
+        color_name: from.color_name,
+        size_id: from.size_id,
+        size_name: from.size_name,
+        client_id: from.client_id,
+        client_name: from.client_name,
+        op: from.op_status,
+        zone_id: from.location_id,
+        quality: from.quality,
+        qty,
+        reason,
+        comment: comment.trim() || null,
+      })
+      onDone(qty)
+    } catch (err) {
+      setConfirming(false)
+      setError(err instanceof Error ? err.message : 'Не удалось списать')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <h3>Списать с остатков</h3>
+        <div className="line-sub" style={{ marginBottom: 14 }}>
+          {variant ? `${from.product_name} · ${variant}` : from.product_name} ·{' '}
+          <span className={from.quality === 'defect' ? 'delta under' : ''}>{QUALITY_LABELS[from.quality]}</span>
+        </div>
+
+        <div className="summary" style={{ marginBottom: 16 }}>
+          <div className="kv">
+            <span className="k">Статус</span>
+            <span className="v">{OP_STATUS_LABELS[from.op_status]}</span>
+          </div>
+          <div className="kv">
+            <span className="k">Место</span>
+            <span className="v">{from.location_name ?? 'Без места'}</span>
+          </div>
+          <div className="kv">
+            <span className="k">Доступно</span>
+            <span className="v mono">{from.qty} шт</span>
+          </div>
+        </div>
+
+        <div className="alert warn" style={{ marginBottom: 12 }}>
+          <Icon name="alert" size={15} />
+          Списание безвозвратно — товар исчезнет с остатков.
+          {from.op_status !== 'storage' && ' Товар привязан к задаче упаковки или отгрузке — документ уедет без него.'}
+        </div>
+
+        <div className="field">
+          <div className="flabel">
+            Причина <span className="req">*</span>
+          </div>
+          <select
+            className="input"
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value as WriteOffReason | '')
+              setConfirming(false)
+            }}
+          >
+            <option value="">Выберите причину…</option>
+            {Object.entries(WRITEOFF_REASON_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <div className="flabel">Сколько</div>
+          <div className="line-row" style={{ marginTop: 0 }}>
+            <input
+              className="input num"
+              type="text"
+              inputMode="numeric"
+              min={1}
+              max={from.qty}
+              value={qty}
+              onChange={(e) => {
+                setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                setConfirming(false)
+              }}
+            />
+            <button
+              className="btn ghost"
+              style={{ flex: 1 }}
+              onClick={() => {
+                setQty(from.qty)
+                setConfirming(false)
+              }}
+            >
+              Всё ({from.qty})
+            </button>
+          </div>
+        </div>
+
+        <div className="field">
+          <div className="flabel">Комментарий{reason === 'other' ? ' *' : ' (необязательно)'}</div>
+          <input
+            className="input"
+            type="text"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Например: повреждено при хранении"
+          />
+        </div>
+
+        {error && (
+          <div className="alert" style={{ marginTop: 4 }}>
+            <Icon name="alert" size={15} />
+            {error}
+          </div>
+        )}
+
+        {confirming && (
+          <div className="alert warn" style={{ marginTop: 4 }}>
+            <Icon name="alert" size={15} />
+            Нажмите «Списать» ещё раз для подтверждения: {qty} шт будет списано безвозвратно.
+          </div>
+        )}
+
+        <div className="line-row" style={{ marginTop: 4 }}>
+          <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn danger" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
+            {saving ? '…' : confirming ? 'Списать — подтверждаю' : 'Списать'}
           </button>
         </div>
       </div>

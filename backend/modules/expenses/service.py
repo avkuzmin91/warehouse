@@ -43,7 +43,7 @@ from config import (
     EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET,
     PAYROLL_KIND_LABELS,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
 from modules.production_calendar.service import working_days_in_range, working_days_of_month
 from modules.timesheet.service import (
     daily_payroll_accruals_split,
@@ -360,8 +360,8 @@ def _expense_filter_sql(
     if date_to:
         conds.append("e.spent_on <= ?"); params.append(date_to.strip())
     if search and search.strip():
-        s = like_substring_param(search)
-        conds.append("(e.name LIKE ? OR e.supplier LIKE ? OR e.exp_number LIKE ?)")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(e.name) LIKE ? OR fold_ci(e.supplier) LIKE ? OR fold_ci(e.exp_number) LIKE ?)")
         params += [s, s, s]
     return " AND ".join(conds), params
 

@@ -324,9 +324,10 @@ export function SelectedReceiptsRollup({ receiptIds, label = 'Сводка по 
 /** Итоговая разбивка счёта по выбранным отгрузкам и поступлениям:
  *  Товары (тарифы отгрузок) + Логистика (отгрузки + поступления) = Итого.
  *  Единая кнопка «В сумму счёта» проставляет объединённый итог. */
-export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: {
+export function InvoiceTotalsRollup({ shipmentIds, receiptIds, extraAmountKop = 0, onApplyAmount }: {
   shipmentIds: string[]
   receiptIds: string[]
+  extraAmountKop?: number
   onApplyAmount?: (kopecks: number) => void
 }) {
   const shipKey = [...shipmentIds].sort().join(',')
@@ -343,7 +344,7 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
       : Promise.resolve({ products: [], total_qty: 0, sku_count: 0, logistics_amount_kop: 0 }),
     [recKey],
   )
-  if (shipmentIds.length === 0 && receiptIds.length === 0) return null
+  if (shipmentIds.length === 0 && receiptIds.length === 0 && extraAmountKop === 0) return null
 
   const goods = ship?.suggested_amount_kop ?? 0
   const logistics = (ship?.logistics_amount_kop ?? 0) + (rec?.logistics_amount_kop ?? 0)
@@ -351,7 +352,7 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
   const boxes = ship?.boxes_amount_kop ?? 0
   return (
     <CostBreakdown
-      goods={goods} logistics={logistics} pallets={pallets} boxes={boxes}
+      goods={goods} logistics={logistics} pallets={pallets} boxes={boxes} extra={extraAmountKop}
       hasMissingPrice={ship?.has_missing_price ?? false}
       hasMissingPalletPrice={ship?.has_missing_pallet_price ?? false}
       hasMissingBoxPrice={ship?.has_missing_box_price ?? false}
@@ -361,18 +362,19 @@ export function InvoiceTotalsRollup({ shipmentIds, receiptIds, onApplyAmount }: 
 }
 
 /** Разбивка стоимости Товары / Логистика / Итого + опц. кнопка «В сумму счёта». */
-export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, hasMissingPrice, hasMissingPalletPrice, hasMissingBoxPrice, onApplyAmount }: {
+export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, extra = 0, hasMissingPrice, hasMissingPalletPrice, hasMissingBoxPrice, onApplyAmount }: {
   goods: number
   logistics: number
   pallets?: number
   boxes?: number
+  extra?: number
   hasMissingPrice?: boolean
   hasMissingPalletPrice?: boolean
   hasMissingBoxPrice?: boolean
   onApplyAmount?: (kopecks: number) => void
 }) {
-  const total = goods + logistics + pallets + boxes
-  const hasRows = goods > 0 || logistics > 0 || pallets > 0 || boxes > 0
+  const total = goods + logistics + pallets + boxes + extra
+  const hasRows = goods > 0 || logistics > 0 || pallets > 0 || boxes > 0 || extra > 0
   return (
     <div style={{ padding: '8px 10px', marginBottom: 8, borderRadius: 8, background: 'var(--c-bg-sunken)' }}>
       {goods > 0 && (
@@ -420,6 +422,12 @@ export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, hasMis
           <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(boxes)}</span>
         </div>
       )}
+      {extra > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: 'var(--c-text-subtle)' }}>Доп. работы</span>
+          <span className="mono" style={{ color: 'var(--c-text-muted)' }}>{formatMoneyKopecks(extra)}</span>
+        </div>
+      )}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
         paddingTop: hasRows ? 6 : 0,
@@ -444,12 +452,14 @@ export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, hasMis
  *  на любом статусе: реквизиты + живой расчёт Товары/Логистика/Итого по текущему
  *  набору отгрузок и поступлений (товары пересчитываются при смене состава). */
 export function InvoiceSummaryPanel({
-  clientName, shipmentCount, receiptCount, totalQty, dueDateText, amountKop,
+  clientName, shipmentCount, receiptCount, extraCount = 0, extraAmountKop = 0, totalQty, dueDateText, amountKop,
   shipmentIds, receiptIds, onApplyAmount, footer,
 }: {
   clientName: string | null
   shipmentCount: number
   receiptCount: number
+  extraCount?: number
+  extraAmountKop?: number
   totalQty: number
   dueDateText: string
   amountKop: number
@@ -464,13 +474,14 @@ export function InvoiceSummaryPanel({
         <ReadRow label="Клиент" strong>{clientName ?? '—'}</ReadRow>
         <ReadRow label="Отгрузок" mono strong>{shipmentCount}</ReadRow>
         <ReadRow label="Поступлений" mono strong>{receiptCount}</ReadRow>
+        {extraCount > 0 && <ReadRow label="Доп. работ" mono strong>{extraCount}</ReadRow>}
         <ReadRow label="Всего мест" mono>{totalQty.toLocaleString('ru-RU')} шт</ReadRow>
         <ReadRow label="Срок расчёта" mono>{dueDateText}</ReadRow>
         <ReadRow label="Сумма счёта" mono strong>{formatMoneyKopecks(amountKop)}</ReadRow>
       </div>
-      {(shipmentIds.length > 0 || receiptIds.length > 0) && (
+      {(shipmentIds.length > 0 || receiptIds.length > 0 || extraAmountKop > 0) && (
         <div style={{ marginTop: 8 }}>
-          <InvoiceTotalsRollup shipmentIds={shipmentIds} receiptIds={receiptIds} onApplyAmount={onApplyAmount} />
+          <InvoiceTotalsRollup shipmentIds={shipmentIds} receiptIds={receiptIds} extraAmountKop={extraAmountKop} onApplyAmount={onApplyAmount} />
         </div>
       )}
       {footer}

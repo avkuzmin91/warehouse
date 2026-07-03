@@ -52,7 +52,7 @@ export function MatrixEntrySheet({
 
   useEffect(() => {
     const ac = new AbortController()
-    getProducts(clientId, ac.signal)
+    getProducts({ client_id: clientId }, ac.signal)
       .then((res) => { if (!ac.signal.aborted) setProducts(res) })
       .catch(() => { /* aborted */ })
     return () => ac.abort()

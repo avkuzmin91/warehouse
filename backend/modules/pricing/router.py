@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import INV_Q_DEFECT, INV_Q_GOOD
-from dbconn import get_connection
+from dbconn import get_connection, ci_like_substring_param
 from modules.auth.service import get_current_manager
 from modules.timesheet.service import business_today
 from security import ensure_finance_access
@@ -51,8 +51,8 @@ def list_priced_products(
     conds = ["COALESCE(p.is_deleted, 0) = 0"]
     params: list = []
     if search and search.strip():
-        like = f"%{search.strip().lower()}%"
-        conds.append("(LOWER(p.name) LIKE ? OR LOWER(COALESCE(p.sku, '')) LIKE ?)")
+        like = ci_like_substring_param(search)
+        conds.append("(fold_ci(p.name) LIKE ? OR fold_ci(p.sku) LIKE ?)")
         params += [like, like]
     if client_id and client_id.strip():
         conds.append("p.client_id = ?")

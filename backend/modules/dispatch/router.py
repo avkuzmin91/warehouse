@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,13 +31,10 @@ from config import (
     MAX_UPLOAD_BYTES,
     UPLOADS_DIR,
 )
-from dbconn import get_connection, like_substring_param
-from modules.auth.service import get_current_manager
-from modules.invoices.service import (
-    adjust_invoice_total_for_box_delta,
-    adjust_invoice_total_for_pallet_delta,
-    invalidate_alerts_cache,
-)
+from dbconn import get_connection, ci_like_substring_param
+from utils import now_iso as _now, validate_business_date
+from modules.auth.service import get_current_document_creator, get_current_manager
+from security import can_view_costs, ensure_cost_access
 from modules.dispatch.schemas import (
     DispatchDetailResponse,
     DispatchDocCreate,
@@ -66,7 +62,6 @@ from modules.dispatch.service import (
     dispatch_alloc_remaining,
     find_duplicate_dispatches,
     dispatch_trip_allocations,
-    dispatch_is_invoiced,
     get_dispatch_detail,
     list_dispatches_aggregated,
     next_doc_number,
@@ -84,9 +79,6 @@ _get_manager = get_current_manager
 _ALLOWED_DISPATCH_FILE_EXTS = {".zip", ".pdf", ".jpg", ".jpeg"}
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
-
 
 def _priority_label(rank: int | None) -> str:
     return DISPATCH_PRIORITY_LABELS.get(rank, f"#{rank}")
@@ -96,8 +88,10 @@ def _priority_label(rank: int | None) -> str:
 def create_dispatch(
     body: DispatchDocCreate,
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
-    user=Depends(_get_manager),
+    user=Depends(get_current_document_creator),
 ):
+    if body.logistics_cost is not None:
+        ensure_cost_access(user)
     uid = str(user["id"])
     now = _now()
     doc_id = str(uuid4())
@@ -113,7 +107,8 @@ def create_dispatch(
                (id,doc_number,cargo_type,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
-             body.destination, body.carrier, body.logistics_cost, body.ship_date,
+             body.destination, body.carrier, body.logistics_cost,
+             validate_business_date(body.ship_date, field_ru="Дата отгрузки"),
              (body.comment or "").strip() or None, DISPATCH_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
@@ -172,6 +167,7 @@ def list_dispatches(
             client_id=client_id, status=status, search=search, sku=sku,
             date_from=date_from, date_to=date_to, cargo_type=cargo_type,
             available_for_trip_id=available_for_trip_id,
+            show_costs=can_view_costs(user),
         )
     return DispatchListResponse(
         items=[DispatchListItem(**it) for it in items],
@@ -197,17 +193,17 @@ def dispatches_summary(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
             params += [s, s, s]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM dispatch_lines dl"
                 " LEFT JOIN products p ON p.id = dl.product_id"
                 " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
-                " AND (COALESCE(NULLIF(p.sku, ''), dl.product_sku) LIKE ? OR dl.product_name LIKE ?))"
+                " AND (fold_ci(COALESCE(NULLIF(p.sku, ''), dl.product_sku)) LIKE ? OR fold_ci(dl.product_name) LIKE ?))"
             )
-            s = like_substring_param(sku); params += [s, s]
+            s = ci_like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -254,12 +250,12 @@ def list_dispatch_lines(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
             params += [s, s, s]
         if sku:
-            s = like_substring_param(sku)
-            conds.append("(COALESCE(NULLIF(p.sku, ''), l.product_sku) LIKE ? OR l.product_name LIKE ?)")
+            s = ci_like_substring_param(sku)
+            conds.append("(fold_ci(COALESCE(NULLIF(p.sku, ''), l.product_sku)) LIKE ? OR fold_ci(l.product_name) LIKE ?)")
             params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
@@ -377,7 +373,7 @@ def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
 @router.get("/dispatches/{doc_id}", response_model=DispatchDetailResponse)
 def get_dispatch(doc_id: str, user=Depends(_get_manager)):
     with get_connection() as conn:
-        detail = get_dispatch_detail(conn, doc_id)
+        detail = get_dispatch_detail(conn, doc_id, show_costs=can_view_costs(user))
     if not detail:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return DispatchDetailResponse(**detail)
@@ -397,10 +393,14 @@ def update_dispatch(doc_id: str, body: DispatchDocUpdate, user=Depends(_get_mana
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in DISPATCH_EDITABLE_STATUSES:
             raise HTTPException(status_code=400, detail="Изменять можно только черновик")
+        if "logistics_cost" in fields:
+            ensure_cost_access(user)
         if "comment" in fields:
             fields["comment"] = (fields["comment"] or "").strip() or None
         if "cargo_type" in fields:
             fields["cargo_type"] = normalize_cargo_type(fields["cargo_type"])
+        if "ship_date" in fields:
+            fields["ship_date"] = validate_business_date(fields["ship_date"], field_ru="Дата отгрузки")
         if "actual_ship_date" in fields:
             fields["actual_ship_date"] = (fields["actual_ship_date"] or "").strip() or None
         if not fields:
@@ -528,9 +528,9 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
 
     Палеты — основа тарификации клиенту, и менеджер должен иметь возможность их поправить
     на любом статусе, включая отгруженные. Единственный гейт — нельзя у аннулированной
-    отгрузки. Если по отгрузке уже выставлен счёт — сумма связанного счёта авто-корректируется
-    на Δпалет × цену палета (аналитика/P&L пересчитываются сами из `dispatch_lines`). Прочие
-    поля строки по-прежнему правятся только в черновике (`update_dispatch_line`)."""
+    отгрузки. Корректировка палет НЕ трогает сумму уже выставленных счетов — счёт правится
+    отдельно. Прочие поля строки по-прежнему правятся только в черновике
+    (`update_dispatch_line`)."""
     now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
@@ -541,7 +541,6 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
             raise HTTPException(status_code=400, detail="Нельзя менять палеты у аннулированной отгрузки")
-        invoiced = dispatch_is_invoiced(conn, doc_id)
         line = conn.execute(
             "SELECT id, product_name, pallets_qty FROM dispatch_lines "
             "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -563,16 +562,7 @@ def update_dispatch_line_pallets(doc_id: str, line_id: str, body: DispatchLinePa
             (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE,
              f"Палеты «{line['product_name']}»: {old_s} → {new_s}", now, uid),
         )
-        adjusted_invoice = None
-        if invoiced:
-            adjusted_invoice = adjust_invoice_total_for_pallet_delta(
-                conn, dispatch_id=doc_id,
-                delta_pallets=(body.pallets_qty or 0) - (old or 0),
-                product_name=str(line["product_name"]), uid=uid, now=now,
-            )
         conn.commit()
-    if adjusted_invoice:
-        invalidate_alerts_cache()
     return {"message": "ok"}
 
 
@@ -582,8 +572,8 @@ def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxe
 
     Полный аналог правки палет: короба — основа тарификации клиенту, и менеджер должен иметь
     возможность их поправить на любом статусе, включая отгруженные. Единственный гейт —
-    нельзя у аннулированной отгрузки. Если по отгрузке уже выставлен счёт — сумма связанного
-    счёта авто-корректируется на Δкоробов × цену короба."""
+    нельзя у аннулированной отгрузки. Корректировка коробов НЕ трогает сумму уже выставленных
+    счетов — счёт правится отдельно."""
     now = _now()
     uid = str(user["id"])
     with get_connection() as conn:
@@ -594,7 +584,6 @@ def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxe
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) == DISPATCH_STATUS_CANCELLED:
             raise HTTPException(status_code=400, detail="Нельзя менять короба у аннулированной отгрузки")
-        invoiced = dispatch_is_invoiced(conn, doc_id)
         line = conn.execute(
             "SELECT id, product_name, boxes_qty FROM dispatch_lines "
             "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -616,16 +605,7 @@ def update_dispatch_line_boxes(doc_id: str, line_id: str, body: DispatchLineBoxe
             (str(uuid4()), doc_id, DISPATCH_OP_LINE_UPDATE,
              f"Короба «{line['product_name']}»: {old_s} → {new_s}", now, uid),
         )
-        adjusted_invoice = None
-        if invoiced:
-            adjusted_invoice = adjust_invoice_total_for_box_delta(
-                conn, dispatch_id=doc_id,
-                delta_boxes=(body.boxes_qty or 0) - (old or 0),
-                product_name=str(line["product_name"]), uid=uid, now=now,
-            )
         conn.commit()
-    if adjusted_invoice:
-        invalidate_alerts_cache()
     return {"message": "ok"}
 
 

@@ -24,26 +24,18 @@ import { getInventoryClientStores } from '../../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../../api/domainTypes'
 import { ShipmentPriorityControl } from '../../inventory/ShipmentPriorityControl'
 import { Icon } from '../../../primitives/Icon'
-import { PhaseBlock } from '../../shared/process/PhaseBlock'
 import { ShipHeader } from './components/ShipHeader'
-import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './components/processUI'
 import { PrimaryAction } from '../../shared/process/PrimaryAction'
-import { Alert } from '../../../primitives/Alert'
-import { EmptyState } from '../../../primitives/EmptyState'
-import { Tooltip } from '../../../primitives/Tooltip'
 import { useConfirm } from '../../../feedback/ConfirmDialog'
 import { useToast } from '../../../feedback/Toast'
 import { Drawer } from '../../../feedback/Drawer'
-import { DatePicker } from '../../../primitives/DatePicker'
-import { AutoGrowTextarea, Field, Input } from '../../../primitives/Input'
-import { fmtDateLong } from '../../../../utils/format'
+import { AutoGrowTextarea, Field } from '../../../primitives/Input'
 import { balanceKey } from '../../../../utils/balanceKey'
 import { canAcceptPackingTask, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
 import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
-import { ReadOnlyField } from '../../inventory/shared/ReadOnlyField'
 import { updateProduct } from '../../../../api/adminApi'
 import { OpEntry } from './components/OpEntry'
 import { lineAvailable } from './shared/opLabels'
@@ -52,13 +44,16 @@ import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
 import { PlacePackedDrawer } from './components/PlacePackedDrawer'
 import { FinishPackingConfirmModal } from './components/FinishPackingConfirmModal'
-import { RelocationPanel } from './components/RelocationPanel'
-import { DefectPreparePanel } from './components/DefectPreparePanel'
-import { CompositionTable } from './components/CompositionTable'
 import type { LineAvailability } from '../shared/AvailabilityCell'
-import { PackingTable } from './components/PackingTable'
 import { FilePreviewModal } from './components/FilePreviewModal'
 import { validateLineFile } from './components/fileHelpers'
+import type { InfoPhaseProps } from './components/InfoPhase'
+import type { CompositionPhaseProps } from './components/CompositionPhase'
+import type { PackingPhaseData } from './components/PackingPhase'
+import { PlanningView } from './views/PlanningView'
+import { PackingView } from './views/PackingView'
+import { RelocatingView } from './views/RelocatingView'
+import { FinalView } from './views/FinalView'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from './shared/types'
 
 type ReadinessCheck = { ok: boolean; label: string; error: string }
@@ -730,33 +725,68 @@ export function ShipmentDetailFeature() {
     : isPacking ? 'План можно править до передачи на упаковку'
     : undefined
 
-  // Фаза «Упаковка»: передача (Кладовщик, packing) → годный/брак (Нач. смены, on_packing) → результат (done).
-  const packPhase = (isDraft || isAssigned)
-    ? { state: 'locked' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: null,
-        hint: 'Передачу и упаковку заполнят кладовщик и начальник смены' }
-    : isPacking
-      ? { state: 'active' as const, role: 'warehouse' as const, title: 'Передача на упаковку', mode: 'transfer' as const,
-          hint: '«Передать» — выбор мест-источников, перемещение сразу' }
-      : isOnPacking
-        ? { state: 'active' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'packing' as const,
-            hint: '«Внести упаковку» — годный и брак; при браке кладовщик подвозит товар' }
-        : { state: 'done' as const, role: 'shift_lead' as const, title: 'Упаковка', mode: 'result' as const,
-            hint: undefined }
-
-  // Сводные итоги состава для панелей правой колонки.
-  const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
-  const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size
-  const poolTotal = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
+  // Упаковано по документу — для гейта аннулирования «На упаковке» (пока ничего не упаковано).
   const packedGood = doc.lines.reduce((s, l) => s + l.packed_good, 0)
   const packedDefect = doc.lines.reduce((s, l) => s + l.packed_defect, 0)
-  const storeAgg = (() => {
-    const m = new Map<string, number>()
-    for (const l of doc.lines) {
-      const k = l.store_name ?? 'Без магазина'
-      m.set(k, (m.get(k) ?? 0) + l.qty)
-    }
-    return [...m.entries()]
-  })()
+
+  const infoProps: InfoPhaseProps = {
+    doc,
+    isDraft,
+    isDefectCargo,
+    canEditInfo,
+    canEditTechTaskOnly,
+    canEditActualShipDate,
+    saved: infoSaved,
+    shipDate: infoShipDate,
+    actualShipDate: infoActualShipDate,
+    comment: infoComment,
+    onShipDate: (v) => { setInfoShipDate(v); setInfoDirty(true) },
+    onActualShipDate: (v) => { setInfoActualShipDate(v); setInfoDirty(true) },
+    onComment: (v) => { setInfoComment(v); setInfoDirty(true) },
+  }
+
+  const compositionProps: CompositionPhaseProps = {
+    lines: editableLines,
+    clientId: doc.client_id,
+    state: compState,
+    hint: compHint,
+    canEditPlan,
+    canDelete,
+    canAttachFiles,
+    acting,
+    saving,
+    savingLine,
+    uploadingLines,
+    getDraft,
+    getStoreOptions: getLineStoreOptions,
+    onAdd: () => setShowPicker(true),
+    onPreviewFile: setFilePreview,
+    onQty: setDraftQty,
+    onStore: setDraftStore,
+    onDelete: handleDeleteLine,
+    onUploadFile: handleUploadFile,
+    onReplaceFile: handleReplaceFile,
+    onDeleteFile: handleDeleteFile,
+    onAssignSku: setSkuLine,
+    getAvail: canEditPlan ? getLineAvail : undefined,
+    availLoading,
+  }
+
+  const packingProps: PackingPhaseData = {
+    lines: editableLines,
+    canMove: canMovePacking,
+    canPack: canPack && isOnPacking,
+    canReturn: canReturnPacking,
+    canPlace: canPlacePacked,
+    acting,
+    savingLine,
+    onOpenMove: (line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' }),
+    onReturn: handleReturnFromPacking,
+    onOpenPacking: setPackingLine,
+    onOpenPlace: setPlaceLine,
+  }
+
+  const checklistItems = advanceChecks.map((c) => ({ ok: c.ok, label: c.label }))
 
   return (
     <div className="page">
@@ -822,322 +852,52 @@ export function ShipmentDetailFeature() {
         }
       />
 
-      {isPacked && (
-        <Alert tone="success" style={{ marginBottom: 16 }}>
-          {isDefectCargo
-            ? 'Брак подготовлен и перемещён в зону отгрузки со статусом «Готов к отгрузке». Задача упаковки завершена.'
-            : 'Товар упакован и разложен по местоположениям со статусом «Готов к отгрузке». Задача упаковки завершена.'}
-        </Alert>
+      {(isDraft || isAssigned) ? (
+        <PlanningView
+          doc={doc}
+          isDraft={isDraft}
+          isDefectCargo={isDefectCargo}
+          info={infoProps}
+          composition={compositionProps}
+          packing={packingProps}
+          checklist={checklistItems}
+        />
+      ) : (isPacking || isOnPacking) ? (
+        <PackingView
+          doc={doc}
+          isPacking={isPacking}
+          isDefectCargo={isDefectCargo}
+          info={infoProps}
+          composition={compositionProps}
+          packing={packingProps}
+          checklist={checklistItems}
+        />
+      ) : isRelocating ? (
+        <RelocatingView
+          docId={docId!}
+          doc={doc}
+          isDefectCargo={isDefectCargo}
+          info={infoProps}
+          composition={compositionProps}
+          packing={packingProps}
+          canRelocate={canRelocate}
+          zoneOptions={unloadingZones}
+          onLinesChanged={refreshAfterLineChange}
+        />
+      ) : (
+        <FinalView
+          docId={docId!}
+          doc={doc}
+          isPacked={isPacked}
+          isLegacyTerminal={isLegacyTerminal}
+          isDefectCargo={isDefectCargo}
+          info={infoProps}
+          composition={compositionProps}
+          packing={packingProps}
+          zoneOptions={unloadingZones}
+          onLinesChanged={refreshAfterLineChange}
+        />
       )}
-
-      {isLegacyTerminal && (
-        <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Документ из прежней схемы движения. Задача упаковки по нему завершена; доступен только просмотр.
-        </Alert>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
-        {/* Left — фазы */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <PhaseBlock
-            icon="file"
-            title="Основная информация"
-            role="manager"
-            state={isDraft ? 'active' : 'done'}
-            hint={canEditInfo ? 'План можно править до передачи на упаковку'
-              : canEditTechTaskOnly ? 'Можно поправить техническое задание перед принятием задачи'
-              : undefined}
-            right={(canEditInfo || canEditTechTaskOnly) && infoSaved ? (
-              <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Icon name="check" size={12} />Сохранено
-              </span>
-            ) : undefined}
-          >
-            {canEditInfo ? (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  <Field label="Клиент" style={{ marginBottom: 0 }}>
-                    <div style={{ position: 'relative' }}>
-                      <Input
-                        value={doc.client_name ?? '—'}
-                        readOnly
-                        style={{ paddingRight: 34, cursor: 'default' }}
-                      />
-                      <div style={{
-                        position: 'absolute',
-                        right: 9,
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        color: 'var(--c-text-subtle)',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                      }}>
-                        <Tooltip content="Клиент нельзя изменить после добавления товаров">
-                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                            <Icon name="lock" size={13} />
-                          </span>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  </Field>
-                  <Field label="Дата упаковки (план)" required style={{ marginBottom: 0 }}>
-                    <DatePicker value={infoShipDate} onChange={(v) => { setInfoShipDate(v); setInfoDirty(true) }} />
-                  </Field>
-                  {canEditActualShipDate ? (
-                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
-                      <DatePicker value={infoActualShipDate} onChange={(v) => { setInfoActualShipDate(v); setInfoDirty(true) }} />
-                    </Field>
-                  ) : (
-                    <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
-                      <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
-                    </Field>
-                  )}
-                  <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                    <AutoGrowTextarea
-                      minRows={3}
-                      placeholder="Опишите задачу для команды склада"
-                      value={infoComment}
-                      onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
-                      style={{ resize: 'vertical', minHeight: 76 }}
-                    />
-                  </Field>
-                </div>
-              </>
-            ) : canEditTechTaskOnly ? (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
-                  <Field label="Техническое задание" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-                    <AutoGrowTextarea
-                      minRows={3}
-                      placeholder="Опишите задачу для команды склада"
-                      value={infoComment}
-                      onChange={(e) => { setInfoComment(e.target.value); setInfoDirty(true) }}
-                      style={{ resize: 'vertical', minHeight: 76 }}
-                    />
-                  </Field>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  <ReadOnlyField label="Клиент" value={doc.client_name} />
-                  <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
-                  <ReadOnlyField label="Дата упаковки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
-                  </div>
-                </div>
-              </>
-            )}
-          </PhaseBlock>
-
-          <PhaseBlock
-            icon="boxes"
-            title="Состав отгрузки"
-            role="manager"
-            state={compState}
-            hint={compHint}
-            right={canDelete ? (
-              <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={acting || !doc.client_id}>
-                <Icon name="plus" size={12} />Добавить товар
-              </button>
-            ) : undefined}
-          >
-            {doc.lines.length === 0 ? (
-              <div style={{ padding: '32px 0' }}>
-                <EmptyState
-                  title="Состав пуст"
-                  sub={canDelete ? 'Добавьте товар — остатки и товар в пути' : 'Нет позиций'}
-                />
-              </div>
-            ) : (
-              <CompositionTable
-                lines={editableLines}
-                showZone={false}
-                canEditPlan={canEditPlan}
-                canDelete={canDelete}
-                canAttachFiles={canAttachFiles}
-                acting={acting}
-                saving={saving}
-                savingLine={savingLine}
-                uploadingLines={uploadingLines}
-                getDraft={getDraft}
-                getStoreOptions={getLineStoreOptions}
-                onPreviewFile={setFilePreview}
-                onQty={setDraftQty}
-                onStore={setDraftStore}
-                onDelete={handleDeleteLine}
-                onUploadFile={handleUploadFile}
-                onReplaceFile={handleReplaceFile}
-                onDeleteFile={handleDeleteFile}
-                onAssignSku={setSkuLine}
-                getAvail={canEditPlan ? getLineAvail : undefined}
-                availLoading={availLoading}
-              />
-            )}
-          </PhaseBlock>
-
-          {!isDefectCargo && (
-            <PhaseBlock
-              icon="box"
-              title={packPhase.title}
-              role={packPhase.role}
-              state={packPhase.state}
-              hint={packPhase.hint}
-            >
-              {packPhase.mode === null ? (
-                <LockedGrid labels={['На упаковке', 'Годный', 'Брак']} />
-              ) : doc.lines.length === 0 ? (
-                <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
-                  Нет позиций для упаковки.
-                </div>
-              ) : (
-                <PackingTable
-                  mode={packPhase.mode}
-                  lines={editableLines}
-                  canMove={canMovePacking}
-                  canPack={canPack && isOnPacking}
-                  canReturn={canReturnPacking}
-                  canPlace={canPlacePacked}
-                  acting={acting}
-                  savingLine={savingLine}
-                  onOpenMove={(line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' })}
-                  onReturn={handleReturnFromPacking}
-                  onOpenPacking={setPackingLine}
-                  onOpenPlace={setPlaceLine}
-                />
-              )}
-            </PhaseBlock>
-          )}
-
-          {!isDefectCargo && (isDraft || isAssigned || isPacking || isOnPacking) && (
-            <PhaseBlock icon="archive" title="Раскладка" role="warehouse" state="locked"
-              hint="Местоположения и упаковка — после передачи на упаковку">
-              <LockedGrid labels={['Местоположения', 'Упаковано']} />
-            </PhaseBlock>
-          )}
-
-          {isDefectCargo && isDraft && (
-            <PhaseBlock icon="archive" title="Подготовка к отгрузке" role="warehouse" state="locked"
-              hint="Кладовщик выберет места-источники и перенесёт брак в зону отгрузки">
-              <LockedGrid labels={['Места-источники', 'Упаковано']} />
-            </PhaseBlock>
-          )}
-
-          {isRelocating && !isDefectCargo && (
-            <RelocationPanel
-              docId={docId!}
-              lines={doc.lines}
-              zoneOptions={unloadingZones}
-              canEdit={canRelocate}
-              onDone={refreshAfterLineChange}
-            />
-          )}
-
-          {isRelocating && isDefectCargo && (
-            <DefectPreparePanel
-              docId={docId!}
-              lines={doc.lines}
-              clientId={doc.client_id}
-              canEdit={canRelocate}
-              onDone={refreshAfterLineChange}
-            />
-          )}
-
-          {(isPacked || isLegacyTerminal) && (
-            <RelocationPanel
-              docId={docId!}
-              lines={doc.lines}
-              zoneOptions={unloadingZones}
-              canEdit={false}
-              readOnly
-              onDone={refreshAfterLineChange}
-            />
-          )}
-        </div>
-
-        {/* Right — маршрут + контекстные панели */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <RailPanel status={status!} ops={doc.ops} cargoType={doc.cargo_type as ShipmentCargoType} />
-
-          {showReadiness && (
-            <ChecklistPanel items={advanceChecks.map((c) => ({ ok: c.ok, label: c.label }))} />
-          )}
-
-          {(isDraft || isAssigned || (isDefectCargo && isRelocating)) && (
-            <Panel icon="chart" title="Итого">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="SKU" mono>{skuCount}</ReadRow>
-                <ReadRow label="Кол-во" mono strong>{planTotal} шт</ReadRow>
-              </div>
-            </Panel>
-          )}
-
-          {isPacking && storeAgg.length > 0 && (
-            <Panel icon="building" title="Магазины">
-              <div style={{ padding: '0 2px' }}>
-                {storeAgg.map(([name, qty]) => (
-                  <ReadRow key={name} label={name} mono>{qty} шт</ReadRow>
-                ))}
-              </div>
-            </Panel>
-          )}
-
-          {isOnPacking && (
-            <Panel icon="box" title="Итог упаковки">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label="На упаковке" mono>{poolTotal} шт</ReadRow>
-                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood}</span></ReadRow>
-                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect}</span></ReadRow>
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Осталось до плана" mono strong>{Math.max(0, planTotal - packedGood)} шт</ReadRow>
-                </div>
-              </div>
-            </Panel>
-          )}
-
-          {isRelocating && !isDefectCargo && (
-            <Panel icon="chart" title="Итог раскладки">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="Годный" mono><span style={{ color: 'var(--c-success)' }}>{packedGood} шт</span></ReadRow>
-                <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
-                <ReadRow label="Упаковано" mono>{packedGood + packedDefect} шт</ReadRow>
-              </div>
-            </Panel>
-          )}
-
-          {isPacked && (
-            <Panel icon="chart" title={isDefectCargo ? 'Итог подготовки' : 'Итог упаковки'}>
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label={isDefectCargo ? 'Брак' : 'Годный'} mono>
-                  <span style={{ color: isDefectCargo ? 'var(--c-warning)' : 'var(--c-success)' }}>{isDefectCargo ? packedDefect : packedGood} шт</span>
-                </ReadRow>
-                {!isDefectCargo && (
-                  <ReadRow label="Брак (на складе)" mono><span style={{ color: 'var(--c-danger)' }}>{packedDefect} шт</span></ReadRow>
-                )}
-                <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
-                  <ReadRow label="Итог" mono strong>Готово к отгрузке</ReadRow>
-                </div>
-              </div>
-            </Panel>
-          )}
-
-          {isLegacyTerminal && (
-            <Panel icon="chart" title="Итог">
-              <div style={{ padding: '0 2px' }}>
-                <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-                <ReadRow label="Отгружено" mono>
-                  <span style={{ color: 'var(--c-success)' }}>{doc.lines.reduce((s, l) => s + l.shipped_qty, 0)} шт</span>
-                </ReadRow>
-              </div>
-            </Panel>
-          )}
-        </div>
-      </div>
 
       <Drawer
         open={rejectOpen}

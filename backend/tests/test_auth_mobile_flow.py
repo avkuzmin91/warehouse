@@ -112,3 +112,40 @@ def test_browser_refresh_without_body_still_works(mobile_user):
         res = client.post("/auth/refresh", headers={"Content-Type": "application/json"})
         assert res.status_code == 200, res.text
         assert res.json().get("refresh_token") is None
+
+
+# --- Регистрация: анти-enumeration ---
+
+def test_register_does_not_reveal_existing_email():
+    """Повторная регистрация занятого email отвечает так же (200), как и новая —
+    существование аккаунта не раскрывается."""
+    email = f"reg-{uuid.uuid4().hex[:8]}@test.com"
+    try:
+        with TestClient(app) as client:
+            r1 = client.post("/auth/register", json={"email": email, "password": "StrongPass123"})
+            assert r1.status_code == 200, r1.text
+            assert r1.json() == {"success": True}
+            r2 = client.post("/auth/register", json={"email": email, "password": "OtherPass456"})
+            assert r2.status_code == 200, r2.text
+            assert r2.json() == {"success": True}
+        # Пароль занятого email не перезаписан вторым запросом.
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE email = ?", (email.lower(),)
+            ).fetchone()
+        assert int(rows["n"]) == 1
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM users WHERE email = ?", (email.lower(),))
+            conn.commit()
+
+
+def test_login_unknown_email_returns_401():
+    """Логин несуществующего email — 401 с обобщённым сообщением (без enumeration)."""
+    with TestClient(app) as client:
+        res = client.post(
+            "/auth/login",
+            json={"email": f"nobody-{uuid.uuid4().hex[:8]}@test.com", "password": "whatever12"},
+        )
+    assert res.status_code == 401
+    assert res.json()["detail"] == "Неверный email или пароль"

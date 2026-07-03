@@ -13,6 +13,7 @@ import { Icon } from '../../primitives/Icon'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { canManageUsers } from '../../../utils/access'
 import { fmtDate } from '../../../utils/format'
+import { foldCiSearch } from '../../../utils/foldCiSearch'
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
@@ -322,7 +323,7 @@ export function UsersFeature() {
 
   const filtered = users.filter((item) => {
     if (roleFilter !== 'all' && item.role !== roleFilter) return false
-    if (search && !item.email.toLowerCase().includes(search.toLowerCase())) return false
+    if (search && !foldCiSearch(item.email).includes(foldCiSearch(search.trim()))) return false
     return true
   })
 

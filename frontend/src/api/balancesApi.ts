@@ -224,6 +224,8 @@ export type ZoneRelocationPayload = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
+  /** Статус перемещаемого товара; меняется только место (по умолчанию storage). */
+  op?:           InvOpStatus
   quality:       InvQuality
   from_zone_id:  string | null
   to_zone_id:    string | null
@@ -248,6 +250,8 @@ export type WriteOffPayload = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
+  /** Статус списываемого товара (по умолчанию storage). */
+  op?:           InvOpStatus
   zone_id:       string
   quality:       InvQuality
   qty:           number
@@ -272,6 +276,8 @@ export type QualityChangePayload = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
+  /** Статус товара; вне storage разрешён только перевод good → defect (по умолчанию storage). */
+  op?:           InvOpStatus
   zone_id:       string
   from_quality:  InvQuality
   to_quality:    InvQuality

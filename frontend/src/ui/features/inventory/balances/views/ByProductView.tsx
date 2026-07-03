@@ -25,7 +25,7 @@ export function ByProductView() {
   const [hasDefect, setHasDefect] = useState(false)
   const { clients } = useLookups()
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     try {
       const [res, sum] = await Promise.all([
@@ -36,22 +36,31 @@ export function ByProductView() {
           client_id: clientId || undefined,
           only_positive: onlyPositive ? undefined : false,
           has_defect: hasDefect || undefined,
-        }),
+        }, signal),
         getBalancesSummary({
           search: search || undefined,
           client_id: clientId || undefined,
           has_defect: hasDefect || undefined,
-        }),
+        }, signal),
       ])
+      if (signal?.aborted) return
       setItems(res.items)
       setTotal(res.total)
       setSummary(sum)
+    } catch (e) {
+      if (signal?.aborted) return
+      throw e
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [page, search, clientId, onlyPositive, hasDefect])
 
-  useEffect(() => { load() }, [load])
+  // Debounce поиска: отмена предыдущего запроса + пауза перед новым при вводе текста
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => void load(ctrl.signal), search ? 250 : 0)
+    return () => { clearTimeout(timer); ctrl.abort() }
+  }, [load, search])
 
   const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
   const defectQty = summary

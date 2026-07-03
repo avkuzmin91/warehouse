@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from dbconn import ci_like_substring_param
 from config import (
     EXPENSE_KIND_RECURRING,
     EXPENSE_OP_CREATE,
@@ -163,8 +164,8 @@ def list_templates(connection, *, page: int, limit: int, search: str | None,
     if active_only:
         conds.append("COALESCE(t.is_active, 0) = 1")
     if search and search.strip():
-        conds.append("LOWER(t.name) LIKE ?")
-        params.append(f"%{search.strip().lower()}%")
+        conds.append("fold_ci(t.name) LIKE ?")
+        params.append(ci_like_substring_param(search))
     where = " AND ".join(conds)
 
     total = int(connection.execute(

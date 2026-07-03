@@ -4,6 +4,11 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from config import (
     DISPATCH_STATUS_CANCELLED,
+    INV_OP_PACKED,
+    INV_OP_PACKING,
+    INV_OP_READY,
+    INV_Q_DEFECT,
+    INV_Q_GOOD,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
@@ -41,15 +46,15 @@ def _packed_on(connection, day: date) -> dict:
     (формула совпадает с `total_packed_qty` списка отгрузок-упаковок).
     """
     row = connection.execute(
-        """
+        f"""
         SELECT
           (SELECT COALESCE(SUM(COALESCE(l.qty, 0)), 0)
              FROM shipment_docs d
              JOIN shipment_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
              WHERE COALESCE(d.is_deleted, 0) = 0 AND d.status <> ? AND d.ship_date = ?) AS plan,
           (SELECT COALESCE(SUM(CASE
-                     WHEN zr.to_op IN ('packed','ready')   AND zr.to_quality='good'   AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
-                     WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing' THEN -zr.qty
+                     WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}')   AND zr.to_quality='{INV_Q_GOOD}'   AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                     WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}' THEN -zr.qty
                      ELSE 0 END), 0)
              FROM zone_relocations zr
              JOIN shipment_lines sl ON sl.id = zr.shipment_line_id
@@ -214,18 +219,18 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
     ]
 
     shipment_rows = connection.execute(
-        """
+        f"""
         SELECT d.id, d.doc_number, d.status, d.ship_date, d.priority_rank, d.client_name, d.destination,
                COUNT(l.id) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0) AS sku_count,
                COALESCE(SUM(l.qty) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0), 0) AS total_qty,
                COALESCE((
                    SELECT SUM(CASE
-                       WHEN zr.to_op='packed' AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
-                       WHEN zr.from_op='packed' AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
+                       WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                       WHEN zr.from_op='{INV_OP_PACKED}' AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                        ELSE 0 END)
                    + SUM(CASE
-                       WHEN zr.to_quality='defect'   AND COALESCE(zr.from_quality,'')<>'defect' THEN zr.qty
-                       WHEN zr.from_quality='defect' AND COALESCE(zr.to_quality,'')<>'defect'   THEN -zr.qty
+                       WHEN zr.to_quality='{INV_Q_DEFECT}'   AND COALESCE(zr.from_quality,'')<>'{INV_Q_DEFECT}' THEN zr.qty
+                       WHEN zr.from_quality='{INV_Q_DEFECT}' AND COALESCE(zr.to_quality,'')<>'{INV_Q_DEFECT}'   THEN -zr.qty
                        ELSE 0 END)
                    FROM zone_relocations zr
                    JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id

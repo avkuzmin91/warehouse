@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header, Query
 
 from dbconn import get_connection
 from idempotency import begin_idempotent
-from modules.auth.service import get_current_manager, get_current_shipment_viewer
+from modules.auth.service import get_current_manager, get_current_shipment_viewer, get_current_stock_operator
 from modules.balances.schemas import (
     BalanceListResponse,
     BalanceSummaryResponse,
@@ -118,7 +118,7 @@ def list_balances_by_zone(
 def create_relocation(
     payload: ZoneRelocationCreate,
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_stock_operator),
 ):
     uid = str(user["id"])
     with get_connection() as conn:
@@ -132,14 +132,14 @@ def create_relocation(
 
 
 @router.post("/balances/write-offs")
-def create_write_off_op(payload: WriteOffCreate, user=Depends(get_current_manager)):
+def create_write_off_op(payload: WriteOffCreate, user=Depends(get_current_stock_operator)):
     with get_connection() as conn:
         create_write_off(conn, payload, str(user["id"]))
     return {"message": "ok"}
 
 
 @router.post("/balances/quality-changes")
-def create_quality_change_op(payload: QualityChangeCreate, user=Depends(get_current_manager)):
+def create_quality_change_op(payload: QualityChangeCreate, user=Depends(get_current_stock_operator)):
     with get_connection() as conn:
         create_quality_change(conn, payload, str(user["id"]))
     return {"message": "ok"}
@@ -159,7 +159,7 @@ def list_relocations(
     limit: int = Query(50, ge=1, le=200),
     client_id: str | None = Query(None),
     search: str | None = Query(None),
-    user=Depends(get_current_manager),
+    user=Depends(get_current_shipment_viewer),
 ):
     with get_connection() as conn:
         return list_zone_relocations(conn, page=page, limit=limit, client_id=client_id, search=search)

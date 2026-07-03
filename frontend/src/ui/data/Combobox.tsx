@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../primitives/Icon'
 import type { IconName } from '../primitives/Icon'
+import { foldCiSearch } from '../../utils/foldCiSearch'
 
 export interface ComboboxOption {
   value: string | number
@@ -33,10 +34,10 @@ export function Combobox({ value, onChange, options, placeholder = 'Выбрат
   const selected = options.find((o) => String(o.value) === String(value))
 
   const filtered = useMemo(() => {
-    if (!query) return options
-    const lq = query.toLowerCase()
+    const lq = foldCiSearch(query.trim())
+    if (!lq) return options
     return options.filter((o) =>
-      o.label.toLowerCase().includes(lq) || (o.sub?.toLowerCase().includes(lq) ?? false)
+      foldCiSearch(o.label).includes(lq) || (o.sub ? foldCiSearch(o.sub).includes(lq) : false)
     )
   }, [options, query])
 

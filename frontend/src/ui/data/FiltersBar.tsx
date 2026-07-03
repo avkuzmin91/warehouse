@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../primitives/Icon'
+import { foldCiSearch } from '../../utils/foldCiSearch'
 
 // ─── FilterChip ──────────────────────────────────────────────────────────────
 
@@ -175,8 +176,9 @@ export function FilterCombobox({ label, value, options, onChange, placeholder = 
   const selected = options.find((o) => o.value === value)
   const active = !!value
 
-  const filtered = search.trim()
-    ? options.filter((o) => o.label.toLowerCase().includes(search.toLowerCase()))
+  const q = foldCiSearch(search.trim())
+  const filtered = q
+    ? options.filter((o) => foldCiSearch(o.label).includes(q))
     : options
 
   useEffect(() => {

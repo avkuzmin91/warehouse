@@ -33,6 +33,7 @@ const INCOME_COLOR: Record<string, string> = {
   logistics: 'oklch(0.66 0.13 250)',
   pallets: 'oklch(0.74 0.13 80)',
   boxes: 'oklch(0.70 0.14 40)',
+  extra: 'oklch(0.66 0.14 310)',
 }
 export function incomeColor(key: string): string {
   return INCOME_COLOR[key] ?? 'var(--c-accent)'

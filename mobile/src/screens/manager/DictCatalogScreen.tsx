@@ -14,6 +14,8 @@ import { PullToRefresh } from '../../components/PullToRefresh'
 import { canCreateDocuments } from '../../utils/access'
 import { DictItemSheet } from './DictItemSheet'
 
+const fold = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim()
+
 export type DictKind = 'colors' | 'sizes'
 
 type Cfg = {
@@ -91,9 +93,9 @@ export function DictCatalogScreen({ kind }: { kind: DictKind }) {
   }, [load])
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = fold(search)
     if (!q) return items
-    return items.filter((it) => it.name.toLowerCase().includes(q))
+    return items.filter((it) => fold(it.name).includes(q))
   }, [items, search])
 
   return (

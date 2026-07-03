@@ -4,7 +4,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from dbconn import get_connection
+from dbconn import get_connection, ci_like_substring_param
 from modules.auth.service import get_current_manager
 from modules.timesheet.service import business_today
 from security import ensure_finance_access
@@ -55,8 +55,8 @@ def list_pallet_priced_clients(
     conds = ["COALESCE(c.is_deleted, 0) = 0"]
     params: list = []
     if search and search.strip():
-        conds.append("LOWER(c.name) LIKE ?")
-        params.append(f"%{search.strip().lower()}%")
+        conds.append("fold_ci(c.name) LIKE ?")
+        params.append(ci_like_substring_param(search))
     if missing_only:
         conds.append(
             "NOT EXISTS (SELECT 1 FROM client_pallet_prices pp "

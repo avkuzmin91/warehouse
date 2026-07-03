@@ -61,6 +61,16 @@ def ensure_dashboard_access(user: Mapping[str, Any]) -> None:
     ensure_shipment_view_access(user)
 
 
+def ensure_stock_write_access(user: Mapping[str, Any]) -> None:
+    """Ручные операции с остатками (перемещение, перевод в брак, списание): весь складской
+    и менеджерский состав, включая начальника смены."""
+    if user["role"] not in ("manager", "admin", "warehouse_manager", "shift_supervisor", "warehouse_head"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def ensure_packing_access(user: Mapping[str, Any]) -> None:
     """Внесение результата упаковки: менеджерский состав, начальник смены и начальник склада."""
     if user["role"] not in ("manager", "admin", "shift_supervisor", "warehouse_head"):

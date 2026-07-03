@@ -48,6 +48,21 @@ def test_create_shipment_returns_doc_id(admin_client, client_id):
     assert detail["doc_number"].startswith("SHP-")
 
 
+def test_create_shipment_rejects_out_of_range_ship_date(admin_client, client_id):
+    payload = _make_shipment_payload(client_id)
+    payload["ship_date"] = "1991-06-15"
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 400, r.text
+    assert "вне допустимого диапазона" in r.json()["detail"]
+
+
+def test_update_shipment_rejects_garbage_ship_date(admin_client, client_id):
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id)).json()["message"]
+    r = admin_client.patch(f"/shipments/{doc_id}", json={"ship_date": "27.05.2026"})
+    assert r.status_code == 400, r.text
+    assert "ГГГГ-ММ-ДД" in r.json()["detail"]
+
+
 def test_shipment_advance_draft_to_packing(admin_client, client_id):
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
     assert r.status_code == 200

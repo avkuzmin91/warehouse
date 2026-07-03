@@ -7,6 +7,7 @@ import { LookupsProvider } from '../../hooks/LookupsProvider'
 import { AppShell } from '../shell/AppShell'
 import { ConfirmDialogProvider } from '../feedback/ConfirmDialog'
 import { ToastProvider } from '../feedback/Toast'
+import { LoadingScreen } from '../feedback/LoadingScreen'
 
 type BootState = 'pending' | 'guest' | 'checking' | 'ready'
 
@@ -32,11 +33,7 @@ export function AppLayout() {
   }, [])
 
   if (boot === 'pending' || boot === 'checking') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100dvh', color: 'var(--c-text-muted)', fontSize: 13 }}>
-        Проверка сессии…
-      </div>
-    )
+    return <LoadingScreen label="Проверка сессии…" />
   }
 
   if (boot === 'guest' || !getToken()) {

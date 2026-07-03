@@ -82,12 +82,10 @@ from modules.expenses.service import (
     upsert_trip_logistics_expense,
 )
 from security import can_view_costs, ensure_cost_access, is_admin
+from utils import now_iso as _now
 
 router = APIRouter(tags=["logistics"])
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 _BUSINESS_TZ = ZoneInfo("Europe/Moscow")

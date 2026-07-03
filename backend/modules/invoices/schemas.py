@@ -10,6 +10,7 @@ class InvoiceCreate(BaseModel):
     total_amount: int = Field(ge=0, default=0)   # копейки
     comment:      str | None = None
     shipment_ids: list[str] = []
+    extra_income_ids: list[str] = []
 
 
 class InvoiceUpdate(BaseModel):
@@ -52,6 +53,19 @@ class InvoiceReceiptItem(BaseModel):
 
 class InvoiceAttachReceipts(BaseModel):
     receipt_ids: list[str] = []
+
+
+class InvoiceExtraIncomeItem(BaseModel):
+    entry_id:      str
+    entry_date:    str
+    category_name: str | None = None
+    qty:           int | None = None
+    amount_kop:    int
+    comment:       str | None = None
+
+
+class InvoiceAttachExtraIncome(BaseModel):
+    entry_ids: list[str] = []
 
 
 class InvoicePaymentItem(BaseModel):
@@ -99,8 +113,10 @@ class InvoiceDetailResponse(BaseModel):
     updated_at:   str | None
     dispatch_logistics_kop: int = 0
     receipt_logistics_kop:  int = 0
+    extra_income_kop:       int = 0
     shipments:    list[InvoiceShipmentItem]
     receipts:     list[InvoiceReceiptItem] = []
+    extra_income: list[InvoiceExtraIncomeItem] = []
     payments:     list[InvoicePaymentItem]
     files:        list[InvoiceFileItem]
     ops:          list[InvoiceOpItem]
@@ -119,6 +135,7 @@ class InvoiceListItem(BaseModel):
     overdue:        bool
     shipment_count: int
     receipt_count:  int = 0
+    extra_count:    int = 0
     created_at:     str
 
 
@@ -171,6 +188,25 @@ class UninvoicedReceiptItem(BaseModel):
 
 class UninvoicedReceiptsResponse(BaseModel):
     items: list[UninvoicedReceiptItem]
+    total: int
+    page:  int
+    limit: int
+
+
+class UninvoicedExtraIncomeItem(BaseModel):
+    id:            str                 # extra_income_entries.id
+    entry_date:    str
+    client_id:     str | None
+    client_name:   str | None
+    category_name: str | None = None
+    qty:           int | None = None
+    amount_kop:    int
+    comment:       str | None = None
+    created_at:    str
+
+
+class UninvoicedExtraIncomeResponse(BaseModel):
+    items: list[UninvoicedExtraIncomeItem]
     total: int
     page:  int
     limit: int

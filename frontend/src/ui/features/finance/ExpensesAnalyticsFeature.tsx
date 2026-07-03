@@ -9,6 +9,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
+import { foldCiSearch } from '../../../utils/foldCiSearch'
 import { AnalyticsTabs } from './AnalyticsTabs'
 
 const PRESETS = [7, 14, 30] as const
@@ -253,10 +254,10 @@ function AnalyticsBody({
 
   // Легенда: все категории по убыванию суммы, фильтр по поиску.
   const legendCats = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = foldCiSearch(query.trim())
     return [...cats]
       .sort((a, b) => totalByName[b.name] - totalByName[a.name])
-      .filter((c) => !q || c.name.toLowerCase().includes(q))
+      .filter((c) => !q || foldCiSearch(c.name).includes(q))
   }, [cats, query, totalByName])
 
   const breakdown = [...enabledCats].sort((a, b) => totalByName[b.name] - totalByName[a.name])

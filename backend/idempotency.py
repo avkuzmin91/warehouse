@@ -20,10 +20,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
+from utils import now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def purge_expired_idempotency_keys(conn: Any, *, older_than_hours: int = 48) -> None:

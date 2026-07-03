@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getCabinetProducts } from '../../../api/cabinetApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
@@ -19,6 +20,18 @@ export function CabinetProductsFeature() {
   const [search, setSearch] = useFilterParam('search', '')
   const [view, setView] = useFilterParam('view', 'grid')
   const [page, setPage] = usePageParam()
+
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
+
   const { data, loading, error } = useApi(
     (signal) => getCabinetProducts({
       page,
@@ -40,15 +53,15 @@ export function CabinetProductsFeature() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 260, paddingRight: search ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 260, paddingRight: searchInput ? 26 : undefined }}
               placeholder="Название или SKU…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => { setSearchInput(''); setSearch('') }}
               >
                 <Icon name="x" size={12} />
               </button>

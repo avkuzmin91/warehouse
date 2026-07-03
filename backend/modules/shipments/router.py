@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from uuid import uuid4
 
 from pathlib import Path
@@ -9,6 +9,12 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
+    INV_OP_PACKED,
+    INV_OP_PACKING,
+    INV_OP_READY,
+    INV_OP_STORAGE,
+    INV_Q_DEFECT,
+    INV_Q_GOOD,
     MAX_UPLOAD_BYTES,
     SHIPMENT_ACCEPT_ROLES,
     SHIPMENT_CARGO_DEFECT,
@@ -32,7 +38,8 @@ from config import (
     SHIPMENT_STATUSES_ALL,
     UPLOADS_DIR,
 )
-from dbconn import get_connection, like_substring_param
+from dbconn import get_connection, ci_like_substring_param
+from utils import now_iso as _now, validate_business_date
 from modules.auth.service import (
     get_current_admin,
     get_current_document_creator,
@@ -135,9 +142,6 @@ def _ensure_can_edit_files(user, status: str) -> None:
         raise HTTPException(status_code=400, detail="Нельзя менять файлы в финальном статусе документа")
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
-
 
 def _fmt_date(value) -> str:
     if not value:
@@ -192,7 +196,9 @@ def create_shipment(
                (id,doc_number,cargo_type,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
-             body.destination, body.carrier, body.logistics_cost, body.ship_date, (body.comment or "").strip() or None,
+             body.destination, body.carrier, body.logistics_cost,
+             validate_business_date(body.ship_date, field_ru="Дата отгрузки"),
+             (body.comment or "").strip() or None,
              SHIPMENT_STATUS_DRAFT, now, uid),
         )
         for line in body.lines:
@@ -238,17 +244,17 @@ def shipments_summary(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
             params += [s, s, s]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " LEFT JOIN products p ON p.id = sl.product_id"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
-                " AND (COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ? OR sl.product_name LIKE ?))"
+                " AND (fold_ci(COALESCE(NULLIF(p.sku, ''), sl.product_sku)) LIKE ? OR fold_ci(sl.product_name) LIKE ?))"
             )
-            s = like_substring_param(sku); params += [s, s]
+            s = ci_like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -317,17 +323,17 @@ def list_shipments(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
             params += [s, s, s]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
                 " LEFT JOIN products p ON p.id = sl.product_id"
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
-                " AND (COALESCE(NULLIF(p.sku, ''), sl.product_sku) LIKE ? OR sl.product_name LIKE ?))"
+                " AND (fold_ci(COALESCE(NULLIF(p.sku, ''), sl.product_sku)) LIKE ? OR fold_ci(sl.product_name) LIKE ?))"
             )
-            s = like_substring_param(sku); params += [s, s]
+            s = ci_like_substring_param(sku); params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
         if date_to:
@@ -346,35 +352,6 @@ def list_shipments(
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                     COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
-                    -- «Факт» документа = упакованный годный (что реально едет). Найденный
-                    -- брак возвращается на хранение и в факт выполнения плана не входит.
-                    COALESCE((
-                        SELECT SUM(CASE
-                            WHEN zr.to_op IN ('packed','ready') AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
-                            WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
-                            ELSE 0 END)
-                        FROM zone_relocations zr
-                        JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
-                        WHERE sl2.doc_id = d.id
-                    ), 0) AS total_packed_qty,
-                    COALESCE((
-                        -- Готовый к отгрузке остаток (нетто `ready` нужного качества): вошло в
-                        -- ready − вышло из ready, стороны независимо, чтобы перекладка ready→ready
-                        -- (раскладка годного по местам) давала ноль. Привязку к рейсу и списание
-                        -- держит домен dispatch — здесь резерв в рейсы не вычитается.
-                        SELECT SUM(GREATEST(pl.ready, 0))
-                        FROM (
-                            SELECT sl3.id AS line_id,
-                                COALESCE(SUM(CASE WHEN zr.to_op='ready'   AND zr.to_quality
-                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0)
-                                - COALESCE(SUM(CASE WHEN zr.from_op='ready' AND zr.from_quality
-                                         = CASE WHEN COALESCE(d.cargo_type,'good')='defect' THEN 'defect' ELSE 'good' END THEN zr.qty ELSE 0 END), 0) AS ready
-                            FROM shipment_lines sl3
-                            LEFT JOIN zone_relocations zr ON zr.shipment_line_id = sl3.id
-                            WHERE sl3.doc_id = d.id AND COALESCE(sl3.is_deleted,0)=0
-                            GROUP BY sl3.id
-                        ) pl
-                    ), 0) AS total_free_qty,
                     COUNT(l.id) FILTER (
                         WHERE l.is_deleted=0 AND COALESCE(l.shipped_qty, 0) > 0
                     ) AS lines_with_shipped_qty,
@@ -390,6 +367,51 @@ def list_shipments(
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
+
+        # Тяжёлые агрегаты по журналу zone_relocations — отдельным запросом только для
+        # документов страницы, а не для всей выборки под фильтром до LIMIT.
+        doc_ids = [str(r["id"]) for r in rows]
+        journal_aggs: dict = {}
+        if doc_ids:
+            ph = ",".join("?" for _ in doc_ids)
+            journal_aggs = {
+                str(a["id"]): a
+                for a in conn.execute(
+                    f"""SELECT d.id,
+                        -- «Факт» документа = упакованный годный (что реально едет). Найденный
+                        -- брак возвращается на хранение и в факт выполнения плана не входит.
+                        COALESCE((
+                            SELECT SUM(CASE
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                ELSE 0 END)
+                            FROM zone_relocations zr
+                            JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
+                            WHERE sl2.doc_id = d.id
+                        ), 0) AS total_packed_qty,
+                        COALESCE((
+                            -- Готовый к отгрузке остаток (нетто `ready` нужного качества): вошло в
+                            -- ready − вышло из ready, стороны независимо, чтобы перекладка ready→ready
+                            -- (раскладка годного по местам) давала ноль. Привязку к рейсу и списание
+                            -- держит домен dispatch — здесь резерв в рейсы не вычитается.
+                            SELECT SUM(GREATEST(pl.ready, 0))
+                            FROM (
+                                SELECT sl3.id AS line_id,
+                                    COALESCE(SUM(CASE WHEN zr.to_op='{INV_OP_READY}'   AND zr.to_quality
+                                             = CASE WHEN COALESCE(d.cargo_type,'{SHIPMENT_CARGO_GOOD}')='{SHIPMENT_CARGO_DEFECT}' THEN '{INV_Q_DEFECT}' ELSE '{INV_Q_GOOD}' END THEN zr.qty ELSE 0 END), 0)
+                                    - COALESCE(SUM(CASE WHEN zr.from_op='{INV_OP_READY}' AND zr.from_quality
+                                             = CASE WHEN COALESCE(d.cargo_type,'{SHIPMENT_CARGO_GOOD}')='{SHIPMENT_CARGO_DEFECT}' THEN '{INV_Q_DEFECT}' ELSE '{INV_Q_GOOD}' END THEN zr.qty ELSE 0 END), 0) AS ready
+                                FROM shipment_lines sl3
+                                LEFT JOIN zone_relocations zr ON zr.shipment_line_id = sl3.id
+                                WHERE sl3.doc_id = d.id AND COALESCE(sl3.is_deleted,0)=0
+                                GROUP BY sl3.id
+                            ) pl
+                        ), 0) AS total_free_qty
+                    FROM shipment_docs d
+                    WHERE d.id IN ({ph})""",
+                    doc_ids,
+                ).fetchall()
+            }
 
     items = [
         ShipmentListItem(
@@ -408,8 +430,8 @@ def list_shipments(
             sku_count=int(r["sku_count"] or 0),
             total_qty=int(r["total_qty"] or 0),
             total_shipped_qty=int(r["total_shipped_qty"] or 0),
-            total_packed_qty=int(r["total_packed_qty"] or 0),
-            total_free_qty=int(r["total_free_qty"] or 0),
+            total_packed_qty=int(journal_aggs[str(r["id"])]["total_packed_qty"] or 0),
+            total_free_qty=int(journal_aggs[str(r["id"])]["total_free_qty"] or 0),
             lines_with_shipped_qty=int(r["lines_with_shipped_qty"] or 0),
             lines_with_packed_qty=int(r["lines_with_packed_qty"] or 0),
             lines_with_zone=int(r["lines_with_zone"] or 0),
@@ -455,12 +477,12 @@ def list_shipment_lines(
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
-            s = like_substring_param(search)
-            conds.append("(d.doc_number LIKE ? OR d.client_name LIKE ? OR d.destination LIKE ?)")
+            s = ci_like_substring_param(search)
+            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
             params += [s, s, s]
         if sku:
-            s = like_substring_param(sku)
-            conds.append("(COALESCE(NULLIF(p.sku, ''), l.product_sku) LIKE ? OR l.product_name LIKE ?)")
+            s = ci_like_substring_param(sku)
+            conds.append("(fold_ci(COALESCE(NULLIF(p.sku, ''), l.product_sku)) LIKE ? OR fold_ci(l.product_name) LIKE ?)")
             params += [s, s]
         if date_from:
             conds.append("d.ship_date >= ?"); params.append(date_from)
@@ -482,16 +504,6 @@ def list_shipment_lines(
                     COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
                     l.color_name, l.size_name, l.qty,
                     COALESCE(l.shipped_qty, 0) AS shipped_qty,
-                    -- «Факт» строки = упакованный годный (что реально едет). Найденный брак
-                    -- возвращается на хранение и в факт выполнения плана не входит.
-                    COALESCE((
-                        SELECT SUM(CASE
-                            WHEN zr.to_op IN ('packed','ready') AND zr.to_quality='good' AND COALESCE(zr.from_op,'') NOT IN ('packed','ready') THEN zr.qty
-                            WHEN zr.from_op IN ('packed','ready') AND zr.from_quality='good' AND zr.to_op='packing'   THEN -zr.qty
-                            ELSE 0 END)
-                        FROM zone_relocations zr
-                        WHERE zr.shipment_line_id = l.id
-                    ), 0) AS packed_good,
                     l.storage_zone_name, l.store_name,
                     d.doc_number, d.cargo_type, d.client_id, d.client_name, d.destination,
                     d.ship_date, d.status
@@ -503,6 +515,28 @@ def list_shipment_lines(
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
+
+        # «Факт» строки = упакованный годный (что реально едет). Найденный брак
+        # возвращается на хранение и в факт выполнения плана не входит.
+        # Агрегат по журналу — отдельным запросом только для строк страницы.
+        line_ids = [str(r["line_id"]) for r in rows]
+        packed_by_line: dict = {}
+        if line_ids:
+            ph = ",".join("?" for _ in line_ids)
+            packed_by_line = {
+                str(a["line_id"]): int(a["packed_good"] or 0)
+                for a in conn.execute(
+                    f"""SELECT zr.shipment_line_id AS line_id,
+                            SUM(CASE
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                ELSE 0 END) AS packed_good
+                        FROM zone_relocations zr
+                        WHERE zr.shipment_line_id IN ({ph})
+                        GROUP BY zr.shipment_line_id""",
+                    line_ids,
+                ).fetchall()
+            }
 
     items = [
         ShipmentLinesListItem(
@@ -523,7 +557,7 @@ def list_shipment_lines(
             size_name=r["size_name"],
             qty=int(r["qty"] or 0),
             shipped_qty=int(r["shipped_qty"] or 0),
-            packed_good=int(r["packed_good"] or 0),
+            packed_good=packed_by_line.get(str(r["line_id"]), 0),
             storage_zone_name=r["storage_zone_name"],
             store_name=r["store_name"],
         )
@@ -564,17 +598,19 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             (doc_id,),
         ).fetchall()
         packed_rows = conn.execute(
-            """SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op IN ('packed','ready')   AND to_quality='good'   AND COALESCE(from_op,'') NOT IN ('packed','ready') THEN qty
-                                    WHEN from_op IN ('packed','ready') AND from_quality='good' AND to_op='packing'               THEN -qty ELSE 0 END), 0) AS good,
-                  COALESCE(SUM(CASE WHEN to_quality='defect'   AND COALESCE(from_quality,'')<>'defect' THEN qty
-                                    WHEN from_quality='defect' AND COALESCE(to_quality,'')<>'defect'   THEN -qty ELSE 0 END), 0) AS defect,
+            f"""SELECT shipment_line_id,
+                  COALESCE(SUM(CASE WHEN to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}')   AND to_quality='{INV_Q_GOOD}'   AND COALESCE(from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN qty
+                                    WHEN from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND from_quality='{INV_Q_GOOD}' AND to_op='{INV_OP_PACKING}'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_quality='{INV_Q_DEFECT}'   AND COALESCE(from_quality,'')<>'{INV_Q_DEFECT}' THEN qty
+                                    WHEN from_quality='{INV_Q_DEFECT}' AND COALESCE(to_quality,'')<>'{INV_Q_DEFECT}'   THEN -qty ELSE 0 END), 0) AS defect,
                   -- «Ещё не размещено» = чистый остаток корзины packed (ждёт раскладки):
                   -- размещение good (packed→ready) и defect (packed→storage) его уменьшает.
-                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   THEN qty
-                                    WHEN from_op='packed' AND from_quality='good' THEN -qty ELSE 0 END), 0) AS pending_good,
-                  COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='defect'   THEN qty
-                                    WHEN from_op='packed' AND from_quality='defect' THEN -qty ELSE 0 END), 0) AS pending_defect
+                  -- Плюс/минус отдельными суммами: ручное перемещение packed→packed по
+                  -- ячейкам обязано дать нетто 0, а не задвоить остаток.
+                  COALESCE(SUM(CASE WHEN to_op='{INV_OP_PACKED}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END), 0)
+                - COALESCE(SUM(CASE WHEN from_op='{INV_OP_PACKED}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END), 0) AS pending_good,
+                  COALESCE(SUM(CASE WHEN to_op='{INV_OP_PACKED}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
+                - COALESCE(SUM(CASE WHEN from_op='{INV_OP_PACKED}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS pending_defect
                FROM zone_relocations
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
                GROUP BY shipment_line_id""",
@@ -590,26 +626,26 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         # отгрузка) либо ready/defect (подготовка брак-отгрузки в зону отгрузки). Движения
         # отгрузки (dispatch) не помечены shipment_line_id, поэтому в раскладку не попадают.
         placement_rows = conn.execute(
-            """SELECT shipment_line_id, kind, zone_id,
+            f"""SELECT shipment_line_id, kind, zone_id,
                   MIN(zone_name) AS zone_name, SUM(net) AS qty
                FROM (
-                   SELECT shipment_line_id, 'good' AS kind, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
-                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'good'
+                   SELECT shipment_line_id, '{INV_Q_GOOD}' AS kind, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+                   FROM zone_relocations WHERE to_op = '{INV_OP_READY}' AND to_quality = '{INV_Q_GOOD}'
                    UNION ALL
-                   SELECT shipment_line_id, 'good', from_zone_id, from_zone_name, -qty
-                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'good'
+                   SELECT shipment_line_id, '{INV_Q_GOOD}', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = '{INV_OP_READY}' AND from_quality = '{INV_Q_GOOD}'
                    UNION ALL
-                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
-                   FROM zone_relocations WHERE to_op = 'storage' AND to_quality = 'defect'
+                   SELECT shipment_line_id, '{INV_Q_DEFECT}', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = '{INV_OP_STORAGE}' AND to_quality = '{INV_Q_DEFECT}'
                    UNION ALL
-                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
-                   FROM zone_relocations WHERE from_op = 'storage' AND from_quality = 'defect'
+                   SELECT shipment_line_id, '{INV_Q_DEFECT}', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = '{INV_OP_STORAGE}' AND from_quality = '{INV_Q_DEFECT}'
                    UNION ALL
-                   SELECT shipment_line_id, 'defect', to_zone_id, to_zone_name, qty
-                   FROM zone_relocations WHERE to_op = 'ready' AND to_quality = 'defect'
+                   SELECT shipment_line_id, '{INV_Q_DEFECT}', to_zone_id, to_zone_name, qty
+                   FROM zone_relocations WHERE to_op = '{INV_OP_READY}' AND to_quality = '{INV_Q_DEFECT}'
                    UNION ALL
-                   SELECT shipment_line_id, 'defect', from_zone_id, from_zone_name, -qty
-                   FROM zone_relocations WHERE from_op = 'ready' AND from_quality = 'defect'
+                   SELECT shipment_line_id, '{INV_Q_DEFECT}', from_zone_id, from_zone_name, -qty
+                   FROM zone_relocations WHERE from_op = '{INV_OP_READY}' AND from_quality = '{INV_Q_DEFECT}'
                ) t
                WHERE shipment_line_id IN (SELECT id FROM shipment_lines WHERE doc_id = ?)
                GROUP BY shipment_line_id, kind, zone_id
@@ -776,6 +812,8 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
             fields["comment"] = (fields["comment"] or "").strip() or None
         if "cargo_type" in fields:
             fields["cargo_type"] = normalize_cargo_type(fields["cargo_type"])
+        if "ship_date" in fields:
+            fields["ship_date"] = validate_business_date(fields["ship_date"], field_ru="Дата отгрузки")
         if not fields:
             return {"message": "ok"}
         sets = ", ".join(f"{k} = ?" for k in fields)
@@ -1331,6 +1369,14 @@ def delete_shipment_line_file(
 def delete_shipment_doc(doc_id: str, user=Depends(_get_manager)):
     now = _now()
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (doc_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        if str(row["status"]) != SHIPMENT_STATUS_DRAFT:
+            raise HTTPException(status_code=400, detail="Удалить можно только черновик")
         conn.execute(
             "UPDATE shipment_docs SET is_deleted=1, updated_at=? WHERE id=?",
             (now, doc_id),

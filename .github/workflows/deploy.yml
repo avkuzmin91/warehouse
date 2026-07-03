@@ -23,10 +23,74 @@ permissions:
   contents: read
 
 jobs:
+  # Гейт перед деплоем: backend pytest (живая PostgreSQL + alembic) и сборка frontend (tsc + vite).
+  # Ломается — деплой не стартует. Ref совпадает с тем, что уедет на сервер (включая rollback-dispatch).
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wms_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/wms_ci
+      # Фиктивный секрет только для тестов (config.py требует ≥32 символов).
+      JWT_SECRET: ci-only-dummy-jwt-secret-0123456789abcdef
+      SALARY_SCHEDULER: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.git_ref != '' && inputs.git_ref || (inputs.environment == 'test' && 'develop' || 'main')) || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install backend deps
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Alembic upgrade head
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Backend pytest
+        working-directory: backend
+        run: python -m pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend build (tsc + vite)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
   test:
+    needs: ci
+    # success() обязателен: свой if заменяет неявную проверку успеха needs.
     if: |
-      github.ref == 'refs/heads/develop' ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
+      success() &&
+      (github.ref == 'refs/heads/develop' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test'))
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment_name: test
@@ -39,9 +103,11 @@ jobs:
     secrets: inherit
 
   production:
+    needs: ci
     if: |
-      github.ref == 'refs/heads/main' ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+      success() &&
+      (github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment_name: production

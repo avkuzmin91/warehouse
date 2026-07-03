@@ -948,19 +948,32 @@ button {
   border-width: 2px;
 }
 
-/* Pull-to-refresh */
-.ptr-track {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  overflow: hidden;
-}
+/* Pull-to-refresh: индикатор — абсолютный слой поверх контента (двигается
+   transform'ом из PullToRefresh, без relayout списка). */
 .ptr-ind {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 44px;
   color: var(--c-accent);
+  pointer-events: none;
+  z-index: 5;
+  will-change: transform;
+}
+.ptr-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--c-bg-elev);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--sh-1);
 }
 
 .alert {

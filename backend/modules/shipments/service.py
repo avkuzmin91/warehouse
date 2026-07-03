@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -31,28 +31,14 @@ from config import (
     SHIPMENT_TRANSITIONS,
     SHIPMENT_TRANSITIONS_DEFECT,
 )
-from dbconn import like_substring_param
+from dbconn import ci_like_substring_param
+from utils import next_doc_number as _next_doc_number, now_iso as _now
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def next_doc_number(connection) -> str:
-    """Генерирует следующий номер документа отгрузки.
-
-    Использует MAX вместо COUNT, чтобы не давать дубликатов при пустых дырках.
-    UNIQUE constraint на doc_number в baseline-миграции гарантирует атомарность.
-    """
-    row = connection.execute(
-        """
-        SELECT COALESCE(MAX(CAST(SUBSTR(doc_number, 5) AS INTEGER)), 0) AS max_n
-        FROM shipment_docs
-        WHERE doc_number LIKE 'SHP-%' AND SUBSTR(doc_number, 5) ~ '^[0-9]+$'
-        """
-    ).fetchone()
-    n = (row["max_n"] if row else 0) + 1
-    return f"SHP-{n:04d}"
+    """Следующий номер задачи упаковки (SHP-NNNN)."""
+    return _next_doc_number(connection, table="shipment_docs", prefix="SHP-", width=4)
 
 
 def normalize_cargo_type(raw: str | None) -> str:
@@ -136,12 +122,12 @@ def _check_lines_covered_by_stock(connection, doc_id: str, client_id) -> None:
         (doc_id,),
     ).fetchall()
 
+    # Плюс/минус отдельными суммами: ручное перемещение пула по ячейкам
+    # (packing→packing) обязано дать нетто 0, а не задвоить пул.
     on_packing_rows = connection.execute(
-        """SELECT sl.product_id, sl.color_id, sl.size_id,
-                  COALESCE(SUM(CASE
-                     WHEN zr.to_op = 'packing'   AND zr.to_quality = 'good'   THEN zr.qty
-                     WHEN zr.from_op = 'packing' AND zr.from_quality = 'good' THEN -zr.qty
-                     ELSE 0 END), 0) AS on_packing
+        f"""SELECT sl.product_id, sl.color_id, sl.size_id,
+                  COALESCE(SUM(CASE WHEN zr.to_op = '{INV_OP_PACKING}' AND zr.to_quality = '{INV_Q_GOOD}' THEN zr.qty ELSE 0 END), 0)
+                - COALESCE(SUM(CASE WHEN zr.from_op = '{INV_OP_PACKING}' AND zr.from_quality = '{INV_Q_GOOD}' THEN zr.qty ELSE 0 END), 0) AS on_packing
            FROM zone_relocations zr
            JOIN shipment_lines sl ON sl.id = zr.shipment_line_id
            WHERE sl.doc_id = ? AND COALESCE(sl.is_deleted, 0) = 0
@@ -309,16 +295,16 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
 
     # Net по исходной зоне = передано из неё − уже возвращённое обратно в неё.
     sources = connection.execute(
-        """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+        f"""SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
                SELECT from_zone_id AS zone_id, from_zone_name AS zone_name, qty AS net
                FROM zone_relocations
-               WHERE shipment_line_id = ? AND from_op = 'storage' AND to_op = 'packing'
-                 AND from_quality = 'good' AND to_quality = 'good'
+               WHERE shipment_line_id = ? AND from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_PACKING}'
+                 AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
                UNION ALL
                SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, -qty AS net
                FROM zone_relocations
-               WHERE shipment_line_id = ? AND from_op = 'packing' AND to_op = 'storage'
-                 AND from_quality = 'good' AND to_quality = 'good'
+               WHERE shipment_line_id = ? AND from_op = '{INV_OP_PACKING}' AND to_op = '{INV_OP_STORAGE}'
+                 AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
            ) t
            GROUP BY zone_id HAVING SUM(net) > 0
            ORDER BY SUM(net) DESC""",
@@ -327,6 +313,11 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
 
     packing_id, packing_name = get_packing_zone(connection)
     client_id = doc["client_id"]
+    # Пул могли вручную переставить из зоны упаковки — возврат уходит из фактических
+    # ячеек корзины `packing` (FIFO), а не всегда из зоны упаковки.
+    pool_sources = line_bucket_zone_sources(
+        connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
+    )
     remaining = target
     for src in sources:
         if remaining <= 0:
@@ -334,19 +325,22 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
         take = min(int(src["net"]), remaining)
         if take <= 0:
             continue
-        insert_inventory_move(
-            connection,
-            product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-            color_id=line["color_id"], color_name=line["color_name"],
-            size_id=line["size_id"], size_name=line["size_name"],
-            client_id=client_id, client_name=None,
-            from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
-            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-            from_zone_id=packing_id, from_zone_name=packing_name,
-            to_zone_id=src["zone_id"], to_zone_name=src["zone_name"],
-            qty=take, user_id=user_id, shipment_line_id=line_id,
-            comment=f"Откат передачи: {take} шт → {src['zone_name'] or 'без места'}",
-        )
+        for pool_zone_id, pool_zone_name, part in _consume_zone_sources(
+            pool_sources, take, fallback=(packing_id, packing_name)
+        ):
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=None,
+                from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
+                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                from_zone_id=pool_zone_id, from_zone_name=pool_zone_name,
+                to_zone_id=src["zone_id"], to_zone_name=src["zone_name"],
+                qty=part, user_id=user_id, shipment_line_id=line_id,
+                comment=f"Откат передачи: {part} шт → {src['zone_name'] or 'без места'}",
+            )
         remaining -= take
 
     returned = target - remaining
@@ -366,12 +360,14 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
 #           списание ready→shipped факт упаковки не меняют — число «упаковано» держится;
 #   defect = конвертации качества good→defect минус обратные. Раскладка брака
 #           (packed→storage с тем же качеством) и списание факт не меняют.
-_PACKED_NET_SQL = """
-    COALESCE(SUM(CASE WHEN {p}to_op IN ('packed','ready')   AND {p}to_quality='good'   AND COALESCE({p}from_op,'') NOT IN ('packed','ready') THEN {p}qty
-                      WHEN {p}from_op IN ('packed','ready') AND {p}from_quality='good' AND {p}to_op='packing'                              THEN -{p}qty
+_PACKED_SET_SQL = ", ".join(f"'{s}'" for s in (INV_OP_PACKED, INV_OP_READY))
+
+_PACKED_NET_SQL = f"""
+    COALESCE(SUM(CASE WHEN {{p}}to_op IN ({_PACKED_SET_SQL})   AND {{p}}to_quality='{INV_Q_GOOD}'   AND COALESCE({{p}}from_op,'') NOT IN ({_PACKED_SET_SQL}) THEN {{p}}qty
+                      WHEN {{p}}from_op IN ({_PACKED_SET_SQL}) AND {{p}}from_quality='{INV_Q_GOOD}' AND {{p}}to_op='{INV_OP_PACKING}'                        THEN -{{p}}qty
                       ELSE 0 END), 0) AS good,
-    COALESCE(SUM(CASE WHEN {p}to_quality='defect'   AND COALESCE({p}from_quality,'')<>'defect' THEN {p}qty
-                      WHEN {p}from_quality='defect' AND COALESCE({p}to_quality,'')<>'defect'   THEN -{p}qty
+    COALESCE(SUM(CASE WHEN {{p}}to_quality='{INV_Q_DEFECT}'   AND COALESCE({{p}}from_quality,'')<>'{INV_Q_DEFECT}' THEN {{p}}qty
+                      WHEN {{p}}from_quality='{INV_Q_DEFECT}' AND COALESCE({{p}}to_quality,'')<>'{INV_Q_DEFECT}'   THEN -{{p}}qty
                       ELSE 0 END), 0) AS defect
 """
 
@@ -393,13 +389,15 @@ def line_packed_pending(connection, line_id: str) -> dict:
     размещения), это то, что физически лежит на столе «Упаковано» и ждёт раскладки.
     Размещение good (packed→ready) и defect (packed→storage) его уменьшает; возврат на
     упаковку (ready→packed) — увеличивает. На этом считается частичное и финальное
-    размещение, чтобы повторная раскладка не задваивала уже размещённое."""
+    размещение, чтобы повторная раскладка не задваивала уже размещённое.
+    Плюс и минус — отдельными суммами: ручное перемещение упакованного по ячейкам
+    (packed→packed) обязано дать нетто 0."""
     row = connection.execute(
-        """SELECT
-              COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='good'   THEN qty
-                                WHEN from_op='packed' AND from_quality='good' THEN -qty ELSE 0 END), 0) AS good,
-              COALESCE(SUM(CASE WHEN to_op='packed'   AND to_quality='defect'   THEN qty
-                                WHEN from_op='packed' AND from_quality='defect' THEN -qty ELSE 0 END), 0) AS defect
+        f"""SELECT
+              COALESCE(SUM(CASE WHEN to_op='{INV_OP_PACKED}' AND to_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op='{INV_OP_PACKED}' AND from_quality='{INV_Q_GOOD}' THEN qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN to_op='{INV_OP_PACKED}' AND to_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op='{INV_OP_PACKED}' AND from_quality='{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS defect
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
     ).fetchone()
@@ -483,33 +481,102 @@ def _emit_packed_placement(
         (INV_Q_GOOD, good_allocs, INV_OP_READY),
         (INV_Q_DEFECT, defect_allocs, INV_OP_STORAGE),
     ):
+        if not allocs:
+            continue
         kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
+        # Упакованное могли вручную переставить из зоны упаковки — забираем из
+        # фактических ячеек корзины `packed` (FIFO, зона упаковки первой).
+        sources = line_bucket_zone_sources(
+            connection, str(line["id"]), op=INV_OP_PACKED, quality=kind, prefer_zone_id=packing_id,
+        )
         for zone_id, zone_name, qty in allocs:
-            insert_inventory_move(
-                connection,
-                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                color_id=line["color_id"], color_name=line["color_name"],
-                size_id=line["size_id"], size_name=line["size_name"],
-                client_id=client_id, client_name=None,
-                from_op=INV_OP_PACKED, to_op=to_op,
-                from_quality=kind, to_quality=kind,
-                from_zone_id=packing_id, from_zone_name=packing_name,
-                to_zone_id=zone_id, to_zone_name=zone_name,
-                qty=qty, user_id=user_id, shipment_line_id=str(line["id"]),
-                comment=f"{comment_prefix} ({kind_ru}): {qty} шт → {zone_name or 'без места'} — {label}",
-            )
+            for src_zone_id, src_zone_name, take in _consume_zone_sources(
+                sources, qty, fallback=(packing_id, packing_name)
+            ):
+                insert_inventory_move(
+                    connection,
+                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                    color_id=line["color_id"], color_name=line["color_name"],
+                    size_id=line["size_id"], size_name=line["size_name"],
+                    client_id=client_id, client_name=None,
+                    from_op=INV_OP_PACKED, to_op=to_op,
+                    from_quality=kind, to_quality=kind,
+                    from_zone_id=src_zone_id, from_zone_name=src_zone_name,
+                    to_zone_id=zone_id, to_zone_name=zone_name,
+                    qty=take, user_id=user_id, shipment_line_id=str(line["id"]),
+                    comment=f"{comment_prefix} ({kind_ru}): {take} шт → {zone_name or 'без места'} — {label}",
+                )
             total += qty
     return total
 
 
+def line_bucket_zone_sources(
+    connection, line_id: str, *, op: str, quality: str, prefer_zone_id: str | None = None,
+) -> list[dict]:
+    """Ячейки, где по журналу физически лежит корзина (op, quality) строки (net > 0).
+
+    Товар на упаковке/упакованный могли вручную переставить из зоны упаковки в другую
+    ячейку (ручное перемещение остатков работает для packing/packed) — процессные
+    списания обязаны уходить из фактических ячеек, иначе остатки по местам разойдутся.
+    prefer_zone_id (обычно зона упаковки) отдаётся первым, остальные — по убыванию
+    нетто. Возвращает мутируемые {'zone_id','zone_name','net'} для FIFO-потребления.
+    """
+    rows = connection.execute(
+        """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+               SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+               FROM zone_relocations
+               WHERE shipment_line_id = ? AND to_op = ? AND to_quality = ?
+               UNION ALL
+               SELECT from_zone_id, from_zone_name, -qty
+               FROM zone_relocations
+               WHERE shipment_line_id = ? AND from_op = ? AND from_quality = ?
+           ) t
+           GROUP BY zone_id HAVING SUM(net) > 0
+           ORDER BY SUM(net) DESC""",
+        (line_id, op, quality, line_id, op, quality),
+    ).fetchall()
+    sources = [{"zone_id": r["zone_id"], "zone_name": r["zone_name"], "net": int(r["net"])} for r in rows]
+    if prefer_zone_id is not None:
+        sources.sort(key=lambda s: 0 if s["zone_id"] == prefer_zone_id else 1)
+    return sources
+
+
+def _consume_zone_sources(
+    sources: list[dict], qty: int, *, fallback: tuple[str | None, str | None],
+) -> list[tuple[str | None, str | None, int]]:
+    """FIFO-съём количества с пула ячеек: [(zone_id, zone_name, take)]. Мутирует sources.
+
+    Гейты процессов считают доступность по нетто строки (все ячейки разом), поэтому
+    положительных ячеек может не хватить при историческом дрейфе по местам — остаток
+    пишется из fallback-зоны (легаси-поведение: зона упаковки), а не падает.
+    """
+    parts: list[tuple[str | None, str | None, int]] = []
+    remaining = int(qty)
+    for src in sources:
+        if remaining <= 0:
+            break
+        take = min(remaining, src["net"])
+        if take <= 0:
+            continue
+        parts.append((src["zone_id"], src["zone_name"], take))
+        src["net"] -= take
+        remaining -= take
+    if remaining > 0:
+        parts.append((fallback[0], fallback[1], remaining))
+    return parts
+
+
 def line_on_packing_qty(connection, line_id: str) -> int:
-    """Нерешённый пул строки на упаковочном столе: net (packing, good) по журналу."""
+    """Нерешённый пул строки на упаковочном столе: net (packing, good) по журналу.
+
+    Плюс и минус считаются отдельными суммами (не одним CASE): ручное перемещение
+    пула по ячейкам — движение packing→packing, обе стороны в одной записи, и она
+    должна дать нетто 0, а не задвоить пул.
+    """
     row = connection.execute(
-        """SELECT COALESCE(SUM(CASE
-              WHEN to_op = 'packing'   AND to_quality = 'good'   THEN qty
-              WHEN from_op = 'packing' AND from_quality = 'good' THEN -qty
-              ELSE 0
-           END), 0) AS qty
+        f"""SELECT
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_PACKING}' AND to_quality = '{INV_Q_GOOD}' THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_PACKING}' AND from_quality = '{INV_Q_GOOD}' THEN qty ELSE 0 END), 0) AS qty
            FROM zone_relocations
            WHERE shipment_line_id = ?""",
         (line_id,),
@@ -583,6 +650,12 @@ def record_packing(
     # И годный, и найденный брак уходят в «Упаковано» (packing,good → packed). Это ещё
     # НЕ «Готов к отгрузке»: годное переведёт в ready только «Готово к рейсу»
     # (finish_relocation), брак там же вернётся на хранение.
+    # Пул «На упаковке» могли вручную переставить из зоны упаковки по ячейкам —
+    # списываем из фактических мест (FIFO, зона упаковки первой). Упакованное
+    # складывается в зоне упаковки.
+    sources = line_bucket_zone_sources(
+        connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
+    )
     for kind, delta, to_op in (
         (INV_Q_GOOD, good_delta, INV_OP_PACKED),
         (INV_Q_DEFECT, defect_delta, INV_OP_PACKED),
@@ -590,20 +663,23 @@ def record_packing(
         if delta <= 0:
             continue
         kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
-        insert_inventory_move(
-            connection,
-            product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-            color_id=line["color_id"], color_name=line["color_name"],
-            size_id=line["size_id"], size_name=line["size_name"],
-            client_id=client_id, client_name=None,
-            from_op=INV_OP_PACKING, to_op=to_op,
-            from_quality=INV_Q_GOOD, to_quality=kind,
-            from_zone_id=packing_id, from_zone_name=packing_name,
-            to_zone_id=packing_id, to_zone_name=packing_name,
-            qty=delta, user_id=user_id, shipment_line_id=line_id,
-            comment=f"Упаковка ({kind_ru}): +{delta} шт.",
-            packed_date=packed_date, pack_entry_id=pack_entry_id,
-        )
+        for src_zone_id, src_zone_name, take in _consume_zone_sources(
+            sources, delta, fallback=(packing_id, packing_name)
+        ):
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=None,
+                from_op=INV_OP_PACKING, to_op=to_op,
+                from_quality=INV_Q_GOOD, to_quality=kind,
+                from_zone_id=src_zone_id, from_zone_name=src_zone_name,
+                to_zone_id=packing_id, to_zone_name=packing_name,
+                qty=take, user_id=user_id, shipment_line_id=line_id,
+                comment=f"Упаковка ({kind_ru}): +{take} шт.",
+                packed_date=packed_date, pack_entry_id=pack_entry_id,
+            )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, SHIPMENT_OP_PACK,
@@ -619,13 +695,13 @@ def list_packing_entries(connection, line_id: str) -> list[dict]:
     есть компенсация. Строки-компенсации в список не попадают.
     """
     rows = connection.execute(
-        """SELECT zr.pack_entry_id AS id,
+        f"""SELECT zr.pack_entry_id AS id,
               MIN(zr.packed_date) AS packed_date,
               MIN(zr.created_at) AS created_at,
               MIN(zr.created_by) AS created_by,
               MIN(u.email) AS created_by_email,
-              COALESCE(SUM(CASE WHEN zr.to_op='packed' AND zr.to_quality='good' THEN zr.qty ELSE 0 END), 0) AS good,
-              COALESCE(SUM(CASE WHEN zr.to_quality='defect'  THEN zr.qty ELSE 0 END), 0) AS defect
+              COALESCE(SUM(CASE WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' THEN zr.qty ELSE 0 END), 0) AS good,
+              COALESCE(SUM(CASE WHEN zr.to_quality='{INV_Q_DEFECT}'  THEN zr.qty ELSE 0 END), 0) AS defect
            FROM zone_relocations zr
            LEFT JOIN users u ON u.id = zr.created_by
            WHERE zr.shipment_line_id = ? AND zr.pack_entry_id IS NOT NULL AND zr.reverses_id IS NULL
@@ -681,8 +757,8 @@ def packing_productivity(
     if client_id and client_id.strip():
         conds.append("zr.client_id = ?"); params.append(client_id.strip())
     if search and search.strip():
-        s = like_substring_param(search)
-        conds.append("(zr.product_sku LIKE ? OR zr.product_name LIKE ? OR zr.product_id IN (SELECT id FROM products WHERE sku LIKE ?))")
+        s = ci_like_substring_param(search)
+        conds.append("(fold_ci(zr.product_sku) LIKE ? OR fold_ci(zr.product_name) LIKE ? OR zr.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
         params += [s, s, s]
     where = " AND ".join(conds)
 
@@ -909,7 +985,7 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
 
     Чистый откат — план/пул не валидируем. Повторная отмена запрещена.
     """
-    from modules.balances.service import get_packing_zone, insert_inventory_move
+    from modules.balances.service import insert_inventory_move
 
     doc_row = connection.execute(
         "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
@@ -934,11 +1010,12 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
     if not rows:
         raise HTTPException(status_code=404, detail="Запись упаковки не найдена")
 
-    packing_id, packing_name = get_packing_zone(connection)
     for r in rows:
         kind_ru = "брак" if str(r["to_quality"]) == INV_Q_DEFECT else "годный"
         label = r["product_sku"] or r["product_name"]
         qty = int(r["qty"] or 0)
+        # Зеркалим зоны отменяемой записи: упаковка могла списать пул из ячейки, куда
+        # его вручную переставили, — возврат кладёт товар обратно в ту же ячейку.
         insert_inventory_move(
             connection,
             product_id=str(r["product_id"]), product_name=r["product_name"], product_sku=r["product_sku"],
@@ -947,8 +1024,8 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
             client_id=r["client_id"], client_name=r["client_name"],
             from_op=str(r["to_op"]), to_op=str(r["from_op"]),
             from_quality=str(r["to_quality"]), to_quality=str(r["from_quality"]),
-            from_zone_id=packing_id, from_zone_name=packing_name,
-            to_zone_id=packing_id, to_zone_name=packing_name,
+            from_zone_id=r["to_zone_id"], from_zone_name=r["to_zone_name"],
+            to_zone_id=r["from_zone_id"], to_zone_name=r["from_zone_name"],
             qty=qty, user_id=user_id, shipment_line_id=line_id,
             comment="Отмена записи упаковки",
             packed_date=r["packed_date"], pack_entry_id=str(uuid4()), reverses_id=entry_id,
@@ -964,11 +1041,11 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
 def _doc_moved_to_packing_qty(connection, doc_id: str) -> int:
     """Сколько по документу всего передано в зону упаковки (движения storage→packing)."""
     row = connection.execute(
-        """SELECT COALESCE(SUM(zr.qty), 0) AS moved
+        f"""SELECT COALESCE(SUM(zr.qty), 0) AS moved
            FROM zone_relocations zr
            JOIN shipment_lines l ON l.id = zr.shipment_line_id
            WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0
-             AND zr.from_op = 'storage' AND zr.to_op = 'packing'""",
+             AND zr.from_op = '{INV_OP_STORAGE}' AND zr.to_op = '{INV_OP_PACKING}'""",
         (doc_id,),
     ).fetchone()
     return int(row["moved"] or 0)
@@ -1043,22 +1120,30 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
         )
 
         # Нерешённый пул (подвезли, но не упаковали) возвращаем на хранение,
-        # чтобы товар не завис на упаковочном столе и баланс не утекал.
+        # чтобы товар не завис на упаковочном столе и баланс не утекал. Пул могли
+        # вручную переставить по ячейкам — снимаем из фактических мест, товар
+        # остаётся лежать там же (хранение в той же ячейке).
         leftover = line_on_packing_qty(connection, line_id)
         if leftover > 0:
-            insert_inventory_move(
-                connection,
-                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                color_id=line["color_id"], color_name=line["color_name"],
-                size_id=line["size_id"], size_name=line["size_name"],
-                client_id=client_id, client_name=None,
-                from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
-                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-                from_zone_id=packing_id, from_zone_name=packing_name,
-                to_zone_id=packing_id, to_zone_name=packing_name,
-                qty=leftover, user_id=user_id, shipment_line_id=line_id,
-                comment=f"Возврат нерешённого пула на хранение: {leftover} шт.",
+            pool_sources = line_bucket_zone_sources(
+                connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
             )
+            for pool_zone_id, pool_zone_name, part in _consume_zone_sources(
+                pool_sources, leftover, fallback=(packing_id, packing_name)
+            ):
+                insert_inventory_move(
+                    connection,
+                    product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                    color_id=line["color_id"], color_name=line["color_name"],
+                    size_id=line["size_id"], size_name=line["size_name"],
+                    client_id=client_id, client_name=None,
+                    from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
+                    from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                    from_zone_id=pool_zone_id, from_zone_name=pool_zone_name,
+                    to_zone_id=pool_zone_id, to_zone_name=pool_zone_name,
+                    qty=part, user_id=user_id, shipment_line_id=line_id,
+                    comment=f"Возврат нерешённого пула на хранение: {part} шт.",
+                )
 
     now = _now()
     connection.execute(
@@ -1355,16 +1440,16 @@ def return_packing_pool_to_storage(connection, doc_id: str, user_id: str) -> int
         packing_id, packing_name = packing_zone
 
         sources = connection.execute(
-            """SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
+            f"""SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
                    SELECT from_zone_id AS zone_id, from_zone_name AS zone_name, qty AS net
                    FROM zone_relocations
-                   WHERE shipment_line_id = ? AND from_op = 'storage' AND to_op = 'packing'
-                     AND from_quality = 'good' AND to_quality = 'good'
+                   WHERE shipment_line_id = ? AND from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_PACKING}'
+                     AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
                    UNION ALL
                    SELECT to_zone_id, to_zone_name, -qty
                    FROM zone_relocations
-                   WHERE shipment_line_id = ? AND from_op = 'packing' AND to_op = 'storage'
-                     AND from_quality = 'good' AND to_quality = 'good'
+                   WHERE shipment_line_id = ? AND from_op = '{INV_OP_PACKING}' AND to_op = '{INV_OP_STORAGE}'
+                     AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
                ) t
                GROUP BY zone_id HAVING SUM(net) > 0
                ORDER BY SUM(net) DESC""",

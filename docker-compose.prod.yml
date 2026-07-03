@@ -24,6 +24,9 @@ services:
     restart: always
     environment:
       APP_ENV: prod
+      # Бизнес-даты (business_today, date.today) считаются по МСК; без TZ контейнер
+      # живёт в UTC и с 00:00 до 03:00 МСК относит операции на вчера.
+      TZ: Europe/Moscow
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/app
       APP_VERSION: ${APP_VERSION:-}
       JWT_SECRET: ${JWT_SECRET}

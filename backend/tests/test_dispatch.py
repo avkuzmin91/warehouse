@@ -16,7 +16,13 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
-from tests.conftest import admin_client, make_client_id, cleanup_client  # noqa: F401
+from tests.conftest import (  # noqa: F401
+    admin_client,
+    manager_client,
+    warehouse_client,
+    make_client_id,
+    cleanup_client,
+)
 
 
 @pytest.fixture
@@ -795,3 +801,69 @@ def test_duplicate_check_cargo_type_differs(admin_client, client_id):
     pid = _make_product(client_id, sku="DSP-DUP5")
     _create(admin_client, client_id, pid, "DSP-DUP5", 10)
     assert _dup_check(admin_client, client_id, pid, 10, cargo_type="defect").json()["matches"] == []
+
+
+# --- Авторизация: паритет с receipts/shipments по созданию и стоимости ---
+
+def test_warehouse_cannot_create_dispatch(warehouse_client, client_id):
+    """Кладовщик не создаёт отгрузку — это менеджерский состав (document_creator)."""
+    pid = _make_product(client_id, sku="DSP-RBAC1")
+    r = warehouse_client.post("/dispatches", json=_payload(client_id, pid, "DSP-RBAC1", 5))
+    assert r.status_code == 403, r.text
+
+
+def test_manager_can_create_dispatch(manager_client, client_id):
+    """Менеджер по-прежнему создаёт отгрузку."""
+    pid = _make_product(client_id, sku="DSP-RBAC2")
+    r = manager_client.post("/dispatches", json=_payload(client_id, pid, "DSP-RBAC2", 5))
+    assert r.status_code == 200, r.text
+
+
+def test_logistics_cost_hidden_from_warehouse(admin_client, warehouse_client, client_id):
+    """logistics_cost видят только admin/manager; кладовщику в list/detail — None."""
+    pid = _make_product(client_id, sku="DSP-RBAC3")
+    payload = _payload(client_id, pid, "DSP-RBAC3", 5)
+    payload["logistics_cost"] = 1234.5
+    doc_id = admin_client.post("/dispatches", json=payload).json()["message"]
+
+    # admin видит стоимость
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["logistics_cost"] == 1234.5
+    # кладовщик — нет
+    assert warehouse_client.get(f"/dispatches/{doc_id}").json()["logistics_cost"] is None
+    wh_item = next(
+        it for it in warehouse_client.get("/dispatches?limit=200").json()["items"]
+        if it["id"] == doc_id
+    )
+    assert wh_item["logistics_cost"] is None
+
+
+def test_warehouse_cannot_set_logistics_cost_on_update(admin_client, warehouse_client, client_id):
+    """Кладовщик не может записать logistics_cost через PATCH черновика."""
+    pid = _make_product(client_id, sku="DSP-RBAC4")
+    doc_id = _create(admin_client, client_id, pid, "DSP-RBAC4", 5)
+    r = warehouse_client.patch(f"/dispatches/{doc_id}", json={"logistics_cost": 999})
+    assert r.status_code == 403, r.text
+
+
+def test_uploaded_file_served_as_attachment_with_nosniff(admin_client, client_id):
+    """Вложения-не-картинки раздаются как attachment + nosniff (не inline), закрывая stored-XSS."""
+    pid = _make_product(client_id, sku="DSP-UP1")
+    doc_id = _create(admin_client, client_id, pid, "DSP-UP1", 1)
+    line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
+    up = admin_client.post(
+        f"/dispatches/{doc_id}/lines/{line_id}/files",
+        files={"file": ("накладная.pdf", b"%PDF-1.4 test", "application/pdf")},
+    )
+    assert up.status_code == 200, up.text
+    url = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["files"][0]["url"]
+
+    served = admin_client.get(url)
+    assert served.status_code == 200, served.text
+    assert served.headers.get("x-content-type-options") == "nosniff"
+    assert "attachment" in (served.headers.get("content-disposition") or "")
+
+
+def test_uploads_rejects_path_traversal(admin_client):
+    """Имя файла с разделителями/traversal не проходит — 404, а не выход из каталога."""
+    assert admin_client.get("/uploads/..%2f..%2fapp.py").status_code == 404
+    assert admin_client.get("/uploads/nonexistent-file.pdf").status_code == 404

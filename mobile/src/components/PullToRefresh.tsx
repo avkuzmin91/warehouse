@@ -4,11 +4,17 @@ import { Icon } from './Icon'
 const TRIGGER = 64 // px вытягивания (после сопротивления), при котором срабатывает обновление
 const MAX = 96 // потолок вытягивания
 const RESIST = 0.5 // коэффициент сопротивления пальцу
+const IND_H = 44 // высота слоя индикатора; спрятан за верхней кромкой на -IND_H
 
 // Pull-to-refresh для списочных экранов. Оборачивает скролл-контейнер:
 // тянем вниз от самого верха → по отпусканию вызывается onRefresh.
 // Нативного жеста в WKWebView без Ionic нет, поэтому реализовано на touch-событиях.
-// Слушатели вешаются вручную (passive:false) — иначе нельзя погасить bounce браузера.
+//
+// Производительность: постоянно висит только passive touchstart. Non-passive
+// touchmove (нужен, чтобы гасить bounce браузера) навешивается лишь когда жест
+// реально может начаться (scrollTop === 0) и снимается по touchend/touchcancel —
+// обычный скролл списка не ждёт JS. Индикатор — абсолютный слой поверх контента,
+// двигается через transform напрямую в DOM (без setState/relayout на каждый пиксель).
 export function PullToRefresh({
   onRefresh,
   className = '',
@@ -19,97 +25,101 @@ export function PullToRefresh({
   children: ReactNode
 }) {
   const elRef = useRef<HTMLDivElement>(null)
-  const [pull, setPull] = useState(0)
+  const indRef = useRef<HTMLDivElement>(null)
+  const arrowRef = useRef<HTMLSpanElement>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [animate, setAnimate] = useState(false)
-  const st = useRef({ startY: 0, active: false, pull: 0, refreshing: false })
+  const st = useRef({ startY: 0, pull: 0, refreshing: false })
+  // Слушатели вешаются один раз; актуальный onRefresh читаем через ref.
+  const onRefreshRef = useRef(onRefresh)
+  onRefreshRef.current = onRefresh
 
   useEffect(() => {
     const el = elRef.current
     if (!el) return
 
-    const onStart = (e: TouchEvent) => {
-      if (st.current.refreshing || el.scrollTop > 0) {
-        st.current.active = false
-        return
+    const setInd = (pull: number, animate: boolean) => {
+      const ind = indRef.current
+      if (ind) {
+        ind.style.transition = animate ? 'transform .25s ease, opacity .25s ease' : 'none'
+        ind.style.transform = `translateY(${pull - IND_H}px)`
+        ind.style.opacity = String(Math.min(1, pull / 24))
       }
-      st.current.startY = e.touches[0].clientY
-      st.current.active = true
-      setAnimate(false)
+      const arrow = arrowRef.current
+      if (arrow) {
+        arrow.style.transition = animate ? 'transform .2s ease' : 'none'
+        arrow.style.transform = `rotate(${Math.min(1, pull / TRIGGER) * 180}deg)`
+      }
+    }
+
+    const detach = () => {
+      el.removeEventListener('touchmove', onMove)
+      el.removeEventListener('touchend', onEnd)
+      el.removeEventListener('touchcancel', onEnd)
     }
 
     const onMove = (e: TouchEvent) => {
-      if (!st.current.active || st.current.refreshing) return
+      if (st.current.refreshing) return
       if (el.scrollTop > 0) {
-        st.current.active = false
         st.current.pull = 0
-        setPull(0)
+        setInd(0, false)
+        detach()
         return
       }
       const dy = e.touches[0].clientY - st.current.startY
       if (dy <= 0) {
         st.current.pull = 0
-        setPull(0)
+        setInd(0, false)
         return
       }
       e.preventDefault()
       const d = Math.min(MAX, dy * RESIST)
       st.current.pull = d
-      setPull(d)
+      setInd(d, false)
     }
 
     const onEnd = () => {
-      if (!st.current.active) return
-      st.current.active = false
-      setAnimate(true)
-      if (st.current.pull >= TRIGGER) {
+      detach()
+      const pull = st.current.pull
+      st.current.pull = 0
+      if (pull >= TRIGGER && !st.current.refreshing) {
         st.current.refreshing = true
-        st.current.pull = TRIGGER
         setRefreshing(true)
-        setPull(TRIGGER)
-        Promise.resolve(onRefresh()).finally(() => {
+        setInd(TRIGGER, true)
+        Promise.resolve(onRefreshRef.current()).finally(() => {
           st.current.refreshing = false
-          st.current.pull = 0
           setRefreshing(false)
-          setPull(0)
+          setInd(0, true)
         })
       } else {
-        st.current.pull = 0
-        setPull(0)
+        setInd(0, true)
       }
     }
 
+    const onStart = (e: TouchEvent) => {
+      if (st.current.refreshing || el.scrollTop > 0) return
+      st.current.startY = e.touches[0].clientY
+      st.current.pull = 0
+      detach()
+      el.addEventListener('touchmove', onMove, { passive: false })
+      el.addEventListener('touchend', onEnd, { passive: true })
+      el.addEventListener('touchcancel', onEnd, { passive: true })
+    }
+
     el.addEventListener('touchstart', onStart, { passive: true })
-    el.addEventListener('touchmove', onMove, { passive: false })
-    el.addEventListener('touchend', onEnd, { passive: true })
-    el.addEventListener('touchcancel', onEnd, { passive: true })
     return () => {
       el.removeEventListener('touchstart', onStart)
-      el.removeEventListener('touchmove', onMove)
-      el.removeEventListener('touchend', onEnd)
-      el.removeEventListener('touchcancel', onEnd)
+      detach()
     }
-  }, [onRefresh])
-
-  const progress = Math.min(1, pull / TRIGGER)
+  }, [])
 
   return (
-    <div ref={elRef} className={className} style={{ overscrollBehaviorY: 'contain' }}>
-      <div
-        className="ptr-track"
-        style={{ height: pull, transition: animate ? 'height .25s ease' : 'none' }}
-      >
-        <div className="ptr-ind" style={{ opacity: Math.min(1, pull / 24) }}>
+    <div ref={elRef} className={className} style={{ overscrollBehaviorY: 'contain', position: 'relative' }}>
+      <div ref={indRef} className="ptr-ind" style={{ transform: `translateY(${-IND_H}px)`, opacity: 0 }}>
+        <div className="ptr-chip">
           {refreshing ? (
             <div className="spin spin-sm" />
           ) : (
-            <span
-              className="ptr-arrow"
-              style={{
-                transform: `rotate(${progress * 180}deg)`,
-                transition: animate ? 'transform .2s ease' : 'none',
-              }}
-            >
+            <span ref={arrowRef} className="ptr-arrow" style={{ display: 'inline-flex' }}>
               <Icon name="refresh" size={20} />
             </span>
           )}

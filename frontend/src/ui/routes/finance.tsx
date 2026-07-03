@@ -28,6 +28,9 @@ const FinanceBoxPricesPage = lazy(() =>
 const FinanceRecurringExpensesPage = lazy(() =>
   import('../pages/FinanceRecurringExpensesPage').then((m) => ({ default: m.FinanceRecurringExpensesPage })),
 )
+const FinanceExtraIncomePage = lazy(() =>
+  import('../pages/FinanceExtraIncomePage').then((m) => ({ default: m.FinanceExtraIncomePage })),
+)
 
 export const financeRoutes = [
   <Route key="finance-invoices" path="/finance/invoices" element={<FinanceInvoicesListPage />} />,
@@ -35,6 +38,7 @@ export const financeRoutes = [
   <Route key="finance-uninvoiced" path="/finance/uninvoiced" element={<FinanceUninvoicedShipmentsPage />} />,
   <Route key="finance-invoices-id" path="/finance/invoices/:invoiceId" element={<FinanceInvoiceDetailPage />} />,
   <Route key="finance-expenses" path="/finance/expenses" element={<FinanceExpensesListPage />} />,
+  <Route key="finance-extra-income" path="/finance/extra-income" element={<FinanceExtraIncomePage />} />,
   <Route key="finance-recurring" path="/finance/recurring" element={<FinanceRecurringExpensesPage />} />,
   <Route key="finance-pricing" path="/finance/pricing" element={<FinancePackingPricesPage />} />,
   <Route key="finance-pallet-pricing" path="/finance/pallet-pricing" element={<FinancePalletPricesPage />} />,

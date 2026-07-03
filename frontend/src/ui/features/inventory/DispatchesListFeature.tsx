@@ -1,4 +1,4 @@
-import { useMemo, useState, Fragment } from 'react'
+import { useEffect, useMemo, useState, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   listDispatches,
@@ -72,6 +72,26 @@ export function DispatchesListFeature() {
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
 
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
+
+  const [skuInput, setSkuInput] = useState(skuFilter)
+  useEffect(() => { setSkuInput(skuFilter) }, [skuFilter])
+  useEffect(() => {
+    if (skuInput === skuFilter) return
+    const timer = setTimeout(() => setSkuFilter(skuInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skuInput, skuFilter])
+
   const [reloadTick, setReloadTick] = useState(0)
 
   const { clients } = useLookups()
@@ -127,15 +147,15 @@ export function DispatchesListFeature() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
               placeholder="Номер, клиент, назначение…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => { setSearchInput(''); setSearch('') }}
               >
                 <Icon name="x" size={12} />
               </button>
@@ -145,15 +165,15 @@ export function DispatchesListFeature() {
             <Icon name="tag" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 190, paddingRight: skuFilter ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 190, paddingRight: skuInput ? 26 : undefined }}
               placeholder="SKU или название…"
-              value={skuFilter}
-              onChange={(e) => setSkuFilter(e.target.value)}
+              value={skuInput}
+              onChange={(e) => setSkuInput(e.target.value)}
             />
-            {skuFilter && (
+            {skuInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSkuFilter('')}
+                onClick={() => { setSkuInput(''); setSkuFilter('') }}
               >
                 <Icon name="x" size={12} />
               </button>
