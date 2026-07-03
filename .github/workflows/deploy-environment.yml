@@ -119,6 +119,8 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD_TEST }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          # Опционально: явный список origins; иначе выводится из VITE_API_BASE_URL + мобильные localhost.
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
         run: |
           set -euo pipefail
           umask 077
@@ -132,6 +134,8 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          # Опционально: явный список origins; иначе выводится из VITE_API_BASE_URL + мобильные localhost.
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
         run: |
           set -euo pipefail
           umask 077
