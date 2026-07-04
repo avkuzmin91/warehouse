@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getMyTasks, taskLink } from '../../../api/tasksApi'
+import { getMyTasks, markAllTasksRead, markTaskRead, taskLink } from '../../../api/tasksApi'
 import type { TaskItem, TaskKind } from '../../../api/tasksApi'
 import { isOutbound } from '../../../api/tripsApi'
 import { fmtDateTime } from '../logistics/tripDetail/format'
@@ -111,11 +111,20 @@ function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean
   return true
 }
 
+const taskKey = (t: TaskItem) => `${t.kind}:${t.doc_id}`
+
 export function MyTasksFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const [limit, setLimit] = useState(TASK_PAGE_SIZE)
   const { data, loading } = useApi((signal) => getMyTasks({ limit }, signal), [limit])
+  // Локально прочитанные до перезагрузки списка: клик по карточке / «Прочитать все».
+  const [readKeys, setReadKeys] = useState<Set<string>>(new Set())
+  const [allRead, setAllRead] = useState(false)
+
+  useEffect(() => { setAllRead(false) }, [data])
+
+  const isRead = (t: TaskItem) => allRead || t.is_read || readKeys.has(taskKey(t))
 
   const tasks: TaskItem[] = [...(data?.items ?? [])]
     .filter((task) => isTaskVisibleForRole(task, user?.role))
@@ -126,6 +135,21 @@ export function MyTasksFeature() {
   const loadedCount = data?.items.length ?? tasks.length
   const totalCount = data?.total ?? loadedCount
   const canLoadMore = loadedCount < totalCount
+  const locallyRead = (data?.items ?? []).filter((t) => !t.is_read && readKeys.has(taskKey(t))).length
+  const unreadCount = allRead ? 0 : Math.max(0, (data?.unread ?? 0) - locallyRead)
+
+  const openTask = (t: TaskItem) => {
+    if (!isRead(t)) {
+      markTaskRead(t).catch(() => {})
+      setReadKeys((prev) => new Set(prev).add(taskKey(t)))
+    }
+    navigate(taskLink(t))
+  }
+
+  const readAll = () => {
+    markAllTasksRead().catch(() => {})
+    setAllRead(true)
+  }
 
   return (
     <div>
@@ -139,6 +163,15 @@ export function MyTasksFeature() {
               minWidth: 22, height: 20, padding: '0 7px', borderRadius: 99, display: 'inline-flex', alignItems: 'center',
               justifyContent: 'center', fontSize: 12, fontWeight: 600, background: 'var(--c-accent-bg)', color: 'var(--c-accent-text)',
             }}>{data?.total ?? tasks.length}</span>
+          )}
+          {!loading && unreadCount > 0 && (
+            <>
+              <span style={{
+                height: 20, padding: '0 8px', borderRadius: 99, display: 'inline-flex', alignItems: 'center',
+                fontSize: 12, fontWeight: 600, background: 'var(--c-accent)', color: 'white',
+              }}>{unreadCount} новых</span>
+              <button type="button" className="btn ghost sm" onClick={readAll}>Прочитать все</button>
+            </>
           )}
           <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>роль: {roleLabel}</span>
         </div>
@@ -155,10 +188,11 @@ export function MyTasksFeature() {
           <>
             {tasks.map((t, i) => {
               const age = ageInfo(t.since)
+              const read = isRead(t)
               return (
                 <div
                   key={`${t.doc_type}-${t.doc_id}-${t.kind}`}
-                  onClick={() => navigate(taskLink(t))}
+                  onClick={() => openTask(t)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', cursor: 'pointer',
                     borderTop: i === 0 ? 'none' : '1px solid var(--c-border)',
@@ -176,7 +210,13 @@ export function MyTasksFeature() {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span style={{ fontSize: 14.5, fontWeight: 600 }}>{taskTitle(t)}</span>
+                      {!read && (
+                        <span
+                          title="Непрочитанная задача"
+                          style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--c-accent)', flexShrink: 0, alignSelf: 'center' }}
+                        />
+                      )}
+                      <span style={{ fontSize: 14.5, fontWeight: read ? 500 : 600 }}>{taskTitle(t)}</span>
                       <span className="mono" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{t.doc_number}</span>
                       {t.priority_rank && (
                         <Badge tone={shipmentPriorityTone(t.priority_rank)}>{shipmentPriorityLabel(t.priority_rank)}</Badge>

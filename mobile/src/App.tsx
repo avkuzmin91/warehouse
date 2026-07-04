@@ -1,6 +1,7 @@
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { NavProvider, useNav } from './nav/NavContext'
 import { HardwareBack } from './nav/HardwareBack'
+import { PushBridge } from './push/PushBridge'
 import { BottomNav } from './components/BottomNav'
 import { OfflineBanner } from './components/OfflineBanner'
 import { ToastProvider } from './components/Toast'
@@ -115,6 +116,7 @@ function Gate() {
   return (
     <NavProvider>
       <HardwareBack />
+      <PushBridge />
       <Main />
     </NavProvider>
   )

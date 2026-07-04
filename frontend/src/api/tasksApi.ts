@@ -27,11 +27,13 @@ export type TaskItem = {
   vehicle_number: string | null
   since: string | null
   priority_rank: number | null
+  is_read: boolean
 }
 
 export type TasksResponse = {
   items: TaskItem[]
   total: number
+  unread: number
 }
 
 export function getMyTasks(params: { limit?: number } = {}, signal?: AbortSignal) {
@@ -39,6 +41,17 @@ export function getMyTasks(params: { limit?: number } = {}, signal?: AbortSignal
   if (params.limit) sp.set('limit', String(params.limit))
   const q = sp.toString()
   return request<TasksResponse>(`/tasks${q ? `?${q}` : ''}`, { signal })
+}
+
+export function markTaskRead(task: Pick<TaskItem, 'kind' | 'doc_id'>) {
+  return request<{ message: string }>('/tasks/read', {
+    method: 'POST',
+    body: JSON.stringify({ kind: task.kind, doc_id: task.doc_id }),
+  })
+}
+
+export function markAllTasksRead() {
+  return request<{ message: string }>('/tasks/read-all', { method: 'POST' })
 }
 
 export function taskLink(task: TaskItem): string {

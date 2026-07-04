@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useNav } from '../nav/NavContext'
 import { ROLE_LABELS } from '../api/authApi'
-import { getTasks } from '../api/tasksApi'
+import { getTasks, markAllTasksRead, markTaskRead, type TaskItem } from '../api/tasksApi'
 import { fmtEta, tripEtaLabel, type TripDirection } from '../api/tripsApi'
 import { getDashboardToday, type DashboardTodayStats } from '../api/dashboardApi'
 import { AppBar } from '../components/AppBar'
@@ -51,12 +51,31 @@ export function TasksScreen() {
     return () => ac.abort()
   }, [loadToday])
 
+  const [unread, setUnread] = useState(0)
   const fetchPage = useCallback(
     (page: number, limit: number, signal?: AbortSignal) =>
-      getTasks({ page, limit }, signal).then((r) => ({ ...r, page, limit })),
+      getTasks({ page, limit }, signal).then((r) => {
+        if (!signal?.aborted) setUnread(r.unread ?? 0)
+        return { ...r, page, limit }
+      }),
     [],
   )
   const { items, total, loading, loadingMore, error, refresh, loadMore, hasMore } = usePagedList(fetchPage)
+
+  // Локально прочитанные до перезагрузки списка: тап по задаче / «Прочитать все».
+  const [readKeys, setReadKeys] = useState<Set<string>>(new Set())
+  const [allRead, setAllRead] = useState(false)
+  useEffect(() => { setAllRead(false) }, [items])
+
+  const taskKey = (t: TaskItem) => `${t.kind}:${t.doc_id}`
+  const isRead = (t: TaskItem) => allRead || !!t.is_read || readKeys.has(taskKey(t))
+  const locallyRead = items.filter((t) => !t.is_read && readKeys.has(taskKey(t))).length
+  const unreadCount = allRead ? 0 : Math.max(0, unread - locallyRead)
+
+  const readAll = () => {
+    markAllTasksRead().catch(() => {})
+    setAllRead(true)
+  }
 
   const role = user ? ROLE_LABELS[user.role] ?? user.role : ''
 
@@ -100,7 +119,23 @@ export function TasksScreen() {
           <>
             <div className="sec">
               Активные
-              <span className="sec-count">{items.length} задач</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                <span className="sec-count">
+                  {items.length} задач{unreadCount > 0 ? ` · ${unreadCount} новых` : ''}
+                </span>
+                {unreadCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={readAll}
+                    style={{
+                      background: 'none', border: 0, padding: 0, font: 'inherit', cursor: 'pointer',
+                      color: 'var(--c-accent)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
+                    }}
+                  >
+                    Прочитать все
+                  </button>
+                )}
+              </span>
             </div>
             {items.map((t) => {
               // Задачи по поступлениям (закрыть недопоставку) выполняются на менеджерской
@@ -108,7 +143,13 @@ export function TasksScreen() {
               const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt'
               const { icon, tone } = taskVisual(t.kind, t.direction)
               const urgent = t.priority_rank != null && t.priority_rank > 0
+              const read = isRead(t)
               const open = () => {
+                // Тап = прочитано, даже если действие пока заблокировано: задачу увидели.
+                if (!read) {
+                  markTaskRead(t).catch(() => {})
+                  setReadKeys((prev) => new Set(prev).add(taskKey(t)))
+                }
                 if (!actionable) {
                   // Кнопка живая, но действие ещё заблокировано — объясняем почему.
                   toast('Задача станет доступна после завершения предыдущего этапа', 'error')
@@ -131,7 +172,15 @@ export function TasksScreen() {
                     <Icon name={icon} size={21} />
                   </div>
                   <div className="tile-body">
-                    <div className="tile-title">{t.title}</div>
+                    <div className="tile-title" style={read ? { fontWeight: 500 } : undefined}>
+                      {!read && (
+                        <span style={{
+                          display: 'inline-block', width: 7, height: 7, borderRadius: 99,
+                          background: 'var(--c-accent)', marginRight: 6, verticalAlign: 'middle',
+                        }} />
+                      )}
+                      {t.title}
+                    </div>
                     <div className="tile-meta">
                       {t.doc_number}
                       {t.since ? ` · ${sinceLabel(t.since)}` : ''}

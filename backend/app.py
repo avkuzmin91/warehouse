@@ -51,6 +51,7 @@ from modules.pnl.router import router as pnl_router
 from modules.pricing.router import router as pricing_router
 from modules.production_calendar.router import router as production_calendar_router
 from modules.products.router import router as products_router
+from modules.push.router import router as push_router
 from modules.receipts.router import router as receipts_router
 from modules.recurring_expenses.router import router as recurring_expenses_router
 from modules.shipments.router import router as shipments_router
@@ -703,6 +704,31 @@ def _ensure_runtime_schema() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_extra_income_entry_unique "
             "ON invoice_extra_income(entry_id) WHERE is_deleted = 0"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS push_tokens (
+                id         TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                token      TEXT NOT NULL,
+                platform   TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            )
+        """)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_push_tokens_token ON push_tokens(token)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS push_notified_tasks (
+                task_key    TEXT PRIMARY KEY,
+                notified_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_reads (
+                user_id  TEXT NOT NULL,
+                task_key TEXT NOT NULL,
+                read_at  TEXT NOT NULL,
+                PRIMARY KEY (user_id, task_key)
+            )
+        """)
         conn.commit()
 
 
@@ -737,6 +763,28 @@ async def _accrual_loop() -> None:
         await asyncio.sleep(3600)
 
 
+async def _push_notify_loop() -> None:
+    """Пуш о новых задачах: раз в минуту пересчитывает очередь «Мои задачи» и шлёт
+    FCM-пуш на зарегистрированные устройства по новым карточкам. Задачи вычисляемые
+    (события «создана» нет) — поэтому дифф активного набора против push_notified_tasks.
+    Тик (БД + сеть FCM) блокирующий — уводим в поток, чтобы не тормозить event loop.
+    Отключается в тестах (PUSH_SCHEDULER=0)."""
+    from modules.push.service import notify_new_tasks
+
+    def _tick() -> None:
+        with get_connection() as conn:
+            notify_new_tasks(conn)
+
+    while True:
+        try:
+            await asyncio.to_thread(_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("wms.push").exception("Сбой цикла пуш-уведомлений, повтор через минуту")
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(exist_ok=True)
@@ -747,7 +795,14 @@ async def lifespan(app: FastAPI):
         if os.environ.get("SALARY_SCHEDULER", "1") == "1"
         else None
     )
+    push_task = (
+        asyncio.create_task(_push_notify_loop())
+        if os.environ.get("PUSH_SCHEDULER", "1") == "1"
+        else None
+    )
     yield
+    if push_task is not None:
+        push_task.cancel()
     if accrual_task is not None:
         accrual_task.cancel()
     close_pool()
@@ -973,5 +1028,6 @@ app.include_router(pnl_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(tasks_router)
+app.include_router(push_router)
 app.include_router(scan_router)
 app.include_router(dashboard_router)

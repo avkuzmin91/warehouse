@@ -16,8 +16,15 @@ class TaskItem(BaseModel):
     vehicle_number: str | None = None  # для рейсов: госномер машины
     since: str | None = None
     priority_rank: int | None = None  # только для отгрузок
+    is_read: bool = False
 
 
 class TasksResponse(BaseModel):
     items: list[TaskItem]
     total: int
+    unread: int = 0
+
+
+class TaskReadPayload(BaseModel):
+    kind: str
+    doc_id: str

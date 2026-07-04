@@ -113,9 +113,8 @@ function ExtraIncomeCreateSheet({ onClose, onDone }: { onClose: () => void; onDo
   const [clientId, setClientId] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [qty, setQty] = useState('')
+  // Хранится всегда итог (amount_kop); на форме вводится цена за единицу.
   const [amount, setAmount] = useState('')
-  // Хранится всегда итог (amount_kop); «за единицу» — только режим ввода на форме.
-  const [perUnit, setPerUnit] = useState(false)
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -137,8 +136,8 @@ function ExtraIncomeCreateSheet({ onClose, onDone }: { onClose: () => void; onDo
   const kop = parseRublesToKopecks(amount)
   const qtyNum = qty.trim() === '' ? null : Math.max(0, Math.floor(Number(qty) || 0))
   const qtyValid = qtyNum != null && qtyNum > 0
-  const totalKop = perUnit ? (kop != null && qtyValid ? kop * qtyNum : null) : kop
-  const valid = entryDate && clientId && categoryId && totalKop != null && totalKop > 0
+  const totalKop = kop != null && qtyValid ? kop * qtyNum : null
+  const valid = entryDate && clientId && categoryId && totalKop != null && totalKop > 0 && comment.trim() !== ''
 
   async function submit() {
     if (saving || !valid) return
@@ -192,43 +191,32 @@ function ExtraIncomeCreateSheet({ onClose, onDone }: { onClose: () => void; onDo
           onChange={setCategoryId}
         />
 
-        <div className="flabel" style={{ marginTop: 10 }}>Количество, шт (не обязательно)</div>
+        <div className="flabel" style={{ marginTop: 10 }}>Количество, шт</div>
         <input
           className="input num"
           type="text"
           inputMode="numeric"
           value={qty}
-          onChange={(e) => {
-            setQty(e.target.value)
-            if (!e.target.value.trim()) setPerUnit(false)
-          }}
-          placeholder="—"
+          onChange={(e) => setQty(e.target.value)}
+          placeholder="например, 300"
         />
 
-        <div className="flabel" style={{ marginTop: 10 }}>{perUnit ? 'Цена за шт., ₽' : 'Сумма итого, ₽'}</div>
-        <div className="seg" style={{ marginBottom: 8 }}>
-          <button type="button" className={!perUnit ? 'active' : ''} onClick={() => setPerUnit(false)}>Итого</button>
-          <button type="button" className={perUnit ? 'active' : ''} disabled={!qtyValid}
-            style={!qtyValid ? { opacity: 0.45 } : undefined}
-            onClick={() => { if (qtyValid) setPerUnit(true) }}>За единицу</button>
-        </div>
+        <div className="flabel" style={{ marginTop: 10 }}>Цена за шт., ₽</div>
         <input
           className="input num"
           type="text"
           inputMode="decimal"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          placeholder="0,00"
+          placeholder="например, 15"
         />
         {qtyValid && kop != null && kop > 0 && (
           <div style={{ marginTop: 6, fontSize: 12.5, color: 'var(--c-text-muted)' }}>
-            {perUnit
-              ? <>{qtyNum} шт × {formatMoneyKopecks(kop)} = <b>{formatMoneyKopecks(totalKop)}</b> итого</>
-              : <>{formatMoneyKopecks(kop)} ÷ {qtyNum} шт ≈ <b>{formatMoneyKopecks(Math.round(kop / qtyNum))}</b>/шт</>}
+            {qtyNum} шт × {formatMoneyKopecks(kop)} = <b>{formatMoneyKopecks(totalKop)}</b> итого
           </div>
         )}
 
-        <div className="flabel" style={{ marginTop: 10 }}>Комментарий</div>
+        <div className="flabel" style={{ marginTop: 10 }}>Комментарий — что делали</div>
         <TextArea value={comment} onChange={setComment} placeholder="Что сделали…" minRows={2} />
 
         {error && (<div className="alert" style={{ marginTop: 10 }}><Icon name="alert" size={15} />{error}</div>)}

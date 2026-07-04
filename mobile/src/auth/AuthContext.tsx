@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { bootstrapSession, login as apiLogin, logout as apiLogout, type Me } from '../api/authApi'
 import { setSessionExpiredHandler } from '../api/http'
+import { unregisterPushToken } from '../api/pushApi'
+import { takePushToken } from '../push/pushToken'
 
 type AuthState = {
   ready: boolean
@@ -38,6 +40,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(await apiLogin(email, password))
     },
     logout: async () => {
+      // Отвязать устройство до logout — запрос требует ещё живой авторизации.
+      const pushToken = takePushToken()
+      if (pushToken) await unregisterPushToken(pushToken).catch(() => {})
       await apiLogout()
       setUser(null)
     },

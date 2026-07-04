@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from config import (
     DISPATCH_STATUS_PREPARING,
@@ -197,3 +197,40 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         t.get("priority_rank") or 0,
     ))
     return tasks
+
+
+def task_key(task: dict) -> str:
+    """Стабильный ключ вычисляемой задачи — тот же формат, что в push_notified_tasks."""
+    return f"{task['kind']}:{task['doc_id']}"
+
+
+def annotate_task_reads(connection, tasks: list[dict], *, user_id: str) -> None:
+    """Проставляет is_read по отметкам task_reads текущего пользователя."""
+    read_keys = {
+        str(r["task_key"])
+        for r in connection.execute(
+            "SELECT task_key FROM task_reads WHERE user_id = ?", (user_id,)
+        ).fetchall()
+    }
+    for t in tasks:
+        t["is_read"] = task_key(t) in read_keys
+
+
+def mark_task_read(connection, *, user_id: str, kind: str, doc_id: str) -> None:
+    connection.execute(
+        "INSERT INTO task_reads (user_id, task_key, read_at) VALUES (?,?,?) "
+        "ON CONFLICT (user_id, task_key) DO NOTHING",
+        (user_id, f"{kind}:{doc_id}", datetime.now(UTC).isoformat()),
+    )
+
+
+def mark_all_tasks_read(connection, *, user) -> None:
+    """Отмечает прочитанными все задачи, видимые пользователю сейчас."""
+    now = datetime.now(UTC).isoformat()
+    uid = str(user["id"])
+    for t in list_my_tasks(connection, user=user):
+        connection.execute(
+            "INSERT INTO task_reads (user_id, task_key, read_at) VALUES (?,?,?) "
+            "ON CONFLICT (user_id, task_key) DO NOTHING",
+            (uid, task_key(t), now),
+        )

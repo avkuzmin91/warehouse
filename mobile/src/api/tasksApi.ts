@@ -14,8 +14,9 @@ export type TaskItem = {
   vehicle_number?: string | null
   since?: string | null
   priority_rank?: number | null
+  is_read?: boolean
 }
-export type TasksResponse = { items: TaskItem[]; total: number }
+export type TasksResponse = { items: TaskItem[]; total: number; unread: number }
 export type TasksParams = { page?: number; limit?: number }
 
 // --- API functions ---
@@ -24,6 +25,17 @@ export function getTasks(params: TasksParams = {}, signal?: AbortSignal): Promis
   if (params.page) sp.set('page', String(params.page))
   sp.set('limit', String(params.limit ?? 20))
   return request<TasksResponse>(`/tasks?${sp.toString()}`, { signal })
+}
+
+export function markTaskRead(task: Pick<TaskItem, 'kind' | 'doc_id'>): Promise<{ message: string }> {
+  return request<{ message: string }>('/tasks/read', {
+    method: 'POST',
+    body: JSON.stringify({ kind: task.kind, doc_id: task.doc_id }),
+  })
+}
+
+export function markAllTasksRead(): Promise<{ message: string }> {
+  return request<{ message: string }>('/tasks/read-all', { method: 'POST' })
 }
 
 // --- Labels & helpers ---
