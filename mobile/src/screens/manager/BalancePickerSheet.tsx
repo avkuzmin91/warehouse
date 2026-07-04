@@ -4,6 +4,7 @@ import { getDispatchReservations, type DispatchCargoType } from '../../api/dispa
 import { balanceKey } from '../../utils/balanceKey'
 import { lineStockChips } from '../../utils/stockChips'
 import { Icon } from '../../components/Icon'
+import { useHardwareBack } from '../../nav/backHandlers'
 
 function fold(s: string): string {
   return s.toLowerCase().replace(/ё/g, 'е').trim()
@@ -41,6 +42,8 @@ export function BalancePickerSheet({
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [qty, setQty] = useState<Record<string, number>>({})
+
+  useHardwareBack(onClose)
 
   useEffect(() => {
     const ac = new AbortController()

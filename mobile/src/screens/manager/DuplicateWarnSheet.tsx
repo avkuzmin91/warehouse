@@ -1,6 +1,7 @@
 import { Icon } from '../../components/Icon'
 import { fmtDateTime } from '../../utils/format'
 import type { DuplicateMatch } from '../../api/dispatchApi'
+import { useHardwareBack } from '../../nav/backHandlers'
 
 function variantLabel(sku: string | null, color: string | null, size: string | null): string {
   return [sku, color, size].filter(Boolean).join(' · ') || '—'
@@ -21,6 +22,7 @@ export function DuplicateWarnSheet({
   onProceed: () => void
   onCancel: () => void
 }) {
+  useHardwareBack(() => { if (!busy) onCancel() })
   return (
     <div className="sheet-backdrop" onClick={onCancel}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>

@@ -196,7 +196,7 @@ export function TripFormScreen() {
             Черновик
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>
-            {saving ? '…' : 'Передать на склад'}
+            {saving ? <span className="spin spin-sm" /> : 'Передать на склад'}
           </button>
         </div>
       </div>

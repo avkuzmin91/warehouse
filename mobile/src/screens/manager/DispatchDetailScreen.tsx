@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
-import { getDispatch, getDispatchReservations, DISPATCH_STATUS_LABELS, dispatchStatusTone, type DispatchDetail } from '../../api/dispatchApi'
+import {
+  cancelDispatch,
+  dispatchPriorityLabel,
+  dispatchPriorityTone,
+  getDispatch,
+  getDispatchReservations,
+  updateDispatchPriority,
+  DISPATCH_STATUS_LABELS,
+  dispatchStatusTone,
+  type DispatchDetail,
+  type DispatchStatus,
+} from '../../api/dispatchApi'
 import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { AppBar } from '../../components/AppBar'
+import { ConfirmAction } from '../../components/ConfirmAction'
+import { LineFiles } from '../../components/LineFiles'
+import { PrioritySheet } from '../../components/PrioritySheet'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { canCreateDocuments } from '../../utils/access'
@@ -11,8 +25,12 @@ import { balanceKey } from '../../utils/balanceKey'
 import { lineStockChips } from '../../utils/stockChips'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
+// Зеркало DISPATCH_CANCELLABLE_STATUSES (config.py): пока ничего не уехало.
+const CANCELLABLE = new Set<DispatchStatus>(['draft', 'preparing', 'awaiting_trip'])
+const PRIORITY_FINAL = new Set<DispatchStatus>(['shipped', 'partially_shipped', 'cancelled'])
+
 export function DispatchDetailScreen({ docId }: { docId: string }) {
-  const { back, openDispatchEdit } = useNav()
+  const { back, openDispatchEdit, openDispatchPrepare } = useNav()
   const { user } = useAuth()
   const canEdit = canCreateDocuments(user?.role)
   const [doc, setDoc] = useState<DispatchDetail | null>(null)
@@ -21,6 +39,10 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   // Доступность под строкой (свободно/резерв/склад/в пути) — только в черновике.
   const [plannable, setPlannable] = useState<PlannableItem[]>([])
   const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const [priorityOpen, setPriorityOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [actionErr, setActionErr] = useState('')
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -56,8 +78,26 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
     return () => ac.abort()
   }, [doc, showAvail])
 
+  async function runAction(fn: () => Promise<unknown>) {
+    if (saving) return
+    setSaving(true)
+    setActionErr('')
+    setConfirmCancel(false)
+    try {
+      await fn()
+      load()
+    } catch (err) {
+      setActionErr(err instanceof Error ? err.message : 'Не удалось выполнить действие')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const tone = doc ? dispatchStatusTone(doc.status) : ''
   const plannableByKey = new Map(plannable.map((p) => [balanceKey(p), p]))
+  const cancellable = doc ? CANCELLABLE.has(doc.status) : false
+  const priorityEditable = doc ? !PRIORITY_FINAL.has(doc.status) : false
+  const priorityTone = doc ? dispatchPriorityTone(doc.priority_rank) : ''
 
   return (
     <div className="screen">
@@ -74,6 +114,18 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               </div>
               <div className="kv"><span className="k">Клиент</span><span className="v">{doc.client_name ?? '—'}</span></div>
               {doc.cargo_type === 'defect' && <div className="kv"><span className="k">Тип</span><span className="v">Брак</span></div>}
+              <div className="kv"><span className="k">Приоритет</span>
+                <span className="v" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  {priorityTone
+                    ? <span className={`badge ${priorityTone}`}><span className="dot" />{dispatchPriorityLabel(doc.priority_rank)}</span>
+                    : dispatchPriorityLabel(doc.priority_rank)}
+                  {canEdit && priorityEditable && (
+                    <button className="btn ghost sm auto" aria-label="Изменить приоритет" onClick={() => setPriorityOpen(true)}>
+                      <Icon name="edit" size={13} />
+                    </button>
+                  )}
+                </span>
+              </div>
               <div className="kv"><span className="k">Отгрузка (план)</span><span className="v">{fmtDate(doc.ship_date)}</span></div>
               <div className="kv"><span className="k">Отгрузка (факт)</span><span className="v">{fmtDate(doc.actual_ship_date)}</span></div>
               {doc.logistics_cost != null && (
@@ -99,6 +151,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                         ))}
                       </div>
                     )}
+                    <LineFiles files={l.files} onError={setActionErr} />
                   </div>
                   <div className="docline-qty">
                     <div className="big">{l.qty} шт</div>
@@ -112,6 +165,33 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               <button className="btn" style={{ marginTop: 16 }} onClick={() => openDispatchEdit(doc.id)}>
                 <Icon name="edit" size={15} /> Редактировать черновик
               </button>
+            )}
+
+            {doc.status === 'preparing' && canEdit && (
+              <button className="btn" style={{ marginTop: 16 }} onClick={() => openDispatchPrepare(doc.id)}>
+                <Icon name="forklift" size={15} /> Собрать отгрузку
+              </button>
+            )}
+
+            {canEdit && cancellable && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+                {actionErr && (
+                  <div className="alert"><Icon name="alert" size={15} />{actionErr}</div>
+                )}
+                <ConfirmAction
+                  danger
+                  label={<><Icon name="x" size={16} /> Аннулировать отгрузку</>}
+                  prompt={doc.status === 'awaiting_trip'
+                    ? 'Подготовленный товар вернётся на исходные места, отгрузка будет аннулирована. Продолжить?'
+                    : 'Аннулировать отгрузку? Действие необратимо.'}
+                  confirmLabel="Да, аннулировать"
+                  saving={saving}
+                  open={confirmCancel}
+                  onOpen={() => setConfirmCancel(true)}
+                  onClose={() => setConfirmCancel(false)}
+                  onConfirm={() => void runAction(() => cancelDispatch(doc.id))}
+                />
+              </div>
             )}
 
             {doc.ops.length > 0 && (
@@ -129,6 +209,18 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
           </>
         )}
       </div>
+
+      {priorityOpen && doc && (
+        <PrioritySheet
+          current={doc.priority_rank}
+          onClose={() => setPriorityOpen(false)}
+          onSave={async (rank) => {
+            await updateDispatchPriority(doc.id, rank)
+            setPriorityOpen(false)
+            load()
+          }}
+        />
+      )}
     </div>
   )
 }

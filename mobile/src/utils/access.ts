@@ -10,3 +10,15 @@ export function canCreateDocuments(role: string | undefined): boolean {
 export function canAcceptPackingTask(role: string | undefined): boolean {
   return role === 'admin' || role === 'manager' || role === 'warehouse_head'
 }
+
+// Пост-фактум корректировка обсчёта приёмки (принятое количество + сток) — менеджерский
+// состав и начальник склада (ср. web canCorrectReceived, backend can_correct_received).
+export function canCorrectReceived(role: string | undefined): boolean {
+  return role === 'admin' || role === 'manager' || role === 'warehouse_head'
+}
+
+// Внесение результата упаковки (годный/брак) — менеджерский состав, начальник смены
+// и начальник склада (ср. backend ensure_packing_access).
+export function canRecordPacking(role: string | undefined): boolean {
+  return role === 'admin' || role === 'manager' || role === 'shift_supervisor' || role === 'warehouse_head'
+}

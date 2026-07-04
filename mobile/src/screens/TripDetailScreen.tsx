@@ -95,7 +95,7 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
             const placements: Record<string, ReceivePlacement[]> = {}
             for (const r of d.receipts) {
               for (const a of r.allocations) {
-                placements[a.line_id] = [{ qty: a.qty, zoneId: a.storage_zone_id ?? '' }]
+                placements[a.line_id] = [{ qty: String(a.qty), zoneId: a.storage_zone_id ?? '' }]
               }
             }
             setPlacementsByLine(placements)
@@ -176,12 +176,12 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
     const out: TripUnloadReceiptLine[] = []
     for (const r of detail?.receipts ?? []) {
       for (const a of r.allocations) {
-        const rows = placementsByLine[a.line_id] ?? [{ qty: a.qty, zoneId: '' }]
+        const rows = placementsByLine[a.line_id] ?? [{ qty: String(a.qty), zoneId: '' }]
         const placements = rows
-          .filter((p) => p.qty > 0)
+          .filter((p) => placementQty(p) > 0)
           .map((p) => {
             const zone = zones.find((z) => z.id === p.zoneId)
-            return { storage_zone_id: p.zoneId || null, storage_zone_name: zone?.name ?? null, qty: p.qty }
+            return { storage_zone_id: p.zoneId || null, storage_zone_name: zone?.name ?? null, qty: placementQty(p) }
           })
         const total = placements.reduce((s, p) => s + p.qty, 0)
         out.push({
@@ -205,13 +205,14 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
     if (!loadFactor) reasons.push('Выберите загруженность машины')
     if (inbound) {
       const missingZone = (detail?.receipts ?? []).some((r) =>
-        r.allocations.some((a) => (placementsByLine[a.line_id] ?? []).some((p) => p.qty > 0 && !p.zoneId)),
+        r.allocations.some((a) => (placementsByLine[a.line_id] ?? []).some((p) => placementQty(p) > 0 && !p.zoneId)),
       )
       if (missingZone) reasons.push('Укажите место хранения для всех принятых позиций')
     }
     if (reasons.length) {
       setShowErrors(true)
-      setActionErr(reasons[0])
+      // Все причины разом — кладовщик исправляет за один заход, а не по одной.
+      setActionErr(reasons.join('\n'))
       return
     }
     void runAction(
@@ -317,11 +318,11 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                   {actionErr && (
                     <div className="alert">
                       <Icon name="alert" size={15} />
-                      {actionErr}
+                      <span style={{ whiteSpace: 'pre-line' }}>{actionErr}</span>
                     </div>
                   )}
                   <button className="btn" disabled={saving} onClick={handleArrival}>
-                    {saving ? '…' : <><Icon name="check" size={18} /> {lex.arrivedAction}</>}
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> {lex.arrivedAction}</>}
                   </button>
                 </div>
               </>
@@ -405,7 +406,7 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                           key={a.line_id}
                           a={a}
                           zones={zones}
-                          rows={placementsByLine[a.line_id] ?? [{ qty: a.qty, zoneId: '' }]}
+                          rows={placementsByLine[a.line_id] ?? [{ qty: String(a.qty), zoneId: '' }]}
                           invalid={showErrors}
                           onRows={(rows) => setPlacementsByLine((p) => ({ ...p, [a.line_id]: rows }))}
                           onError={setActionErr}
@@ -421,11 +422,11 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
                   {actionErr && (
                     <div className="alert">
                       <Icon name="alert" size={15} />
-                      {actionErr}
+                      <span style={{ whiteSpace: 'pre-line' }}>{actionErr}</span>
                     </div>
                   )}
                   <button className="btn" disabled={saving} onClick={() => handleFinish(!outbound)}>
-                    {saving ? '…' : <><Icon name="check" size={18} /> {lex.finishAction}</>}
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> {lex.finishAction}</>}
                   </button>
                 </div>
               </>
@@ -608,11 +609,11 @@ function ReceiveLine({
   onRows: (rows: ReceivePlacement[]) => void
   onError: (msg: string) => void
 }) {
-  const total = rows.reduce((s, p) => s + (p.qty > 0 ? p.qty : 0), 0)
+  const total = rows.reduce((s, p) => s + placementQty(p), 0)
   const diff = total - a.qty
   const setRow = (idx: number, patch: Partial<ReceivePlacement>) =>
     onRows(rows.map((p, i) => (i === idx ? { ...p, ...patch } : p)))
-  const addRow = () => onRows([...rows, { qty: 0, zoneId: '' }])
+  const addRow = () => onRows([...rows, { qty: '', zoneId: '' }])
   const removeRow = (idx: number) => onRows(rows.filter((_, i) => i !== idx))
   return (
     <div className="line">
@@ -629,16 +630,15 @@ function ReceiveLine({
         ) : null}
       </div>
       {rows.map((p, idx) => {
-        const zoneMissing = invalid && p.qty > 0 && !p.zoneId
+        const zoneMissing = invalid && placementQty(p) > 0 && !p.zoneId
         return (
           <div className="line-row" key={idx} style={{ marginTop: idx === 0 ? 0 : 10 }}>
             <input
               className="input num"
               type="text"
               inputMode="numeric"
-              min={0}
-              value={p.qty || ''}
-              onChange={(e) => setRow(idx, { qty: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+              value={p.qty}
+              onChange={(e) => setRow(idx, { qty: e.target.value.replace(/\D/g, '') })}
             />
             <ZoneField
               value={p.zoneId}
@@ -670,4 +670,10 @@ function ReceiveLine({
   )
 }
 
-type ReceivePlacement = { qty: number; zoneId: string }
+// qty — строка из поля ввода: пустая строка = пустое поле (можно стереть «0»),
+// парсится только при подсчёте/отправке.
+type ReceivePlacement = { qty: string; zoneId: string }
+
+function placementQty(p: ReceivePlacement): number {
+  return parseInt(p.qty, 10) || 0
+}

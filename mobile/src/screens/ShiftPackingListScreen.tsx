@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../nav/NavContext'
-import { listShipments, SHIPMENT_STATUS_LABELS, type ShipmentListItem, type ShipmentStatus } from '../api/shipmentsApi'
+import {
+  getPackingProductivity,
+  listShipments,
+  SHIPMENT_STATUS_LABELS,
+  type PackingProductivityDay,
+  type ShipmentListItem,
+  type ShipmentStatus,
+} from '../api/shipmentsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
-import { fmtDate } from '../utils/format'
+import { fmtDate, moscowTodayYmd } from '../utils/format'
 
 // Активные стадии упаковки, видимые начальнику смены. Внесение годного/брака
 // доступно только на on_packing — остальные показаны для контекста (read-only).
@@ -20,11 +27,23 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function ShiftPackingListScreen() {
-  const { openPackDoc } = useNav()
+  // У начальника смены экран — корневая вкладка; начальник склада открывает его
+  // из хаба «Склад» поверх стека, поэтому нужна кнопка «назад».
+  const { openPackDoc, isTab, back } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [today, setToday] = useState<PackingProductivityDay | null>(null)
+
+  // Сводка «за смену»: нетто упаковано складом за сегодняшнюю бизнес-дату (МСК).
+  // Вспомогательный блок — при ошибке молча скрывается, список важнее.
+  const loadToday = useCallback((signal?: AbortSignal) => {
+    const d = moscowTodayYmd()
+    return getPackingProductivity({ date_from: d, date_to: d }, signal)
+      .then((r) => { if (!signal?.aborted) setToday(r.days[0] ?? null) })
+      .catch(() => {})
+  }, [])
 
   const load = useCallback((signal?: AbortSignal, silent = false) => {
     if (!silent) setLoading(true)
@@ -54,18 +73,47 @@ export function ShiftPackingListScreen() {
   useEffect(() => {
     const ac = new AbortController()
     load(ac.signal)
+    loadToday(ac.signal)
     return () => ac.abort()
-  }, [load])
+  }, [load, loadToday])
 
   return (
     <div className="screen">
-      <AppBar title="Упаковка" sub="Задачи упаковки" />
-      <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
+      <AppBar title="Упаковка" sub="Задачи упаковки" onBack={isTab ? undefined : back} />
+      <PullToRefresh
+        className="scroll pad-nav"
+        onRefresh={() => Promise.all([load(undefined, true), loadToday()])}
+      >
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
             {error}
           </div>
+        )}
+        {today && today.total > 0 && (
+          <>
+            <div className="sec">За смену сегодня</div>
+            <div className="summary">
+              <div className="kv">
+                <span className="k">Годный</span>
+                <span className="v mono" style={{ color: 'var(--c-success)' }}>{today.good} шт</span>
+              </div>
+              <div className="kv">
+                <span className="k">Брак</span>
+                <span className="v mono" style={{ color: today.defect > 0 ? 'var(--c-danger)' : undefined }}>
+                  {today.defect} шт
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k">Всего</span>
+                <span className="v mono">{today.total} шт</span>
+              </div>
+              <div className="kv">
+                <span className="k">Задач · SKU</span>
+                <span className="v mono">{today.doc_count} · {today.sku_count}</span>
+              </div>
+            </div>
+          </>
         )}
         {loading ? (
           <div className="center">

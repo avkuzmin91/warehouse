@@ -169,7 +169,12 @@ export function ExtraIncomeFeature() {
                   {it.comment && <div className="t-sub" style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.comment}</div>}
                 </Td>
                 <Td className="num">{it.qty != null ? `${it.qty} шт.` : '—'}</Td>
-                <Td className="num" style={{ fontWeight: 600 }}>{formatMoneyKopecks(it.amount_kop)}</Td>
+                <Td className="num" style={{ fontWeight: 600 }}>
+                  {formatMoneyKopecks(it.amount_kop)}
+                  {it.qty != null && it.qty > 0 && (
+                    <div className="t-sub" style={{ fontWeight: 400 }}>≈ {formatMoneyKopecks(Math.round(it.amount_kop / it.qty))}/шт.</div>
+                  )}
+                </Td>
                 <Td>
                   {it.invoice_number
                     ? <Badge tone="info" dot>{it.invoice_number}</Badge>

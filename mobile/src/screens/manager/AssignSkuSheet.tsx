@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { assignProductSku } from '../../api/productsApi'
 import { Icon } from '../../components/Icon'
+import { Sheet } from '../../components/Sheet'
 
 /** Присвоение/смена базового SKU товара для строки «ожидает SKU». */
 export function AssignSkuSheet({
@@ -38,9 +39,7 @@ export function AssignSkuSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={sku !== (currentSku ?? '')} locked={saving}>
         <h3>{currentSku ? 'Изменить SKU' : 'Указать SKU'}</h3>
         <div className="line-sub" style={{ marginBottom: 14 }}>
           {productName}{variantLabel ? ` · ${variantLabel}` : ''}
@@ -69,10 +68,9 @@ export function AssignSkuSheet({
         <div className="line-row" style={{ marginTop: 10 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={onClose} disabled={saving}>Отмена</button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : 'Сохранить'}
+            {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
           </button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   )
 }

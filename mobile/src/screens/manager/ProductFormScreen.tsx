@@ -422,7 +422,7 @@ export function ProductFormScreen() {
             Отмена
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save()}>
-            {saving ? '…' : 'Создать товар'}
+            {saving ? <span className="spin spin-sm" /> : 'Создать товар'}
           </button>
         </div>
       </div>

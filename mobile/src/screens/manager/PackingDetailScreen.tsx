@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
-import { getShipment, SHIPMENT_STATUS_LABELS, type ShipmentDetail } from '../../api/shipmentsApi'
+import {
+  cancelShipment,
+  getShipment,
+  returnShipmentToPacking,
+  shipmentPriorityLabel,
+  shipmentPriorityTone,
+  updateShipmentPriority,
+  SHIPMENT_STATUS_LABELS,
+  type ShipmentDetail,
+  type ShipmentStatus,
+} from '../../api/shipmentsApi'
 import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { AppBar } from '../../components/AppBar'
+import { ConfirmAction } from '../../components/ConfirmAction'
+import { LineFiles } from '../../components/LineFiles'
+import { PrioritySheet } from '../../components/PrioritySheet'
 import { Icon } from '../../components/Icon'
 import { canCreateDocuments } from '../../utils/access'
 import { balanceKey } from '../../utils/balanceKey'
@@ -16,6 +29,13 @@ const STATUS_TONE: Record<string, string> = {
   completed_no_goods: 'success', cancelled: 'danger',
 }
 
+// Зеркала гейтов бэка (config.py): где документ ещё можно аннулировать / вернуть на
+// упаковку / поменять приоритет. Финальную проверку всегда делает сервер.
+const CANCELLABLE_GOOD = new Set<ShipmentStatus>(['draft', 'assigned', 'packing', 'on_packing'])
+const CANCELLABLE_DEFECT = new Set<ShipmentStatus>(['draft', 'relocating', 'awaiting_trip'])
+const RETURN_TO_PACKING = new Set<ShipmentStatus>(['relocating', 'packed'])
+const PRIORITY_FINAL = new Set<ShipmentStatus>(['shipped', 'partially_shipped', 'completed_no_goods', 'cancelled'])
+
 export function PackingDetailScreen({ docId }: { docId: string }) {
   const { back, openPackingEdit } = useNav()
   const { user } = useAuth()
@@ -25,6 +45,10 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
   const [error, setError] = useState('')
   // Остаток «склад»/«в пути» под строкой — только в черновике (пока планируем).
   const [plannable, setPlannable] = useState<PlannableItem[]>([])
+  const [confirmAct, setConfirmAct] = useState<'' | 'cancel' | 'return'>('')
+  const [priorityOpen, setPriorityOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [actionErr, setActionErr] = useState('')
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -51,8 +75,30 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
     return () => ac.abort()
   }, [doc, showAvail])
 
+  async function runAction(fn: () => Promise<unknown>) {
+    if (saving) return
+    setSaving(true)
+    setActionErr('')
+    setConfirmAct('')
+    try {
+      await fn()
+      load()
+    } catch (err) {
+      setActionErr(err instanceof Error ? err.message : 'Не удалось выполнить действие')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const tone = doc ? (STATUS_TONE[doc.status] ?? '') : ''
   const plannableByKey = new Map(plannable.map((p) => [balanceKey(p), p]))
+  const cancellable = doc
+    ? (doc.cargo_type === 'defect' ? CANCELLABLE_DEFECT : CANCELLABLE_GOOD).has(doc.status)
+    : false
+  // Брак упаковку минует — возврат «на упаковку» только для годного груза.
+  const returnable = doc ? doc.cargo_type === 'good' && RETURN_TO_PACKING.has(doc.status) : false
+  const priorityEditable = doc ? !PRIORITY_FINAL.has(doc.status) : false
+  const priorityTone = doc ? shipmentPriorityTone(doc.priority_rank) : ''
 
   return (
     <div className="screen">
@@ -69,6 +115,18 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
               </div>
               <div className="kv"><span className="k">Клиент</span><span className="v">{doc.client_name ?? '—'}</span></div>
               {doc.cargo_type === 'defect' && <div className="kv"><span className="k">Тип</span><span className="v">Брак</span></div>}
+              <div className="kv"><span className="k">Приоритет</span>
+                <span className="v" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  {priorityTone
+                    ? <span className={`badge ${priorityTone}`}><span className="dot" />{shipmentPriorityLabel(doc.priority_rank)}</span>
+                    : shipmentPriorityLabel(doc.priority_rank)}
+                  {canEdit && priorityEditable && (
+                    <button className="btn ghost sm auto" aria-label="Изменить приоритет" onClick={() => setPriorityOpen(true)}>
+                      <Icon name="edit" size={13} />
+                    </button>
+                  )}
+                </span>
+              </div>
               <div className="kv"><span className="k">Упаковка (план)</span><span className="v">{fmtDate(doc.ship_date)}</span></div>
               {doc.comment && (<div className="kv"><span className="k">ТЗ</span><span className="v">{doc.comment}</span></div>)}
             </div>
@@ -90,6 +148,7 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                         ))}
                       </div>
                     )}
+                    <LineFiles files={l.files} onError={setActionErr} />
                   </div>
                   <div className="docline-qty">
                     <div className="big">{l.qty} шт</div>
@@ -103,9 +162,56 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                 <Icon name="edit" size={15} /> Редактировать черновик
               </button>
             )}
+
+            {canEdit && (returnable || cancellable) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+                {actionErr && (
+                  <div className="alert"><Icon name="alert" size={15} />{actionErr}</div>
+                )}
+                {returnable && (
+                  <ConfirmAction
+                    label={<><Icon name="refresh" size={16} /> Вернуть на упаковку</>}
+                    prompt={doc.status === 'packed'
+                      ? 'Раскладка по местам откатится, задача вернётся на упаковку. Продолжить?'
+                      : 'Задача вернётся на упаковку. Продолжить?'}
+                    confirmLabel="Да, вернуть"
+                    saving={saving}
+                    open={confirmAct === 'return'}
+                    onOpen={() => setConfirmAct('return')}
+                    onClose={() => setConfirmAct('')}
+                    onConfirm={() => void runAction(() => returnShipmentToPacking(doc.id))}
+                  />
+                )}
+                {cancellable && (
+                  <ConfirmAction
+                    danger
+                    label={<><Icon name="x" size={16} /> Аннулировать задачу</>}
+                    prompt="Аннулировать задачу упаковки? Действие необратимо."
+                    confirmLabel="Да, аннулировать"
+                    saving={saving}
+                    open={confirmAct === 'cancel'}
+                    onOpen={() => setConfirmAct('cancel')}
+                    onClose={() => setConfirmAct('')}
+                    onConfirm={() => void runAction(() => cancelShipment(doc.id))}
+                  />
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
+
+      {priorityOpen && doc && (
+        <PrioritySheet
+          current={doc.priority_rank}
+          onClose={() => setPriorityOpen(false)}
+          onSave={async (rank) => {
+            await updateShipmentPriority(doc.id, rank)
+            setPriorityOpen(false)
+            load()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,10 +1,7 @@
-interface Crumb {
-  label: string
-  to?: string
-}
+import type { BreadcrumbItem } from '../../utils/breadcrumbLabels'
 
 interface BreadcrumbsProps {
-  crumbs: Crumb[]
+  crumbs: BreadcrumbItem[]
   onNavigate?: (to: string) => void
 }
 
@@ -16,6 +13,7 @@ export function Breadcrumbs({ crumbs, onNavigate }: BreadcrumbsProps) {
           {i > 0 && <span className="sep">/</span>}
           <span
             className={`crumb ${i === crumbs.length - 1 ? 'active' : ''}`}
+            style={c.to ? undefined : { cursor: 'default' }}
             onClick={() => c.to && onNavigate?.(c.to)}
           >
             {c.label}

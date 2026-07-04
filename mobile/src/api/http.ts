@@ -96,15 +96,44 @@ function buildHeaders(path: string, init: RequestOptions | undefined, json: bool
 
 const NETWORK_ERROR = 'Сервер недоступен. Проверьте подключение и повторите попытку.'
 
+// Глобальное состояние «сеть лежит»: выставляется по сетевому фейлу fetch,
+// сбрасывается первым успешным ответом (или событием browser online). Смена
+// состояния рассылается событием — на него подписаны OfflineBanner и экраны,
+// которым нужно перезагрузить данные после восстановления связи.
+export const CONNECTIVITY_EVENT = 'wms:connectivity'
+
+let networkDown = false
+
+export function isNetworkDown(): boolean {
+  return networkDown
+}
+
+function setNetworkDown(down: boolean): void {
+  if (networkDown === down) return
+  networkDown = down
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(CONNECTIVITY_EVENT, { detail: { online: !down } }))
+  }
+}
+
+// Браузерное «online» — оптимистичный сброс: реальную доступность подтвердит
+// первый же запрос, но баннер не должен висеть до него.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => setNetworkDown(false))
+}
+
 async function doFetch(path: string, init: RequestOptions | undefined, headers: Record<string, string>): Promise<Response> {
   try {
-    return await fetch(`${API_BASE_URL}${path}`, {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       credentials: init?.credentials ?? AUTH_FETCH_CREDENTIALS,
       headers,
     })
+    setNetworkDown(false)
+    return response
   } catch (error) {
     if (error instanceof TypeError) {
+      setNetworkDown(true)
       throw new Error(NETWORK_ERROR, { cause: error })
     }
     throw error
@@ -189,6 +218,41 @@ export async function request<T>(path: string, init?: RequestOptions): Promise<T
   }
   if (response.status === 204) return undefined as T
   return readJsonBody<T>(response)
+}
+
+/** Скачивание защищённого файла (/uploads/*) с Bearer-авторизацией: тот же
+ *  401→refresh→повтор, что и у request, но тело возвращается как Blob. */
+export async function requestBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const init: RequestOptions = { method: 'GET', signal }
+  let headers = buildHeaders(path, init, false)
+  let response = await doFetch(path, init, headers)
+
+  const hadBearer = typeof headers.Authorization === 'string'
+  if (response.status === 401 && hadBearer) {
+    const refreshed = await refreshSessionOnce()
+    if (refreshed) {
+      headers = buildHeaders(path, init, false)
+      response = await doFetch(path, init, headers)
+    }
+    if (response.status === 401) {
+      await clearTokens()
+      onSessionExpired?.()
+      throw new SessionExpiredError()
+    }
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
+  }
+  try {
+    return await response.blob()
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(NETWORK_ERROR, { cause: error })
+    }
+    throw error
+  }
 }
 
 /** Как request, но тело — FormData (multipart): Content-Type не задаём, его ставит браузер с boundary. */

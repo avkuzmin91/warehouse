@@ -53,7 +53,7 @@ export function LoginScreen() {
               </span>
               <input
                 className="input"
-                type="email"
+                type="text"
                 inputMode="email"
                 autoCapitalize="none"
                 autoCorrect="off"
@@ -101,7 +101,7 @@ export function LoginScreen() {
           </div>
 
           <button className="btn" type="submit" disabled={busy || !email || !password} style={{ marginTop: 8 }}>
-            {busy ? 'Вход…' : <>Войти <Icon name="arrowRight" size={18} /></>}
+            {busy ? <><span className="spin spin-sm" /> Вход…</> : <>Войти <Icon name="arrowRight" size={18} /></>}
           </button>
         </div>
 

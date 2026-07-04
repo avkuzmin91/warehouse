@@ -2,11 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useNav } from '../nav/NavContext'
 import { ROLE_LABELS } from '../api/authApi'
-import { getTasks, type TaskItem } from '../api/tasksApi'
+import { getTasks } from '../api/tasksApi'
 import { fmtEta, tripEtaLabel, type TripDirection } from '../api/tripsApi'
+import { getDashboardToday, type DashboardTodayStats } from '../api/dashboardApi'
 import { AppBar } from '../components/AppBar'
 import { Icon, type IconName } from '../components/Icon'
+import { LoadMore } from '../components/LoadMore'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { useToast } from '../components/Toast'
+import { usePagedList } from '../hooks/usePagedList'
+import { canCreateDocuments } from '../utils/access'
 import { fmtDateTime } from '../utils/format'
 
 function sinceLabel(since?: string | null): string {
@@ -19,6 +24,7 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
   if (kind === 'shipment_relocate') return { icon: 'layers', tone: 'blue' }
   if (kind === 'shipment_defect_prepare') return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('shipment')) return { icon: 'box', tone: 'gray' }
+  if (kind.startsWith('dispatch')) return { icon: 'forklift', tone: 'green' }
   if (kind.startsWith('trip')) return direction === 'outbound' ? { icon: 'truckOut', tone: 'green' } : { icon: 'truckIn', tone: '' }
   if (kind.startsWith('receipt')) return { icon: 'truckIn', tone: '' }
   return { icon: 'list', tone: 'gray' }
@@ -26,35 +32,31 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
 
 export function TasksScreen() {
   const { user } = useAuth()
-  const { openTrip, openShipment } = useNav()
-  const [items, setItems] = useState<TaskItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const { openTrip, openShipment, openDispatchPrepare, openPackDoc, openReceiptDoc } = useNav()
+  const toast = useToast()
+  // Сводка дня — только менеджерский состав (контроль склада со смартфона).
+  const isManager = canCreateDocuments(user?.role)
+  const [today, setToday] = useState<DashboardTodayStats | null>(null)
 
-  const load = useCallback((signal?: AbortSignal, silent = false) => {
-    if (!silent) setLoading(true)
-    setError('')
-    return getTasks(100, signal)
-      .then((r) => {
-        if (signal?.aborted) return
-        setItems(r.items)
-        setTotal(r.total)
-      })
-      .catch((err) => {
-        if (signal?.aborted) return
-        setError(err instanceof Error ? err.message : 'Не удалось загрузить задачи')
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLoading(false)
-      })
-  }, [])
+  const loadToday = useCallback((signal?: AbortSignal) => {
+    if (!isManager) return
+    getDashboardToday(signal)
+      .then((r) => { if (!signal?.aborted) setToday(r.today) })
+      .catch(() => {})
+  }, [isManager])
 
   useEffect(() => {
     const ac = new AbortController()
-    load(ac.signal)
+    loadToday(ac.signal)
     return () => ac.abort()
-  }, [load])
+  }, [loadToday])
+
+  const fetchPage = useCallback(
+    (page: number, limit: number, signal?: AbortSignal) =>
+      getTasks({ page, limit }, signal).then((r) => ({ ...r, page, limit })),
+    [],
+  )
+  const { items, total, loading, loadingMore, error, refresh, loadMore, hasMore } = usePagedList(fetchPage)
 
   const role = user ? ROLE_LABELS[user.role] ?? user.role : ''
 
@@ -62,7 +64,19 @@ export function TasksScreen() {
     <div className="screen">
       <AppBar title="Мои задачи" sub={role} />
 
-      <PullToRefresh className="scroll pad-nav" onRefresh={() => load(undefined, true)}>
+      <PullToRefresh className="scroll pad-nav" onRefresh={() => { loadToday(); return refresh() }}>
+        {today && (
+          <div className="summary" style={{ marginBottom: 12 }}>
+            <div className="kv"><span className="k">Приёмка сегодня</span><span className="v mono">{today.arrivals.fact} / {today.arrivals.plan}</span></div>
+            <div className="kv"><span className="k">Упаковано</span><span className="v mono">{today.packed.fact} / {today.packed.plan}</span></div>
+            <div className="kv"><span className="k">Отгружено</span><span className="v mono">{today.shipped.fact} / {today.shipped.plan}</span></div>
+            {today.defects > 0 && (
+              <div className="kv"><span className="k">Брак</span>
+                <span className="v"><span className="badge danger"><span className="dot" />{today.defects} шт</span></span>
+              </div>
+            )}
+          </div>
+        )}
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
@@ -89,19 +103,29 @@ export function TasksScreen() {
               <span className="sec-count">{items.length} задач</span>
             </div>
             {items.map((t) => {
-              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment'
+              // Задачи по поступлениям (закрыть недопоставку) выполняются на менеджерской
+              // деталке поступления — остальным ролям она открывается в режиме просмотра.
+              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt'
               const { icon, tone } = taskVisual(t.kind, t.direction)
               const urgent = t.priority_rank != null && t.priority_rank > 0
               const open = () => {
+                if (!actionable) {
+                  // Кнопка живая, но действие ещё заблокировано — объясняем почему.
+                  toast('Задача станет доступна после завершения предыдущего этапа', 'error')
+                  return
+                }
                 if (t.doc_type === 'trip') openTrip(t.doc_id)
+                // «Упаковать» — внесение годного/брака: экран упаковки, не деталка кладовщика.
+                else if (t.kind === 'shipment_pack') openPackDoc(t.doc_id)
                 else if (t.doc_type === 'shipment') openShipment(t.doc_id)
+                else if (t.doc_type === 'dispatch') openDispatchPrepare(t.doc_id)
+                else if (t.doc_type === 'receipt') openReceiptDoc(t.doc_id)
               }
               return (
                 <button
                   key={`${t.doc_type}:${t.doc_id}:${t.kind}`}
                   className="tile"
                   onClick={open}
-                  disabled={!actionable}
                 >
                   <div className={`tile-ico${tone ? ' ' + tone : ''}`}>
                     <Icon name={icon} size={21} />
@@ -149,11 +173,13 @@ export function TasksScreen() {
                 </button>
               )
             })}
-            {items.length < total && (
-              <div className="line-sub" style={{ textAlign: 'center', padding: '12px 0' }}>
-                Показаны первые {items.length} из {total}
-              </div>
-            )}
+            <LoadMore
+              shown={items.length}
+              total={total}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onMore={loadMore}
+            />
           </>
         )}
       </PullToRefresh>

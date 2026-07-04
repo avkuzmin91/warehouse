@@ -47,6 +47,16 @@ export function fmtDateTime(s: string | null | undefined, empty = '—'): string
   })
 }
 
+/** Копейки (INTEGER из API) → "15 000,00 ₽". Контракт повторяет веб. */
+export function formatMoneyKopecks(kopecks: number | null | undefined): string {
+  if (kopecks == null) return '—'
+  const neg = kopecks < 0
+  const abs = Math.abs(Math.round(kopecks))
+  const rub = Math.floor(abs / 100)
+  const kop = abs % 100
+  return `${neg ? '−' : ''}${rub.toLocaleString('ru-RU')},${String(kop).padStart(2, '0')} ₽`
+}
+
 /** «150» / «150,50» → копейки (15050). null — пусто или не число. Контракт повторяет веб. */
 export function parseRublesToKopecks(input: string): number | null {
   const s = input.trim().replace(/\s/g, '').replace(',', '.')

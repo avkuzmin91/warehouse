@@ -1,37 +1,8 @@
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Icon } from '../primitives/Icon'
 import { Kbd } from '../primitives/Kbd'
-
-const ROUTE_LABELS: Record<string, string[]> = {
-  '/home': ['Главная'],
-  '/inventory': ['Склад'],
-  '/inventory/receipts': ['Склад', 'Поступления'],
-  '/inventory/receipts/new': ['Склад', 'Поступления', 'Новое'],
-  '/inventory/shipments': ['Склад', 'Упаковка'],
-  '/inventory/shipments/new': ['Склад', 'Упаковка', 'Новая'],
-  '/inventory/balances': ['Склад', 'Остатки'],
-  '/inventory/packing': ['Склад', 'Упаковка'],
-  '/finance/invoices': ['Финансы', 'Счета'],
-  '/finance/invoices/new': ['Финансы', 'Счета', 'Новый'],
-  '/finance/uninvoiced': ['Финансы', 'Отгрузки без счёта'],
-  '/analytics': ['Аналитика'],
-  '/dictionaries': ['Справочники'],
-  '/dictionaries/users': ['Управление', 'Пользователи'],
-  '/dictionaries/clients': ['Справочники', 'Клиенты'],
-  '/dictionaries/sizes': ['Справочники', 'Размеры'],
-  '/dictionaries/colors': ['Справочники', 'Цвета'],
-  '/dictionaries/product-types': ['Справочники', 'Типы'],
-  '/dictionaries/suppliers': ['Справочники', 'Поставщики'],
-  '/account/password': ['Аккаунт', 'Смена пароля'],
-  '/cabinet': ['Личный кабинет'],
-  '/cabinet/balances': ['Личный кабинет', 'Остатки'],
-  '/cabinet/receipts': ['Личный кабинет', 'Поступления'],
-  '/cabinet/shipments': ['Личный кабинет', 'Отгрузки'],
-  '/cabinet/defects': ['Личный кабинет', 'Брак'],
-  '/cabinet/products': ['Личный кабинет', 'Мои товары'],
-  '/cabinet/reports': ['Личный кабинет', 'Отчёты'],
-  '/cabinet/profile': ['Личный кабинет', 'Профиль и магазины'],
-}
+import { Breadcrumbs } from './Breadcrumbs'
+import { buildBreadcrumbsFromPathname } from '../../utils/breadcrumbLabels'
 
 interface TopbarProps {
   onCmd: () => void
@@ -41,15 +12,10 @@ interface TopbarProps {
 
 export function Topbar({ onCmd, onToggleSidebar, sidebarCollapsed }: TopbarProps) {
   const location = useLocation()
+  const navigate = useNavigate()
   const path = location.pathname
 
-  const crumbs = (() => {
-    if (ROUTE_LABELS[path]) return ROUTE_LABELS[path]
-    for (const [key, val] of Object.entries(ROUTE_LABELS)) {
-      if (path.startsWith(key + '/')) return [...val, '…']
-    }
-    return []
-  })()
+  const crumbs = buildBreadcrumbsFromPathname(path)
 
   return (
     <header className="topbar">
@@ -58,16 +24,7 @@ export function Topbar({ onCmd, onToggleSidebar, sidebarCollapsed }: TopbarProps
           <Icon name="menu" size={15} />
         </button>
       )}
-      {crumbs.length > 0 && (
-        <div className="crumbs">
-          {crumbs.map((c, i) => (
-            <span key={i} style={{ display: 'contents' }}>
-              {i > 0 && <span className="sep">/</span>}
-              <span className={`crumb ${i === crumbs.length - 1 ? 'active' : ''}`}>{c}</span>
-            </span>
-          ))}
-        </div>
-      )}
+      {crumbs.length > 0 && <Breadcrumbs crumbs={crumbs} onNavigate={navigate} />}
       {path.startsWith('/cabinet') && (
         <span
           className="beta-pill"

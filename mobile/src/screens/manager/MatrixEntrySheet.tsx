@@ -7,6 +7,7 @@ import {
 } from '../../api/lookupsApi'
 import { Combobox } from '../../components/Combobox'
 import { Icon } from '../../components/Icon'
+import { useHardwareBack } from '../../nav/backHandlers'
 
 export type MatrixCell = {
   color_id: string | null
@@ -49,6 +50,8 @@ export function MatrixEntrySheet({
   const [qty, setQty] = useState<Record<string, number>>({})
   const [fillValue, setFillValue] = useState('')
   const [error, setError] = useState('')
+
+  useHardwareBack(onClose)
 
   useEffect(() => {
     const ac = new AbortController()

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Icon } from './Icon'
+import { useHardwareBack } from '../nav/backHandlers'
 import { moscowTodayYmd } from '../utils/format'
 
 const MONTHS = [
@@ -93,6 +94,8 @@ export function DateField({
     onChange(draft)
     setOpen(false)
   }
+
+  useHardwareBack(() => setOpen(false), open)
 
   const cells = monthGrid(view.y, view.m)
 

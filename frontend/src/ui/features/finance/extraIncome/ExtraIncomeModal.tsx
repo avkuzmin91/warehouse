@@ -31,6 +31,8 @@ export function ExtraIncomeModal({ entry, categories, onClose, onSaved }: {
   const [qty, setQty] = useState(entry?.qty != null ? String(entry.qty) : '')
   const [amount, setAmount] = useState(entry ? String(entry.amount_kop / 100) : '')
   const [comment, setComment] = useState(entry?.comment ?? '')
+  // Хранится всегда итог (amount_kop); «за единицу» — только режим ввода на форме.
+  const [perUnit, setPerUnit] = useState(false)
   const [busy, setBusy] = useState(false)
 
   // Запись, вошедшая в счёт, менять нельзя (сумма счёта разойдётся с составом) —
@@ -39,12 +41,17 @@ export function ExtraIncomeModal({ entry, categories, onClose, onSaved }: {
 
   const kopecks = parseRublesToKopecks(amount)
   const qtyNum = qty.trim() ? Number(qty) : null
+  const qtyValid = qtyNum != null && Number.isInteger(qtyNum) && qtyNum > 0
+  const totalKop = perUnit
+    ? (kopecks != null && qtyValid ? kopecks * qtyNum : null)
+    : kopecks
   const problems = [
     ...(!entryDate ? ['Укажите дату'] : []),
     ...(!clientId ? ['Выберите клиента'] : []),
     ...(!categoryId ? ['Выберите вид работы'] : []),
-    ...(kopecks == null || kopecks <= 0 ? ['Сумма — число больше нуля'] : []),
-    ...(qtyNum != null && (!Number.isInteger(qtyNum) || qtyNum <= 0) ? ['Количество — целое число больше нуля'] : []),
+    ...(perUnit && !qtyValid ? ['Для цены за единицу укажите количество'] : []),
+    ...(kopecks == null || kopecks <= 0 ? [perUnit ? 'Цена за единицу — число больше нуля' : 'Сумма — число больше нуля'] : []),
+    ...(qtyNum != null && !qtyValid ? ['Количество — целое число больше нуля'] : []),
   ]
 
   function save() {
@@ -55,7 +62,7 @@ export function ExtraIncomeModal({ entry, categories, onClose, onSaved }: {
       client_id: clientId,
       category_id: categoryId,
       qty: qtyNum,
-      amount_kop: kopecks as number,
+      amount_kop: totalKop as number,
       comment: comment.trim() || null,
     }
     const req = entry ? updateExtraIncome(entry.id, payload) : createExtraIncome(payload)
@@ -135,13 +142,33 @@ export function ExtraIncomeModal({ entry, categories, onClose, onSaved }: {
         <div>
           <label style={labelStyle}>Количество, шт. <span style={{ fontWeight: 400, color: 'var(--c-text-subtle)' }}>· не обязательно</span></label>
           <input className="input" inputMode="numeric" placeholder="например, 300" value={qty} disabled={locked}
-            onChange={(e) => setQty(e.target.value)} />
+            onChange={(e) => {
+              setQty(e.target.value)
+              if (!e.target.value.trim()) setPerUnit(false)
+            }} />
         </div>
         <div>
-          <label style={labelStyle}>Сумма, ₽</label>
-          <input className="input" inputMode="decimal" placeholder="например, 4500" value={amount} disabled={locked}
+          <label style={labelStyle}>{perUnit ? 'Цена за шт., ₽' : 'Сумма итого, ₽'}</label>
+          <input className="input" inputMode="decimal" placeholder={perUnit ? 'например, 15' : 'например, 4500'} value={amount} disabled={locked}
             onChange={(e) => setAmount(e.target.value)} />
         </div>
+        {!locked && (
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 8, marginTop: -4 }}>
+            <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Ввод стоимости:</span>
+            <button type="button" className={`chip${!perUnit ? ' active' : ''}`} onClick={() => setPerUnit(false)}>итого</button>
+            <button type="button" className={`chip${perUnit ? ' active' : ''}`} disabled={!qtyValid}
+              title={!qtyValid ? 'Сначала укажите количество' : undefined}
+              style={!qtyValid ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+              onClick={() => { if (qtyValid) setPerUnit(true) }}>за единицу</button>
+          </div>
+        )}
+        {qtyValid && kopecks != null && kopecks > 0 && (
+          <div style={{ gridColumn: '1 / -1', fontSize: 12.5, color: 'var(--c-text-muted)', marginTop: -4 }}>
+            {perUnit
+              ? <>{qtyNum} шт. × {formatMoneyKopecks(kopecks)} = <b>{formatMoneyKopecks(totalKop)}</b> итого</>
+              : <>{formatMoneyKopecks(kopecks)} ÷ {qtyNum} шт. ≈ <b>{formatMoneyKopecks(Math.round(kopecks / qtyNum))}</b>/шт.</>}
+          </div>
+        )}
         <div style={{ gridColumn: '1 / -1' }}>
           <label style={labelStyle}>Комментарий</label>
           <textarea className="input" rows={2} placeholder="Что делали и почему…" value={comment} disabled={locked}

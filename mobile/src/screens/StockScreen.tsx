@@ -16,6 +16,8 @@ import { newRequestId } from '../api/http'
 import { balanceKey } from '../utils/balanceKey'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
+import { Sheet } from '../components/Sheet'
+import { useToast } from '../components/Toast'
 import { ZoneField } from '../components/ZoneField'
 import { PullToRefresh } from '../components/PullToRefresh'
 
@@ -42,13 +44,13 @@ function rowSort(a: ZoneBalance, b: ZoneBalance): number {
 }
 
 export function StockScreen() {
+  const toast = useToast()
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<ZoneBalance[]>([])
   const [zones, setZones] = useState<Zone[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [okMsg, setOkMsg] = useState('')
 
   const [selected, setSelected] = useState<string | null>(null)
   const [moveFrom, setMoveFrom] = useState<ZoneBalance | null>(null)
@@ -160,13 +162,6 @@ export function StockScreen() {
             {error}
           </div>
         )}
-        {okMsg && (
-          <div className="alert ok">
-            <Icon name="check" size={15} />
-            {okMsg}
-          </div>
-        )}
-
         {!selectedPlace && (
           <>
             <div className="input search-wrap" style={{ marginBottom: 14 }}>
@@ -178,10 +173,7 @@ export function StockScreen() {
                 autoCorrect="off"
                 placeholder="Поиск по названию или SKU"
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value)
-                  setOkMsg('')
-                }}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
@@ -242,18 +234,9 @@ export function StockScreen() {
               <RowCard
                 key={`${r.location_id ?? '∅'}__${r.op_status}__${r.quality}__${i}`}
                 row={r}
-                onMove={() => {
-                  setOkMsg('')
-                  setMoveFrom(r)
-                }}
-                onQuality={() => {
-                  setOkMsg('')
-                  setQualFrom(r)
-                }}
-                onWriteOff={() => {
-                  setOkMsg('')
-                  setWoffFrom(r)
-                }}
+                onMove={() => setMoveFrom(r)}
+                onQuality={() => setQualFrom(r)}
+                onWriteOff={() => setWoffFrom(r)}
               />
             ))}
           </>
@@ -267,7 +250,7 @@ export function StockScreen() {
           onClose={() => setMoveFrom(null)}
           onDone={(qty) => {
             setMoveFrom(null)
-            setOkMsg(`Перемещено ${qty} шт`)
+            toast(`Перемещено ${qty} шт`)
             reload()
           }}
         />
@@ -279,7 +262,7 @@ export function StockScreen() {
           onClose={() => setQualFrom(null)}
           onDone={(qty) => {
             setQualFrom(null)
-            setOkMsg(`Качество изменено: ${qty} шт`)
+            toast(`Качество изменено: ${qty} шт`)
             reload()
           }}
         />
@@ -291,7 +274,7 @@ export function StockScreen() {
           onClose={() => setWoffFrom(null)}
           onDone={(qty) => {
             setWoffFrom(null)
-            setOkMsg(`Списано ${qty} шт`)
+            toast(`Списано ${qty} шт`)
             reload()
           }}
         />
@@ -371,7 +354,7 @@ function MoveSheet({
   onDone: (qty: number) => void
 }) {
   const [toZoneId, setToZoneId] = useState('')
-  const [qty, setQty] = useState(from.qty)
+  const [qtyStr, setQtyStr] = useState(String(from.qty))
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -382,6 +365,7 @@ function MoveSheet({
     .filter((z) => z.id !== from.location_id)
     .map((z) => ({ value: z.id, label: z.name }))
   const variant = variantLabel(from)
+  const dirty = toZoneId !== '' || qtyStr !== String(from.qty) || comment !== ''
 
   async function submit() {
     if (saving) return
@@ -389,6 +373,7 @@ function MoveSheet({
       setError('Выберите место назначения')
       return
     }
+    const qty = parseInt(qtyStr, 10) || 0
     if (qty < 1 || qty > from.qty) {
       setError(`Укажите количество от 1 до ${from.qty}`)
       return
@@ -422,9 +407,7 @@ function MoveSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={dirty} locked={saving}>
         <h3>Переместить</h3>
         <div className="line-sub" style={{ marginBottom: 14 }}>
           {variant ? `${from.product_name} · ${variant}` : from.product_name} ·{' '}
@@ -480,12 +463,10 @@ function MoveSheet({
               className="input num"
               type="text"
               inputMode="numeric"
-              min={1}
-              max={from.qty}
-              value={qty}
-              onChange={(e) => setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              value={qtyStr}
+              onChange={(e) => setQtyStr(e.target.value.replace(/\D/g, ''))}
             />
-            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setQty(from.qty)}>
+            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setQtyStr(String(from.qty))}>
               Всё ({from.qty})
             </button>
           </div>
@@ -514,11 +495,10 @@ function MoveSheet({
             Отмена
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : 'Переместить'}
+            {saving ? <span className="spin spin-sm" /> : 'Переместить'}
           </button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   )
 }
 
@@ -531,13 +511,15 @@ function QualitySheet({
   onClose: () => void
   onDone: (qty: number) => void
 }) {
-  const [qty, setQty] = useState(from.qty)
+  const [qtyStr, setQtyStr] = useState(String(from.qty))
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const toQuality = from.quality === 'defect' ? 'good' : 'defect'
   const variant = variantLabel(from)
+  const dirty = qtyStr !== String(from.qty) || comment !== ''
+  const qty = parseInt(qtyStr, 10) || 0
 
   async function submit() {
     if (saving) return
@@ -575,9 +557,7 @@ function QualitySheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={dirty} locked={saving}>
         <h3>{toQuality === 'defect' ? 'Перевести в брак' : 'Перевести в годный'}</h3>
         <div className="line-sub" style={{ marginBottom: 14 }}>
           {variant ? `${from.product_name} · ${variant}` : from.product_name}
@@ -616,12 +596,10 @@ function QualitySheet({
               className="input num"
               type="text"
               inputMode="numeric"
-              min={1}
-              max={from.qty}
-              value={qty}
-              onChange={(e) => setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              value={qtyStr}
+              onChange={(e) => setQtyStr(e.target.value.replace(/\D/g, ''))}
             />
-            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setQty(from.qty)}>
+            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setQtyStr(String(from.qty))}>
               Всё ({from.qty})
             </button>
           </div>
@@ -650,11 +628,10 @@ function QualitySheet({
             Отмена
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : toQuality === 'defect' ? 'В брак' : 'В годный'}
+            {saving ? <span className="spin spin-sm" /> : toQuality === 'defect' ? 'В брак' : 'В годный'}
           </button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   )
 }
 
@@ -667,7 +644,7 @@ function WriteOffSheet({
   onClose: () => void
   onDone: (qty: number) => void
 }) {
-  const [qty, setQty] = useState(from.qty)
+  const [qtyStr, setQtyStr] = useState(String(from.qty))
   const [reason, setReason] = useState<WriteOffReason | ''>('')
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
@@ -675,6 +652,8 @@ function WriteOffSheet({
   const [confirming, setConfirming] = useState(false)
 
   const variant = variantLabel(from)
+  const dirty = qtyStr !== String(from.qty) || reason !== '' || comment !== ''
+  const qty = parseInt(qtyStr, 10) || 0
 
   async function submit() {
     if (saving) return
@@ -726,9 +705,7 @@ function WriteOffSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={dirty} locked={saving}>
         <h3>Списать с остатков</h3>
         <div className="line-sub" style={{ marginBottom: 14 }}>
           {variant ? `${from.product_name} · ${variant}` : from.product_name} ·{' '}
@@ -782,11 +759,9 @@ function WriteOffSheet({
               className="input num"
               type="text"
               inputMode="numeric"
-              min={1}
-              max={from.qty}
-              value={qty}
+              value={qtyStr}
               onChange={(e) => {
-                setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                setQtyStr(e.target.value.replace(/\D/g, ''))
                 setConfirming(false)
               }}
             />
@@ -794,7 +769,7 @@ function WriteOffSheet({
               className="btn ghost"
               style={{ flex: 1 }}
               onClick={() => {
-                setQty(from.qty)
+                setQtyStr(String(from.qty))
                 setConfirming(false)
               }}
             >
@@ -833,10 +808,9 @@ function WriteOffSheet({
             Отмена
           </button>
           <button className="btn danger" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : confirming ? 'Списать — подтверждаю' : 'Списать'}
+            {saving ? <span className="spin spin-sm" /> : confirming ? 'Списать — подтверждаю' : 'Списать'}
           </button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   )
 }

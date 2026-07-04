@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
 import {
+  createClient,
   createColor,
   createSize,
+  getClients,
   getColors,
   getSizes,
   type DictionaryItem,
@@ -16,7 +18,7 @@ import { DictItemSheet } from './DictItemSheet'
 
 const fold = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim()
 
-export type DictKind = 'colors' | 'sizes'
+export type DictKind = 'colors' | 'sizes' | 'clients'
 
 type Cfg = {
   title: string
@@ -55,6 +57,18 @@ const CONFIG: Record<DictKind, Cfg> = {
     sheetPlaceholder: 'Например, XL',
     load: getSizes,
     create: createSize,
+  },
+  clients: {
+    title: 'Клиенты',
+    sub: 'Справочник клиентов',
+    icon: 'users',
+    addLabel: 'Добавить клиента',
+    emptyLabel: 'Клиенты не заведены',
+    sheetTitle: 'Новый клиент',
+    sheetLabel: 'Название клиента',
+    sheetPlaceholder: 'Например, ООО «Ромашка»',
+    load: getClients,
+    create: createClient,
   },
 }
 

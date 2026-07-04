@@ -1,6 +1,31 @@
+import { useEffect, useState } from 'react'
+import { getTasks } from '../api/tasksApi'
 import { useNav } from '../nav/NavContext'
 import type { TabDef } from '../nav/tabs'
 import { Icon } from './Icon'
+
+// Размер личной очереди /tasks для бейджа на вкладке «Задачи». Опрос — пока виден
+// таб-бар (на детальных экранах он размонтирован, возврат на вкладку освежает счётчик).
+function useTaskCount(): number {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    let live = true
+    const tick = () =>
+      getTasks({ limit: 1 })
+        .then((r) => { if (live) setCount(r.total) })
+        .catch(() => {})
+    tick()
+    const id = setInterval(tick, 60_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') void tick() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      live = false
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+  return count
+}
 
 function ScanGlyph({ size = 24 }: { size?: number }) {
   return (
@@ -15,13 +40,14 @@ function ScanGlyph({ size = 24 }: { size?: number }) {
 
 export function BottomNav() {
   const { rootTab, goTab, openScan, tabs, showScan } = useNav()
+  const taskCount = useTaskCount()
 
   if (!showScan) {
     // Менеджер: ровный ряд вкладок без скан-FAB.
     return (
       <nav className="bottomnav">
         {tabs.map((t) => (
-          <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
+          <NavButton key={t.name} tab={t} active={rootTab === t.name} taskCount={taskCount} onClick={() => goTab(t.name)} />
         ))}
       </nav>
     )
@@ -32,7 +58,7 @@ export function BottomNav() {
   return (
     <nav className="bottomnav">
       {tabs.slice(0, half).map((t) => (
-        <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
+        <NavButton key={t.name} tab={t} active={rootTab === t.name} taskCount={taskCount} onClick={() => goTab(t.name)} />
       ))}
 
       <button className="scanfab" onClick={openScan} aria-label="Сканировать ШК">
@@ -43,7 +69,7 @@ export function BottomNav() {
       </button>
 
       {tabs.slice(half).map((t) => (
-        <NavButton key={t.name} tab={t} active={rootTab === t.name} onClick={() => goTab(t.name)} />
+        <NavButton key={t.name} tab={t} active={rootTab === t.name} taskCount={taskCount} onClick={() => goTab(t.name)} />
       ))}
     </nav>
   )
@@ -52,15 +78,19 @@ export function BottomNav() {
 function NavButton({
   tab,
   active,
+  taskCount,
   onClick,
 }: {
   tab: TabDef
   active: boolean
+  taskCount: number
   onClick: () => void
 }) {
+  const badge = tab.name === 'tasks' && taskCount > 0
   return (
     <button className={`navbtn${active ? ' active' : ''}`} onClick={onClick}>
       <Icon name={tab.icon} size={22} />
+      {badge && <span className="navbadge">{taskCount > 99 ? '99+' : taskCount}</span>}
       <span className="navlabel">{tab.label}</span>
     </button>
   )

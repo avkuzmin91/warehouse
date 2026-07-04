@@ -16,6 +16,14 @@ export type ShipmentStatus =
 
 export type ShipmentPlacement = { kind: 'good' | 'defect'; zone_id: string | null; zone_name: string | null; qty: number }
 
+export type ShipmentLineFile = {
+  id: string
+  filename: string
+  url: string
+  mime_type: string | null
+  created_at: string
+}
+
 export type ShipmentLine = {
   id: string
   product_id: string
@@ -37,6 +45,7 @@ export type ShipmentLine = {
   store_id: string | null
   store_name: string | null
   placements: ShipmentPlacement[]
+  files: ShipmentLineFile[]
 }
 
 export type ShipmentDetail = {
@@ -48,6 +57,7 @@ export type ShipmentDetail = {
   destination: string | null
   carrier: string | null
   ship_date: string | null
+  priority_rank: number | null
   comment: string | null
   status: ShipmentStatus
   status_label: string
@@ -149,6 +159,10 @@ export function uploadShipmentLineFile(docId: string, lineId: string, file: File
   return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
 }
 
+export function deleteShipmentLineFile(docId: string, lineId: string, fileId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}`, { method: 'DELETE' })
+}
+
 // Менеджерский список «Задач упаковки»: пагинация + фильтры (status опционален → все статусы).
 export function listShipments(params: ShipmentListParams = {}, signal?: AbortSignal): Promise<ShipmentListResponse> {
   const sp = new URLSearchParams()
@@ -190,6 +204,27 @@ export function advanceShipment(id: string, requestId: string) {
   })
 }
 
+export function updateShipmentPriority(id: string, priorityRank: number | null) {
+  // Выделенный эндпоинт: общий PATCH разрешён только в draft/packing,
+  // а приоритет редактируется до самой отправки.
+  return request<{ message: string }>(`/shipments/${id}/priority`, {
+    method: 'PATCH',
+    body: JSON.stringify({ priority_rank: priorityRank }),
+  })
+}
+
+// Аннулирование: годный — до передачи на упаковку включительно (в «На упаковке» — пока
+// ничего не упаковано), брак — draft/relocating/awaiting_trip (гейты бэка).
+export function cancelShipment(id: string) {
+  return request<{ message: string }>(`/shipments/${id}/cancel`, { method: 'POST' })
+}
+
+// Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
+// «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
+export function returnShipmentToPacking(id: string) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
+}
+
 // Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.
 export function rejectShipment(id: string, reason: string) {
   return request<{ message: string }>(`/shipments/${id}/reject`, {
@@ -218,6 +253,19 @@ export function placePackedShipment(id: string, lines: RelocateLine[], requestId
     method: 'POST',
     body: JSON.stringify({ lines }),
     headers: requestIdHeaders(requestId),
+  })
+}
+
+export type ShipmentDefectSourceAllocation = { zone_id: string; zone_name: string | null; qty: number }
+export type ShipmentDefectRelocateLine = { line_id: string; sources: ShipmentDefectSourceAllocation[] }
+
+// Брак-отгрузка: relocating → awaiting_trip. Брак собирается из мест хранения
+// (storage/defect) и переезжает в зону отгрузки. Ретрай безопасен: повтор после
+// смены статуса отклоняется серверным гейтом перехода.
+export function finishShipmentDefectRelocation(id: string, lines: ShipmentDefectRelocateLine[]) {
+  return request<{ message: string }>(`/shipments/${id}/finish-defect-relocation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
   })
 }
 
@@ -261,6 +309,84 @@ export function reversePackingEntry(docId: string, lineId: string, entryId: stri
     `/shipments/${docId}/lines/${lineId}/packing/${entryId}/reverse`,
     { method: 'POST', headers: requestIdHeaders(requestId) },
   )
+}
+
+// --- Производительность упаковки (сводка «за смену») ---
+export type PackingProductivityRow = {
+  client_id:    string | null
+  client_name:  string | null
+  product_id:   string
+  product_sku:  string | null
+  product_name: string | null
+  good:         number
+  defect:       number
+  total:        number
+  good_earn_kop:   number
+  defect_earn_kop: number
+  earn_kop:        number
+  doc_ids:         string[]
+}
+
+export type PackingProductivityDay = {
+  packed_date: string
+  good:        number
+  defect:      number
+  total:       number
+  sku_count:   number
+  doc_count:   number
+  good_earn_kop:   number
+  defect_earn_kop: number
+  earn_kop:        number
+  rows:        PackingProductivityRow[]
+}
+
+export type PackingProductivityResponse = {
+  days:         PackingProductivityDay[]
+  total_good:   number
+  total_defect: number
+  total:        number
+  total_good_earn_kop:   number
+  total_defect_earn_kop: number
+  total_earn_kop:        number
+  with_earnings:         boolean
+}
+
+export type PackingProductivityParams = {
+  date_from?: string
+  date_to?:   string
+  client_id?: string
+  search?:    string
+}
+
+// Нетто упаковано по дням (клиент × SKU). Деньги (earn_kop) бэкенд отдаёт
+// только ролям с can_view_costs — для склада всегда нули, в UI их не показываем.
+export function getPackingProductivity(params: PackingProductivityParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to)   sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search)    sp.set('search', params.search)
+  const q = sp.toString()
+  return request<PackingProductivityResponse>(`/shipments/packing/productivity${q ? `?${q}` : ''}`, { signal })
+}
+
+// Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
+export const SHIPMENT_PRIORITY_URGENT = 1
+export const SHIPMENT_PRIORITY_HIGH   = 2
+
+export const SHIPMENT_PRIORITY_LABELS: Record<number, string> = {
+  [SHIPMENT_PRIORITY_URGENT]: 'Срочно',
+  [SHIPMENT_PRIORITY_HIGH]:   'Повышенный',
+}
+
+export function shipmentPriorityLabel(rank: number | null): string {
+  return (rank != null && SHIPMENT_PRIORITY_LABELS[rank]) || 'Обычный'
+}
+
+export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' | '' {
+  if (rank === SHIPMENT_PRIORITY_URGENT) return 'danger'
+  if (rank === SHIPMENT_PRIORITY_HIGH) return 'warning'
+  return ''
 }
 
 // --- Labels ---

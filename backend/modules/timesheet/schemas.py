@@ -98,6 +98,7 @@ class EmployeeWeekSummary(BaseModel):
     advances:    int | None = None
     to_pay:      int | None = None
     overpaid:    int | None = None
+    settled:     bool = False
 
 
 class AttendanceDay(BaseModel):

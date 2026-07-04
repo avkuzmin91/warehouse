@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
-import { useNav } from '../nav/NavContext'
+import { useNav, type PackFocus } from '../nav/NavContext'
 import {
   advanceShipment,
   getLinePacking,
@@ -15,6 +15,8 @@ import {
 import { AppBar } from '../components/AppBar'
 import { DateField } from '../components/DateField'
 import { Icon } from '../components/Icon'
+import { Sheet } from '../components/Sheet'
+import { LineFiles } from '../components/LineFiles'
 import { CollapsibleSection } from '../components/CollapsibleSection'
 import { fmtDate, moscowTodayYmd, variantTitle } from '../utils/format'
 
@@ -50,7 +52,7 @@ function PackMeter({ good, defect, plan, left }: { good: number; defect: number;
   )
 }
 
-export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string }) {
+export function ShiftPackingDetailScreen({ shipmentId, focus }: { shipmentId: string; focus?: PackFocus }) {
   const { back } = useNav()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,6 +94,25 @@ export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string })
     () => (doc?.lines ?? []).reduce((s, l) => s + Math.max(0, l.available_for_pack), 0),
     [doc],
   )
+
+  // Переход со скана: подсветить и проскроллить строку отсканированного варианта.
+  const focusLineId = useMemo(() => {
+    if (!focus || !doc) return null
+    const l = doc.lines.find(
+      (l) =>
+        l.product_id === focus.productId &&
+        (l.color_id ?? null) === (focus.colorId ?? null) &&
+        (l.size_id ?? null) === (focus.sizeId ?? null),
+    )
+    return l?.id ?? null
+  }, [focus, doc])
+  const focusScrolled = useRef(false)
+  const focusRef = useCallback((el: HTMLDivElement | null) => {
+    if (el && !focusScrolled.current) {
+      focusScrolled.current = true
+      el.scrollIntoView({ block: 'center' })
+    }
+  }, [])
 
   async function doAdvance() {
     if (saving) return
@@ -159,9 +180,14 @@ export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string })
                   <span className="sec-count">{doc.lines.length}</span>
                 </div>
                 {doc.lines.map((l) => (
-                  <div key={l.id} className="line">
+                  <div
+                    key={l.id}
+                    className={`line${l.id === focusLineId ? ' focus-flash' : ''}`}
+                    ref={l.id === focusLineId ? focusRef : undefined}
+                  >
                     <div className="line-name">{lineTitle(l)}</div>
                     <div className="line-sub mono">{l.product_sku}</div>
+                    <LineFiles files={l.files} onError={setError} />
                     <PackMeter
                       good={l.packed_good}
                       defect={l.packed_defect}
@@ -246,24 +272,21 @@ export function ShiftPackingDetailScreen({ shipmentId }: { shipmentId: string })
       )}
 
       {confirmAdvance && (
-        <div className="sheet-backdrop" onClick={() => { if (!saving) setConfirmAdvance(false) }}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-grip" />
-            <h3>Передать кладовщику?</h3>
-            <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-              Упаковка завершена. Кладовщик разложит годный и брак по местам.
-              {totalPool > 0 ? ` На упаковке ещё ${totalPool} шт без решения.` : ''}
-            </p>
-            <div className="dtf-actions">
-              <button className="btn ghost" disabled={saving} onClick={() => setConfirmAdvance(false)}>
-                Отмена
-              </button>
-              <button className="btn" disabled={saving} onClick={() => void doAdvance()}>
-                {saving ? '…' : 'Передать'}
-              </button>
-            </div>
+        <Sheet onClose={() => setConfirmAdvance(false)} locked={saving}>
+          <h3>Передать кладовщику?</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+            Упаковка завершена. Кладовщик разложит годный и брак по местам.
+            {totalPool > 0 ? ` На упаковке ещё ${totalPool} шт без решения.` : ''}
+          </p>
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={saving} onClick={() => setConfirmAdvance(false)}>
+              Отмена
+            </button>
+            <button className="btn" disabled={saving} onClick={() => void doAdvance()}>
+              {saving ? <span className="spin spin-sm" /> : 'Передать'}
+            </button>
           </div>
-        </div>
+        </Sheet>
       )}
     </div>
   )
@@ -281,8 +304,8 @@ function PackLineSheet({
   onDone: () => Promise<void> | void
 }) {
   const [date, setDate] = useState(moscowTodayYmd())
-  const [good, setGood] = useState(0)
-  const [defect, setDefect] = useState(0)
+  const [goodStr, setGoodStr] = useState('')
+  const [defectStr, setDefectStr] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -319,6 +342,9 @@ function PackLineSheet({
     return () => ac.abort()
   }, [refreshSheet])
 
+  const good = parseInt(goodStr, 10) || 0
+  const defect = parseInt(defectStr, 10) || 0
+  const dirty = good > 0 || defect > 0
   const add = good + defect
   const overPool = add > pool
   const overPlan = packedGood + good > plan
@@ -338,8 +364,8 @@ function PackLineSheet({
       const reqId = (packReqId.current ||= newRequestId())
       await recordPacking(docId, line.id, { good_delta: good, defect_delta: defect, packed_date: date }, reqId)
       packReqId.current = ''
-      setGood(0)
-      setDefect(0)
+      setGoodStr('')
+      setDefectStr('')
       await refreshSheet()
       await onDone()
     } catch (e) {
@@ -367,9 +393,7 @@ function PackLineSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={() => { if (!saving) onClose() }}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={dirty} locked={saving}>
         <h3>Внести упаковку</h3>
         <div className="line-sub" style={{ marginTop: -4 }}>{line.product_name} · <span className="mono">{line.product_sku}</span></div>
 
@@ -397,8 +421,8 @@ function PackLineSheet({
             className="input num"
             type="text"
             inputMode="numeric"
-            value={good || ''}
-            onChange={(e) => setGood(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+            value={goodStr}
+            onChange={(e) => setGoodStr(e.target.value.replace(/\D/g, ''))}
           />
         </div>
         <div className="qrow defect">
@@ -407,8 +431,8 @@ function PackLineSheet({
             className="input num"
             type="text"
             inputMode="numeric"
-            value={defect || ''}
-            onChange={(e) => setDefect(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+            value={defectStr}
+            onChange={(e) => setDefectStr(e.target.value.replace(/\D/g, ''))}
           />
         </div>
 
@@ -422,7 +446,7 @@ function PackLineSheet({
         <div className="dtf-actions">
           <button className="btn ghost" disabled={saving} onClick={onClose}>Закрыть</button>
           <button className="btn" disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : <><Icon name="check" size={18} /> Записать</>}
+            {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Записать</>}
           </button>
         </div>
 
@@ -451,7 +475,6 @@ function PackLineSheet({
           ))
         )}
         </CollapsibleSection>
-      </div>
-    </div>
+    </Sheet>
   )
 }

@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNav } from '../nav/NavContext'
 import { Icon } from '../components/Icon'
 import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
 import { getLocationByCode, isLocationCode } from '../api/locationsApi'
+import { isScanAutoStartEnabled } from '../utils/scanSettings'
+import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 
 // Сканер ШК: камера в нативной сборке (ML Kit за абстракцией ScanSource — позже ТСД),
 // ручной ввод кода как fallback. Код → GET /products/by-barcode/{code}. См. docs/mobile-plan.md §6.2.
+
+// После успешного скана экран уходит на карточку результата и размонтируется; при
+// возврате «назад» камера не должна открываться сама — флаг живёт на уровне модуля.
+let returningFromResult = false
+
 export function ScanScreen() {
   const { back, openScanProduct, openScanLocation } = useNav()
   const [code, setCode] = useState('')
@@ -15,13 +22,29 @@ export function ScanScreen() {
   const [notFound, setNotFound] = useState('')
   const [scanAvailable, setScanAvailable] = useState(false)
   const [moduleProgress, setModuleProgress] = useState<number | null>(null)
+  // Вернулись с карточки результата — камера не автозапускается, кнопка = «Сканировать ещё».
+  const [returned] = useState(() => {
+    const v = returningFromResult
+    returningFromResult = false
+    return v
+  })
+  const autoStarted = useRef(false)
 
   useEffect(() => {
     let live = true
-    scanSource.isAvailable().then((v) => live && setScanAvailable(v))
+    scanSource.isAvailable().then((v) => {
+      if (!live) return
+      setScanAvailable(v)
+      // Автозапуск камеры без лишнего тапа (отключается в профиле).
+      if (v && !returned && isScanAutoStartEnabled() && !autoStarted.current) {
+        autoStarted.current = true
+        void onScanCamera()
+      }
+    })
     return () => {
       live = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function lookup(raw: string) {
@@ -34,13 +57,25 @@ export function ScanScreen() {
       // QR ячейки («wms:loc:<id>») ведёт на карточку места, всё прочее — ШК товара.
       if (isLocationCode(c)) {
         const res = await getLocationByCode(c)
-        if (res.found && res.location) openScanLocation(res.location)
-        else setNotFound(c)
+        if (res.found && res.location) {
+          scanSuccessFeedback()
+          returningFromResult = true
+          openScanLocation(res.location)
+        } else {
+          scanNotFoundFeedback()
+          setNotFound(c)
+        }
         return
       }
       const res = await getProductByBarcode(c)
-      if (res.found && res.match) openScanProduct(res.match)
-      else setNotFound(c)
+      if (res.found && res.match) {
+        scanSuccessFeedback()
+        returningFromResult = true
+        openScanProduct(res.match)
+      } else {
+        scanNotFoundFeedback()
+        setNotFound(c)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось найти')
     } finally {
@@ -73,9 +108,7 @@ export function ScanScreen() {
             <Icon name="arrowLeft" size={19} />
           </button>
           <span className="scan-title">Сканировать ШК</span>
-          <button className="scan-icobtn" aria-label="Настройки" disabled>
-            <Icon name="settings" size={18} />
-          </button>
+          <span className="scan-icobtn" style={{ visibility: 'hidden' }} aria-hidden="true" />
         </div>
 
         <div className="scan-reticle">
@@ -101,7 +134,7 @@ export function ScanScreen() {
                 `Загрузка сканера… ${Math.round(moduleProgress)}%`
               ) : (
                 <>
-                  <Icon name="search" size={16} /> Сканировать камерой
+                  <Icon name="search" size={16} /> {returned ? 'Сканировать ещё' : 'Сканировать камерой'}
                 </>
               )}
             </button>
@@ -133,7 +166,7 @@ export function ScanScreen() {
               }}
             />
             <button className="btn auto" type="submit" disabled={looking || !code.trim()}>
-              {looking ? '…' : 'Найти'}
+              {looking ? <span className="spin spin-sm" /> : 'Найти'}
             </button>
           </form>
 
@@ -150,10 +183,6 @@ export function ScanScreen() {
               Код «{notFound}» не найден.
             </div>
           )}
-
-          <button className="btn ghost" style={{ marginTop: 12 }} onClick={back}>
-            Назад
-          </button>
         </div>
       </div>
     </div>

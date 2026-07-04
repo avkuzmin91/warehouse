@@ -19,6 +19,7 @@ import {
 } from '../../api/tripsApi'
 import { getCarriers, getVehicleTypes, getWarehouses, type DictionaryItem } from '../../api/lookupsApi'
 import { AppBar } from '../../components/AppBar'
+import { ConfirmAction } from '../../components/ConfirmAction'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { isDateTimeBefore, isDateTimeComplete } from '../../components/DateTimeField'
@@ -296,13 +297,17 @@ export function ManagerTripDetailScreen({ tripId }: { tripId: string }) {
 
                 <ActionBar error={actionErr}>
                   <button className="btn" disabled={saving} onClick={handleHandoff}>
-                    {saving ? '…' : <><Icon name="arrowRight" size={18} /> Передать на склад</>}
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="arrowRight" size={18} /> Передать на склад</>}
                   </button>
-                  <CancelControl
-                    confirm={confirmCancel}
+                  <ConfirmAction
+                    danger
+                    label={<><Icon name="x" size={16} /> Отменить рейс</>}
+                    prompt="Аннулировать рейс? Действие необратимо."
+                    confirmLabel="Да, отменить"
                     saving={saving}
-                    onAsk={() => setConfirmCancel(true)}
-                    onCancel={() => setConfirmCancel(false)}
+                    open={confirmCancel}
+                    onOpen={() => setConfirmCancel(true)}
+                    onClose={() => setConfirmCancel(false)}
                     onConfirm={() => { setConfirmCancel(false); void runAction(() => cancelTrip(tripId)) }}
                   />
                 </ActionBar>
@@ -333,11 +338,15 @@ export function ManagerTripDetailScreen({ tripId }: { tripId: string }) {
                 <DocsSection detail={detail} outbound={outbound} title={lex.docsInVehicle} />
 
                 <ActionBar error={actionErr}>
-                  <CancelControl
-                    confirm={confirmCancel}
+                  <ConfirmAction
+                    danger
+                    label={<><Icon name="x" size={16} /> Отменить рейс</>}
+                    prompt="Аннулировать рейс? Действие необратимо."
+                    confirmLabel="Да, отменить"
                     saving={saving}
-                    onAsk={() => setConfirmCancel(true)}
-                    onCancel={() => setConfirmCancel(false)}
+                    open={confirmCancel}
+                    onOpen={() => setConfirmCancel(true)}
+                    onClose={() => setConfirmCancel(false)}
                     onConfirm={() => { setConfirmCancel(false); void runAction(() => cancelTrip(tripId)) }}
                   />
                 </ActionBar>
@@ -376,13 +385,17 @@ export function ManagerTripDetailScreen({ tripId }: { tripId: string }) {
 
                 <ActionBar error={actionErr}>
                   <button className="btn" disabled={saving} onClick={() => void runAction(() => closeTrip(tripId))}>
-                    {saving ? '…' : <><Icon name="check" size={18} /> Закрыть рейс</>}
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Закрыть рейс</>}
                   </button>
-                  <CancelControl
-                    confirm={confirmCancel}
+                  <ConfirmAction
+                    danger
+                    label={<><Icon name="x" size={16} /> Отменить рейс</>}
+                    prompt="Аннулировать рейс? Действие необратимо."
+                    confirmLabel="Да, отменить"
                     saving={saving}
-                    onAsk={() => setConfirmCancel(true)}
-                    onCancel={() => setConfirmCancel(false)}
+                    open={confirmCancel}
+                    onOpen={() => setConfirmCancel(true)}
+                    onClose={() => setConfirmCancel(false)}
                     onConfirm={() => { setConfirmCancel(false); void runAction(() => cancelTrip(tripId)) }}
                   />
                 </ActionBar>
@@ -579,29 +592,3 @@ function ActionBar({ error, children }: { error: string; children: ReactNode }) 
   )
 }
 
-function CancelControl({ confirm, saving, onAsk, onCancel, onConfirm }: {
-  confirm: boolean
-  saving: boolean
-  onAsk: () => void
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  if (!confirm) {
-    return (
-      <button className="btn ghost danger" disabled={saving} onClick={onAsk}>
-        <Icon name="x" size={16} /> Отменить рейс
-      </button>
-    )
-  }
-  return (
-    <>
-      <div className="line-sub" style={{ textAlign: 'center', margin: '2px 0' }}>Аннулировать рейс? Действие необратимо.</div>
-      <div className="line-row" style={{ marginTop: 0 }}>
-        <button className="btn ghost" style={{ flex: 1 }} disabled={saving} onClick={onCancel}>Нет</button>
-        <button className="btn danger" style={{ flex: 1 }} disabled={saving} onClick={onConfirm}>
-          {saving ? '…' : 'Да, отменить'}
-        </button>
-      </div>
-    </>
-  )
-}

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Icon } from './Icon'
+import { useHardwareBack } from '../nav/backHandlers'
 
 export type ComboOption = { value: string; label: string }
 
@@ -38,6 +39,8 @@ export function Combobox({
     setOpen(false)
     setQ('')
   }
+
+  useHardwareBack(close, open)
 
   return (
     <>

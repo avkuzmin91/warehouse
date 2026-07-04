@@ -116,6 +116,30 @@ export function advanceReceiptStatus(docId: string): Promise<{ message: string }
   return request<{ message: string }>(`/receipts/${docId}/advance`, { method: 'POST' })
 }
 
+// Пост-фактум корректировка обсчёта приёмки по строке (частично принято / завершён):
+// правит принятое вместе со стоком и журналом. Причина обязательна.
+export function correctReceivedQty(docId: string, lineId: string, payload: { accepted_qty: number; reason: string }) {
+  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/correct-received`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// Аннулировать можно только «В плане» и без привязки к активному рейсу (гейты бэка).
+export function cancelReceipt(docId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/receipts/${docId}/cancel`, { method: 'POST' })
+}
+
+/** Частично принято → Завершён: закрыть поступление с недопоставкой (менеджер). */
+export function closeReceiptShort(docId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/receipts/${docId}/close-short`, { method: 'POST' })
+}
+
+/** Частично принято: освободить недовоз разгруженных рейсов под новый рейс (менеджер). */
+export function expectRedelivery(docId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/receipts/${docId}/expect-redelivery`, { method: 'POST' })
+}
+
 export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal): Promise<ReceiptListResponse> {
   const sp = new URLSearchParams()
   if (params.page)      sp.set('page', String(params.page))

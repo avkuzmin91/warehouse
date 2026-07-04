@@ -1,6 +1,9 @@
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { NavProvider, useNav } from './nav/NavContext'
+import { HardwareBack } from './nav/HardwareBack'
 import { BottomNav } from './components/BottomNav'
+import { OfflineBanner } from './components/OfflineBanner'
+import { ToastProvider } from './components/Toast'
 import { LoginScreen } from './screens/LoginScreen'
 import { TasksScreen } from './screens/TasksScreen'
 import { TripsListScreen } from './screens/TripsListScreen'
@@ -12,6 +15,7 @@ import { ScanLocationScreen } from './screens/ScanLocationScreen'
 import { StockScreen } from './screens/StockScreen'
 import { TripDetailScreen } from './screens/TripDetailScreen'
 import { ShipmentDetailScreen } from './screens/ShipmentDetailScreen'
+import { DispatchPrepareScreen } from './screens/DispatchPrepareScreen'
 import { ShiftPackingListScreen } from './screens/ShiftPackingListScreen'
 import { ShiftPackingDetailScreen } from './screens/ShiftPackingDetailScreen'
 import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
@@ -25,11 +29,19 @@ import { DispatchFormScreen } from './screens/manager/DispatchFormScreen'
 import { DispatchDetailScreen } from './screens/manager/DispatchDetailScreen'
 import { WarehouseHubScreen } from './screens/manager/WarehouseHubScreen'
 import { ProductFormScreen } from './screens/manager/ProductFormScreen'
+import { ProductEditScreen } from './screens/manager/ProductEditScreen'
 import { ProductsCatalogScreen } from './screens/manager/ProductsCatalogScreen'
 import { DictCatalogScreen } from './screens/manager/DictCatalogScreen'
 import { ManagerTripsListScreen } from './screens/manager/ManagerTripsListScreen'
 import { TripFormScreen } from './screens/manager/TripFormScreen'
 import { ManagerTripDetailScreen } from './screens/manager/ManagerTripDetailScreen'
+import { InvoicesListScreen } from './screens/manager/InvoicesListScreen'
+import { InvoiceDetailScreen } from './screens/manager/InvoiceDetailScreen'
+import { UninvoicedScreen } from './screens/manager/UninvoicedScreen'
+import { ExtraIncomeScreen } from './screens/manager/ExtraIncomeScreen'
+import { ExpensesScreen } from './screens/manager/ExpensesScreen'
+import { ExpenseDetailScreen } from './screens/manager/ExpenseDetailScreen'
+import { PackingProductivityScreen } from './screens/manager/PackingProductivityScreen'
 
 function Main() {
   // Таб-бар — только на «корневых» вкладках (isTab). На детальных экранах есть своя
@@ -45,9 +57,11 @@ function Main() {
     case 'mTripDoc':  screen = <ManagerTripDetailScreen tripId={route.id} />; break
     case 'mWarehouse': screen = <WarehouseHubScreen />; break
     case 'productNew': screen = <ProductFormScreen />; break
+    case 'productEdit': screen = <ProductEditScreen productId={route.id} />; break
     case 'mProducts': screen = <ProductsCatalogScreen />; break
     case 'mColors':   screen = <DictCatalogScreen kind="colors" />; break
     case 'mSizes':    screen = <DictCatalogScreen kind="sizes" />; break
+    case 'mClients':  screen = <DictCatalogScreen kind="clients" />; break
     case 'mReceipts': screen = <ReceiptsListScreen />; break
     case 'receiptNew': screen = <ReceiptFormScreen />; break
     case 'mReceiptDoc': screen = <ReceiptDetailScreen docId={route.id} />; break
@@ -59,6 +73,13 @@ function Main() {
     case 'dispatchNew': screen = <DispatchFormScreen />; break
     case 'dispatchEdit': screen = <DispatchFormScreen docId={route.id} />; break
     case 'mDispatchDoc': screen = <DispatchDetailScreen docId={route.id} />; break
+    case 'mInvoices': screen = <InvoicesListScreen />; break
+    case 'mInvoiceDoc': screen = <InvoiceDetailScreen invoiceId={route.id} />; break
+    case 'mUninvoiced': screen = <UninvoicedScreen />; break
+    case 'mExtraIncome': screen = <ExtraIncomeScreen />; break
+    case 'mExpenses': screen = <ExpensesScreen />; break
+    case 'mExpenseDoc': screen = <ExpenseDetailScreen expenseId={route.id} />; break
+    case 'mPackingProductivity': screen = <PackingProductivityScreen />; break
     case 'profile':   screen = <ProfileScreen />; break
     case 'scan':      screen = <ScanScreen />; break
     case 'scanProduct': screen = <ScanProductScreen match={route.match} />; break
@@ -66,8 +87,9 @@ function Main() {
     case 'stock':     screen = <StockScreen />; break
     case 'trip':      screen = <TripDetailScreen tripId={route.id} />; break
     case 'shipment':  screen = <ShipmentDetailScreen shipmentId={route.id} />; break
+    case 'dispatchPrepare': screen = <DispatchPrepareScreen docId={route.id} />; break
     case 'packing':   screen = <ShiftPackingListScreen />; break
-    case 'packDoc':   screen = <ShiftPackingDetailScreen shipmentId={route.id} />; break
+    case 'packDoc':   screen = <ShiftPackingDetailScreen shipmentId={route.id} focus={route.focus} />; break
   }
   return (
     <>
@@ -92,6 +114,7 @@ function Gate() {
   if (!user) return <LoginScreen />
   return (
     <NavProvider>
+      <HardwareBack />
       <Main />
     </NavProvider>
   )
@@ -100,7 +123,10 @@ function Gate() {
 export function App() {
   return (
     <AuthProvider>
-      <Gate />
+      <ToastProvider>
+        <OfflineBanner />
+        <Gate />
+      </ToastProvider>
     </AuthProvider>
   )
 }

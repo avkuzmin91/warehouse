@@ -6,7 +6,7 @@ import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDateLong } from '../../../utils/format'
 import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate, fmtSalary } from './shared'
-import { AdvanceModal, RateModal, SalaryModal, EditEmployeeModal } from './modals'
+import { AdvanceModal, SettleModal, RateModal, SalaryModal, EditEmployeeModal } from './modals'
 import { getEmployee, archiveEmployee, restoreEmployee, cancelPayment, deleteEmployeeRate, deleteEmployeeSalary, DAY_STATUS_LABELS, type EmployeeDetail, type PayHistoryItem, type AttendanceBlock, type AttendanceStatus } from '../../../api/timesheetApi'
 
 function SumCell({ label, value, big, tone }: { label: string; value: string; big?: boolean; tone?: 'accent' | 'danger' }) {
@@ -197,6 +197,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
   const confirm = useConfirm()
   const [tick, setTick] = useState(0)
   const [advance, setAdvance] = useState(false)
+  const [settleOpen, setSettleOpen] = useState(false)
   const [rateOpen, setRateOpen] = useState(false)
   const [salaryOpen, setSalaryOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -259,6 +260,8 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
   if (!e) return <div className="page" style={{ padding: 24, color: 'var(--c-text-subtle)' }}>{loading ? 'Загрузка…' : null}</div>
 
   const w = e.this_week
+  // Пятничный расчёт — только у почасовиков (оклад начисляется помесячно, а не закрывается неделей).
+  const canSettle = showMoney && e.status === 'active' && e.comp_type === 'hourly'
   return (
     <div className="page">
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, paddingBottom: 16, marginBottom: 18, borderBottom: '1px solid var(--c-border)' }}>
@@ -290,7 +293,17 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
 
       <div className="split">
         <div className="col" style={{ gap: 14 }}>
-          <Panel icon="clock" title="Эта неделя" bodyPad={false} right={<span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{e.week_label}</span>}>
+          <Panel
+            icon="clock" title="Эта неделя" bodyPad={false}
+            right={
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                {canSettle && (w.settled
+                  ? <Badge tone="success" dot>Рассчитан</Badge>
+                  : <button className="btn primary sm" onClick={() => setSettleOpen(true)}><Icon name="wallet" size={13} />Рассчитать</button>)}
+                <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{e.week_label}</span>
+              </span>
+            }
+          >
             <div style={{ display: 'grid', gridTemplateColumns: showMoney ? 'repeat(4, 1fr)' : 'repeat(2, 1fr)' }}>
               <SumCell label="Отработано" value={fmtHours(w.hours)} />
               <SumCell label="Смен" value={`${w.worked_days}${w.absent ? ` · ${w.absent} невых.` : ''}`} tone={w.absent ? 'danger' : undefined} />
@@ -376,6 +389,15 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
           weekStart={e.week_start} weekEnd={e.week_end}
           earned={w.earned ?? 0} advances={w.advances ?? 0}
           onClose={() => setAdvance(false)} onSaved={reload}
+        />
+      )}
+      {settleOpen && canSettle && (
+        <SettleModal
+          employeeId={empId} employeeName={e.full_name}
+          weekLabel={e.week_label} weekStart={e.week_start} weekEnd={e.week_end}
+          earned={w.earned ?? 0} advances={w.advances ?? 0} toPay={w.to_pay ?? 0}
+          hours={w.hours} rate={e.rate_kopecks}
+          onClose={() => setSettleOpen(false)} onSaved={reload}
         />
       )}
       {rateOpen && showMoney && (

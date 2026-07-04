@@ -56,6 +56,7 @@ export type EmployeeWeekSummary = {
   advances: number | null
   to_pay: number | null
   overpaid: number | null
+  settled: boolean
 }
 export type AttendanceStatus = DayStatus | 'prehire' | 'future'
 export type AttendanceDay = {

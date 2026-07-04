@@ -12,7 +12,7 @@ import { canCreateDocuments } from '../../utils/access'
 const LIMIT = 200
 
 export function ProductsCatalogScreen() {
-  const { openProductNew, back } = useNav()
+  const { openProductNew, openProductEdit, back } = useNav()
   const { user } = useAuth()
   const canCreate = canCreateDocuments(user?.role)
 
@@ -111,19 +111,34 @@ export function ProductsCatalogScreen() {
               {search.trim() ? 'Найдено' : 'Все товары'}
               <span className="sec-count">{truncated ? `${LIMIT}+` : items.length}</span>
             </div>
-            {items.map((p) => (
-              <div key={p.id} className="tile static">
-                <div className="tile-ico">
-                  <Icon name="tag" size={19} />
-                </div>
-                <div className="tile-body">
-                  <div className="tile-title">{p.name}</div>
-                  <div className="tile-meta">
-                    {p.sku_pending || !p.sku ? 'SKU ожидается' : <span className="mono">{p.sku}</span>}
+            {items.map((p) =>
+              canCreate ? (
+                <button key={p.id} className="tile" onClick={() => openProductEdit(p.id)}>
+                  <div className="tile-ico">
+                    <Icon name="tag" size={19} />
+                  </div>
+                  <div className="tile-body">
+                    <div className="tile-title">{p.name}</div>
+                    <div className="tile-meta">
+                      {p.sku_pending || !p.sku ? 'SKU ожидается' : <span className="mono">{p.sku}</span>}
+                    </div>
+                  </div>
+                  <span className="tile-chev"><Icon name="chev" size={18} /></span>
+                </button>
+              ) : (
+                <div key={p.id} className="tile static">
+                  <div className="tile-ico">
+                    <Icon name="tag" size={19} />
+                  </div>
+                  <div className="tile-body">
+                    <div className="tile-title">{p.name}</div>
+                    <div className="tile-meta">
+                      {p.sku_pending || !p.sku ? 'SKU ожидается' : <span className="mono">{p.sku}</span>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ),
+            )}
           </>
         )}
       </PullToRefresh>

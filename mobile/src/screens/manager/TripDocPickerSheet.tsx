@@ -4,6 +4,7 @@ import { getDispatches, DISPATCH_TRIP_SELECTABLE_STATUSES } from '../../api/disp
 import type { TripDirection, TripCargoType } from '../../api/tripsApi'
 import { Icon } from '../../components/Icon'
 import { fmtDate } from '../../utils/format'
+import { useHardwareBack } from '../../nav/backHandlers'
 
 // Документ-кандидат для привязки к рейсу (единый вид для поступлений и отгрузок).
 export type TripPickDoc = {
@@ -46,6 +47,8 @@ export function TripDocPickerSheet({
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
+
+  useHardwareBack(onClose)
 
   useEffect(() => {
     const ac = new AbortController()

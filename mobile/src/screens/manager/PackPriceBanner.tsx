@@ -119,7 +119,7 @@ function PriceRow({
             </button>
           )}
           <button type="button" className="btn sm" disabled={saving} onClick={() => void save()}>
-            <Icon name="check" size={12} /> {saving ? '…' : 'Сохранить'}
+            <Icon name="check" size={12} /> {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
           </button>
         </div>
         {error && (

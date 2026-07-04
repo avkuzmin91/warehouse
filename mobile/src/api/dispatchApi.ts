@@ -1,4 +1,4 @@
-import { request, requestForm } from './http'
+import { request, requestForm, requestIdHeaders } from './http'
 
 // --- Types --- (подмножество backend/modules/dispatch/schemas.py)
 export type DispatchStatus =
@@ -194,6 +194,51 @@ export function uploadDispatchLineFile(docId: string, lineId: string, file: File
 
 export function advanceDispatch(id: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/dispatches/${id}/advance`, { method: 'POST' })
+}
+
+export function updateDispatchPriority(id: string, priorityRank: number | null) {
+  return request<{ message: string }>(`/dispatches/${id}/priority`, {
+    method: 'PATCH',
+    body: JSON.stringify({ priority_rank: priorityRank }),
+  })
+}
+
+// Аннулировать можно, пока ничего не уехало (draft/preparing/awaiting_trip); из
+// «Ожидает рейс» бэк автоворачивает подготовленный товар на исходные места.
+export function cancelDispatch(id: string) {
+  return request<{ message: string }>(`/dispatches/${id}/cancel`, { method: 'POST' })
+}
+
+// Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
+export const DISPATCH_PRIORITY_URGENT = 1
+export const DISPATCH_PRIORITY_HIGH   = 2
+
+export const DISPATCH_PRIORITY_LABELS: Record<number, string> = {
+  [DISPATCH_PRIORITY_URGENT]: 'Срочно',
+  [DISPATCH_PRIORITY_HIGH]:   'Повышенный',
+}
+
+export function dispatchPriorityLabel(rank: number | null): string {
+  return (rank != null && DISPATCH_PRIORITY_LABELS[rank]) || 'Обычный'
+}
+
+export function dispatchPriorityTone(rank: number | null): 'danger' | 'warning' | '' {
+  if (rank === DISPATCH_PRIORITY_URGENT) return 'danger'
+  if (rank === DISPATCH_PRIORITY_HIGH) return 'warning'
+  return ''
+}
+
+export type DispatchPrepareSource = { zone_id: string; zone_name: string | null; qty: number }
+export type DispatchPrepareLine = { line_id: string; sources: DispatchPrepareSource[] }
+
+// Подготовка отгрузки кладовщиком: preparing → awaiting_trip. Товар списывается с
+// выбранных ячеек-источников и переезжает в зону отгрузки (ready).
+export function finishDispatchPreparation(id: string, lines: DispatchPrepareLine[], requestId: string) {
+  return request<{ message: string }>(`/dispatches/${id}/finish-preparation`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+    headers: requestIdHeaders(requestId),
+  })
 }
 
 // --- Проверка дубля (зеркало web DuplicateWarnModal) ---

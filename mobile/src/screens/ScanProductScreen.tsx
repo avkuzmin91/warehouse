@@ -159,7 +159,10 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
           </>
         )}
 
-        <ScanDocsBlock variantId={match.variant_id} />
+        <ScanDocsBlock
+          variantId={match.variant_id}
+          packFocus={{ productId: product_id, colorId: color_id ?? null, sizeId: size_id ?? null }}
+        />
       </PullToRefresh>
     </div>
   )

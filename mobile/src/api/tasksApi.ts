@@ -4,7 +4,7 @@ import { request } from './http'
 export type TaskItem = {
   kind: string
   title: string
-  doc_type: 'trip' | 'receipt' | 'shipment'
+  doc_type: 'trip' | 'receipt' | 'shipment' | 'dispatch'
   doc_id: string
   doc_number: string
   status: string
@@ -16,11 +16,13 @@ export type TaskItem = {
   priority_rank?: number | null
 }
 export type TasksResponse = { items: TaskItem[]; total: number }
+export type TasksParams = { page?: number; limit?: number }
 
 // --- API functions ---
-export function getTasks(limit = 20, signal?: AbortSignal): Promise<TasksResponse> {
+export function getTasks(params: TasksParams = {}, signal?: AbortSignal): Promise<TasksResponse> {
   const sp = new URLSearchParams()
-  sp.set('limit', String(limit))
+  if (params.page) sp.set('page', String(params.page))
+  sp.set('limit', String(params.limit ?? 20))
   return request<TasksResponse>(`/tasks?${sp.toString()}`, { signal })
 }
 
@@ -31,6 +33,7 @@ export const TASK_KIND_LABELS: Record<string, string> = {
   shipment_move_in: 'Передать на упаковку',
   shipment_relocate: 'Разложить по местам',
   shipment_defect_prepare: 'Подготовить брак',
+  dispatch_prepare: 'Подготовить отгрузку',
 }
 
 /** Иконка-эмодзи по типу задачи — крупная визуальная метка для мобильной карточки. */

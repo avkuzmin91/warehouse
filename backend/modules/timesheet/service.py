@@ -264,11 +264,16 @@ def load_week_employees(connection, sat_iso: str, fri_iso: str) -> list[dict]:
 
     Два последних условия держат историю: архивный сотрудник остаётся в неделях,
     где он работал или получал выплаты (суммы сходятся), но пропадает из текущих и
-    будущих недель, где данных по нему уже нет."""
+    будущих недель, где данных по нему уже нет.
+
+    Окладники (comp_type=fixed) в сетку/расчёт/планирование не попадают: их оплата
+    помесячная (начисляется отдельно, а не закрывается неделей), в недельном табеле
+    они только мешают."""
     rows = connection.execute(
         "SELECT e.id, e.full_name, COALESCE(p.name, e.position) AS position, e.status "
         "FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
-        "WHERE COALESCE(e.is_deleted, 0) = 0 AND ("
+        "WHERE COALESCE(e.is_deleted, 0) = 0 "
+        "  AND COALESCE(e.comp_type, ?) != ? AND ("
         "  (e.status = ? AND COALESCE(e.hired_on, SUBSTR(e.created_at, 1, 10)) <= ?)"
         "  OR EXISTS (SELECT 1 FROM timesheet_entries t "
         "             WHERE t.employee_id = e.id AND COALESCE(t.is_deleted, 0) = 0 "
@@ -278,7 +283,8 @@ def load_week_employees(connection, sat_iso: str, fri_iso: str) -> list[dict]:
         "               AND pp.period_start = ? AND pp.period_end = ?)"
         ") "
         "ORDER BY (e.status = ?) DESC, e.full_name",
-        (EMPLOYEE_STATUS_ACTIVE, fri_iso, sat_iso, fri_iso,
+        (EMPLOYEE_COMP_HOURLY, EMPLOYEE_COMP_FIXED,
+         EMPLOYEE_STATUS_ACTIVE, fri_iso, sat_iso, fri_iso,
          sat_iso, fri_iso, EMPLOYEE_STATUS_ACTIVE),
     ).fetchall()
     return [

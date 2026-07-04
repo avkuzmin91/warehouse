@@ -454,6 +454,7 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
             advances=s["advances"] if with_money else None,
             to_pay=s["to_pay"] if with_money else None,
             overpaid=s["overpaid"] if with_money else None,
+            settled=bool(s["settled"]),
         ),
         attendance=AttendanceBlock(**attendance),
         rate_history=rate_history,

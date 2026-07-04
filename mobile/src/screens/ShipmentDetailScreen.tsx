@@ -7,20 +7,27 @@ import { getBalancesByZone, type ZoneBalance } from '../api/balancesApi'
 import { balanceKey } from '../utils/balanceKey'
 import {
   advanceShipment,
+  deleteShipmentLineFile,
   finishRelocation,
+  finishShipmentDefectRelocation,
   getShipment,
   moveLineToPacking,
   placePackedShipment,
   rejectShipment,
   returnLineFromPacking,
   SHIPMENT_STATUS_LABELS,
+  updateShipment,
+  uploadShipmentLineFile,
   type MoveAllocation,
   type RelocateLine,
+  type ShipmentDefectRelocateLine,
   type ShipmentDetail,
   type ShipmentLine,
 } from '../api/shipmentsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
+import { LineFiles } from '../components/LineFiles'
+import { Sheet } from '../components/Sheet'
 import { TextArea } from '../components/TextArea'
 import { ZoneField } from '../components/ZoneField'
 import { canAcceptPackingTask } from '../utils/access'
@@ -53,11 +60,16 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
   const [defectRows, setDefectRows] = useState<Record<string, Row[]>>({})
   // Частичное размещение упакованного по местам прямо на упаковке (good).
   const [placeRows, setPlaceRows] = useState<Record<string, Row[]>>({})
+  // Брак-отгрузка (relocating/defect): сбор брака из мест хранения в зону отгрузки.
+  const [defectPrepRows, setDefectPrepRows] = useState<Record<string, Row[]>>({})
   const [showErrors, setShowErrors] = useState(false)
   const [returnLine, setReturnLine] = useState<ShipmentLine | null>(null)
   // Отклонение задачи упаковки на приёмке (assigned → draft): обязательная причина.
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  // Правка ТЗ на приёмке задачи (assigned): бэк пускает начсклада только к comment.
+  const [tzOpen, setTzOpen] = useState(false)
+  const [tzText, setTzText] = useState('')
 
   const load = useCallback(
     (signal?: AbortSignal) => {
@@ -82,6 +94,11 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
             }
             setGoodRows(g)
             setDefectRows(df)
+          }
+          if (d.status === 'relocating' && d.cargo_type === 'defect') {
+            const next: Record<string, Row[]> = {}
+            for (const l of d.lines) next[l.id] = [{ zoneId: '', qty: l.qty }]
+            setDefectPrepRows(next)
           }
           if (d.status === 'on_packing' && d.cargo_type === 'good') {
             const p: Record<string, Row[]> = {}
@@ -115,9 +132,12 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     return () => ac.abort()
   }, [])
 
-  // Места-источники свободного товара на хранении — для передачи на упаковку.
+  // Места-источники свободного товара на хранении — для передачи на упаковку
+  // (packing) и для сбора брака при брак-отгрузке (relocating/defect).
   useEffect(() => {
-    if (!doc || doc.status !== 'packing' || !doc.client_id) return
+    if (!doc || !doc.client_id) return
+    const needSources = doc.status === 'packing' || (doc.status === 'relocating' && doc.cargo_type === 'defect')
+    if (!needSources) return
     const ac = new AbortController()
     getBalancesByZone({ clientId: doc.client_id }, ac.signal)
       .then((r) => setZoneBalances(r.items))
@@ -278,6 +298,40 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
 
   const canAccept = doc?.status === 'assigned' && canAcceptPackingTask(user?.role)
 
+  async function saveTz() {
+    if (saving || savingLine) return
+    setSaving(true)
+    setError('')
+    try {
+      await updateShipment(shipmentId, { comment: tzText.trim() || null })
+      setTzOpen(false)
+      reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить ТЗ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function uploadTaskFiles(line: ShipmentLine, files: File[]) {
+    if (files.length === 0 || saving || savingLine) return
+    setSavingLine(line.id)
+    setError('')
+    try {
+      for (const f of files) await uploadShipmentLineFile(shipmentId, line.id, f)
+      reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить файл')
+    } finally {
+      setSavingLine(null)
+    }
+  }
+
+  async function removeTaskFile(line: ShipmentLine, fileId: string) {
+    await deleteShipmentLineFile(shipmentId, line.id, fileId)
+    reload()
+  }
+
   function handleFinishRelocation() {
     const reasons: string[] = []
     for (const l of packedLines) {
@@ -305,6 +359,43 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
       defect: l.packed_pending_defect > 0 ? toAlloc(defectRows[l.id] ?? []) : [],
     }))
     void runAction(() => finishRelocation(shipmentId, lines, requestIdFor('finish')), 'finish')
+  }
+
+  // Брак-отгрузка: собрать брак из мест хранения → зона отгрузки (relocating → awaiting_trip).
+  function handleFinishDefectPreparation() {
+    if (!doc) return
+    const reasons: string[] = []
+    for (const l of doc.lines) {
+      const rows = defectPrepRows[l.id] ?? []
+      const avail = new Map(sourceZones(l).map((z) => [z.id, z.available]))
+      if (rows.some((r) => r.qty > 0 && !r.zoneId)) reasons.push(`Выберите место-источник для «${l.product_name}»`)
+      const seen = new Set<string>()
+      for (const r of rows) {
+        if (!r.zoneId) continue
+        if (seen.has(r.zoneId)) { reasons.push(`Место указано дважды для «${l.product_name}»`); break }
+        seen.add(r.zoneId)
+      }
+      if (sumRows(rows) !== l.qty) reasons.push(`Наберите весь брак «${l.product_name}» (нужно ${l.qty} шт.)`)
+      if (rows.some((r) => r.zoneId && r.qty > (avail.get(r.zoneId) ?? 0))) {
+        reasons.push(`В выбранном месте не хватает брака для «${l.product_name}»`)
+      }
+    }
+    if (reasons.length) {
+      setShowErrors(true)
+      setError(reasons[0])
+      return
+    }
+    const lines: ShipmentDefectRelocateLine[] = doc.lines.map((l) => ({
+      line_id: l.id,
+      sources: (defectPrepRows[l.id] ?? [])
+        .filter((r) => r.zoneId && r.qty > 0)
+        .map((r) => ({
+          zone_id: r.zoneId,
+          zone_name: sourceZones(l).find((z) => z.id === r.zoneId)?.name ?? null,
+          qty: r.qty,
+        })),
+    }))
+    void runAction(() => finishShipmentDefectRelocation(shipmentId, lines))
   }
 
   return (
@@ -347,10 +438,22 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                 <span className="v">{fmtDate(doc.ship_date)}</span>
               </div>
             </div>
-            {doc.comment && (
+            {(doc.comment || canAccept) && (
               <div className="tzcard">
-                <div className="tztitle">Техническое задание</div>
-                <div className="tzbody">{doc.comment}</div>
+                <div className="tztitle" style={canAccept ? { display: 'flex', alignItems: 'center' } : undefined}>
+                  Техническое задание
+                  {canAccept && (
+                    <button
+                      className="btn ghost sm auto"
+                      style={{ marginLeft: 'auto' }}
+                      aria-label="Изменить ТЗ"
+                      onClick={() => { setTzText(doc.comment ?? ''); setTzOpen(true) }}
+                    >
+                      <Icon name="edit" size={13} /> Изменить
+                    </button>
+                  )}
+                </div>
+                <div className="tzbody">{doc.comment || 'ТЗ не заполнено'}</div>
               </div>
             )}
 
@@ -367,6 +470,26 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                       <span className="line-sub mono">{l.product_sku}</span>
                       <span className="line-sub">{l.qty} шт</span>
                     </div>
+                    <LineFiles
+                      files={l.files}
+                      onError={setError}
+                      onDelete={canAccept ? (f) => removeTaskFile(l, f.id) : undefined}
+                    />
+                    {canAccept && (
+                      <label className="btn ghost sm auto" style={{ marginTop: 8, cursor: 'pointer' }}>
+                        <Icon name="file" size={13} /> {savingLine === l.id ? <span className="spin spin-sm" /> : 'Файл ТЗ'}
+                        <input
+                          type="file"
+                          hidden
+                          multiple
+                          accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf"
+                          onChange={(e) => {
+                            void uploadTaskFiles(l, Array.from(e.target.files ?? []))
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                    )}
                   </div>
                 ))}
                 {canAccept ? (
@@ -378,7 +501,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                       </div>
                     )}
                     <button className="btn" disabled={saving} onClick={handleAdvance}>
-                      {saving ? '…' : <><Icon name="check" size={18} /> Принять в работу</>}
+                      {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Принять в работу</>}
                     </button>
                     <button className="btn ghost" disabled={saving} onClick={() => { setError(''); setRejectOpen(true) }}>
                       <Icon name="x" size={18} /> Отклонить
@@ -422,6 +545,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                       <div className="line-sub">
                         <span className="mono">{l.product_sku}</span>
                       </div>
+                      <LineFiles files={l.files} onError={setError} />
                       <div className="pack-meter">
                         <div className="pack-meter-top">
                           <div className="pack-meter-count">
@@ -506,7 +630,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                               disabled={savingLine === l.id}
                               onClick={() => void transferLine(l)}
                             >
-                              {savingLine === l.id ? '…' : 'Передать'}
+                              {savingLine === l.id ? <span className="spin spin-sm" /> : 'Передать'}
                             </button>
                           </div>
                         </>
@@ -522,7 +646,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                     </div>
                   )}
                   <button className="btn" disabled={saving || savingLine !== null} onClick={handleAdvance}>
-                    {saving ? '…' : <><Icon name="check" size={18} /> Готово — на упаковку</>}
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Готово — на упаковку</>}
                   </button>
                 </div>
               </>
@@ -565,22 +689,119 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                     ))}
                     <div className="actionbar">
                       <button className="btn" disabled={saving} onClick={handleFinishRelocation}>
-                        {saving ? '…' : <><Icon name="check" size={18} /> Готово к рейсу</>}
+                        {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Готово к рейсу</>}
                       </button>
                     </div>
                   </>
                 )}
               </>
             ) : doc.status === 'relocating' && doc.cargo_type === 'defect' ? (
-              <div className="center">
-                <div className="center-ico">
-                  <Icon name="refresh" size={26} />
+              <>
+                <div className="sec">Сбор брака к отгрузке</div>
+                <div className="line-sub" style={{ padding: '0 2px 8px' }}>
+                  По каждой строке укажите, из каких мест хранения берётся брак —
+                  он переедет в зону отгрузки и будет ждать рейс.
                 </div>
-                <div>Подготовка брака к отгрузке пока доступна в веб-версии.</div>
-                <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
-                  Назад
-                </button>
-              </div>
+                {doc.lines.map((l) => {
+                  const opts = sourceZones(l)
+                  const rows = defectPrepRows[l.id] ?? []
+                  const picked = sumRows(rows.filter((r) => !!r.zoneId))
+                  const done = picked >= l.qty
+                  return (
+                    <div key={l.id} className="line">
+                      <div className="line-head">
+                        <div className="line-name">{lineTitle(l)}</div>
+                        {done ? (
+                          <span className="badge success">
+                            <Icon name="check" size={12} /> Набрано
+                          </span>
+                        ) : (
+                          <span className="badge warning">осталось {Math.max(0, l.qty - picked)}</span>
+                        )}
+                      </div>
+                      <div className="line-sub">
+                        <span className="mono">{l.product_sku}</span> · план {l.qty} шт
+                      </div>
+                      <LineFiles files={l.files} onError={setError} />
+                      {opts.length === 0 ? (
+                        <div className="line-sub" style={{ marginTop: 8, color: 'var(--c-warning)' }}>
+                          Брак этой позиции не найден в местах хранения — проверьте остатки.
+                        </div>
+                      ) : (
+                        <>
+                          {rows.map((row, i) => (
+                            <div key={i} className="line-row">
+                              <input
+                                className="input num"
+                                type="text"
+                                inputMode="numeric"
+                                min={0}
+                                value={row.qty || ''}
+                                onChange={(e) =>
+                                  setDefectPrepRows((p) => ({
+                                    ...p,
+                                    [l.id]: rows.map((r, idx) =>
+                                      idx === i ? { ...r, qty: Math.max(0, Math.floor(Number(e.target.value) || 0)) } : r,
+                                    ),
+                                  }))
+                                }
+                              />
+                              <ZoneField
+                                value={row.zoneId}
+                                options={opts.map((o) => ({ value: o.id, label: `${o.name} (брак ${o.available})` }))}
+                                placeholder="Откуда взять…"
+                                title="Место-источник"
+                                invalid={showErrors && row.qty > 0 && !row.zoneId}
+                                onError={setError}
+                                onChange={(v) =>
+                                  setDefectPrepRows((p) => ({
+                                    ...p,
+                                    [l.id]: rows.map((r, idx) => (idx === i ? { ...r, zoneId: v } : r)),
+                                  }))
+                                }
+                              />
+                              {rows.length > 1 && (
+                                <button
+                                  className="appbar-back"
+                                  style={{ flex: '0 0 50px', height: 50 }}
+                                  aria-label="Убрать строку"
+                                  onClick={() =>
+                                    setDefectPrepRows((p) => ({ ...p, [l.id]: rows.filter((_, idx) => idx !== i) }))
+                                  }
+                                >
+                                  <Icon name="x" size={18} />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                          {rows.length < opts.length && (
+                            <button
+                              className="btn ghost sm auto"
+                              style={{ marginTop: 10 }}
+                              onClick={() =>
+                                setDefectPrepRows((p) => ({ ...p, [l.id]: [...rows, { zoneId: '', qty: 0 }] }))
+                              }
+                            >
+                              <Icon name="plus" size={16} /> Место
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+                <div className="actionbar">
+                  {error && (
+                    <div className="alert">
+                      <Icon name="alert" size={15} />
+                      {error}
+                    </div>
+                  )}
+                  <button className="btn" disabled={saving} onClick={handleFinishDefectPreparation}>
+                    {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Готово к рейсу</>}
+                  </button>
+                </div>
+              </>
             ) : doc.status === 'on_packing' && doc.cargo_type === 'good' ? (
               (() => {
                 const placeable = doc.lines.filter((l) => l.packed_pending_good > 0)
@@ -623,7 +844,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                               disabled={savingLine === l.id}
                               onClick={() => void placeLinePacked(l)}
                             >
-                              {savingLine === l.id ? '…' : <><Icon name="check" size={16} /> Разместить</>}
+                              {savingLine === l.id ? <span className="spin spin-sm" /> : <><Icon name="check" size={16} /> Разместить</>}
                             </button>
                           </div>
                         ))}
@@ -664,56 +885,74 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
       </div>
 
       {returnLine && (
-        <div className="sheet-backdrop" onClick={() => { if (!savingLine) setReturnLine(null) }}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-grip" />
-            <h3>Вернуть на хранение?</h3>
-            <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-              {returnLine.available_for_pack} шт по «{returnLine.product_name}» вернётся в исходные места хранения.
-              Передачу на упаковку можно будет указать заново.
-            </p>
-            <div className="dtf-actions">
-              <button className="btn ghost" disabled={savingLine === returnLine.id} onClick={() => setReturnLine(null)}>
-                Отмена
-              </button>
-              <button className="btn" disabled={savingLine === returnLine.id} onClick={() => void doReturnFromPacking()}>
-                {savingLine === returnLine.id ? '…' : 'Вернуть'}
-              </button>
-            </div>
+        <Sheet onClose={() => setReturnLine(null)} locked={savingLine === returnLine.id}>
+          <h3>Вернуть на хранение?</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+            {returnLine.available_for_pack} шт по «{returnLine.product_name}» вернётся в исходные места хранения.
+            Передачу на упаковку можно будет указать заново.
+          </p>
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={savingLine === returnLine.id} onClick={() => setReturnLine(null)}>
+              Отмена
+            </button>
+            <button className="btn" disabled={savingLine === returnLine.id} onClick={() => void doReturnFromPacking()}>
+              {savingLine === returnLine.id ? <span className="spin spin-sm" /> : 'Вернуть'}
+            </button>
           </div>
-        </div>
+        </Sheet>
+      )}
+
+      {tzOpen && (
+        <Sheet onClose={() => setTzOpen(false)} dirty={tzText !== (doc?.comment ?? '')} locked={saving}>
+          <h3>Техническое задание</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+            Уточните задание перед принятием в работу — его увидит начальник смены на упаковке.
+          </p>
+          <TextArea value={tzText} onChange={setTzText} placeholder="Текст ТЗ…" minRows={4} />
+          {error && (
+            <div className="alert" style={{ marginTop: 10 }}>
+              <Icon name="alert" size={15} />
+              {error}
+            </div>
+          )}
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={saving} onClick={() => setTzOpen(false)}>
+              Отмена
+            </button>
+            <button className="btn" disabled={saving} onClick={() => void saveTz()}>
+              {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
+            </button>
+          </div>
+        </Sheet>
       )}
 
       {rejectOpen && (
-        <div className="sheet-backdrop" onClick={() => { if (!saving) setRejectOpen(false) }}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-grip" />
-            <h3>Отклонить задачу?</h3>
-            <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-              Задача вернётся менеджеру на доработку. Укажите причину отклонения.
-            </p>
-            <TextArea
-              value={rejectReason}
-              onChange={setRejectReason}
-              placeholder="Причина отклонения…"
-              minRows={3}
-            />
-            {error && (
-              <div className="alert" style={{ marginTop: 10 }}>
-                <Icon name="alert" size={15} />
-                {error}
-              </div>
-            )}
-            <div className="dtf-actions">
-              <button className="btn ghost" disabled={saving} onClick={() => setRejectOpen(false)}>
-                Отмена
-              </button>
-              <button className="btn danger" disabled={saving || !rejectReason.trim()} onClick={() => void doReject()}>
-                {saving ? '…' : 'Отклонить'}
-              </button>
+        <Sheet onClose={() => setRejectOpen(false)} dirty={rejectReason.trim() !== ''} locked={saving}>
+          <h3>Отклонить задачу?</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+            Задача вернётся менеджеру на доработку. Укажите причину отклонения.
+          </p>
+          <TextArea
+            value={rejectReason}
+            onChange={setRejectReason}
+            placeholder="Причина отклонения…"
+            minRows={3}
+          />
+          {error && (
+            <div className="alert" style={{ marginTop: 10 }}>
+              <Icon name="alert" size={15} />
+              {error}
             </div>
+          )}
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={saving} onClick={() => setRejectOpen(false)}>
+              Отмена
+            </button>
+            <button className="btn danger" disabled={saving || !rejectReason.trim()} onClick={() => void doReject()}>
+              {saving ? <span className="spin spin-sm" /> : 'Отклонить'}
+            </button>
           </div>
-        </div>
+        </Sheet>
       )}
     </div>
   )

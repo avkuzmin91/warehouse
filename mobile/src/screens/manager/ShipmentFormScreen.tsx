@@ -469,7 +469,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
             {editing ? 'Сохранить' : 'Черновик'}
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>
-            {saving ? '…' : 'Запланировать'}
+            {saving ? <span className="spin spin-sm" /> : 'Запланировать'}
           </button>
         </div>
       </div>

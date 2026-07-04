@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { newRequestId } from '../../api/http'
 import { Icon } from '../../components/Icon'
+import { Sheet } from '../../components/Sheet'
 
 /** Создание элемента справочника с одним полем «Название» (цвет / размер). */
 export function DictItemSheet({
@@ -40,9 +41,7 @@ export function DictItemSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
+    <Sheet onClose={onClose} dirty={name.trim() !== ''} locked={saving}>
         <h3>{title}</h3>
 
         <div className="field" style={{ marginTop: 8 }}>
@@ -68,10 +67,9 @@ export function DictItemSheet({
         <div className="line-row" style={{ marginTop: 10 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={onClose} disabled={saving}>Отмена</button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            {saving ? '…' : 'Добавить'}
+            {saving ? <span className="spin spin-sm" /> : 'Добавить'}
           </button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   )
 }

@@ -4,12 +4,16 @@ import { getTasks } from '../api/tasksApi'
 import { RECEIPT_STATUS_LABELS, type ReceiptStatus } from '../api/receiptsApi'
 import { SHIPMENT_STATUS_LABELS, type ShipmentStatus } from '../api/shipmentsApi'
 import { DISPATCH_STATUS_LABELS, type DispatchStatus } from '../api/dispatchApi'
+import { useAuth } from '../auth/AuthContext'
+import { useNav, type PackFocus } from '../nav/NavContext'
+import { canRecordPacking } from '../utils/access'
 import { Icon } from './Icon'
 
-// Блок «Участие в живых документах» для справочника скана (товар и место). Read-only:
-// показывает, в каких незавершённых документах задействован объект, и подсвечивает те,
-// что совпадают с личной очередью (/tasks), бейджем «Моя задача». Переходов нет — это
-// справка, а не рабочая очередь.
+// Блок «Участие в живых документах» для справочника скана (товар и место). В основном
+// read-only: показывает, в каких незавершённых документах задействован объект, и
+// подсвечивает совпадения с личной очередью (/tasks) бейджем «Моя задача». Единственный
+// переход — задача упаковки «На упаковке» для упаковочных ролей: тап открывает карточку
+// внесения годного/брака (со скана товара — сразу к его строке через packFocus).
 
 const GROUP_TITLE: Record<ScanContextDoc['doc_type'], string> = {
   receipt: 'Поступления',
@@ -31,7 +35,18 @@ function qtyLabel(d: ScanContextDoc): string {
   return done > 0 ? `${d.planned_qty} шт · отгружено ${done}` : `${d.planned_qty} шт`
 }
 
-export function ScanDocsBlock({ variantId, locationId }: { variantId?: string; locationId?: string }) {
+export function ScanDocsBlock({
+  variantId,
+  locationId,
+  packFocus,
+}: {
+  variantId?: string
+  locationId?: string
+  packFocus?: PackFocus
+}) {
+  const { user } = useAuth()
+  const { openPackDoc } = useNav()
+  const packer = canRecordPacking(user?.role)
   const [docs, setDocs] = useState<ScanContextDoc[]>([])
   const [mine, setMine] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -44,7 +59,7 @@ export function ScanDocsBlock({ variantId, locationId }: { variantId?: string; l
     setError('')
     Promise.all([
       getScanContext({ variantId, locationId }, ac.signal),
-      getTasks(100, ac.signal).catch(() => ({ items: [], total: 0 })),
+      getTasks({ limit: 100 }, ac.signal).catch(() => ({ items: [], total: 0 })),
     ])
       .then(([ctx, tasks]) => {
         if (ac.signal.aborted) return
@@ -86,8 +101,9 @@ export function ScanDocsBlock({ variantId, locationId }: { variantId?: string; l
               </div>
               {group.map((d) => {
                 const qty = qtyLabel(d)
-                return (
-                  <div className="line" key={d.doc_id}>
+                const packable = packer && d.doc_type === 'shipment' && d.status === 'on_packing'
+                const body = (
+                  <>
                     <div className="line-name mono">{d.doc_number}</div>
                     <div className="pills">
                       <span className="pill">{statusLabel(d)}</span>
@@ -98,8 +114,31 @@ export function ScanDocsBlock({ variantId, locationId }: { variantId?: string; l
                           Моя задача
                         </span>
                       )}
+                      {packable && (
+                        <span className="badge warning">
+                          <span className="dot" />
+                          Внести
+                        </span>
+                      )}
                     </div>
                     {qty && <div className="line-sub">{qty}</div>}
+                  </>
+                )
+                if (packable) {
+                  return (
+                    <button
+                      className="line"
+                      key={d.doc_id}
+                      style={{ width: '100%', textAlign: 'left' }}
+                      onClick={() => openPackDoc(d.doc_id, packFocus)}
+                    >
+                      {body}
+                    </button>
+                  )
+                }
+                return (
+                  <div className="line" key={d.doc_id}>
+                    {body}
                   </div>
                 )
               })}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { useHardwareBack } from '../../nav/backHandlers'
 
 /** Ввод кратности упаковки товара (штук в коробе / коробов на палете). Значения живут
  *  на карточке товара и переиспользуются на всех будущих отгрузках. */
@@ -20,6 +21,8 @@ export function PackMultiplicitySheet({
   const [perBox, setPerBox] = useState(itemsPerBox != null ? String(itemsPerBox) : '')
   const [boxesPer, setBoxesPer] = useState(boxesPerPallet != null ? String(boxesPerPallet) : '')
   const [saving, setSaving] = useState(false)
+
+  useHardwareBack(() => { if (!saving) onClose() })
 
   function parse(raw: string): number | null {
     const t = raw.trim()
@@ -67,7 +70,7 @@ export function PackMultiplicitySheet({
         <div className="line-row" style={{ marginTop: 10 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={onClose} disabled={saving}>Отмена</button>
           <button className="btn" style={{ flex: 2 }} disabled={saving} onClick={() => void submit()}>
-            <Icon name="check" size={14} /> {saving ? '…' : 'Сохранить'}
+            <Icon name="check" size={14} /> {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
           </button>
         </div>
       </div>

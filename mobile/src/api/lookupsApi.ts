@@ -87,6 +87,15 @@ export function createSize(name: string, requestId?: string): Promise<{ message:
   })
 }
 
+// Создание клиента: backend POST /clients гейтится backoffice-составом (менеджер входит).
+export function createClient(name: string, requestId?: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/clients', {
+    method: 'POST',
+    body: JSON.stringify({ name, is_active: true }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
 export type ProductLookupParams = { client_id?: string | null; search?: string; limit?: number }
 
 // Признака усечения в ответе нет (список, совместимость с вебом) — кому он нужен,

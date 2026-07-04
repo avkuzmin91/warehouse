@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Icon } from './Icon'
 import type { ComboOption } from './Combobox'
+import { useHardwareBack } from '../nav/backHandlers'
 
 // Поиск без учёта регистра и диакритики (кириллица/латиница).
 function fold(s: string): string {
@@ -44,6 +45,8 @@ export function MultiSelectField({
     setOpen(false)
     setQ('')
   }
+
+  useHardwareBack(close, open)
 
   return (
     <>
