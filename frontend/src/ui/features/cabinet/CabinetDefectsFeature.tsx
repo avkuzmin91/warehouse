@@ -143,22 +143,19 @@ export function CabinetDefectsFeature() {
             <thead>
               <tr>
                 <th>Товар</th>
-                <th style={{ textAlign: 'right', width: 120 }}>На хранении</th>
-                <th style={{ textAlign: 'right', width: 120 }}>На упаковке</th>
-                <th style={{ textAlign: 'right', width: 140 }}>Готов к отгрузке</th>
-                <th className="total-col" style={{ textAlign: 'right', width: 110 }}>Итого брак</th>
+                <th className="total-col" style={{ textAlign: 'right', width: 130 }}>Итого брак</th>
               </tr>
             </thead>
             <tbody>
               {stock.loading ? (
-                <SkeletonRows rows={6} cols={5} />
+                <SkeletonRows rows={6} cols={2} />
               ) : stock.error ? (
-                <tr><Td colSpan={5}><EmptyState title="Не удалось загрузить брак" sub={stock.error.message} /></Td></tr>
+                <tr><Td colSpan={2}><EmptyState title="Не удалось загрузить брак" sub={stock.error.message} /></Td></tr>
               ) : (stock.data?.items ?? []).length === 0 ? (
-                <tr><Td colSpan={5}><EmptyState title="Брака нет" sub="По вашим товарам брак не зафиксирован" /></Td></tr>
+                <tr><Td colSpan={2}><EmptyState title="Брака нет" sub="По вашим товарам брак не зафиксирован" /></Td></tr>
               ) : (
                 (stock.data?.items ?? []).map((item, index) => {
-                  const defectTotal = item.storage_defect + item.packing_defect + item.ready_defect
+                  const defectTotal = item.storage_defect + item.packing_defect + item.packed_defect + item.ready_defect
                   return (
                     <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${index}`}>
                       <Td>
@@ -167,9 +164,6 @@ export function CabinetDefectsFeature() {
                           {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                         </div>
                       </Td>
-                      <Td className="num">{item.storage_defect > 0 ? item.storage_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
-                      <Td className="num">{item.packing_defect > 0 ? item.packing_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
-                      <Td className="num">{item.ready_defect > 0 ? item.ready_defect.toLocaleString('ru-RU') : <span className="dash">0</span>}</Td>
                       <Td className="num total-col" style={{ color: 'var(--c-warning)' }}>
                         {defectTotal.toLocaleString('ru-RU')}
                       </Td>
