@@ -25,6 +25,12 @@ const FinancePalletPricesPage = lazy(() =>
 const FinanceBoxPricesPage = lazy(() =>
   import('../pages/FinanceBoxPricesPage').then((m) => ({ default: m.FinanceBoxPricesPage })),
 )
+const FinanceStoragePricesPage = lazy(() =>
+  import('../pages/FinanceStoragePricesPage').then((m) => ({ default: m.FinanceStoragePricesPage })),
+)
+const FinanceStorageReportPage = lazy(() =>
+  import('../pages/FinanceStorageReportPage').then((m) => ({ default: m.FinanceStorageReportPage })),
+)
 const FinanceRecurringExpensesPage = lazy(() =>
   import('../pages/FinanceRecurringExpensesPage').then((m) => ({ default: m.FinanceRecurringExpensesPage })),
 )
@@ -43,4 +49,6 @@ export const financeRoutes = [
   <Route key="finance-pricing" path="/finance/pricing" element={<FinancePackingPricesPage />} />,
   <Route key="finance-pallet-pricing" path="/finance/pallet-pricing" element={<FinancePalletPricesPage />} />,
   <Route key="finance-box-pricing" path="/finance/box-pricing" element={<FinanceBoxPricesPage />} />,
+  <Route key="finance-storage-pricing" path="/finance/storage-pricing" element={<FinanceStoragePricesPage />} />,
+  <Route key="finance-storage" path="/finance/storage" element={<FinanceStorageReportPage />} />,
 ]

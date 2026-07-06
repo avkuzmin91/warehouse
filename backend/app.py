@@ -55,6 +55,7 @@ from modules.push.router import router as push_router
 from modules.receipts.router import router as receipts_router
 from modules.recurring_expenses.router import router as recurring_expenses_router
 from modules.shipments.router import router as shipments_router
+from modules.storage_pricing.router import router as storage_pricing_router
 from modules.dispatch.router import router as dispatch_router
 from modules.tasks.router import router as tasks_router
 from modules.scan.router import router as scan_router
@@ -735,12 +736,14 @@ def _ensure_runtime_schema() -> None:
 async def _accrual_loop() -> None:
     """Фоновое автоначисление: ЗП-оклады (одна проводка на месяц, 1-го числа / в день
     приёма), аренда складов (за текущий месяц, в любой день — самовосстановление при
-    пропущенном 1-м числе) и регулярные расходы по шаблонам (ежедневно / в число месяца).
+    пропущенном 1-м числе), регулярные расходы по шаблонам (ежедневно / в число месяца)
+    и платное хранение остатков (за каждый прошедший бизнес-день по клиентам с тарифом).
     Будится раз в час; дедуп по периоду делает повторные прогоны и рестарты безопасными.
     Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
     from idempotency import purge_expired_idempotency_keys
     from modules.expenses.service import run_rent_accruals, run_salary_accruals
     from modules.recurring_expenses.service import run_recurring_accruals
+    from modules.storage_pricing.service import run_storage_accruals
     from modules.timesheet.service import business_today
 
     while True:
@@ -750,6 +753,7 @@ async def _accrual_loop() -> None:
                 created = run_salary_accruals(conn, today)
                 created += run_rent_accruals(conn, today)
                 created += run_recurring_accruals(conn, today)
+                created += run_storage_accruals(conn, today)
                 if created:
                     conn.commit()
                 purge_expired_idempotency_keys(conn)
@@ -1013,6 +1017,7 @@ app.include_router(products_router)
 app.include_router(pricing_router)
 app.include_router(pallet_pricing_router)
 app.include_router(box_pricing_router)
+app.include_router(storage_pricing_router)
 app.include_router(production_calendar_router)
 app.include_router(warehouse_rent_router)
 app.include_router(receipts_router)

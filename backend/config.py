@@ -640,6 +640,8 @@ INVOICE_OP_CLOSE           = "close"
 INVOICE_OP_CANCEL          = "cancel"
 INVOICE_OP_EXTRA_LINK      = "extra_income_link"
 INVOICE_OP_EXTRA_UNLINK    = "extra_income_unlink"
+INVOICE_OP_STORAGE_LINK    = "storage_link"
+INVOICE_OP_STORAGE_UNLINK  = "storage_unlink"
 
 # ---------------------------------------------------------------------------
 # Доп. работы (прочие доходы): переборка брака, переклейка ШК и т.п.
@@ -663,6 +665,28 @@ EXTRA_INCOME_CATEGORY_SEED: tuple[str, ...] = (
     "Переклейка ШК",
     "Прочие работы",
 )
+
+# ---------------------------------------------------------------------------
+# Платное хранение остатков (storage billing)
+# ---------------------------------------------------------------------------
+# Тариф клиента (client_storage_prices) effective-dated; запись несёт единицу
+# тарификации, ставку за единицу в день (КОПЕЙКИ INTEGER) и бесплатный период
+# (календарные дни). Начало отсчёта хранения = effective_from самой ранней
+# записи тарифа — до неё начислений нет (ставка НЕ «тянется назад», в отличие
+# от pricing.price_on). Начисления — append-only журнал storage_charges,
+# в P&L входят источником «Хранение» по charge_date.
+
+STORAGE_UNIT_PIECE  = "piece"
+STORAGE_UNIT_BOX    = "box"
+STORAGE_UNIT_PALLET = "pallet"
+
+STORAGE_UNITS: tuple[str, ...] = (STORAGE_UNIT_PIECE, STORAGE_UNIT_BOX, STORAGE_UNIT_PALLET)
+
+STORAGE_UNIT_LABELS: dict[str, str] = {
+    STORAGE_UNIT_PIECE:  "Штука",
+    STORAGE_UNIT_BOX:    "Короб",
+    STORAGE_UNIT_PALLET: "Палета",
+}
 
 # ---------------------------------------------------------------------------
 # Расходы на материалы (хозрасходы)
@@ -792,8 +816,11 @@ EXPENSE_SYSTEM_CATEGORY_SEED: tuple[str, ...] = (
 EXPENSE_CATEGORY_SEED: tuple[str, ...] = (
     "Склад", "Упаковка", "Уборка", "Туалет", "Прочее",
 )
+# Нейтральные значения: сид выполняется на КАЖДОМ новом инстансе (клиентском),
+# поэтому здесь нет имён конкретной компании; свои источники добавляются в UI.
+# Уже развёрнутые базы не затрагиваются — миграция 0056 на них давно применена.
 EXPENSE_PAYMENT_SOURCE_SEED: tuple[str, ...] = (
-    "ИП Макс", "Саша", "Олег",
+    "Основной счёт", "Наличные",
 )
 
 # ---------------------------------------------------------------------------

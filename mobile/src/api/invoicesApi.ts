@@ -14,6 +14,8 @@ export type InvoiceOpType =
   | 'receipt_unlink'
   | 'extra_income_link'
   | 'extra_income_unlink'
+  | 'storage_link'
+  | 'storage_unlink'
   | 'payment'
   | 'due_date_change'
   | 'amount_change'
@@ -255,6 +257,8 @@ export const INVOICE_OP_LABELS: Record<InvoiceOpType, string> = {
   receipt_unlink: 'Отвязано поступление',
   extra_income_link: 'Привязана доп. работа',
   extra_income_unlink: 'Отвязана доп. работа',
+  storage_link: 'Привязано хранение',
+  storage_unlink: 'Отвязано хранение',
   payment: 'Оплата',
   due_date_change: 'Перенос срока',
   amount_change: 'Корректировка суммы',

@@ -69,7 +69,7 @@ def test_dictionaries_seeded(admin_client):
     cats = {c["name"] for c in admin_client.get("/expenses/dict/categories").json()}
     srcs = {s["name"] for s in admin_client.get("/expenses/dict/payment-sources").json()}
     assert {"Склад", "Упаковка", "Уборка", "Туалет", "Прочее"} <= cats
-    assert {"ИП Макс", "Саша", "Олег"} <= srcs
+    assert {"Основной счёт", "Наличные"} <= srcs
 
 
 def test_create_lands_in_list_with_journal(admin_client, dict_ids):

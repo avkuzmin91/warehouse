@@ -68,6 +68,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 | `timesheet` | табель (неделя Сб→Пт), ставки effective-dated, выплаты |
 | `production_calendar`, `warehouse_rent` | произв. календарь (6/1); ставки аренды складов effective-dated |
 | `pricing`, `pallet_pricing`, `box_pricing` | клиентские тарифы: логистика, палеты, короба (все effective-dated) |
+| `storage_pricing` | платное хранение остатков: тариф клиента (единица/ставка/`free_days`, effective-dated), ежедневные начисления `storage_charges` в `_accrual_loop`, отчёт «Хранение»; в счёт — `invoice_storage_charges`, в P&L — источник `storage` |
 | `inventory` | вспомогательные lookup'ы инвентаря (исторически только router.py) |
 
 ---
@@ -511,6 +512,7 @@ URL-конвенции inventory: `/receipts`, `/shipments`, `/balances` — **�
 - **Таймзона:** бизнес-логика склада живёт по **Europe/Moscow** (`business_today` в `modules/timesheet/service.py`); `created_at` хранится в UTC, бакетировать по UTC; фронт пиннит МСК. Не использовать локальную дату сервера (`date.today()`) для бизнес-дат.
 - **Деньги:** счета, расходы, ставки табеля — **копейки INTEGER** (не float). Прочие стоимости проекта — REAL, это осознанное различие.
 - **Effective-dated справочники:** тарифы (логистика/палеты/короба), ставки сотрудников, оклады, аренда — версии со сроком действия; текущая = последняя с `effective_from <= дата`.
+- **Контракт окружения:** добавил чтение новой env-переменной в код — в том же коммите допиши её в `.env.prod.example` (и `backend/.env.example`, если backend-локальная). Инстансы разворачиваются скриптом `scripts/onboarding/new-instance.sh` по ранбуку [docs/onboarding-instance.md](docs/onboarding-instance.md); первичный админ — `backend/bootstrap_instance.py`. Сиды справочников (`EXPENSE_*_SEED` и т.п.) выполняются на каждом новом клиентском инстансе — только нейтральные значения, без имён конкретной компании.
 
 ---
 

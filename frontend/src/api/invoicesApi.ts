@@ -15,6 +15,8 @@ export type InvoiceOpType =
   | 'receipt_unlink'
   | 'extra_income_link'
   | 'extra_income_unlink'
+  | 'storage_link'
+  | 'storage_unlink'
   | 'payment'
   | 'due_date_change'
   | 'amount_change'
@@ -44,6 +46,13 @@ export type InvoiceReceipt = {
   sku_count: number
   total_qty: number
   logistics_cost_kop: number
+}
+
+export type InvoiceStorageBlock = {
+  period_from: string
+  period_to: string
+  days: number
+  amount_kop: number
 }
 
 export type InvoiceExtraIncome = {
@@ -101,6 +110,8 @@ export type InvoiceDetail = {
   dispatch_logistics_kop: number
   receipt_logistics_kop: number
   extra_income_kop: number
+  storage_kop: number
+  storage: InvoiceStorageBlock | null
   shipments: InvoiceShipment[]
   receipts: InvoiceReceipt[]
   extra_income: InvoiceExtraIncome[]
@@ -387,6 +398,19 @@ export function detachInvoiceExtraIncome(invoiceId: string, entryId: string) {
   })
 }
 
+export function attachInvoiceStorage(invoiceId: string, payload: { date_from: string; date_to: string }) {
+  return request<{ message: string; days: number; amount_kop: number }>(`/invoices/${invoiceId}/storage`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function detachInvoiceStorage(invoiceId: string) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/storage`, {
+    method: 'DELETE',
+  })
+}
+
 export function addInvoicePayment(invoiceId: string, payload: { amount: number; paid_on?: string | null; comment?: string | null }) {
   return request<{ message: string }>(`/invoices/${invoiceId}/payments`, {
     method: 'POST',
@@ -460,6 +484,8 @@ export const INVOICE_OP_LABELS: Record<InvoiceOpType, string> = {
   receipt_unlink: 'Отвязано поступление',
   extra_income_link: 'Привязана доп. работа',
   extra_income_unlink: 'Отвязана доп. работа',
+  storage_link: 'Привязано хранение',
+  storage_unlink: 'Отвязано хранение',
   payment: 'Оплата',
   due_date_change: 'Перенос срока',
   amount_change: 'Корректировка суммы',

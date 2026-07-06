@@ -20,6 +20,8 @@ from config import (
     INVOICE_OP_EXTRA_LINK,
     INVOICE_OP_RECEIPT_LINK,
     INVOICE_OP_SHIPMENT_LINK,
+    INVOICE_OP_STORAGE_LINK,
+    INVOICE_OP_STORAGE_UNLINK,
     INVOICE_STATUS_LABELS,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_LABELS,
@@ -301,6 +303,106 @@ def attach_extra_income(
             (str(uuid4()), invoice_id, INVOICE_OP_EXTRA_LINK,
              "Привязана доп. работа: " + " · ".join(bits), now, uid),
         )
+
+
+def invoice_storage_block(connection, invoice_id: str) -> dict | None:
+    """Сводка привязанных к счёту начислений хранения (период, дни, сумма) или None."""
+    row = connection.execute(
+        """
+        SELECT COUNT(*) AS days,
+               MIN(c.charge_date) AS period_from,
+               MAX(c.charge_date) AS period_to,
+               COALESCE(SUM(c.amount_kop), 0) AS amount_kop
+        FROM invoice_storage_charges l
+        JOIN storage_charges c ON c.id = l.charge_id
+        WHERE l.invoice_id = ? AND COALESCE(l.is_deleted, 0) = 0
+        """,
+        (invoice_id,),
+    ).fetchone()
+    if not row or not int(row["days"] or 0):
+        return None
+    return {
+        "period_from": str(row["period_from"]),
+        "period_to": str(row["period_to"]),
+        "days": int(row["days"]),
+        "amount_kop": int(row["amount_kop"]),
+    }
+
+
+def attach_storage_charges(
+    connection,
+    *,
+    invoice_id: str,
+    client_id: str | None,
+    date_from: str,
+    date_to: str,
+    uid: str,
+    now: str,
+) -> dict:
+    """Привязывает к счёту непривязанные начисления хранения клиента за период.
+
+    Берутся только дни с ненулевой суммой; день входит не более чем в один
+    активный счёт (частичный уникальный индекс
+    `idx_invoice_storage_charges_charge_unique` страхует от гонок)."""
+    cid = str(client_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="У счёта не указан клиент")
+    rows = connection.execute(
+        """
+        SELECT c.id, c.charge_date, c.amount_kop
+        FROM storage_charges c
+        WHERE c.client_id = ? AND c.charge_date >= ? AND c.charge_date <= ?
+          AND c.amount_kop > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM invoice_storage_charges l
+              WHERE l.charge_id = c.id AND COALESCE(l.is_deleted, 0) = 0
+          )
+        ORDER BY c.charge_date
+        """,
+        (cid, date_from, date_to),
+    ).fetchall()
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="За период нет начислений хранения, не привязанных к счёту",
+        )
+    for r in rows:
+        connection.execute(
+            "INSERT INTO invoice_storage_charges "
+            "(id,invoice_id,charge_id,created_at,created_by) VALUES (?,?,?,?,?)",
+            (str(uuid4()), invoice_id, str(r["id"]), now, uid),
+        )
+    total = sum(int(r["amount_kop"]) for r in rows)
+    connection.execute(
+        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), invoice_id, INVOICE_OP_STORAGE_LINK,
+         f"Привязано хранение {rows[0]['charge_date']} — {rows[-1]['charge_date']}: "
+         f"{len(rows)} дн. · {format_kopecks(total)}",
+         now, uid),
+    )
+    return {"days": len(rows), "amount_kop": total}
+
+
+def detach_storage_charges(connection, *, invoice_id: str, uid: str, now: str) -> int:
+    """Отвязывает от счёта все начисления хранения (дни снова свободны для счёта)."""
+    block = invoice_storage_block(connection, invoice_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Хранение не привязано к счёту")
+    connection.execute(
+        "UPDATE invoice_storage_charges SET is_deleted = 1 "
+        "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (invoice_id,),
+    )
+    connection.execute(
+        "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), invoice_id, INVOICE_OP_STORAGE_UNLINK,
+         f"Отвязано хранение {block['period_from']} — {block['period_to']} · "
+         f"{format_kopecks(block['amount_kop'])}",
+         now, uid),
+    )
+    return int(block["amount_kop"])
 
 
 def list_uninvoiced_extra_income(

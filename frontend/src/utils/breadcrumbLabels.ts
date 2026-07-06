@@ -60,6 +60,8 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/finance/pricing', [FINANCE, { label: 'Стоимость упаковки' }]],
   ['/finance/pallet-pricing', [FINANCE, { label: 'Стоимость палета' }]],
   ['/finance/box-pricing', [FINANCE, { label: 'Стоимость короба' }]],
+  ['/finance/storage-pricing', [FINANCE, { label: 'Стоимость хранения' }]],
+  ['/finance/storage', [FINANCE, { label: 'Хранение' }]],
 
   ['/dictionaries', [{ label: 'Справочники' }]],
   ['/dictionaries/users', [{ label: 'Управление' }, { label: 'Пользователи' }]],

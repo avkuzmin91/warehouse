@@ -1,6 +1,6 @@
 """Финрезультат «доходы vs расходы» (P&L) — сборка дохода по дням и сравнение с расходом.
 
-Доход = упаковка (годное/брак) + логистика клиента + палеты + короба + доп. работы.
+Доход = упаковка (годное/брак) + логистика клиента + палеты + короба + доп. работы + хранение.
 Расход переиспользует `expenses.service.expense_analytics` (ЗП/аренда размазаны по дням, см. там).
 
 Атрибуция по дням:
@@ -8,7 +8,8 @@
   • логистика, палеты и короба — по ФАКТИЧЕСКОМУ дню рейса `trip_docs.arrived_at`, по документам,
     привязанным к рейсу. Рейсы со статусом cancelled и без факта прибытия не учитываются;
   • доп. работы (extra_income_entries) — по `entry_date` (бизнес-дата работы). Учёт по
-    начислению: попадание записи в счёт клиенту на доход P&L не влияет.
+    начислению: попадание записи в счёт клиенту на доход P&L не влияет;
+  • хранение (storage_charges) — по `charge_date` (день начисления), аналогично по начислению.
 
 Документ, привязанный к нескольким рейсам (дробление), относим к самому раннему его рейсу
 в окне — чтобы стоимость логистики/палет документа не задвоилась. Деньги — копейки INTEGER.
@@ -223,6 +224,7 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
     (те же слагаемые). Копейки INTEGER."""
     from modules.extra_income.service import extra_income_rows
     from modules.shipments.service import packing_productivity
+    from modules.storage_pricing.service import storage_income_rows
 
     idx = {d: i for i, d in enumerate(axis)}
     n = len(axis)
@@ -287,6 +289,13 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
             extra[i] += r["kop"]
             _add_client(r["client_id"], r["client_name"], r["kop"])
 
+    storage = _empty()
+    for r in storage_income_rows(connection, date_from=df, date_to=dt, client_id=client_id):
+        i = idx.get(r["day"])
+        if i is not None:
+            storage[i] += r["kop"]
+            _add_client(r["client_id"], r["client_name"], r["kop"])
+
     income_defs = [
         ("packing_good", "Упаковка (годное)", INV_Q_GOOD, packing_good),
         ("packing_defect", "Упаковка (брак)", INV_Q_DEFECT, packing_defect),
@@ -294,6 +303,7 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
         ("pallets", "Палеты", None, pallets),
         ("boxes", "Короба", None, boxes),
         ("extra", "Доп. работы", None, extra),
+        ("storage", "Хранение", None, storage),
     ]
     sources = [
         {"key": key, "label": label, "kind": kind, "amount": sum(series), "series": series}
@@ -429,6 +439,7 @@ def pnl_day_detail(
     from modules.pallet_pricing.service import load_pallet_price_histories
     from modules.pricing.service import price_on
     from modules.shipments.service import packing_productivity
+    from modules.storage_pricing.service import storage_income_day_items
 
     cid = (client_id or None)
 
@@ -580,6 +591,7 @@ def pnl_day_detail(
                 })
 
     extra_items = extra_income_day_items(connection, day=day, client_id=cid)
+    storage_items = storage_income_day_items(connection, day=day, client_id=cid)
 
     income_defs = [
         ("packing_good", "Упаковка (годное)", INV_Q_GOOD, good_items),
@@ -588,6 +600,7 @@ def pnl_day_detail(
         ("pallets", "Палеты", None, pallet_items),
         ("boxes", "Короба", None, box_items),
         ("extra", "Доп. работы", None, extra_items),
+        ("storage", "Хранение", None, storage_items),
     ]
     income_sources: list[dict] = []
     for key, label, kind, items in income_defs:

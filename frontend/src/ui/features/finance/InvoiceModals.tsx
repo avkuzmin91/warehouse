@@ -4,6 +4,7 @@ import {
   attachInvoiceExtraIncome,
   attachInvoiceReceipts,
   attachInvoiceShipments,
+  attachInvoiceStorage,
   getUninvoicedExtraIncome,
   getUninvoicedReceipts,
   getUninvoicedShipments,
@@ -12,6 +13,7 @@ import {
   updateInvoiceDueDate,
 } from '../../../api/invoicesApi'
 import type { InvoiceDetail } from '../../../api/invoicesApi'
+import { getStorageClientDays } from '../../../api/storagePricingApi'
 import { Modal } from '../../feedback/Modal'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Icon } from '../../primitives/Icon'
@@ -471,6 +473,71 @@ export function AttachExtraIncomeModal({ invoice, onClose, onDone }: { invoice: 
               </div>
             )
           })}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+
+// ── Добавить хранение за период ──────────────────────────────────────────────
+export function AttachStorageModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const hasPeriod = Boolean(dateFrom && dateTo && dateFrom <= dateTo)
+  const { data, loading } = useApi(
+    (s) => hasPeriod && invoice.client_id
+      ? getStorageClientDays(invoice.client_id, { date_from: dateFrom, date_to: dateTo }, s)
+      : Promise.resolve({ items: [] }),
+    [invoice.client_id, dateFrom, dateTo, hasPeriod],
+  )
+  const free = (data?.items ?? []).filter((d) => d.amount_kop > 0 && !d.invoice_id)
+  const freeAmount = free.reduce((a, d) => a + d.amount_kop, 0)
+
+  function submit() {
+    if (!hasPeriod) { toast('Укажите период хранения', 'error'); return }
+    setBusy(true)
+    attachInvoiceStorage(invoice.id, { date_from: dateFrom, date_to: dateTo })
+      .then((r) => { toast(`Хранение добавлено: ${r.days} дн. на ${formatMoneyKopecks(r.amount_kop)}`, 'success'); onDone() })
+      .catch((e) => toast(e.message, 'error'))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} title="Добавить хранение" width={460}
+      subtitle={`Начисления за хранение остатков клиента ${invoice.client_name ?? ''}`}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, width: '100%' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
+            {hasPeriod && !loading && <>Свободно: <b>{free.length} дн.</b> на <b className="mono">{formatMoneyKopecks(freeAmount)}</b></>}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn ghost" onClick={onClose}>Отмена</button>
+            <button className="btn primary" onClick={submit} disabled={busy || !hasPeriod || (!loading && free.length === 0)}>
+              <Icon name="plus" size={14} />Добавить
+            </button>
+          </div>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+        <Icon name="lock" size={12} />Каждый день начисления входит не более чем в один счёт.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <FieldRow label="Период с" required>
+          <DatePicker value={dateFrom} onChange={setDateFrom} />
+        </FieldRow>
+        <FieldRow label="по" required>
+          <DatePicker value={dateTo} onChange={setDateTo} />
+        </FieldRow>
+      </div>
+      {hasPeriod && !loading && free.length === 0 && (
+        <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--c-warning)' }}>
+          За период нет начислений, не привязанных к счёту.
         </div>
       )}
     </Modal>

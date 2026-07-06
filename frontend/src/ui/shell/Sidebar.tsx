@@ -32,6 +32,8 @@ const FINANCE_NAV: NavItem[] = [
   { to: '/finance/pricing', icon: 'tag', label: 'Стоимость упаковки' },
   { to: '/finance/pallet-pricing', icon: 'layers', label: 'Стоимость палета' },
   { to: '/finance/box-pricing', icon: 'box', label: 'Стоимость короба' },
+  { to: '/finance/storage-pricing', icon: 'clock', label: 'Стоимость хранения' },
+  { to: '/finance/storage', icon: 'archive', label: 'Хранение' },
 ]
 
 const TIMESHEET_NAV: NavItem[] = [

@@ -68,6 +68,19 @@ class InvoiceAttachExtraIncome(BaseModel):
     entry_ids: list[str] = []
 
 
+class InvoiceStorageBlock(BaseModel):
+    """Сводка привязанных к счёту начислений хранения (по дням периода)."""
+    period_from: str
+    period_to:   str
+    days:        int
+    amount_kop:  int
+
+
+class InvoiceAttachStorage(BaseModel):
+    date_from: str
+    date_to:   str
+
+
 class InvoicePaymentItem(BaseModel):
     id:               str
     amount:           int                    # копейки
@@ -114,6 +127,8 @@ class InvoiceDetailResponse(BaseModel):
     dispatch_logistics_kop: int = 0
     receipt_logistics_kop:  int = 0
     extra_income_kop:       int = 0
+    storage_kop:            int = 0
+    storage:      InvoiceStorageBlock | None = None
     shipments:    list[InvoiceShipmentItem]
     receipts:     list[InvoiceReceiptItem] = []
     extra_income: list[InvoiceExtraIncomeItem] = []

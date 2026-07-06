@@ -1,9 +1,14 @@
-name: wms-prod
+# Параметры инстанса (несколько систем на одном VPS — scripts/onboarding/new-instance.sh):
+#   WMS_INSTANCE          — имя compose-проекта (изоляция томов/сетей), по умолчанию wms-prod
+#   WMS_CONTAINER_PREFIX  — префикс имён контейнеров, по умолчанию wms_prod
+#   WMS_BACKEND_PORT / WMS_FRONTEND_PORT — loopback-порты, по умолчанию 10000 / 10080
+# Без этих переменных поведение идентично прежнему (ваш prod, CI-деплой по ADR 0001).
+name: ${WMS_INSTANCE:-wms-prod}
 
 services:
   db:
     image: postgres:16
-    container_name: wms_prod_db
+    container_name: ${WMS_CONTAINER_PREFIX:-wms_prod}_db
     restart: always
     environment:
       POSTGRES_USER: postgres
@@ -20,7 +25,7 @@ services:
   backend:
     build:
       context: ./backend
-    container_name: wms_prod_backend
+    container_name: ${WMS_CONTAINER_PREFIX:-wms_prod}_backend
     restart: always
     environment:
       APP_ENV: prod
@@ -40,19 +45,21 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:10000:8000"
+      - "127.0.0.1:${WMS_BACKEND_PORT:-10000}:8000"
 
   frontend:
     build:
       context: ./frontend
-    container_name: wms_prod_frontend
+      args:
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-Pack-men}
+    container_name: ${WMS_CONTAINER_PREFIX:-wms_prod}_frontend
     restart: always
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL}
     depends_on:
       - backend
     ports:
-      - "127.0.0.1:10080:80"
+      - "127.0.0.1:${WMS_FRONTEND_PORT:-10080}:80"
 
 volumes:
   db_data:

@@ -7,6 +7,7 @@ import {
   detachInvoiceExtraIncome,
   detachInvoiceReceipt,
   detachInvoiceShipment,
+  detachInvoiceStorage,
   getInvoice,
   INVOICE_OP_LABELS,
   invoiceStatusTone,
@@ -32,7 +33,7 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDate, fmtDateShort, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
 import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel, SelectedContentsRollup, SelectedReceiptsRollup, InvoiceSummaryPanel } from './financeUI'
 import { InvoiceRailPanel, invoicePhase } from './InvoiceRail'
-import { PayModal, DueModal, AmountModal, AttachModal, AttachReceiptsModal, AttachExtraIncomeModal } from './InvoiceModals'
+import { PayModal, DueModal, AmountModal, AttachModal, AttachReceiptsModal, AttachExtraIncomeModal, AttachStorageModal } from './InvoiceModals'
 
 const OP_DOT: Partial<Record<InvoiceOpType, string>> = {
   issue: 'var(--c-accent)',
@@ -63,6 +64,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const [attachOpen, setAttachOpen] = useState(false)
   const [attachRecOpen, setAttachRecOpen] = useState(false)
   const [attachExtraOpen, setAttachExtraOpen] = useState(false)
+  const [attachStorageOpen, setAttachStorageOpen] = useState(false)
   const [expandedShip, setExpandedShip] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -109,10 +111,10 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     closed: inv.status === 'closed' && inv.updated_at ? fmtDateShort(inv.updated_at) : undefined,
   }
 
-  const docCount = inv.shipments.length + inv.receipts.length + inv.extra_income.length
+  const docCount = inv.shipments.length + inv.receipts.length + inv.extra_income.length + (inv.storage ? 1 : 0)
   // Готовность к выставлению (draft → issued): зеркало серверных гейтов.
   const issueChecklist = [
-    { ok: docCount > 0, label: docCount > 0 ? `Привязаны документы (${inv.shipments.length} отгр. · ${inv.receipts.length} пост. · ${inv.extra_income.length} доп.)` : 'Привяжите отгрузку, поступление или доп. работу' },
+    { ok: docCount > 0, label: docCount > 0 ? `Привязаны документы (${inv.shipments.length} отгр. · ${inv.receipts.length} пост. · ${inv.extra_income.length} доп.${inv.storage ? ' · хранение' : ''})` : 'Привяжите отгрузку, поступление, доп. работу или хранение' },
     { ok: inv.total_amount > 0, label: inv.total_amount > 0 ? `Сумма счёта ${formatMoneyKopecks(inv.total_amount)}` : 'Укажите сумму счёта' },
     { ok: !!inv.due_date, label: inv.due_date ? `Срок расчёта ${fmtDate(inv.due_date)}` : 'Укажите плановую дату расчёта' },
     { ok: inv.files.length > 0, label: inv.files.length > 0 ? `Файл прикреплён (${inv.files.length})` : 'Прикрепите файл счёта' },
@@ -134,7 +136,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
       due = saved.due_date
     }
     const reasons = [
-      inv.shipments.length + inv.receipts.length + inv.extra_income.length === 0 ? 'Привяжите отгрузку, поступление или доп. работу' : null,
+      inv.shipments.length + inv.receipts.length + inv.extra_income.length + (inv.storage ? 1 : 0) === 0 ? 'Привяжите отгрузку, поступление, доп. работу или хранение' : null,
       amount <= 0 ? 'Укажите сумму счёта' : null,
       !due ? 'Укажите плановую дату расчёта' : null,
       inv.files.length === 0 ? 'Прикрепите файл счёта' : null,
@@ -174,6 +176,17 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     const ok = await confirm({ title: 'Отвязать доп. работу?', body: `«${label}» вернётся в пул невыставленных доп. работ.`, confirmLabel: 'Отвязать' })
     if (!ok) return
     detachInvoiceExtraIncome(inv.id, entryId).then(() => { toast('Доп. работа отвязана', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
+  }
+
+  async function handleDetachStorage() {
+    if (!inv || !inv.storage) return
+    const ok = await confirm({
+      title: 'Отвязать хранение?',
+      body: `Начисления ${fmtDate(inv.storage.period_from)} — ${fmtDate(inv.storage.period_to)} (${inv.storage.days} дн.) снова станут доступны для счёта.`,
+      confirmLabel: 'Отвязать',
+    })
+    if (!ok) return
+    detachInvoiceStorage(inv.id).then(() => { toast('Хранение отвязано', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -404,6 +417,34 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             )}
           </InvoiceSection>
 
+          <InvoiceSection
+            icon="archive" title="Хранение" count={inv.storage ? inv.storage.days : 0} accent="var(--c-accent)" state={editable ? 'active' : 'done'}
+            right={editable && !inv.storage ? (
+              <button className="btn ghost sm" onClick={() => setAttachStorageOpen(true)}>
+                <Icon name="plus" size={12} />Добавить
+              </button>
+            ) : undefined}
+          >
+            {!inv.storage ? (
+              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>
+                Начисления за хранение остатков не привязаны. Суммы по дням — в разделе «Финансы → Хранение».
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13 }}>
+                <span className="mono" style={{ color: 'var(--c-text-subtle)' }}>
+                  {fmtDate(inv.storage.period_from)} — {fmtDate(inv.storage.period_to)}
+                </span>
+                <span style={{ color: 'var(--c-text-subtle)' }}>{inv.storage.days} дн.</span>
+                <span className="mono" style={{ fontWeight: 600, marginLeft: 'auto' }}>{formatMoneyKopecks(inv.storage.amount_kop)}</span>
+                {editable && (
+                  <button className="btn ghost icon sm" title="Отвязать хранение" onClick={handleDetachStorage}>
+                    <Icon name="x" size={13} />
+                  </button>
+                )}
+              </div>
+            )}
+          </InvoiceSection>
+
           {!draft && (
             <InvoiceSection
               icon="coins" title="Оплаты" count={inv.payments.length} accent="var(--c-warning)" state={active ? 'active' : 'done'}
@@ -532,6 +573,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
       {attachOpen && <AttachModal invoice={inv} onClose={() => setAttachOpen(false)} onDone={() => { setAttachOpen(false); reload() }} />}
       {attachRecOpen && <AttachReceiptsModal invoice={inv} onClose={() => setAttachRecOpen(false)} onDone={() => { setAttachRecOpen(false); reload() }} />}
       {attachExtraOpen && <AttachExtraIncomeModal invoice={inv} onClose={() => setAttachExtraOpen(false)} onDone={() => { setAttachExtraOpen(false); reload() }} />}
+      {attachStorageOpen && <AttachStorageModal invoice={inv} onClose={() => setAttachStorageOpen(false)} onDone={() => { setAttachStorageOpen(false); reload() }} />}
     </div>
   )
 }

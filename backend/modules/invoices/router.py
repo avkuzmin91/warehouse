@@ -38,6 +38,8 @@ from modules.invoices.schemas import (
     InvoiceAttachExtraIncome,
     InvoiceAttachReceipts,
     InvoiceAttachShipments,
+    InvoiceAttachStorage,
+    InvoiceStorageBlock,
     InvoiceAmountUpdate,
     InvoiceCreate,
     InvoiceDetailResponse,
@@ -68,7 +70,10 @@ from modules.invoices.service import (
     attach_extra_income,
     attach_receipts,
     attach_shipments,
+    attach_storage_charges,
+    detach_storage_charges,
     format_kopecks,
+    invoice_storage_block,
     invalidate_alerts_cache,
     is_due_reached,
     is_overdue,
@@ -212,6 +217,10 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     ]
     extra_income_kop = sum(x.amount_kop for x in extra_income)
 
+    storage_block = invoice_storage_block(conn, invoice_id)
+    storage = InvoiceStorageBlock(**storage_block) if storage_block else None
+    storage_kop = storage.amount_kop if storage else 0
+
     pay_rows = conn.execute(
         """
         SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by,
@@ -295,6 +304,8 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
         dispatch_logistics_kop=dispatch_logistics_kop,
         receipt_logistics_kop=receipt_logistics_kop,
         extra_income_kop=extra_income_kop,
+        storage_kop=storage_kop,
+        storage=storage,
         shipments=shipments,
         receipts=receipts,
         extra_income=extra_income,
@@ -675,6 +686,54 @@ def detach_invoice_extra_income(invoice_id: str, entry_id: str, user=Depends(_ge
     return {"message": "ok"}
 
 
+# ── Storage link/unlink ─────────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/storage")
+def attach_invoice_storage(invoice_id: str, body: InvoiceAttachStorage, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    df = str(body.date_from or "").strip()[:10]
+    dt = str(body.date_to or "").strip()[:10]
+    if not df or not dt or df > dt:
+        raise HTTPException(status_code=400, detail="Укажите корректный период хранения")
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, client_id FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        result = attach_storage_charges(
+            conn,
+            invoice_id=invoice_id,
+            client_id=doc["client_id"],
+            date_from=df,
+            date_to=dt,
+            uid=uid,
+            now=now,
+        )
+        conn.commit()
+    return {"message": "ok", **result}
+
+
+@router.delete("/invoices/{invoice_id}/storage")
+def detach_invoice_storage(invoice_id: str, user=Depends(_get_finance)):
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        detach_storage_charges(conn, invoice_id=invoice_id, uid=uid, now=now)
+        conn.commit()
+    return {"message": "ok"}
+
+
 # ── Draft: правка реквизитов и выставление ───────────────────────────────────────
 
 @router.patch("/invoices/{invoice_id}")
@@ -704,13 +763,15 @@ def update_invoice(invoice_id: str, body: InvoiceUpdate, user=Depends(_get_finan
                     "UNION ALL "
                     "SELECT 1 FROM invoice_receipts WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 "
                     "UNION ALL "
-                    "SELECT 1 FROM invoice_extra_income WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
-                    (invoice_id, invoice_id, invoice_id),
+                    "SELECT 1 FROM invoice_extra_income WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 "
+                    "UNION ALL "
+                    "SELECT 1 FROM invoice_storage_charges WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+                    (invoice_id, invoice_id, invoice_id, invoice_id),
                 ).fetchone()
                 if linked:
                     raise HTTPException(
                         status_code=400,
-                        detail="Сначала отвяжите отгрузки, поступления и доп. работы прежнего клиента",
+                        detail="Сначала отвяжите отгрузки, поступления, доп. работы и хранение прежнего клиента",
                     )
             sets.append("client_id = ?"); params.append(new_client)
         if "client_name" in fields:
@@ -777,10 +838,15 @@ def issue_invoice(
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         ).fetchone()["n"])
-        if n_ship == 0 and n_rec == 0 and n_extra == 0:
+        n_storage = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM invoice_storage_charges "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchone()["n"])
+        if n_ship == 0 and n_rec == 0 and n_extra == 0 and n_storage == 0:
             raise HTTPException(
                 status_code=400,
-                detail="Добавьте хотя бы одну отгрузку, поступление или доп. работу",
+                detail="Добавьте хотя бы одну отгрузку, поступление, доп. работу или хранение",
             )
         n_files = int(conn.execute(
             "SELECT COUNT(*) AS n FROM invoice_files "
@@ -1039,6 +1105,11 @@ def cancel_invoice(
         )
         conn.execute(
             "UPDATE invoice_extra_income SET is_deleted = 1 "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        )
+        conn.execute(
+            "UPDATE invoice_storage_charges SET is_deleted = 1 "
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         )
