@@ -5,16 +5,17 @@ import type { ProcessRole } from './roles'
 
 /** Вертикальный таймлайн фаз процесса. Заменяет горизонтальный степпер.
  *  done — пройденный шаг (галочка + время), active — текущий («сейчас»),
- *  future — пунктирная остановка. Шаги считает домен (рейс / отгрузка). */
+ *  future — пунктирная остановка, cancelled — терминальный обрыв (красный крест).
+ *  Шаги считает домен (рейс / отгрузка). */
 export type ProcessStep = {
   key: string
   title: string
   role: ProcessRole | null
   icon: IconName
-  state: 'done' | 'active' | 'future'
+  state: 'done' | 'active' | 'future' | 'cancelled'
   /** Подпись времени (mono); для future игнорируется. */
   time?: string | null
-  /** Короткая подсказка под active-шагом. */
+  /** Короткая подсказка под active- или cancelled-шагом. */
   sub?: string
 }
 
@@ -26,11 +27,13 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
         const done = step.state === 'done'
         const active = step.state === 'active'
         const future = step.state === 'future'
+        const cancelled = step.state === 'cancelled'
         // done — зелёный, active — индиго-акцент (системный стиль активного статуса,
-        // ср. .ptrack-step.active). Цвет роли для кружка не используем: у «Начальника
-        // склада» он совпадает с зелёным «выполнено».
+        // ср. .ptrack-step.active), cancelled — красный терминальный обрыв. Цвет роли
+        // для кружка не используем: у «Начальника склада» он совпадает с зелёным «выполнено».
         const dotColor = done ? 'var(--c-success)'
           : active ? 'var(--c-accent)'
+          : cancelled ? 'var(--c-danger)'
           : 'var(--c-border-strong)'
         return (
           <div key={step.key} style={{ display: 'flex', gap: 12, position: 'relative' }}>
@@ -52,8 +55,8 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
             <div style={{ paddingBottom: last ? 0 : 14, flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{
-                  fontSize: 13, fontWeight: active ? 600 : 500,
-                  color: future ? 'var(--c-text-subtle)' : 'var(--c-text)',
+                  fontSize: 13, fontWeight: active || cancelled ? 600 : 500,
+                  color: future ? 'var(--c-text-subtle)' : cancelled ? 'var(--c-danger)' : 'var(--c-text)',
                 }}>{step.title}</span>
                 {active && (
                   <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: dotColor }}>
@@ -67,7 +70,7 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
                   {future || !step.time ? '—' : step.time}
                 </span>
               </div>
-              {active && step.sub && (
+              {(active || cancelled) && step.sub && (
                 <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)', marginTop: 3 }}>{step.sub}</div>
               )}
             </div>

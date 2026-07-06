@@ -43,8 +43,6 @@ function fmt(s: string): string {
 }
 
 export function ProcessRail({ status, ops = [], direction }: { status: TripStatus; ops?: TripOp[]; direction?: string | null }) {
-  const cancelled = status === 'cancelled'
-  const curIdx = cancelled ? 1 : STATUS_ORDER.indexOf(status)
   const ts = getTimestamps(ops)
   const outbound = isOutbound(direction)
   const titleFor = (s: TripStatus): string => {
@@ -52,6 +50,29 @@ export function ProcessRail({ status, ops = [], direction }: { status: TripStatu
     return META[s].title
   }
 
+  // Аннулирование — терминальная ветка, а не пауза на шаге. Показываем фактически
+  // достигнутые фазы (по отметкам в журнале) как пройденные и завершаем красным
+  // узлом «Аннулирован»; недостигнутые шаги и «Закрыт» не рисуем — они не наступят.
+  if (status === 'cancelled') {
+    const reachedIdx = STATUS_ORDER.reduce((max, s, i) => (ts[s] ? i : max), 0)
+    const cancelOp = ops.find((o) => o.op_type === 'cancel')
+    const steps: ProcessStep[] = STATUS_ORDER.slice(0, reachedIdx + 1).map((s) => {
+      const m = META[s]
+      return { key: s, title: titleFor(s), role: m.role, icon: m.icon, state: 'done', time: ts[s] ? fmt(ts[s]!) : null }
+    })
+    steps.push({
+      key: 'cancelled',
+      title: 'Аннулирован',
+      role: null,
+      icon: 'x',
+      state: 'cancelled',
+      time: cancelOp ? fmt(cancelOp.created_at) : null,
+      sub: cancelOp?.created_by_email ?? undefined,
+    })
+    return <ProcessRailView steps={steps} />
+  }
+
+  const curIdx = STATUS_ORDER.indexOf(status)
   const steps: ProcessStep[] = STATUS_ORDER.map((s, i) => {
     const m = META[s]
     return {
