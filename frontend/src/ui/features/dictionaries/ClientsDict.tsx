@@ -10,10 +10,9 @@ import { EmptyState } from '../../primitives/EmptyState'
 interface ClientsDictProps {
   refreshKey: number
   onEdit: (item: DictionaryItem) => void
-  onTotalLoaded: (total: number) => void
 }
 
-export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictProps) {
+export function ClientsDict({ refreshKey, onEdit }: ClientsDictProps) {
   const [items, setItems] = useState<DictionaryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadedOnce, setLoadedOnce] = useState(false)
@@ -25,7 +24,6 @@ export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictPr
       getClients({ page: 1, limit: 100, search: search.trim() || undefined })
         .then((res) => {
           setItems(res.items)
-          onTotalLoaded(res.total)
           setLoadedOnce(true)
           setLoading(false)
         })
@@ -35,7 +33,7 @@ export function ClientsDict({ refreshKey, onEdit, onTotalLoaded }: ClientsDictPr
         })
     }, search ? 250 : 0)
     return () => clearTimeout(timer)
-  }, [onTotalLoaded, refreshKey, search])
+  }, [refreshKey, search])
 
   return (
     <div className="t-wrap">

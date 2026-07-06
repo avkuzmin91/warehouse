@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getStoragePricedClients, storageRateLabel } from '../../../../api/storagePricingApi'
 import { ListPage } from '../../../layouts/ListPage'
 import { Table, Td } from '../../../data/Table'
@@ -15,12 +15,25 @@ import { StoragePriceDrawer } from './StoragePriceDrawer'
 const PAGE_SIZE = 25
 
 export function StoragePricesFeature() {
-  const [search, setSearch] = useFilterParam('search', '')
-  const [missing, setMissing] = useFilterParam('missing', '')
+  // replace: панель встроена в «Справочники» — фильтры не плодят записи истории,
+  // «назад» сразу уводит со страницы справочников.
+  const [search, setSearch] = useFilterParam('search', '', { replace: true })
+  const [missing, setMissing] = useFilterParam('missing', '', { replace: true })
   const [page, setPage] = usePageParam()
-  const { setMany } = useFilterParamsActions()
+  const { setMany } = useFilterParamsActions({ replace: true })
   const [tick, setTick] = useState(0)
   const [editId, setEditId] = useState<string | null>(null)
+
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setSearch(searchInput), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
 
   const { data, loading, error } = useApi(
     (s) => getStoragePricedClients({
@@ -46,15 +59,15 @@ export function StoragePricesFeature() {
             <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
             <input
               className="input sm"
-              style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
+              style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
               placeholder="Название клиента…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => setSearch('')}
+                onClick={() => { setSearchInput(''); setSearch('') }}
               ><Icon name="x" size={12} /></button>
             )}
           </div>

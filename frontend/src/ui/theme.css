@@ -278,6 +278,11 @@ a { color: inherit; text-decoration: none; }
 }
 .page-title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
 .page-subtitle { font-size: 13px; color: var(--c-text-muted); margin-top: 4px; }
+/* Справочники стоимостей рендерят собственный ListPage внутри панели «Справочников» —
+   без сброса он добавил бы второй page-отступ. */
+.dict-embed .page { padding: 0; max-width: none; }
+.dict-embed .page-title { font-size: 16px; }
+.dict-embed .page-header { padding-bottom: 10px; margin-bottom: 12px; }
 
 /* === Buttons === */
 .btn {

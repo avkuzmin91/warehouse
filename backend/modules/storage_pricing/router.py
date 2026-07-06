@@ -20,6 +20,7 @@ from .schemas import (
     StorageClientDaysResponse,
     StoragePriceHistoryEntry,
     StorageReportResponse,
+    UninvoicedStorageResponse,
 )
 from .service import (
     add_storage_price,
@@ -27,10 +28,12 @@ from .service import (
     current_storage_prices,
     delete_storage_price,
     load_storage_price_history,
+    run_client_storage_accrual,
     storage_charge_detail,
     storage_client_days,
     storage_record_on,
     storage_report,
+    uninvoiced_storage_months,
 )
 
 router = APIRouter(tags=["storage-pricing"])
@@ -140,6 +143,10 @@ def set_client_storage_price(client_id: str, body: SetStoragePriceRequest, user=
             conn, client_id=client_id, unit=unit, price_kop=body.price_kop,
             free_days=body.free_days, effective_from=effective_from, user_id=uid, note=body.note,
         )
+        # Ретро-включение: запись задним числом сразу доначисляет непокрытые дни —
+        # менеджер видит суммы в отчёте и подсказке «не выставлено» без ожидания
+        # фонового цикла. Уже начисленные дни не трогаются (append-only).
+        run_client_storage_accrual(conn, client_id, business_today())
         conn.commit()
     return MessageResponse(message="ok")
 
@@ -152,6 +159,20 @@ def delete_client_storage_price(client_id: str, price_id: str, user=Depends(_get
             raise HTTPException(status_code=404, detail="Запись тарифа не найдена")
         conn.commit()
     return MessageResponse(message="ok")
+
+
+@router.get("/storage-pricing/clients/{client_id}/uninvoiced", response_model=UninvoicedStorageResponse)
+def get_uninvoiced_storage(client_id: str, user=Depends(_get_finance)):
+    """Невыставленное хранение клиента помесячно — подсказка при выставлении счёта."""
+    _ = user
+    with get_connection() as conn:
+        client = conn.execute(
+            "SELECT id FROM clients WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (client_id,)
+        ).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="Клиент не найден")
+        data = uninvoiced_storage_months(conn, client_id)
+    return UninvoicedStorageResponse(**data)
 
 
 # ── Отчёт «Хранение» ─────────────────────────────────────────────────────────

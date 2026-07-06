@@ -55,6 +55,20 @@ class SetStoragePriceRequest(BaseModel):
     note: str | None = None
 
 
+class UninvoicedStorageMonth(BaseModel):
+    month: str
+    month_label: str
+    days: int
+    date_from: str
+    date_to: str
+    amount_kop: int
+
+
+class UninvoicedStorageResponse(BaseModel):
+    items: list[UninvoicedStorageMonth]
+    total_amount_kop: int
+
+
 # ── Отчёт «Хранение» ─────────────────────────────────────────────────────────
 
 class StorageReportItem(BaseModel):

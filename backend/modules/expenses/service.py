@@ -1130,6 +1130,41 @@ def upsert_trip_logistics_expense(connection, trip_row, uid: str) -> None:
     )
 
 
+def reverse_trip_logistics_expense(connection, trip_id: str, uid: str) -> None:
+    """Снимает логистический расход рейса (source_kind=trip) при аннулировании рейса.
+
+    Парный к upsert_trip_logistics_expense: soft-delete + журнал, чтобы после отмены
+    рейса в реестре расходов и в P&L не висел расход по несуществующему рейсу. Разрешено,
+    только пока расход «ожидает оплаты»: оплаченный/частично оплаченный расход исказил бы
+    историю платежей — 400, финансы разбираются вручную. Если расхода нет — тихо выходим.
+    Не коммитит — это делает вызывающий."""
+    existing = connection.execute(
+        "SELECT id, amount, payment_status FROM material_expenses "
+        "WHERE source_kind = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (EXPENSE_SOURCE_TRIP, trip_id),
+    ).fetchone()
+    if not existing:
+        return
+    if str(existing["payment_status"]) != EXPENSE_PAYMENT_AWAITING:
+        label = EXPENSE_PAYMENT_STATUS_LABELS.get(
+            str(existing["payment_status"]), str(existing["payment_status"])
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Расход по логистике рейса уже оплачивается («{label}») — обратитесь к финансам",
+        )
+    connection.execute(
+        "UPDATE material_expenses SET is_deleted = 1, updated_at = ? WHERE id = ?",
+        (now_iso(), str(existing["id"])),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), str(existing["id"]), EXPENSE_OP_DELETE,
+         f"Рейс аннулирован: {format_kopecks(int(existing['amount']))} · расход снят", now_iso(), uid),
+    )
+
+
 def reattribute_trip_logistics_carrier(
     connection, trip_id: str, *, carrier_id: str | None, carrier_name: str | None, uid: str
 ) -> None:

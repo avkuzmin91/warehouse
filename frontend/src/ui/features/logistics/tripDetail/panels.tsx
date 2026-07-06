@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
+import { Drawer } from '../../../feedback/Drawer'
 import type { TripOp, TripStatus } from '../../../../api/tripsApi'
 import { ProcessRail } from '../components/ProcessRail'
 import { CostLedger } from '../components/CostLedger'
@@ -50,19 +52,41 @@ export function CostPanel({ estimate, actual, waiting, showActual }: {
   )
 }
 
-export function JournalPanel({ ops }: { ops: TripOp[] }) {
+/** Кнопка в панели действий, открывающая журнал операций рейса в шторке (как в отгрузках). */
+export function JournalButton({ ops, tripNumber }: { ops: TripOp[]; tripNumber: string }) {
+  const [open, setOpen] = useState(false)
   return (
-    <Panel icon="layers" title="Журнал" right={ops.length > 0 ? <span className="t-sub">{ops.length}</span> : undefined} bodyPad={false}>
-      {ops.length === 0 ? (
-        <div className="t-sub" style={{ padding: 14 }}>Нет операций</div>
-      ) : (
-        <div style={{ padding: '6px 14px 10px' }}>
-          {ops.map((op) => (
-            <OpEntry key={op.id} op={op} />
-          ))}
-        </div>
-      )}
-    </Panel>
+    <>
+      <button className="btn ghost" onClick={() => setOpen(true)}>
+        <Icon name="layers" size={14} />Журнал
+        {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
+      </button>
+      <Drawer
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Журнал операций"
+        subtitle={`${ops.length} записей · ${tripNumber}`}
+        width={460}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-text-subtle)' }}>
+            <Icon name="shield" size={11} />
+            <span>Операции не редактируются. Удаление запрещено.</span>
+          </div>
+        }
+      >
+        {ops.length === 0 ? (
+          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            Нет операций
+          </div>
+        ) : (
+          <div className="ops-timeline">
+            {ops.map((op) => (
+              <OpEntry key={op.id} op={op} />
+            ))}
+          </div>
+        )}
+      </Drawer>
+    </>
   )
 }
 

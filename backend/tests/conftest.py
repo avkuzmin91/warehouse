@@ -72,10 +72,11 @@ _isolate_database()
 
 from fastapi.testclient import TestClient
 
-# Фоновые планировщики (ЗП, пуш-уведомления) не должны писать в тестовую БД
-# при старте lifespan.
+# Фоновые планировщики (ЗП, пуш-уведомления, синк маркетплейсов) не должны
+# писать в тестовую БД при старте lifespan.
 os.environ["SALARY_SCHEDULER"] = "0"
 os.environ["PUSH_SCHEDULER"] = "0"
+os.environ["MP_SCHEDULER"] = "0"
 
 from app import app
 from dbconn import close_pool, get_connection

@@ -11,7 +11,7 @@ import { DateTimeField, FieldLabel, Segmented } from '../../components/fields'
 import { timePart } from '../../components/dateTimeValue'
 import { ReceiptsBlock } from '../ReceiptsBlock'
 import type { ReceiptLink, ReceiptEnrich } from '../ReceiptsBlock'
-import { ProcessPanel, CostPanel, JournalPanel } from '../panels'
+import { ProcessPanel, CostPanel, JournalButton } from '../panels'
 
 function LockedCostFields({ after }: { after: string }) {
   return (
@@ -96,6 +96,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <JournalButton ops={ops} tripNumber={doc.trip_number} />
             <button className="btn ghost danger" onClick={onCancel} disabled={busy}>
               <Icon name="x" size={14} />Аннулировать
             </button>
@@ -201,7 +202,6 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
         <div className="col gap-16">
           <ProcessPanel status={doc.status} ops={ops} direction={direction} />
           {showCosts && <CostPanel estimate={doc.cost_estimate} />}
-          <JournalPanel ops={ops} />
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getProducts, getProductVariants } from '../../../api/adminApi'
 import { getInventoryProductTypes } from '../../../api/inventoryLookupsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
@@ -35,22 +35,45 @@ const SKU_OPTIONS = [
 
 interface ProductsDictProps {
   refreshKey: number
-  onTotalLoaded: (total: number) => void
+  visible: boolean
 }
 
-export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
+export function ProductsDict({ refreshKey, visible }: ProductsDictProps) {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [products, setProducts] = useState<ProductItem[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
 
-  const [search, setSearch] = useState('')
-  const [typeId, setTypeId] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [actuality, setActuality] = useState('')
-  const [skuState, setSkuState] = useState('')
+  // Фильтры живут в state (панель остаётся смонтированной при переключении
+  // вкладок справочника), но зеркалятся в URL, пока вкладка «Товары» активна —
+  // возврат с карточки товара («назад») их восстанавливает.
+  const initParam = (key: string) => (visible ? searchParams.get(key) ?? '' : '')
+  const [search, setSearch] = useState(() => initParam('search'))
+  const [typeId, setTypeId] = useState(() => initParam('ptype'))
+  const [clientId, setClientId] = useState(() => initParam('client'))
+  const [actuality, setActuality] = useState(() => initParam('status'))
+  const [skuState, setSkuState] = useState(() => initParam('sku'))
+  const [page, setPage] = useState(() => (visible ? Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1) : 1))
+
+  useEffect(() => {
+    if (!visible) return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        const setOrDel = (key: string, v: string) => { if (v) next.set(key, v); else next.delete(key) }
+        setOrDel('search', search)
+        setOrDel('ptype', typeId)
+        setOrDel('client', clientId)
+        setOrDel('status', actuality)
+        setOrDel('sku', skuState)
+        setOrDel('page', page > 1 ? String(page) : '')
+        return next
+      },
+      { replace: true },
+    )
+  }, [visible, search, typeId, clientId, actuality, skuState, page, setSearchParams])
 
   const [productTypes, setProductTypes] = useState<InventoryProductTypeLookup[]>([])
   const { clients } = useLookups()
@@ -79,11 +102,10 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
       })
       setProducts(res.items)
       setTotal(res.total)
-      onTotalLoaded(res.total)
     } finally {
       setLoading(false)
     }
-  }, [onTotalLoaded])
+  }, [])
 
   // Debounce search; immediate on filter changes
   useEffect(() => {
@@ -91,8 +113,12 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
     return () => clearTimeout(timer)
   }, [search, typeId, clientId, actuality, skuState, page, load, refreshKey])
 
-  // Reset to page 1 when filters change
-  useEffect(() => { setPage(1) }, [search, typeId, clientId, actuality, skuState])
+  // Reset to page 1 when filters change (не при монтировании — page восстановлен из URL)
+  const filtersMounted = useRef(false)
+  useEffect(() => {
+    if (!filtersMounted.current) { filtersMounted.current = true; return }
+    setPage(1)
+  }, [search, typeId, clientId, actuality, skuState])
 
   useEffect(() => {
     if (!selectedId) { setVariants([]); return }
@@ -125,7 +151,7 @@ export function ProductsDict({ refreshKey, onTotalLoaded }: ProductsDictProps) {
           <input
             className="input sm"
             style={{ paddingLeft: 28, width: 220 }}
-            placeholder="SKU или название…"
+            placeholder="SKU, штрих-код или название…"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           />

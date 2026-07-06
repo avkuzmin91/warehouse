@@ -95,6 +95,12 @@ export type ProductVariantDimension = {
   height: number
 }
 
+export type VariantBarcodeItem = {
+  id: string
+  barcode: string
+  source: string | null
+}
+
 export type ProductVariantItem = {
   id: string
   color_id: string | null
@@ -103,6 +109,7 @@ export type ProductVariantItem = {
   size_id: string | null
   size_name: string | null
   sku: string
+  barcodes: VariantBarcodeItem[]
   images: string[]
   is_active: boolean
   stock: number

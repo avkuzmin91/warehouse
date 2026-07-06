@@ -5,6 +5,7 @@ import { authRoutes } from './routes/auth'
 import { inventoryRoutes } from './routes/inventory'
 import { logisticsRoutes } from './routes/logistics'
 import { financeRoutes } from './routes/finance'
+import { marketplacesRoutes } from './routes/marketplaces'
 import { timesheetRoutes } from './routes/timesheet'
 import { cabinetRoutes } from './routes/cabinet'
 import { adminRoutes } from './routes/admin'
@@ -24,6 +25,7 @@ export function App() {
             {inventoryRoutes}
             {logisticsRoutes}
             {financeRoutes}
+            {marketplacesRoutes}
             {timesheetRoutes}
             {cabinetRoutes}
           </Route>

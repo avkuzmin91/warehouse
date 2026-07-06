@@ -77,8 +77,11 @@ from modules.logistics.service import (
     sync_actual_arrival,
     sync_actual_ship_date,
 )
+from modules.dispatch.service import dispatch_is_invoiced
+from modules.receipts.service import receipt_is_invoiced
 from modules.expenses.service import (
     reattribute_trip_logistics_carrier,
+    reverse_trip_logistics_expense,
     upsert_trip_logistics_expense,
 )
 from security import can_view_costs, ensure_cost_access, is_admin
@@ -918,12 +921,39 @@ def cancel_trip(
             return stored
         doc_row = _fetch_doc(conn, trip_id)
         current = str(doc_row["status"])
-        if current in (TRIP_STATUS_CLOSED, TRIP_STATUS_CANCELLED):
-            raise HTTPException(status_code=400, detail="Рейс уже в финальном статусе")
+        if current == TRIP_STATUS_CANCELLED:
+            raise HTTPException(status_code=400, detail="Рейс уже аннулирован")
         now = _now()
-        # Если рейс уже двигал остаток (был в «Уточнение стоимости») — вернуть назад:
+        outbound = str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND
+        # Денежные хвосты закрываем до сторно остатков. Документ в выставленном счёте
+        # откатывать нельзя — сумма уже у клиента; расход рейса снимаем (или 400, если оплачен).
+        if outbound:
+            linked = conn.execute(
+                "SELECT DISTINCT tl.dispatch_doc_id AS id, s.doc_number FROM trip_lines tl "
+                "JOIN dispatch_docs s ON s.id = tl.dispatch_doc_id AND COALESCE(s.is_deleted, 0) = 0 "
+                "WHERE tl.trip_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND tl.dispatch_doc_id IS NOT NULL",
+                (trip_id,),
+            ).fetchall()
+            blocked = [str(r["doc_number"]) for r in linked if dispatch_is_invoiced(conn, str(r["id"]))]
+            noun = "Отгрузка"
+        else:
+            linked = conn.execute(
+                "SELECT DISTINCT tl.receipt_doc_id AS id, d.doc_number FROM trip_lines tl "
+                "JOIN receipt_docs d ON d.id = tl.receipt_doc_id AND COALESCE(d.is_deleted, 0) = 0 "
+                "WHERE tl.trip_id = ? AND COALESCE(tl.is_deleted, 0) = 0 AND tl.receipt_doc_id IS NOT NULL",
+                (trip_id,),
+            ).fetchall()
+            blocked = [str(r["doc_number"]) for r in linked if receipt_is_invoiced(conn, str(r["id"]))]
+            noun = "Поступление"
+        if blocked:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{noun} {', '.join(blocked)} уже в счёте — сначала аннулируйте счёт",
+            )
+        reverse_trip_logistics_expense(conn, trip_id, uid)
+        # Если рейс уже двигал остаток (был в «Уточнение стоимости» / «Закрыт») — вернуть назад:
         # отгрузка списанное → «Готов»; поступление принятое → снять с хранения.
-        if str(doc_row["direction"]) == TRIP_DIRECTION_OUTBOUND:
+        if outbound:
             reverse_dispatch_consume_for_trip(conn, trip_id, uid)
         else:
             reverse_receipt_intake_for_trip(conn, trip_id, uid)

@@ -64,7 +64,7 @@ export function CabinetBalancesFeature() {
   const summary = summaryRes.data
   const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
   const defectQty = summary
-    ? summary.storage_defect + summary.packing_defect + summary.ready_defect
+    ? summary.storage_defect + summary.packing_defect + summary.packed_defect + summary.ready_defect
     : undefined
 
   return (
@@ -125,6 +125,12 @@ export function CabinetBalancesFeature() {
               unit="шт"
             />
             <KPI
+              label={INV_OP_LABELS.packed}
+              value={kpiVal(summary ? summary.packed_good + summary.packed_defect : undefined)}
+              valueColor="var(--c-info)"
+              unit="шт"
+            />
+            <KPI
               label={INV_OP_LABELS.ready}
               value={kpiVal(summary ? summary.ready_good + summary.ready_defect : undefined)}
               valueColor="var(--c-success)"
@@ -146,21 +152,23 @@ export function CabinetBalancesFeature() {
                 <th style={{ width: 150 }}>Распределение</th>
                 <th style={{ textAlign: 'right', width: 120 }}>{INV_OP_LABELS.storage}</th>
                 <th style={{ textAlign: 'right', width: 120 }}>{INV_OP_LABELS.packing}</th>
+                <th style={{ textAlign: 'right', width: 120 }}>{INV_OP_LABELS.packed}</th>
                 <th style={{ textAlign: 'right', width: 130 }}>{INV_OP_LABELS.ready}</th>
                 <th className="total-col" style={{ textAlign: 'right', width: 95 }}>Всего</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={8} cols={6} />
+                <SkeletonRows rows={8} cols={7} />
               ) : items.length === 0 ? (
-                <tr><Td colSpan={6}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
+                <tr><Td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></Td></tr>
               ) : (
                 items.map((item, index) => {
                   const stor = item.storage_good + item.storage_defect
                   const pack = item.packing_good + item.packing_defect
+                  const packd = item.packed_good + item.packed_defect
                   const ready = item.ready_good + item.ready_defect
-                  const sum = Math.max(1, stor + pack + ready)
+                  const sum = Math.max(1, stor + pack + packd + ready)
                   return (
                     <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${index}`}>
                       <Td>
@@ -172,10 +180,11 @@ export function CabinetBalancesFeature() {
                       <Td>
                         <div
                           className="distbar"
-                          title={`хранение ${stor.toLocaleString('ru-RU')} · упаковка ${pack.toLocaleString('ru-RU')} · готово ${ready.toLocaleString('ru-RU')}`}
+                          title={`хранение ${stor.toLocaleString('ru-RU')} · упаковка ${pack.toLocaleString('ru-RU')} · упаковано ${packd.toLocaleString('ru-RU')} · готово ${ready.toLocaleString('ru-RU')}`}
                         >
                           <i style={{ width: `${(stor / sum) * 100}%`, background: 'var(--c-accent)', opacity: 0.75 }} />
                           <i style={{ width: `${(pack / sum) * 100}%`, background: 'var(--c-info)', opacity: 0.75 }} />
+                          <i style={{ width: `${(packd / sum) * 100}%`, background: 'var(--c-info)', opacity: 0.45 }} />
                           <i style={{ width: `${(ready / sum) * 100}%`, background: 'var(--c-success)', opacity: 0.8 }} />
                         </div>
                       </Td>
@@ -184,6 +193,9 @@ export function CabinetBalancesFeature() {
                       </Td>
                       <Td className="num">
                         <BucketCell good={item.packing_good} defect={item.packing_defect} accent="var(--c-info)" />
+                      </Td>
+                      <Td className="num">
+                        <BucketCell good={item.packed_good} defect={item.packed_defect} accent="var(--c-info)" />
                       </Td>
                       <Td className="num">
                         <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-success)" />
@@ -198,6 +210,7 @@ export function CabinetBalancesFeature() {
           <div className="row mt-12" style={{ gap: 12, color: 'var(--c-text-subtle)', fontSize: 12 }}>
             <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-accent)', opacity: 0.75 }} />хранение</span>
             <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-info)', opacity: 0.75 }} />упаковка</span>
+            <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-info)', opacity: 0.45 }} />упаковано</span>
             <span className="row gap-4"><i style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--c-success)', opacity: 0.8 }} />готово к отгрузке</span>
             <span style={{ color: 'var(--c-warning)' }}>+n брак — брак в зоне</span>
           </div>

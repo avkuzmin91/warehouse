@@ -7,6 +7,7 @@ const PACKING: CrumbDef = { label: 'Упаковка', to: '/inventory/packing' 
 const LOGISTICS: CrumbDef = { label: 'Логистика' }
 const FINANCE: CrumbDef = { label: 'Финансы' }
 const TIMESHEET: CrumbDef = { label: 'Табель', to: '/timesheet' }
+const MARKETPLACES: CrumbDef = { label: 'Маркетплейсы' }
 const DICTIONARIES: CrumbDef = { label: 'Справочники', to: '/dictionaries' }
 const CABINET: CrumbDef = { label: 'Личный кабинет', to: '/cabinet' }
 
@@ -57,11 +58,12 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/finance/expenses', [FINANCE, { label: 'Расходы' }]],
   ['/finance/extra-income', [FINANCE, { label: 'Доп. работы' }]],
   ['/finance/recurring', [FINANCE, { label: 'Регулярные расходы' }]],
-  ['/finance/pricing', [FINANCE, { label: 'Стоимость упаковки' }]],
-  ['/finance/pallet-pricing', [FINANCE, { label: 'Стоимость палета' }]],
-  ['/finance/box-pricing', [FINANCE, { label: 'Стоимость короба' }]],
-  ['/finance/storage-pricing', [FINANCE, { label: 'Стоимость хранения' }]],
   ['/finance/storage', [FINANCE, { label: 'Хранение' }]],
+
+  ['/marketplaces/orders', [MARKETPLACES, { label: 'FBS-заказы' }]],
+  ['/marketplaces/orders/:orderId', [MARKETPLACES, { label: 'FBS-заказы', to: '/marketplaces/orders' }, { label: 'Карточка заказа' }]],
+  ['/marketplaces/links', [MARKETPLACES, { label: 'Связка товаров' }]],
+  ['/marketplaces/accounts', [MARKETPLACES, { label: 'Подключения' }]],
 
   ['/dictionaries', [{ label: 'Справочники' }]],
   ['/dictionaries/users', [{ label: 'Управление' }, { label: 'Пользователи' }]],

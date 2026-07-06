@@ -46,6 +46,7 @@ from modules.timesheet.router import router as timesheet_router
 from modules.box_pricing.router import router as box_pricing_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
+from modules.marketplaces.router import router as marketplaces_router
 from modules.pallet_pricing.router import router as pallet_pricing_router
 from modules.pnl.router import router as pnl_router
 from modules.pricing.router import router as pricing_router
@@ -789,6 +790,33 @@ async def _push_notify_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _mp_sync_loop() -> None:
+    """Polling FBS-заказов по активным подключениям маркетплейсов (Фаза 1 —
+    read-only: в МП ничего не пишем). Сбой одного кабинета фиксируется в
+    last_sync_error и не мешает остальным (изоляция внутри run_marketplace_sync).
+    Тик блокирующий (БД + сеть МП) — уводим в поток, как пуш-цикл.
+    Отключается MP_SCHEDULER=0 (тесты, инстансы без FBS)."""
+    from modules.marketplaces.service import run_marketplace_sync
+
+    try:
+        interval = max(30, int(os.environ.get("MP_SYNC_INTERVAL_SECONDS", "120")))
+    except ValueError:
+        interval = 120
+
+    def _tick() -> None:
+        with get_connection() as conn:
+            run_marketplace_sync(conn)
+
+    while True:
+        try:
+            await asyncio.to_thread(_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("wms.mp").exception("Сбой цикла синка маркетплейсов, повтор через интервал")
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(exist_ok=True)
@@ -804,7 +832,14 @@ async def lifespan(app: FastAPI):
         if os.environ.get("PUSH_SCHEDULER", "1") == "1"
         else None
     )
+    mp_task = (
+        asyncio.create_task(_mp_sync_loop())
+        if os.environ.get("MP_SCHEDULER", "1") == "1"
+        else None
+    )
     yield
+    if mp_task is not None:
+        mp_task.cancel()
     if push_task is not None:
         push_task.cancel()
     if accrual_task is not None:
@@ -1032,6 +1067,7 @@ app.include_router(recurring_expenses_router)
 app.include_router(pnl_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
+app.include_router(marketplaces_router)
 app.include_router(tasks_router)
 app.include_router(push_router)
 app.include_router(scan_router)

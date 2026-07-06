@@ -28,7 +28,6 @@ interface SimpleDictProps {
   title: string
   refreshKey: number
   onEdit: (item: AnyDictItem) => void
-  onTotalLoaded: (total: number) => void
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -52,7 +51,7 @@ function itemColorHex(item: AnyDictItem): string | null {
   return 'color_hex' in item ? normalizeColorHex(item.color_hex) : null
 }
 
-export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }: SimpleDictProps) {
+export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProps) {
   const [items, setItems] = useState<AnyDictItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadedOnce, setLoadedOnce] = useState(false)
@@ -64,47 +63,36 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
       if (typeId === 'product-types') {
         const res = await fetchProductTypesPage({ page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'sizes') {
         const res = await getSizes({ page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'colors') {
         const res = await fetchSimpleDictionaryPage('/colors', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'suppliers') {
         const res = await fetchSimpleDictionaryPage('/suppliers', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'warehouses') {
         const res = await fetchSimpleDictionaryPage('/warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'own-warehouses') {
         const res = await fetchSimpleDictionaryPage('/own-warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'carriers') {
         const res = await fetchSimpleDictionaryPage('/carriers', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'vehicle-types') {
         const res = await fetchSimpleDictionaryPage('/vehicle-types', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'positions') {
         const res = await fetchSimpleDictionaryPage('/positions', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else if (typeId === 'reasons') {
         const res = await fetchSimpleDictionaryPage('/defect-reasons', 'name', { page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-        onTotalLoaded(res.total)
       } else {
         // Fallback for unknown simple types — should not reach here (those get EmptyState at page level)
         setItems([])
-        onTotalLoaded(0)
       }
       setLoadedOnce(true)
     } catch {
@@ -112,7 +100,7 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit, onTotalLoaded }:
     } finally {
       setLoading(false)
     }
-  }, [typeId, onTotalLoaded])
+  }, [typeId])
 
   useEffect(() => {
     setSearch('')

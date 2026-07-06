@@ -13,7 +13,7 @@ import {
   updateInvoiceDueDate,
 } from '../../../api/invoicesApi'
 import type { InvoiceDetail } from '../../../api/invoicesApi'
-import { getStorageClientDays } from '../../../api/storagePricingApi'
+import { getUninvoicedStorage } from '../../../api/storagePricingApi'
 import { Modal } from '../../feedback/Modal'
 import { DatePicker } from '../../primitives/DatePicker'
 import { Icon } from '../../primitives/Icon'
@@ -480,64 +480,103 @@ export function AttachExtraIncomeModal({ invoice, onClose, onDone }: { invoice: 
 }
 
 
-// ── Добавить хранение за период ──────────────────────────────────────────────
+// ── Добавить хранение (помесячно, система сама подсказывает) ─────────────────
 export function AttachStorageModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
   const toast = useToast()
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
 
-  const hasPeriod = Boolean(dateFrom && dateTo && dateFrom <= dateTo)
   const { data, loading } = useApi(
-    (s) => hasPeriod && invoice.client_id
-      ? getStorageClientDays(invoice.client_id, { date_from: dateFrom, date_to: dateTo }, s)
-      : Promise.resolve({ items: [] }),
-    [invoice.client_id, dateFrom, dateTo, hasPeriod],
+    (s) => invoice.client_id
+      ? getUninvoicedStorage(invoice.client_id, s)
+      : Promise.resolve({ items: [], total_amount_kop: 0 }),
+    [invoice.client_id],
   )
-  const free = (data?.items ?? []).filter((d) => d.amount_kop > 0 && !d.invoice_id)
-  const freeAmount = free.reduce((a, d) => a + d.amount_kop, 0)
+  const months = data?.items ?? []
+  const selectedMonths = months.filter((m) => selected.has(m.month))
+  const selectedAmount = selectedMonths.reduce((a, m) => a + m.amount_kop, 0)
 
-  function submit() {
-    if (!hasPeriod) { toast('Укажите период хранения', 'error'); return }
+  function toggle(month: string) {
+    setSelected((prev) => { const n = new Set(prev); if (n.has(month)) n.delete(month); else n.add(month); return n })
+  }
+  function toggleAll() {
+    setSelected((prev) => prev.size === months.length ? new Set() : new Set(months.map((m) => m.month)))
+  }
+
+  async function submit() {
+    if (selectedMonths.length === 0) { toast('Выберите хотя бы один месяц', 'error'); return }
     setBusy(true)
-    attachInvoiceStorage(invoice.id, { date_from: dateFrom, date_to: dateTo })
-      .then((r) => { toast(`Хранение добавлено: ${r.days} дн. на ${formatMoneyKopecks(r.amount_kop)}`, 'success'); onDone() })
-      .catch((e) => toast(e.message, 'error'))
-      .finally(() => setBusy(false))
+    try {
+      for (const m of selectedMonths) {
+        await attachInvoiceStorage(invoice.id, { date_from: m.date_from, date_to: m.date_to })
+      }
+      toast(`Хранение добавлено на ${formatMoneyKopecks(selectedAmount)}`, 'success')
+      onDone()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
     <Modal
-      open onClose={onClose} title="Добавить хранение" width={460}
-      subtitle={`Начисления за хранение остатков клиента ${invoice.client_name ?? ''}`}
+      open onClose={onClose} title="Добавить хранение" width={520}
+      subtitle={`Невыставленное хранение клиента ${invoice.client_name ?? ''}`}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, width: '100%' }}>
           <span style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-            {hasPeriod && !loading && <>Свободно: <b>{free.length} дн.</b> на <b className="mono">{formatMoneyKopecks(freeAmount)}</b></>}
+            Выбрано: <b>{selected.size}</b>{selected.size > 0 && <> на <b className="mono">{formatMoneyKopecks(selectedAmount)}</b></>}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn ghost" onClick={onClose}>Отмена</button>
-            <button className="btn primary" onClick={submit} disabled={busy || !hasPeriod || (!loading && free.length === 0)}>
-              <Icon name="plus" size={14} />Добавить
+            <button className="btn primary" onClick={submit} disabled={busy || selected.size === 0}>
+              <Icon name="plus" size={14} />Добавить ({selected.size})
             </button>
           </div>
         </div>
       }
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-        <Icon name="lock" size={12} />Каждый день начисления входит не более чем в один счёт.
+        <Icon name="lock" size={12} />День начисления входит не более чем в один счёт.
+        {months.length > 0 && (
+          <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={toggleAll}>
+            {selected.size === months.length ? 'Снять все' : 'Выбрать все'}
+          </button>
+        )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <FieldRow label="Период с" required>
-          <DatePicker value={dateFrom} onChange={setDateFrom} />
-        </FieldRow>
-        <FieldRow label="по" required>
-          <DatePicker value={dateTo} onChange={setDateTo} />
-        </FieldRow>
-      </div>
-      {hasPeriod && !loading && free.length === 0 && (
-        <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--c-warning)' }}>
-          За период нет начислений, не привязанных к счёту.
+      {loading ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка…</div>
+      ) : months.length === 0 ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+          Невыставленного хранения нет — все начисления уже в счетах либо хранение не тарифицируется.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
+          {months.map((m) => {
+            const on = selected.has(m.month)
+            return (
+              <div key={m.month} style={{
+                borderRadius: 'var(--r-md)',
+                border: `1px solid ${on ? 'var(--c-accent-border)' : 'var(--c-border)'}`,
+                background: on ? 'var(--c-accent-bg)' : 'var(--c-bg-elev)',
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', cursor: 'pointer' }}>
+                  <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {on && <Icon name="check" size={10} />}
+                  </span>
+                  <input type="checkbox" checked={on} onChange={() => toggle(m.month)} style={{ display: 'none' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{m.month_label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 2 }}>
+                      {fmtDate(m.date_from)} — {fmtDate(m.date_to)} · {m.days} дн.
+                    </div>
+                  </div>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>{formatMoneyKopecks(m.amount_kop)}</span>
+                </label>
+              </div>
+            )
+          })}
         </div>
       )}
     </Modal>

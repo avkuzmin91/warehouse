@@ -106,6 +106,20 @@ export type StorageChargeLine = {
   billable_qty: number
 }
 
+export type UninvoicedStorageMonth = {
+  month: string
+  month_label: string
+  days: number
+  date_from: string
+  date_to: string
+  amount_kop: number
+}
+
+export type UninvoicedStorageResponse = {
+  items: UninvoicedStorageMonth[]
+  total_amount_kop: number
+}
+
 export type StorageChargeDetail = {
   id: string
   client_id: string
@@ -163,6 +177,10 @@ export function getStorageClientDays(clientId: string, params: { date_from: stri
   sp.set('date_from', params.date_from)
   sp.set('date_to', params.date_to)
   return request<{ items: StorageDayItem[] }>(`/storage-pricing/report/${clientId}/days?${sp.toString()}`, { signal })
+}
+
+export function getUninvoicedStorage(clientId: string, signal?: AbortSignal) {
+  return request<UninvoicedStorageResponse>(`/storage-pricing/clients/${clientId}/uninvoiced`, { signal })
 }
 
 export function getStorageChargeDetail(chargeId: string, signal?: AbortSignal) {

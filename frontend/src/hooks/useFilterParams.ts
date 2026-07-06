@@ -3,9 +3,15 @@ import { useSearchParams } from 'react-router-dom'
 /**
  * Читает строковый фильтр из URL query string и возвращает сеттер.
  * Смена фильтра создаёт новую запись в истории (replace: false) → «назад» восстанавливает фильтры.
+ * replace: true — для встраиваемых панелей (справочники), где страница должна
+ * оставаться одной записью истории и «назад» сразу уводит с неё.
  * При смене фильтра автоматически сбрасывает page=1.
  */
-export function useFilterParam(key: string, def: string): [string, (v: string) => void] {
+export function useFilterParam(
+  key: string,
+  def: string,
+  opts?: { replace?: boolean },
+): [string, (v: string) => void] {
   const [params, setParams] = useSearchParams()
   const value = params.get(key) ?? def
 
@@ -21,14 +27,14 @@ export function useFilterParam(key: string, def: string): [string, (v: string) =
         next.delete('page')
         return next
       },
-      { replace: false },
+      { replace: opts?.replace ?? false },
     )
   }
 
   return [value, setValue]
 }
 
-export function useFilterParamsActions() {
+export function useFilterParamsActions(opts?: { replace?: boolean }) {
   const [, setParams] = useSearchParams()
 
   function setMany(updates: Record<string, string | null | undefined>) {
@@ -42,7 +48,7 @@ export function useFilterParamsActions() {
         next.delete('page')
         return next
       },
-      { replace: false },
+      { replace: opts?.replace ?? false },
     )
   }
 

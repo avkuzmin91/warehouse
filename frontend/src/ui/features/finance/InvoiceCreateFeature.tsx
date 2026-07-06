@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { attachInvoiceReceipts, createInvoice, getUninvoicedExtraIncome, getUninvoicedReceipts, getUninvoicedShipments } from '../../../api/invoicesApi'
+import { attachInvoiceReceipts, attachInvoiceStorage, createInvoice, getUninvoicedExtraIncome, getUninvoicedReceipts, getUninvoicedShipments } from '../../../api/invoicesApi'
 import type { UninvoicedExtraIncome, UninvoicedReceipt, UninvoicedShipment } from '../../../api/invoicesApi'
+import { getUninvoicedStorage } from '../../../api/storagePricingApi'
+import type { UninvoicedStorageMonth } from '../../../api/storagePricingApi'
 import { FormPage } from '../../layouts/FormPage'
 import { Combobox } from '../../data/Combobox'
 import { DatePicker } from '../../primitives/DatePicker'
@@ -29,6 +31,7 @@ export function InvoiceCreateFeature() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedRec, setSelectedRec] = useState<Set<string>>(new Set())
   const [selectedExtra, setSelectedExtra] = useState<Set<string>>(new Set())
+  const [selectedStor, setSelectedStor] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
   const [showErrors, setShowErrors] = useState(false)
 
@@ -56,7 +59,17 @@ export function InvoiceCreateFeature() {
   )
   const extraEntries: UninvoicedExtraIncome[] = uninvExtra?.items ?? []
 
-  useEffect(() => { setSelected(new Set()); setSelectedRec(new Set()); setSelectedExtra(new Set()) }, [clientId])
+  const { data: uninvStor, loading: loadingStor } = useApi(
+    (signal) => clientId
+      ? getUninvoicedStorage(clientId, signal)
+      : Promise.resolve({ items: [], total_amount_kop: 0 }),
+    [clientId],
+  )
+  const storMonths: UninvoicedStorageMonth[] = uninvStor?.items ?? []
+  const storSelected = storMonths.filter((m) => selectedStor.has(m.month))
+  const storAmountKop = storSelected.reduce((a, m) => a + m.amount_kop, 0)
+
+  useEffect(() => { setSelected(new Set()); setSelectedRec(new Set()); setSelectedExtra(new Set()); setSelectedStor(new Set()) }, [clientId])
 
   const kopecks = parseRublesToKopecks(amount)
   const clientName = clients.find((c) => c.id === clientId)?.name ?? null
@@ -92,6 +105,12 @@ export function InvoiceCreateFeature() {
   function toggleAllExtra() {
     setSelectedExtra((prev) => prev.size === extraEntries.length ? new Set() : new Set(extraEntries.map((e) => e.id)))
   }
+  function toggleStor(month: string) {
+    setSelectedStor((prev) => { const n = new Set(prev); if (n.has(month)) n.delete(month); else n.add(month); return n })
+  }
+  function toggleAllStor() {
+    setSelectedStor((prev) => prev.size === storMonths.length ? new Set() : new Set(storMonths.map((m) => m.month)))
+  }
 
   const extraAmountKop = extraEntries.filter((e) => selectedExtra.has(e.id)).reduce((a, e) => a + e.amount_kop, 0)
 
@@ -109,8 +128,12 @@ export function InvoiceCreateFeature() {
       extra_income_ids: [...selectedExtra],
     })
       .then(async (r) => {
-        // Поступления привязываются вторым вызовом — схема создания принимает только отгрузки.
+        // Поступления и хранение привязываются вторыми вызовами — схема создания
+        // принимает только отгрузки и доп. работы.
         if (selectedRec.size > 0) await attachInvoiceReceipts(r.message, [...selectedRec])
+        for (const m of storSelected) {
+          await attachInvoiceStorage(r.message, { date_from: m.date_from, date_to: m.date_to })
+        }
         toast('Черновик создан', 'success')
         navigate(`/finance/invoices/${r.message}`, { replace: true })
       })
@@ -369,6 +392,70 @@ export function InvoiceCreateFeature() {
             )}
           </PhaseBlock>
 
+          <PhaseBlock
+            icon="archive" title="Хранение без счёта" role="manager" state="active"
+            hint={clientId ? `не выставлено: ${storMonths.length > 0 ? formatMoneyKopecks(uninvStor?.total_amount_kop ?? 0) : 'нет'}` : 'сначала выберите клиента'}
+            right={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {selectedStor.size > 0 && <Badge tone="info">Выбрано: {selectedStor.size}</Badge>}
+                {storMonths.length > 0 && (
+                  <button className="btn ghost sm" onClick={toggleAllStor}>
+                    {selectedStor.size === storMonths.length ? 'Снять все' : 'Выбрать все'}
+                  </button>
+                )}
+              </span>
+            }
+          >
+            {!clientId ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                Выберите клиента выше, чтобы увидеть невыставленное хранение.
+              </div>
+            ) : loadingStor ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>Загрузка…</div>
+            ) : storMonths.length === 0 ? (
+              <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 13, color: 'var(--c-text-subtle)' }}>
+                Невыставленного хранения нет — все начисления уже в счетах либо хранение не тарифицируется.
+              </div>
+            ) : (
+              <>
+                <div style={{ margin: '0 -14px' }}>
+                  {storMonths.map((m) => {
+                    const on = selectedStor.has(m.month)
+                    return (
+                      <div key={m.month} style={{
+                        borderBottom: '1px solid var(--c-border)',
+                        background: on ? 'var(--c-accent-bg)' : undefined,
+                      }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+                          <span className={`t-checkbox ${on ? 'checked' : ''}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {on && <Icon name="check" size={10} />}
+                          </span>
+                          <input type="checkbox" checked={on} onChange={() => toggleStor(m.month)} style={{ display: 'none' }} />
+                          <span style={{ fontWeight: 500, minWidth: 120 }}>{m.month_label}</span>
+                          <span style={{ flex: 1, fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
+                            {fmtDate(m.date_from)} — {fmtDate(m.date_to)} · {m.days} дн.
+                          </span>
+                          <span className="mono" style={{ fontSize: 12, color: 'var(--c-text)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                            {formatMoneyKopecks(m.amount_kop)}
+                          </span>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+                {selectedStor.size > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12.5 }}>
+                    <span style={{ color: 'var(--c-text-subtle)' }}>Выбрано хранения на:</span>
+                    <span className="mono" style={{ fontWeight: 600 }}>{formatMoneyKopecks(storAmountKop)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                  <Icon name="lock" size={12} />День начисления входит не более чем в один счёт. Детали по дням — в разделе «Финансы → Хранение».
+                </div>
+              </>
+            )}
+          </PhaseBlock>
+
           <PhaseBlock icon="receipt" title="Параметры счёта" role="manager" state="active">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <div>
@@ -395,7 +482,7 @@ export function InvoiceCreateFeature() {
         </div>
 
         {/* Правая колонка — превью жизненного цикла + сводка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'sticky', top: 16, maxHeight: 'calc(100vh - var(--header-h) - 32px)', overflowY: 'auto' }}>
           <InvoiceRailPanel phase="draft" overdue={false} dueDate={dueDate ? fmtDate(dueDate) : 'выбрать'} duePrev={null} stamps={{ draft: 'сейчас' }} />
           <InvoiceSummaryPanel
             clientName={clientName}

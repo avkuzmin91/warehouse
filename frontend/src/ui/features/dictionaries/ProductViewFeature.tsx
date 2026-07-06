@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { deleteProduct, getProduct, getProductVariants } from '../../../api/adminApi'
+import { addVariantBarcode, deleteProduct, deleteVariantBarcode, getProduct, getProductVariants } from '../../../api/adminApi'
+import type { ProductVariantItem, VariantBarcodeItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
@@ -44,13 +45,57 @@ export function ProductViewFeature({ productId }: Props) {
   const { user } = useCurrentUser()
   const isAdmin = user?.role === 'admin'
   const productState = useApi((signal) => getProduct(productId, signal), [productId])
-  const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId])
+  const [variantsVersion, setVariantsVersion] = useState(0)
+  const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId, variantsVersion])
   const product = productState.data
   const variants = variantsState.data ?? []
 
   const [mainIdx, setMainIdx] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  const [bcTarget, setBcTarget] = useState<ProductVariantItem | null>(null)
+  const [bcCode, setBcCode] = useState('')
+  const [bcSource, setBcSource] = useState('')
+  const [bcSaving, setBcSaving] = useState(false)
+
+  function openAddBarcode(variant: ProductVariantItem) {
+    setBcCode('')
+    setBcSource('')
+    setBcTarget(variant)
+  }
+
+  async function handleAddBarcode() {
+    if (!bcTarget || !bcCode.trim() || bcSaving) return
+    setBcSaving(true)
+    try {
+      await addVariantBarcode(productId, bcTarget.id, { barcode: bcCode.trim(), source: bcSource.trim() || null })
+      toast('Штрих-код добавлен', 'success')
+      setBcTarget(null)
+      setVariantsVersion((v) => v + 1)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось добавить штрих-код', 'error')
+    } finally {
+      setBcSaving(false)
+    }
+  }
+
+  async function handleDeleteBarcode(variant: ProductVariantItem, bc: VariantBarcodeItem) {
+    const ok = await confirm({
+      title: 'Снять штрих-код?',
+      body: `Код ${bc.barcode} перестанет опознавать вариант ${variant.sku} при сканировании.`,
+      danger: true,
+      confirmLabel: 'Снять',
+    })
+    if (!ok) return
+    try {
+      await deleteVariantBarcode(productId, variant.id, bc.id)
+      toast('Штрих-код снят', 'success')
+      setVariantsVersion((v) => v + 1)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось снять штрих-код', 'error')
+    }
+  }
 
   async function handleDelete() {
     if (!product) return
@@ -192,17 +237,18 @@ export function ProductViewFeature({ productId }: Props) {
                   <th>Цвет</th>
                   <th>Размер</th>
                   <th>Габариты, см</th>
+                  <th>Штрих-коды</th>
                   <th style={{ textAlign: 'right', width: 100 }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                 </tr>
               </thead>
               <tbody>
                 {variantsState.loading ? (
-                  <SkeletonRows rows={5} cols={7} />
+                  <SkeletonRows rows={5} cols={8} />
                 ) : variantsState.error ? (
-                  <tr><Td colSpan={7}><EmptyState title="Не удалось загрузить варианты" sub={variantsState.error.message} /></Td></tr>
+                  <tr><Td colSpan={8}><EmptyState title="Не удалось загрузить варианты" sub={variantsState.error.message} /></Td></tr>
                 ) : variants.length === 0 ? (
-                  <tr><Td colSpan={7}><EmptyState title="Вариантов нет" sub="Добавьте варианты в режиме редактирования" /></Td></tr>
+                  <tr><Td colSpan={8}><EmptyState title="Вариантов нет" sub="Добавьте варианты в режиме редактирования" /></Td></tr>
                 ) : (
                   <>
                     {variants.map((variant) => {
@@ -224,6 +270,31 @@ export function ProductViewFeature({ productId }: Props) {
                           <Td className="mono" style={{ fontSize: 12 }}>
                             {variant.dimension.length}×{variant.dimension.width}×{variant.dimension.height}
                           </Td>
+                          <Td>
+                            <div className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                              {variant.barcodes.map((bc) => (
+                                <span
+                                  key={bc.id}
+                                  className="mono"
+                                  title={bc.source ?? undefined}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
+                                >
+                                  {bc.barcode}
+                                  <button
+                                    type="button"
+                                    title="Снять штрих-код"
+                                    onClick={() => void handleDeleteBarcode(variant, bc)}
+                                    style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                                  >
+                                    <Icon name="x" size={12} />
+                                  </button>
+                                </span>
+                              ))}
+                              <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" onClick={() => openAddBarcode(variant)}>
+                                <Icon name="plus" size={13} />
+                              </button>
+                            </div>
+                          </Td>
                           <Td className="num" style={{ color: variant.stock > 0 ? 'var(--c-success)' : undefined, fontWeight: variant.stock > 0 ? 500 : undefined }}>
                             {variant.stock.toLocaleString('ru-RU')}
                           </Td>
@@ -234,7 +305,7 @@ export function ProductViewFeature({ productId }: Props) {
                       )
                     })}
                     <tr>
-                      <Td colSpan={5} style={{ fontWeight: 500 }}>Итого</Td>
+                      <Td colSpan={6} style={{ fontWeight: 500 }}>Итого</Td>
                       <Td className="num" style={{ fontWeight: 500 }}>
                         {variants.reduce((s, v) => s + v.stock, 0).toLocaleString('ru-RU')}
                       </Td>
@@ -249,6 +320,45 @@ export function ProductViewFeature({ productId }: Props) {
           </Card>
         </div>
       )}
+
+      <Modal
+        open={bcTarget !== null}
+        onClose={() => setBcTarget(null)}
+        title="Добавить штрих-код"
+        subtitle={bcTarget ? `Вариант ${bcTarget.sku}` : undefined}
+        width={420}
+        footer={
+          <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn ghost" onClick={() => setBcTarget(null)}>Отмена</button>
+            <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
+              {bcSaving ? 'Добавление…' : 'Добавить'}
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>Штрих-код</div>
+            <input
+              className="input sm mono"
+              value={bcCode}
+              onChange={(e) => setBcCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleAddBarcode() }}
+              placeholder="Отсканируйте или введите код"
+              autoFocus
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>Источник (необязательно)</div>
+            <input
+              className="input sm"
+              value={bcSource}
+              onChange={(e) => setBcSource(e.target.value)}
+              placeholder="Ozon, WB, производитель…"
+            />
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={fullscreen && mainImage !== null} onClose={() => setFullscreen(false)} width={960}>
         {mainImage && (

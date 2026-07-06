@@ -29,11 +29,13 @@ const FINANCE_NAV: NavItem[] = [
   { to: '/finance/extra-income', icon: 'briefcase', label: 'Доп. работы' },
   { to: '/finance/expenses', icon: 'coins', label: 'Расходы' },
   { to: '/finance/recurring', icon: 'refresh', label: 'Регулярные расходы' },
-  { to: '/finance/pricing', icon: 'tag', label: 'Стоимость упаковки' },
-  { to: '/finance/pallet-pricing', icon: 'layers', label: 'Стоимость палета' },
-  { to: '/finance/box-pricing', icon: 'box', label: 'Стоимость короба' },
-  { to: '/finance/storage-pricing', icon: 'clock', label: 'Стоимость хранения' },
   { to: '/finance/storage', icon: 'archive', label: 'Хранение' },
+]
+
+const MARKETPLACES_NAV: NavItem[] = [
+  { to: '/marketplaces/orders', icon: 'cart', label: 'FBS-заказы' },
+  { to: '/marketplaces/links', icon: 'tag', label: 'Связка товаров' },
+  { to: '/marketplaces/accounts', icon: 'settings', label: 'Подключения' },
 ]
 
 const TIMESHEET_NAV: NavItem[] = [
@@ -178,6 +180,14 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
               <>
                 {!collapsed && <div className="sidebar-section">Финансы</div>}
                 {FINANCE_NAV.map((item) => (
+                  <NavItem key={item.to} {...item} collapsed={collapsed} />
+                ))}
+              </>
+            )}
+            {hasFinanceAccess && (
+              <>
+                {!collapsed && <div className="sidebar-section">Маркетплейсы</div>}
+                {MARKETPLACES_NAV.map((item) => (
                   <NavItem key={item.to} {...item} collapsed={collapsed} />
                 ))}
               </>

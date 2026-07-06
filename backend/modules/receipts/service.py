@@ -9,6 +9,8 @@ from config import (
     INV_OP_INTAKE,
     INV_OP_STORAGE,
     INV_Q_GOOD,
+    INVOICE_STATUS_CANCELLED,
+    INVOICE_STATUS_DRAFT,
     RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_PLAN_FIX,
@@ -35,6 +37,22 @@ from utils import next_doc_number as _next_doc_number, now_iso as _now
 _OVERDUE_STATUSES_SQL = ", ".join(
     f"'{s}'" for s in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW)
 )
+
+
+def receipt_is_invoiced(connection, doc_id: str) -> bool:
+    """True, если по поступлению уже выставлен счёт (привязка к не-черновому счёту).
+
+    Зеркало dispatch_is_invoiced: логистика поступления входит в счёт клиента
+    (invoice_receipts), поэтому откат принятого поступления, уже попавшего в
+    выставленный счёт, разъехался бы с суммой у клиента. Черновик счёта не блокирует."""
+    row = connection.execute(
+        "SELECT 1 FROM invoice_receipts r "
+        "JOIN invoice_docs i ON i.id = r.invoice_id AND COALESCE(i.is_deleted, 0) = 0 "
+        "WHERE r.receipt_doc_id = ? AND COALESCE(r.is_deleted, 0) = 0 "
+        "AND i.status NOT IN (?, ?) LIMIT 1",
+        (doc_id, INVOICE_STATUS_DRAFT, INVOICE_STATUS_CANCELLED),
+    ).fetchone()
+    return row is not None
 
 
 def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:

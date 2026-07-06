@@ -36,3 +36,6 @@ tmp/
 # Секреты Firebase: ключ сервисного аккаунта (пуш-уведомления) и google-services.json
 backend/secrets/
 mobile/android/app/google-services.json
+
+# Личные черновики ТЗ (рабочие заметки, не часть репозитория)
+docs/мои ТЗ/

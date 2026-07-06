@@ -1,4 +1,4 @@
-"""Штрих-коды вариантов: присвоение + поиск сканером (mobile §6.2)."""
+"""Штрих-коды вариантов: несколько кодов на вариант, присвоение + поиск сканером."""
 from __future__ import annotations
 
 import os
@@ -12,6 +12,7 @@ if not os.environ.get("DATABASE_URL"):
 from dbconn import get_connection
 from tests.conftest import (  # noqa: F401
     admin_client,
+    manager_client,
     warehouse_client,
     make_client_id,
     cleanup_client,
@@ -44,6 +45,11 @@ def product_with_variant():
         conn.commit()
     yield {"client_id": cid, "product_id": pid, "variant_id": vid}
     with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM product_variant_barcodes "
+            "WHERE variant_id IN (SELECT id FROM product_variants WHERE product_id = ?)",
+            (pid,),
+        )
         conn.execute("DELETE FROM product_variants WHERE product_id = ?", (pid,))
         conn.execute("DELETE FROM products WHERE id = ?", (pid,))
         conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
@@ -51,28 +57,37 @@ def product_with_variant():
     cleanup_client(cid)
 
 
-def _set_barcode(admin_client, pid, vid, code):
-    return admin_client.patch(f"/products/{pid}/variants/{vid}/barcode", json={"barcode": code})
+def _add_barcode(client, pid, vid, code, source=None):
+    return client.post(
+        f"/products/{pid}/variants/{vid}/barcodes",
+        json={"barcode": code, "source": source},
+    )
 
 
-def test_assign_then_lookup(admin_client, warehouse_client, product_with_variant):
+def test_multiple_barcodes_lookup_same_variant(manager_client, warehouse_client, product_with_variant):
     pid, vid = product_with_variant["product_id"], product_with_variant["variant_id"]
-    code = f"460{uuid.uuid4().hex[:10]}"
+    code1 = f"460{uuid.uuid4().hex[:10]}"
+    code2 = f"460{uuid.uuid4().hex[:10]}"
 
-    r = _set_barcode(admin_client, pid, vid, code)
-    assert r.status_code == 200, r.text
+    assert _add_barcode(manager_client, pid, vid, code1, source="Ozon").status_code == 200
+    assert _add_barcode(manager_client, pid, vid, code2).status_code == 200
 
-    found = warehouse_client.get(f"/products/by-barcode/{code}")
-    assert found.status_code == 200, found.text
-    data = found.json()
-    assert data["found"] is True
-    assert data["match"]["variant_id"] == vid
-    assert data["match"]["product_id"] == pid
-    assert data["match"]["client_name"]
+    # оба кода ведут к одному и тому же варианту
+    for code in (code1, code2):
+        found = warehouse_client.get(f"/products/by-barcode/{code}")
+        assert found.status_code == 200, found.text
+        data = found.json()
+        assert data["found"] is True
+        assert data["match"]["variant_id"] == vid
+        assert data["match"]["product_id"] == pid
+        assert data["match"]["client_name"]
 
-    # в списке вариантов штрих-код тоже виден
-    variants = admin_client.get(f"/products/{pid}/variants").json()
-    assert variants[0]["barcode"] == code
+    # в списке вариантов видны оба кода с источником
+    variants = manager_client.get(f"/products/{pid}/variants").json()
+    codes = {b["barcode"]: b for b in variants[0]["barcodes"]}
+    assert set(codes) == {code1, code2}
+    assert codes[code1]["source"] == "Ozon"
+    assert codes[code2]["source"] is None
 
 
 def test_lookup_unknown_returns_not_found(warehouse_client):
@@ -81,10 +96,13 @@ def test_lookup_unknown_returns_not_found(warehouse_client):
     assert r.json() == {"found": False, "match": None}
 
 
-def test_duplicate_barcode_rejected(admin_client, product_with_variant):
+def test_duplicate_barcode_rejected(manager_client, product_with_variant):
     pid, vid = product_with_variant["product_id"], product_with_variant["variant_id"]
     code = f"461{uuid.uuid4().hex[:10]}"
-    assert _set_barcode(admin_client, pid, vid, code).status_code == 200
+    assert _add_barcode(manager_client, pid, vid, code).status_code == 200
+
+    # повтор на том же варианте
+    assert _add_barcode(manager_client, pid, vid, code).status_code == 409
 
     # второй вариант того же товара
     vid2 = str(uuid.uuid4())
@@ -97,16 +115,41 @@ def test_duplicate_barcode_rejected(admin_client, product_with_variant):
         )
         conn.commit()
 
-    clash = _set_barcode(admin_client, pid, vid2, code)
+    clash = _add_barcode(manager_client, pid, vid2, code)
     assert clash.status_code == 409, clash.text
 
 
-def test_clear_barcode_removes_from_lookup(admin_client, warehouse_client, product_with_variant):
+def test_delete_barcode_removes_from_lookup(manager_client, warehouse_client, product_with_variant):
     pid, vid = product_with_variant["product_id"], product_with_variant["variant_id"]
-    code = f"462{uuid.uuid4().hex[:10]}"
-    assert _set_barcode(admin_client, pid, vid, code).status_code == 200
-    assert warehouse_client.get(f"/products/by-barcode/{code}").json()["found"] is True
+    code1 = f"462{uuid.uuid4().hex[:10]}"
+    code2 = f"462{uuid.uuid4().hex[:10]}"
+    assert _add_barcode(manager_client, pid, vid, code1).status_code == 200
+    assert _add_barcode(manager_client, pid, vid, code2).status_code == 200
 
-    cleared = _set_barcode(admin_client, pid, vid, None)
-    assert cleared.status_code == 200, cleared.text
-    assert warehouse_client.get(f"/products/by-barcode/{code}").json()["found"] is False
+    variants = manager_client.get(f"/products/{pid}/variants").json()
+    bc1_id = next(b["id"] for b in variants[0]["barcodes"] if b["barcode"] == code1)
+
+    r = manager_client.delete(f"/products/{pid}/variants/{vid}/barcodes/{bc1_id}")
+    assert r.status_code == 200, r.text
+
+    assert warehouse_client.get(f"/products/by-barcode/{code1}").json()["found"] is False
+    # второй код продолжает работать
+    assert warehouse_client.get(f"/products/by-barcode/{code2}").json()["found"] is True
+
+    # снятый код можно присвоить заново
+    assert _add_barcode(manager_client, pid, vid, code1).status_code == 200
+
+
+def test_products_search_by_barcode_exact(manager_client, product_with_variant):
+    pid, vid = product_with_variant["product_id"], product_with_variant["variant_id"]
+    code = f"463{uuid.uuid4().hex[:10]}"
+    assert _add_barcode(manager_client, pid, vid, code).status_code == 200
+
+    r = manager_client.get(f"/products?search={code}")
+    assert r.status_code == 200, r.text
+    assert [i["id"] for i in r.json()["items"]] == [pid]
+
+    # поиск по ШК — точное совпадение: обрезанный код товара не находит
+    r = manager_client.get(f"/products?search={code[:8]}")
+    assert r.status_code == 200
+    assert pid not in [i["id"] for i in r.json()["items"]]

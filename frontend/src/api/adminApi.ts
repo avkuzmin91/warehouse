@@ -364,6 +364,19 @@ export function deleteProductVariant(productId: string, variantId: string) {
   })
 }
 
+export function addVariantBarcode(productId: string, variantId: string, payload: { barcode: string; source?: string | null }) {
+  return request<{ message: string }>(`/products/${productId}/variants/${variantId}/barcodes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteVariantBarcode(productId: string, variantId: string, barcodeId: string) {
+  return request<{ message: string }>(`/products/${productId}/variants/${variantId}/barcodes/${barcodeId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function uploadProductDictionaryImage(file: File) {
   const form = new FormData()
   form.append('image', file)

@@ -19,6 +19,7 @@ import {
   uploadInvoiceFile,
 } from '../../../api/invoicesApi'
 import type { InvoiceDetail, InvoiceOpType } from '../../../api/invoicesApi'
+import { getUninvoicedStorage } from '../../../api/storagePricingApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { Badge } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
@@ -57,6 +58,13 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     setExpandedShip((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   const { data: inv, loading, error } = useApi((s) => getInvoice(invoiceId, s), [invoiceId, tick])
+  // Подсказка «есть невыставленное хранение» — только пока хранение не привязано.
+  const { data: uninvStor } = useApi(
+    (s) => inv?.client_id && !inv.storage && (isInvoiceDraft(inv.status) || isInvoiceActive(inv.status))
+      ? getUninvoicedStorage(inv.client_id, s)
+      : Promise.resolve({ items: [], total_amount_kop: 0 }),
+    [inv?.client_id, inv?.storage, inv?.status, tick],
+  )
 
   const [payOpen, setPayOpen] = useState(false)
   const [dueOpen, setDueOpen] = useState(false)
@@ -426,9 +434,22 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             ) : undefined}
           >
             {!inv.storage ? (
-              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>
-                Начисления за хранение остатков не привязаны. Суммы по дням — в разделе «Финансы → Хранение».
-              </div>
+              editable && (uninvStor?.items.length ?? 0) > 0 ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
+                  <Icon name="alert" size={14} style={{ color: 'var(--c-warning)', flexShrink: 0 }} />
+                  <span>
+                    У клиента есть невыставленное хранение:{' '}
+                    <b className="mono">{formatMoneyKopecks(uninvStor?.total_amount_kop ?? 0)}</b>
+                    <span style={{ color: 'var(--c-text-subtle)' }}>
+                      {' '}({uninvStor?.items.map((m) => m.month_label).join(', ')})
+                    </span>
+                  </span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>
+                  Начисления за хранение остатков не привязаны. Суммы по дням — в разделе «Финансы → Хранение».
+                </div>
+              )
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13 }}>
                 <span className="mono" style={{ color: 'var(--c-text-subtle)' }}>
@@ -519,7 +540,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
         </div>
 
         {/* Правая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'sticky', top: 16, maxHeight: 'calc(100vh - var(--header-h) - 32px)', overflowY: 'auto' }}>
           <InvoiceRailPanel phase={phase} overdue={inv.overdue} dueReached={inv.due_reached} dueDate={fmtDate(inv.due_date)} duePrev={duePrevRaw ? fmtDate(duePrevRaw) : null} stamps={stamps} />
 
           <InvoiceSummaryPanel

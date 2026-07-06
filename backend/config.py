@@ -689,6 +689,49 @@ STORAGE_UNIT_LABELS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# FBS-маркетплейсы (Ozon / Wildberries)
+# ---------------------------------------------------------------------------
+# Фаза 1 — read-only монитор: заказы тянутся polling'ом, статусы МП в ядро
+# не тащим — храним сырой external_status и нормализуем в свой набор.
+# Неизвестный статус МП нормализуется в in_progress (заказ жив, опрашиваем дальше).
+
+MP_OZON = "ozon"
+MP_WB = "wb"
+
+MARKETPLACES: tuple[str, ...] = (MP_OZON, MP_WB)
+
+MP_ACCOUNT_STATUS_ACTIVE = "active"
+MP_ACCOUNT_STATUS_PAUSED = "paused"
+
+MP_ACCOUNT_STATUSES: tuple[str, ...] = (MP_ACCOUNT_STATUS_ACTIVE, MP_ACCOUNT_STATUS_PAUSED)
+
+MP_ORDER_STATUS_NEW = "new"                  # ждёт сборки
+MP_ORDER_STATUS_IN_PROGRESS = "in_progress"  # подтверждён/собран продавцом, ещё у нас
+MP_ORDER_STATUS_SHIPPED = "shipped"          # передан в доставку МП
+MP_ORDER_STATUS_DONE = "done"                # доставлен покупателю
+MP_ORDER_STATUS_CANCELLED = "cancelled"
+
+MP_ORDER_STATUSES: tuple[str, ...] = (
+    MP_ORDER_STATUS_NEW, MP_ORDER_STATUS_IN_PROGRESS, MP_ORDER_STATUS_SHIPPED,
+    MP_ORDER_STATUS_DONE, MP_ORDER_STATUS_CANCELLED,
+)
+
+# Терминальные: воркер перестаёт опрашивать заказ, из списков скрыты по умолчанию.
+MP_ORDER_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    MP_ORDER_STATUS_DONE, MP_ORDER_STATUS_CANCELLED,
+})
+
+MP_LINK_SOURCE_BARCODE = "barcode_auto"
+MP_LINK_SOURCE_MANUAL = "manual"
+
+MP_SYNC_KIND_ORDERS = "orders"
+MP_SYNC_KIND_CATALOG = "catalog"
+MP_SYNC_KIND_CHECK = "check"
+
+MP_DEADLINE_SOURCE_API = "api"
+MP_DEADLINE_SOURCE_ESTIMATED = "estimated"
+
+# ---------------------------------------------------------------------------
 # Расходы на материалы (хозрасходы)
 # ---------------------------------------------------------------------------
 # Суммы (material_expenses.amount) хранятся в КОПЕЙКАХ как INTEGER — как в счетах

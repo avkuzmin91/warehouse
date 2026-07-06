@@ -176,8 +176,8 @@ def test_warehouse_role_forbidden(warehouse_client):
 # ── Начисление: бесплатный период, FIFO, старт тарифа ────────────────────────
 
 def test_accrual_free_period_and_fifo(admin_client, client_id, product_id):
-    # Тариф: 1,00 ₽/шт·день, 14 бесплатных дней, действует 40 дней.
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=14, effective_from=_day(-40))
+    # Журнальные события уже в прошлом, потом заводится тариф:
+    # 1,00 ₽/шт·день, 14 бесплатных дней, действует 40 дней.
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=100, day=_day(-30), receipt_line_id="lot-a")
@@ -187,6 +187,7 @@ def test_accrual_free_period_and_fifo(admin_client, client_id, product_id):
         _move(conn, client_id=client_id, product_id=product_id, from_op="storage",
               to_op="shipped", qty=80, day=_day(-3))
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=14, effective_from=_day(-40))
     _accrue()
 
     # Вчера: от лота A осталось 20 (возраст 29 ≥ 14 — платно), лот B молодой (4 дн.) — бесплатно.
@@ -217,11 +218,11 @@ def test_accrual_free_period_and_fifo(admin_client, client_id, product_id):
 
 def test_accrual_age_counts_from_tariff_start(admin_client, client_id, product_id):
     # Лот принят задолго до старта тарифа: ретроспективы нет, возраст — от старта.
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=5, effective_from=_day(-10))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=10, day=_day(-100), receipt_line_id="lot-old")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=5, effective_from=_day(-10))
     _accrue()
     # Через 2 дня после старта возраст 2 < 5 — бесплатно.
     assert _charge(client_id, _day(-8))["amount_kop"] == 0
@@ -232,11 +233,11 @@ def test_accrual_age_counts_from_tariff_start(admin_client, client_id, product_i
 
 
 def test_accrual_idempotent_and_self_healing(admin_client, client_id, product_id):
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-3))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=5, day=_day(-3), receipt_line_id="lot-1")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-3))
     _accrue()
     _accrue()  # повторный прогон не задваивает
     with get_connection() as conn:
@@ -248,13 +249,13 @@ def test_accrual_idempotent_and_self_healing(admin_client, client_id, product_id
 
 def test_accrual_correction_reduces_lot(admin_client, client_id, product_id):
     # Корректировка приёмки (storage → intake) уменьшает лот своей строки.
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-5))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=30, day=_day(-5), receipt_line_id="lot-c")
         _move(conn, client_id=client_id, product_id=product_id, from_op="storage",
               to_op="intake", qty=10, day=_day(-2), receipt_line_id="lot-c")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-5))
     _accrue()
     assert _charge(client_id, _day(-3))["qty_pieces"] == 30  # до корректировки
     assert _charge(client_id, _day(-1))["qty_pieces"] == 20  # после
@@ -298,11 +299,11 @@ def test_units_box_conversion_and_missing_capacity(admin_client, client_id, prod
 # ── Отчёт и P&L ──────────────────────────────────────────────────────────────
 
 def test_report_and_pnl_include_storage(admin_client, client_id, product_id):
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-2))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=10, day=_day(-2), receipt_line_id="lot-p")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-2))
     _accrue()
 
     rep = admin_client.get(
@@ -334,14 +335,67 @@ def test_report_and_pnl_include_storage(admin_client, client_id, product_id):
     assert any(s["key"] == "storage" for s in day_detail["income_sources"])
 
 
+def test_retro_tariff_backfills_missing_days(admin_client, client_id, product_id):
+    # Кейс «вспомнили позже»: тариф завели с -5, начислили; потом решили, что
+    # рассчитывать надо было с -15. Запись задним числом доначисляет дыры
+    # (-15..-6) по своей ставке СИНХРОННО при сохранении; уже начисленные
+    # дни (-5..-1) не пересчитываются.
+    with get_connection() as conn:
+        _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
+              to_op="storage", qty=10, day=_day(-20), receipt_line_id="lot-r")
+        conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-5))
+    assert _charge(client_id, _day(-1))["amount_kop"] == 10 * 100  # POST доначислил сам
+    assert _charge(client_id, _day(-10)) is None                   # до старта — пусто
+
+    _set_tariff(admin_client, client_id, price_kop=200, free_days=0, effective_from=_day(-15))
+    retro = _charge(client_id, _day(-10))
+    assert retro is not None
+    assert retro["rate_kop"] == 200                                # ставка ретро-записи
+    assert retro["amount_kop"] == 10 * 200
+    kept = _charge(client_id, _day(-3))
+    assert kept["rate_kop"] == 100                                 # старый день не пересчитан
+    assert kept["amount_kop"] == 10 * 100
+    # Ретро-дни попали в подсказку «не выставлено».
+    data = admin_client.get(f"/storage-pricing/clients/{client_id}/uninvoiced").json()
+    assert sum(m["days"] for m in data["items"]) == 15
+
+
+def test_uninvoiced_storage_months(admin_client, client_id, product_id):
+    # Подсказка менеджеру: невыставленное хранение помесячно; окно в 40 дней
+    # гарантированно пересекает границу месяца.
+    with get_connection() as conn:
+        _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
+              to_op="storage", qty=10, day=_day(-40), receipt_line_id="lot-m")
+        conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-40))
+    _accrue()
+
+    data = admin_client.get(f"/storage-pricing/clients/{client_id}/uninvoiced").json()
+    assert data["total_amount_kop"] == 40 * 10 * 100
+    assert sum(m["days"] for m in data["items"]) == 40
+    assert len(data["items"]) >= 2
+    assert all(m["month_label"] for m in data["items"])
+
+    # Привязка месяца к счёту убирает его из подсказки.
+    first = data["items"][0]
+    inv_id = admin_client.post("/invoices", json={"client_id": client_id}).json()["message"]
+    r = admin_client.post(f"/invoices/{inv_id}/storage",
+                          json={"date_from": first["date_from"], "date_to": first["date_to"]})
+    assert r.status_code == 200, r.text
+    after = admin_client.get(f"/storage-pricing/clients/{client_id}/uninvoiced").json()
+    assert all(m["month"] != first["month"] for m in after["items"])
+    assert after["total_amount_kop"] == data["total_amount_kop"] - first["amount_kop"]
+
+
 # ── Привязка к счёту ─────────────────────────────────────────────────────────
 
 def test_invoice_storage_attach_and_detach(admin_client, client_id, product_id):
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-3))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=10, day=_day(-3), receipt_line_id="lot-i")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-3))
     _accrue()
 
     r = admin_client.post("/invoices", json={"client_id": client_id, "client_name": "Test Client"})
@@ -375,11 +429,11 @@ def test_invoice_storage_attach_and_detach(admin_client, client_id, product_id):
 
 
 def test_invoice_cancel_frees_storage(admin_client, client_id, product_id):
-    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-2))
     with get_connection() as conn:
         _move(conn, client_id=client_id, product_id=product_id, from_op="intake",
               to_op="storage", qty=5, day=_day(-2), receipt_line_id="lot-z")
         conn.commit()
+    _set_tariff(admin_client, client_id, price_kop=100, free_days=0, effective_from=_day(-2))
     _accrue()
 
     inv_id = admin_client.post("/invoices", json={"client_id": client_id}).json()["message"]

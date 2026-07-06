@@ -280,7 +280,11 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   }
 
   async function handleCancel() {
-    const ok = await confirm({ title: 'Аннулировать рейс?', body: 'Это действие нельзя отменить.', danger: true, confirmLabel: 'Аннулировать' })
+    const moved = status === 'costing' || status === 'closed'
+    const body = moved
+      ? 'Остатки вернутся на склад, привязанные поступления/отгрузки откатятся, а логистический расход рейса будет снят. Если отгрузка уже в счёте или расход оплачен — аннулирование будет отклонено.'
+      : 'Это действие нельзя отменить.'
+    const ok = await confirm({ title: 'Аннулировать рейс?', body, danger: true, confirmLabel: 'Аннулировать' })
     if (!ok) return
     await run(() => cancelTrip(tripId))
   }
@@ -529,7 +533,8 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
     const carrierEdit = user?.role === 'admin' && status === 'closed'
       ? { carriers, currentId: doc.carrier_id, onSave: handleChangeCarrier, busy }
       : undefined
-    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} docsNode={docsNode} carrierEdit={carrierEdit} />
+    const closedCancel = status === 'closed' && canEditTransportPlanning ? handleCancel : undefined
+    view = <ClosedView detail={detail} showCosts={showCosts} onBack={onBack} onOpenReceipt={onOpenReceipt} docsNode={docsNode} carrierEdit={carrierEdit} onCancel={closedCancel} busy={busy} />
   }
 
   return (

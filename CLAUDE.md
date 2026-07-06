@@ -50,7 +50,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 |---|---|
 | `auth`, `users` | JWT + refresh-сессии (cookie `wms_rt`, мобильный режим `X-Client: mobile`), rate-limit; учётные записи |
 | `dictionaries` | справочники (clients, colors, sizes, warehouses, carriers, positions, own_warehouses, ...) |
-| `products` | товары и варианты: SKU (+`sku_pending`), barcode, фото |
+| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_variant_barcodes`), фото |
 | `receipts` | поступления `WH-xxxxx`; приёмка идёт через рейс (разгрузка) |
 | `shipments` | «Задача упаковки» склада; терминальный исход — `packed` |
 | `dispatch` | «Отгрузка» клиенту `DSP-xxxx`; дробление по рейсам через `trip_alloc` |

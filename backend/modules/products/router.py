@@ -38,7 +38,8 @@ from .schemas import (
     ProductVariantsPatchRequest,
     ProductVariantFindItem,
     ProductCreateMeta,
-    VariantBarcodeUpdate,
+    VariantBarcodeAdd,
+    VariantBarcodeItem,
 )
 from .service import (
     _assign_variant_skus_from_base,
@@ -96,9 +97,19 @@ def list_products(
     conds = ["1=1"]
     params: list = []
     if search is not None and str(search).strip():
-        like = _ci_substring_like_param(str(search))
-        conds.append("(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?)")
-        params.extend([like, like])
+        term = str(search).strip()
+        like = _ci_substring_like_param(term)
+        # Штрих-код ищется точным совпадением: сканер/буфер отдаёт код целиком.
+        conds.append(
+            "(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?"
+            " OR EXISTS ("
+            "   SELECT 1 FROM product_variant_barcodes vb"
+            "   JOIN product_variants pv ON pv.id = vb.variant_id"
+            "   WHERE pv.product_id = p.id AND vb.barcode = ?"
+            "     AND COALESCE(vb.is_deleted, 0) = 0 AND COALESCE(pv.is_deleted, 0) = 0"
+            " ))"
+        )
+        params.extend([like, like, term])
     if name is not None and str(name).strip():
         conds.append("fold_ci(p.name) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))
@@ -491,6 +502,11 @@ def delete_product(item_id: str, admin=Depends(_get_strict_admin)):
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Нельзя удалить товар: он участвует в отгрузках",
             )
+        connection.execute(
+            "DELETE FROM product_variant_barcodes "
+            "WHERE variant_id IN (SELECT id FROM product_variants WHERE product_id = ?)",
+            (item_id,),
+        )
         connection.execute("DELETE FROM product_variants WHERE product_id = ?", (item_id,))
         connection.execute("DELETE FROM products WHERE id = ?", (item_id,))
         connection.commit()
@@ -511,7 +527,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             f"""
             SELECT v.id, v.color_id, col.name AS color_name,
                    v.size_id, sz.name AS size_name,
-                   v.length, v.width, v.height, v.sku, v.barcode, v.images_json, v.is_active,
+                   v.length, v.width, v.height, v.sku, v.images_json, v.is_active,
                    GREATEST(0, COALESCE(b.good_in, 0)) AS stock,
                    GREATEST(0, COALESCE(b.defect_in, 0)) AS defect_qty,
                    CASE WHEN EXISTS (
@@ -543,6 +559,25 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
                 item_id,
             ),
         ).fetchall()
+        bc_rows = connection.execute(
+            """
+            SELECT vb.id, vb.variant_id, vb.barcode, vb.source
+            FROM product_variant_barcodes vb
+            JOIN product_variants v ON v.id = vb.variant_id
+            WHERE v.product_id = ? AND COALESCE(vb.is_deleted, 0) = 0
+            ORDER BY vb.created_at
+            """,
+            (item_id,),
+        ).fetchall()
+    barcodes_by_variant: dict[str, list[VariantBarcodeItem]] = {}
+    for b in bc_rows:
+        barcodes_by_variant.setdefault(str(b["variant_id"]), []).append(
+            VariantBarcodeItem(
+                id=str(b["id"]),
+                barcode=str(b["barcode"]),
+                source=str(b["source"]) if b["source"] else None,
+            )
+        )
     return [
         ProductVariantItem(
             id=str(r["id"]),
@@ -552,7 +587,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             size_id=str(r["size_id"]) if r["size_id"] else None,
             size_name=r["size_name"],
             sku=str(r["sku"]),
-            barcode=str(r["barcode"]) if r["barcode"] else None,
+            barcodes=barcodes_by_variant.get(str(r["id"]), []),
             images=_decode_images_json(r["images_json"]),
             is_active=bool(r["is_active"]),
             stock=max(0, int(r["stock"])),
@@ -679,9 +714,12 @@ def find_product_variant_for_receipt(
         )
 
 
-@router.patch("/products/{item_id}/variants/{variant_id}/barcode", response_model=MessageResponse)
-def set_variant_barcode(item_id: str, variant_id: str, payload: VariantBarcodeUpdate, admin=Depends(get_current_admin)):
-    code = (payload.barcode or "").strip()
+@router.post("/products/{item_id}/variants/{variant_id}/barcodes", response_model=MessageResponse)
+def add_variant_barcode(item_id: str, variant_id: str, payload: VariantBarcodeAdd, admin=Depends(get_current_admin)):
+    code = payload.barcode.strip()
+    source = (payload.source or "").strip() or None
+    if not code:
+        raise HTTPException(status_code=400, detail="Укажите штрих-код")
     with get_connection() as connection:
         row = connection.execute(
             "SELECT id FROM product_variants WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -689,24 +727,43 @@ def set_variant_barcode(item_id: str, variant_id: str, payload: VariantBarcodeUp
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Вариант не найден")
-        if code:
-            dup = connection.execute(
-                "SELECT 1 FROM product_variants "
-                "WHERE barcode = ? AND id <> ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
-                (code, variant_id),
-            ).fetchone()
-            if dup:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту")
+        dup = connection.execute(
+            "SELECT 1 FROM product_variant_barcodes WHERE barcode = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+            (code,),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту")
         try:
             connection.execute(
-                "UPDATE product_variants SET barcode = ?, updated_at = ? WHERE id = ? AND product_id = ?",
-                (code or None, _now(), variant_id, item_id),
+                "INSERT INTO product_variant_barcodes (id, variant_id, barcode, source, created_at, created_by, is_deleted) "
+                "VALUES (?,?,?,?,?,?,0)",
+                (str(uuid4()), variant_id, code, source, _now(), str(admin["id"])),
             )
             connection.commit()
         except IntegrityError as exc:
             connection.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту") from exc
-    return MessageResponse(message="Штрих-код обновлён" if code else "Штрих-код снят")
+    return MessageResponse(message="Штрих-код добавлен")
+
+
+@router.delete("/products/{item_id}/variants/{variant_id}/barcodes/{barcode_id}", response_model=MessageResponse)
+def delete_variant_barcode(item_id: str, variant_id: str, barcode_id: str, admin=Depends(get_current_admin)):
+    _ = admin
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT vb.id FROM product_variant_barcodes vb "
+            "JOIN product_variants v ON v.id = vb.variant_id "
+            "WHERE vb.id = ? AND vb.variant_id = ? AND v.product_id = ? AND COALESCE(vb.is_deleted, 0) = 0",
+            (barcode_id, variant_id, item_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Штрих-код не найден")
+        connection.execute(
+            "UPDATE product_variant_barcodes SET is_deleted = 1 WHERE id = ?",
+            (barcode_id,),
+        )
+        connection.commit()
+    return MessageResponse(message="Штрих-код снят")
 
 
 @router.get("/products/by-barcode/{code}", response_model=BarcodeLookupResponse)
@@ -723,12 +780,14 @@ def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
                    v.color_id, col.name AS color_name,
                    v.size_id, sz.name AS size_name,
                    p.client_id, cl.name AS client_name
-            FROM product_variants v
+            FROM product_variant_barcodes vb
+            JOIN product_variants v ON v.id = vb.variant_id
             JOIN products p ON p.id = v.product_id
             LEFT JOIN colors col ON col.id = v.color_id
             LEFT JOIN sizes sz ON sz.id = v.size_id
             LEFT JOIN clients cl ON cl.id = p.client_id
-            WHERE v.barcode = ?
+            WHERE vb.barcode = ?
+              AND COALESCE(vb.is_deleted, 0) = 0
               AND COALESCE(v.is_deleted, 0) = 0
               AND COALESCE(p.is_deleted, 0) = 0
             LIMIT 1

@@ -7,7 +7,7 @@ import { TRIP_LOAD_LABELS, tripLexicon } from '../../../../../api/tripsApi'
 import { TripHeader } from '../TripHeader'
 import { ReadRow, SelectField } from '../../components/fields'
 import { ReceiptsBlock } from '../ReceiptsBlock'
-import { Panel, ProcessPanel, CostPanel, JournalPanel } from '../panels'
+import { Panel, ProcessPanel, CostPanel, JournalButton } from '../panels'
 import { fmtDateTime } from '../format'
 
 /** Инлайн-смена перевозчика на карточке закрытого рейса (только админ). */
@@ -74,13 +74,15 @@ function Kpi({ icon, label, value }: { icon: IconName; label: string; value: str
   )
 }
 
-export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode, carrierEdit }: {
+export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode, carrierEdit, onCancel, busy }: {
   detail: TripDetail
   showCosts: boolean
   onBack: () => void
   onOpenReceipt: (id: string) => void
   docsNode?: ReactNode
   carrierEdit?: CarrierEdit
+  onCancel?: () => void
+  busy?: boolean
 }) {
   const { doc, ops, receipts } = detail
   const direction = (doc.direction as TripDirection) ?? 'inbound'
@@ -98,9 +100,17 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode,
         cargoType={doc.cargo_type}
         onBack={onBack}
         action={
-          <button className="btn" onClick={() => window.print()}>
-            <Icon name="download" size={14} />Экспорт
-          </button>
+          <div className="row gap-8">
+            <JournalButton ops={ops} tripNumber={doc.trip_number} />
+            {closed && onCancel && (
+              <button className="btn danger" disabled={busy} onClick={onCancel}>
+                <Icon name="alert" size={14} />Аннулировать
+              </button>
+            )}
+            <button className="btn" onClick={() => window.print()}>
+              <Icon name="download" size={14} />Экспорт
+            </button>
+          </div>
         }
       />
 
@@ -159,7 +169,6 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode,
         <div className="col gap-16">
           <ProcessPanel status={doc.status} ops={ops} direction={direction} />
           {showCosts && <CostPanel estimate={doc.cost_estimate} actual={doc.logistics_cost_actual} waiting={doc.waiting_cost} showActual={closed} />}
-          <JournalPanel ops={ops} />
         </div>
       </div>
     </div>

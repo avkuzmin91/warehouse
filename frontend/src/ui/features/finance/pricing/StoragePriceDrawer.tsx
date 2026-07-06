@@ -145,6 +145,16 @@ export function StoragePriceDrawer({ clientId, onClose, onSaved }: Props) {
             <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 5 }}>Действует с</div>
             <DatePicker value={effFrom} onChange={setEffFrom} />
           </label>
+          {detail?.billing_start && effFrom && effFrom < detail.billing_start && (
+            <div style={{ display: 'flex', gap: 7, marginTop: 8, fontSize: 12, color: 'var(--c-warning)' }}>
+              <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                Дата раньше текущего начала отсчёта ({fmtDate(detail.billing_start)}): дни
+                с {fmtDate(effFrom)} будут доначислены по этой ставке сразу после сохранения.
+                Уже начисленные дни не пересчитываются.
+              </span>
+            </div>
+          )}
 
           <HistoryBlock title="История тарифа" entries={detail?.history ?? []} onDelete={deleteEntry} />
         </>

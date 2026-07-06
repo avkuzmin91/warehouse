@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { Route } from 'react-router-dom'
+import { Navigate, Route } from 'react-router-dom'
 
 const FinanceInvoicesListPage = lazy(() =>
   import('../pages/FinanceInvoicesListPage').then((m) => ({ default: m.FinanceInvoicesListPage })),
@@ -15,18 +15,6 @@ const FinanceInvoiceDetailPage = lazy(() =>
 )
 const FinanceExpensesListPage = lazy(() =>
   import('../pages/FinanceExpensesListPage').then((m) => ({ default: m.FinanceExpensesListPage })),
-)
-const FinancePackingPricesPage = lazy(() =>
-  import('../pages/FinancePackingPricesPage').then((m) => ({ default: m.FinancePackingPricesPage })),
-)
-const FinancePalletPricesPage = lazy(() =>
-  import('../pages/FinancePalletPricesPage').then((m) => ({ default: m.FinancePalletPricesPage })),
-)
-const FinanceBoxPricesPage = lazy(() =>
-  import('../pages/FinanceBoxPricesPage').then((m) => ({ default: m.FinanceBoxPricesPage })),
-)
-const FinanceStoragePricesPage = lazy(() =>
-  import('../pages/FinanceStoragePricesPage').then((m) => ({ default: m.FinanceStoragePricesPage })),
 )
 const FinanceStorageReportPage = lazy(() =>
   import('../pages/FinanceStorageReportPage').then((m) => ({ default: m.FinanceStorageReportPage })),
@@ -46,9 +34,10 @@ export const financeRoutes = [
   <Route key="finance-expenses" path="/finance/expenses" element={<FinanceExpensesListPage />} />,
   <Route key="finance-extra-income" path="/finance/extra-income" element={<FinanceExtraIncomePage />} />,
   <Route key="finance-recurring" path="/finance/recurring" element={<FinanceRecurringExpensesPage />} />,
-  <Route key="finance-pricing" path="/finance/pricing" element={<FinancePackingPricesPage />} />,
-  <Route key="finance-pallet-pricing" path="/finance/pallet-pricing" element={<FinancePalletPricesPage />} />,
-  <Route key="finance-box-pricing" path="/finance/box-pricing" element={<FinanceBoxPricesPage />} />,
-  <Route key="finance-storage-pricing" path="/finance/storage-pricing" element={<FinanceStoragePricesPage />} />,
+  // Тарифы услуг переехали в «Справочники» → «Стоимости услуг»; старые URL — редиректы.
+  <Route key="finance-pricing" path="/finance/pricing" element={<Navigate to="/dictionaries?type=packing-pricing" replace />} />,
+  <Route key="finance-pallet-pricing" path="/finance/pallet-pricing" element={<Navigate to="/dictionaries?type=pallet-pricing" replace />} />,
+  <Route key="finance-box-pricing" path="/finance/box-pricing" element={<Navigate to="/dictionaries?type=box-pricing" replace />} />,
+  <Route key="finance-storage-pricing" path="/finance/storage-pricing" element={<Navigate to="/dictionaries?type=storage-pricing" replace />} />,
   <Route key="finance-storage" path="/finance/storage" element={<FinanceStorageReportPage />} />,
 ]

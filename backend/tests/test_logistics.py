@@ -331,6 +331,62 @@ def test_receipt_split_across_two_trips(admin_client, client_id):
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
 
 
+def test_cancel_closed_inbound_trip_reverses_intake(admin_client, client_id):
+    # Закрытый inbound-рейс: аннулирование откатывает приёмку done → planned и снимает
+    # принятый остаток с хранения.
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    trip_id = _bare_inbound_trip(admin_client)
+    assert admin_client.post(f"/trips/{trip_id}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 10}]}],
+    }).status_code == 200
+    _drive_inbound_to_costing(admin_client, trip_id)
+    assert admin_client.get(f"/receipts/{doc_id}").json()["doc"]["status"] == "done"
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    assert cancel.json()["message"] == "cancelled"
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "planned"
+    assert rec["lines"][0]["accepted_qty"] == 0
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 0
+
+
+def test_cancel_closed_inbound_trip_blocked_when_receipt_invoiced(admin_client, client_id):
+    # Поступление в выставленном счёте (invoice_receipts) — аннулирование рейса отклоняется.
+    import uuid as _uuid
+
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    trip_id = _bare_inbound_trip(admin_client)
+    assert admin_client.post(f"/trips/{trip_id}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 10}]}],
+    }).status_code == 200
+    _drive_inbound_to_costing(admin_client, trip_id)
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+
+    from dbconn import get_connection
+    inv_id = str(_uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO invoice_docs (id,doc_number,client_id,status,total_amount,paid_amount,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (inv_id, f"INV-R{inv_id[:6]}", client_id, "issued", 1000, 0, "2026-06-11T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO invoice_receipts (id,invoice_id,receipt_doc_id,client_id,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (str(_uuid.uuid4()), inv_id, doc_id, client_id, "2026-06-11T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 400, cancel.text
+    assert "счёт" in cancel.json()["detail"]
+    assert admin_client.get(f"/receipts/{doc_id}").json()["doc"]["status"] == "done"
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
+
+
 def test_receipt_split_across_cells_on_unload(admin_client, client_id):
     """Принятое по строке раскладывается по нескольким ячейкам: журнал пишет движение
     на каждую ячейку, остаток встаёт в свои места, карточка показывает раскладку."""

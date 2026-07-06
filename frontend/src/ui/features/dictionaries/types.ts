@@ -14,9 +14,13 @@ export type DictionaryTypeId =
   | 'carriers'
   | 'vehicle-types'
   | 'positions'
+  | 'packing-pricing'
+  | 'pallet-pricing'
+  | 'box-pricing'
+  | 'storage-pricing'
 
 export type DictionaryKind = 'rich' | 'simple' | 'empty'
-export type DictionaryGroup = 'main' | 'system'
+export type DictionaryGroup = 'main' | 'pricing' | 'system'
 
 export interface DictionaryType {
   id: DictionaryTypeId
@@ -30,6 +34,8 @@ export interface DictionaryType {
   sheetKind?: string
   /** Видимость только для админа (например ставки аренды наших складов) */
   adminOnly?: boolean
+  /** Видимость только при финансовом доступе (admin/manager) — тарифы услуг */
+  financeOnly?: boolean
 }
 
 export const DICTIONARY_TYPES: DictionaryType[] = [
@@ -44,5 +50,9 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'vehicle-types', name: 'Типы кузовов',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Тип кузова' },
   { id: 'positions',     name: 'Должности',     icon: 'users',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Должность' },
   { id: 'reasons',       name: 'Причины брака', icon: 'alert',    kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Причина брака' },
+  { id: 'packing-pricing', name: 'Стоимость упаковки', icon: 'tag',    kind: 'rich', group: 'pricing', createLabel: '', financeOnly: true },
+  { id: 'pallet-pricing',  name: 'Стоимость палета',   icon: 'layers', kind: 'rich', group: 'pricing', createLabel: '', financeOnly: true },
+  { id: 'box-pricing',     name: 'Стоимость короба',   icon: 'box',    kind: 'rich', group: 'pricing', createLabel: '', financeOnly: true },
+  { id: 'storage-pricing', name: 'Стоимость хранения', icon: 'clock',  kind: 'rich', group: 'pricing', createLabel: '', financeOnly: true },
   { id: 'product-types', name: 'Типы товаров',  icon: 'tag',      kind: 'simple', group: 'system', createLabel: 'Создать запись', sheetKind: 'Тип товара' },
 ]

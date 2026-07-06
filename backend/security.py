@@ -153,6 +153,16 @@ def ensure_admin_finance(user: Mapping[str, Any]) -> None:
         )
 
 
+def ensure_marketplace_access(user: Mapping[str, Any]) -> None:
+    """FBS-маркетплейсы — заказы, связка товаров и подключения кабинетов (включая
+    API-ключи продавцов) — менеджерский состав (admin, manager), не кладовщик."""
+    if user["role"] not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
 def can_edit_shipment_priority(user: Mapping[str, Any]) -> bool:
     return user["role"] in ("admin", "manager")
 

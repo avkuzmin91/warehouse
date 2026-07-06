@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Icon } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
@@ -11,9 +11,13 @@ import { ClientsDict } from './ClientsDict'
 import { LocationsDict } from './LocationsDict'
 import { SimpleDictSheet } from './SimpleDictSheet'
 import { ClientSheet } from './ClientSheet'
+import { PackingPricesFeature } from '../finance/pricing/PackingPricesFeature'
+import { PalletPricesFeature } from '../finance/pricing/PalletPricesFeature'
+import { BoxPricesFeature } from '../finance/pricing/BoxPricesFeature'
+import { StoragePricesFeature } from '../finance/pricing/StoragePricesFeature'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canManageOwnWarehouses } from '../../../utils/access'
+import { canManageOwnWarehouses, canViewCosts } from '../../../utils/access'
 
 type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 type SimpleDictionaryTypeId = Extract<DictionaryTypeId, 'product-types' | 'sizes' | 'colors' | 'suppliers' | 'warehouses' | 'own-warehouses' | 'carriers' | 'vehicle-types' | 'positions' | 'reasons'>
@@ -40,9 +44,9 @@ export function DictionariesFeature() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
   const isAdmin = canManageOwnWarehouses(user)
+  const hasFinanceAccess = canViewCosts(user)
   const [active, setActive] = useDictionaryRoute()
   const [sheet, setSheet] = useState<SheetState>(null)
-  const [counts, setCounts] = useState<Partial<Record<DictionaryTypeId, number>>>({})
   const [refreshKey, setRefreshKey] = useState(0)
   const [visitedPanels, setVisitedPanels] = useState({
     products: active === 'products',
@@ -108,19 +112,17 @@ export function DictionariesFeature() {
     setSheet({ type: 'client', isNew: false, initial: item })
   }
 
-  const handleTotalLoaded = useCallback((id: DictionaryTypeId) => (total: number) => {
-    setCounts((prev) => prev[id] === total ? prev : { ...prev, [id]: total })
-  }, [])
-
   const handleSaved = () => setRefreshKey((k) => k + 1)
 
-  const activeForbidden = !!dictDef?.adminOnly && !isAdmin
+  const activeForbidden =
+    (!!dictDef?.adminOnly && !isAdmin) || (!!dictDef?.financeOnly && !hasFinanceAccess)
 
   const createLabel =
     activeForbidden ? undefined :
     active === 'products' ? 'Новый товар' :
     active === 'clients' ? 'Новый клиент' :
     active === 'locations' ? undefined : // у панели «Места хранения» собственные действия
+    dictDef?.group === 'pricing' ? undefined : // тарифы заводятся из строки, шторкой
     dictDef?.kind === 'empty' ? undefined :
     'Создать запись'
 
@@ -148,19 +150,19 @@ export function DictionariesFeature() {
         <DictionariesSidebar
           active={active}
           onSelect={setActive}
-          counts={counts}
           isAdmin={isAdmin}
+          hasFinanceAccess={hasFinanceAccess}
         />
         <div>
           {visitedPanels.products && (
             <div style={{ display: active === 'products' ? 'block' : 'none' }}>
-              <ProductsDict refreshKey={refreshKey} onTotalLoaded={handleTotalLoaded('products')} />
+              <ProductsDict refreshKey={refreshKey} visible={active === 'products'} />
             </div>
           )}
 
           {visitedPanels.clients && (
             <div style={{ display: active === 'clients' ? 'block' : 'none' }}>
-              <ClientsDict refreshKey={refreshKey} onEdit={openClientEdit} onTotalLoaded={handleTotalLoaded('clients')} />
+              <ClientsDict refreshKey={refreshKey} onEdit={openClientEdit} />
             </div>
           )}
 
@@ -168,13 +170,24 @@ export function DictionariesFeature() {
             <div style={{ padding: 40 }}>
               <EmptyState
                 title="Недостаточно прав"
-                sub="Этот справочник доступен только администратору"
+                sub={dictDef?.financeOnly
+                  ? 'Этот справочник доступен только менеджеру и администратору'
+                  : 'Этот справочник доступен только администратору'}
               />
             </div>
           )}
 
           {active === 'locations' && (
-            <LocationsDict refreshKey={refreshKey} onTotalLoaded={handleTotalLoaded('locations')} />
+            <LocationsDict refreshKey={refreshKey} />
+          )}
+
+          {!activeForbidden && dictDef?.group === 'pricing' && (
+            <div className="dict-embed">
+              {active === 'packing-pricing' && <PackingPricesFeature />}
+              {active === 'pallet-pricing' && <PalletPricesFeature />}
+              {active === 'box-pricing' && <BoxPricesFeature />}
+              {active === 'storage-pricing' && <StoragePricesFeature />}
+            </div>
           )}
 
           {!activeForbidden && visitedPanels.simple && (
@@ -187,13 +200,12 @@ export function DictionariesFeature() {
                   refreshKey={refreshKey}
                   title={DICTIONARY_TYPES.find((d) => d.id === typeId)?.sheetKind ?? 'Значение'}
                   onEdit={openSimpleEdit}
-                  onTotalLoaded={handleTotalLoaded(typeId)}
                 />
               </div>
             ))
           )}
 
-          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && active !== 'locations' && (
+          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && active !== 'locations' && dictDef?.group !== 'pricing' && (
             <div style={{ padding: 40 }}>
               <EmptyState
                 title="Данные появятся при подключении API"

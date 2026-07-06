@@ -37,7 +37,6 @@ function locToDictItem(loc: LocationItem): DictionaryItem {
 
 interface LocationsDictProps {
   refreshKey: number
-  onTotalLoaded: (total: number) => void
 }
 
 function escapeHtml(value: string): string {
@@ -244,7 +243,7 @@ function printLabels(labels: LocationLabel[], dir: LabelArrowDir) {
 
 const EMPTY: LocationItem[] = []
 
-export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps) {
+export function LocationsDict({ refreshKey }: LocationsDictProps) {
   const toast = useToast()
   const confirm = useConfirm()
   const { reload: reloadLookups } = useLookups()
@@ -278,7 +277,6 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
       setItems(res.items)
       setTotal(res.total)
       setSelected(new Set())
-      onTotalLoaded(res.total)
       setLoadedOnce(true)
     } catch {
       if (signal?.aborted) return
@@ -286,7 +284,7 @@ export function LocationsDict({ refreshKey, onTotalLoaded }: LocationsDictProps)
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  }, [room, rack, onTotalLoaded])
+  }, [room, rack])
 
   useEffect(() => {
     const ctrl = new AbortController()

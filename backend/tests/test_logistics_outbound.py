@@ -405,6 +405,89 @@ def test_cancel_trip_returns_partial_dispatch(admin_client, client_id):
     assert _ready_net(client_id, pid) == 10
 
 
+def _expense_awaiting(trip_id: str) -> dict | None:
+    """Активный (не удалённый) логистический расход рейса, если есть."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, payment_status FROM material_expenses "
+            "WHERE source_kind = 'trip' AND source_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (trip_id,),
+        ).fetchone()
+
+
+def test_cancel_closed_trip_reverses_shipment_and_removes_expense(admin_client, client_id):
+    # Закрытый outbound-рейс: аннулирование откатывает отгрузку shipped → awaiting_trip,
+    # возвращает готовый остаток и снимает логистический расход рейса.
+    doc_id, _, pid = _awaiting_dispatch(admin_client, client_id, qty=5)
+    trip_id = _trip_with_dispatch(admin_client, doc_id)
+    _drive_to_costing(admin_client, trip_id)
+    assert admin_client.post(f"/trips/{trip_id}/cost", json={"logistics_cost_actual": 8000}).status_code == 200
+    assert _expense_awaiting(trip_id) is not None
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "shipped"
+    assert _ready_net(client_id, pid) == 0
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 200, cancel.text
+    assert cancel.json()["message"] == "cancelled"
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "cancelled"
+    ship = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert ship["status"] == "awaiting_trip"
+    assert ship["lines"][0]["shipped_qty"] == 0
+    assert _ready_net(client_id, pid) == 5
+    assert _expense_awaiting(trip_id) is None  # расход снят
+
+
+def test_cancel_closed_trip_blocked_when_paid_expense(admin_client, client_id):
+    # Оплаченный логистический расход блокирует аннулирование — финансы разбираются вручную.
+    doc_id, _, pid = _awaiting_dispatch(admin_client, client_id, qty=5)
+    trip_id = _trip_with_dispatch(admin_client, doc_id)
+    _drive_to_costing(admin_client, trip_id)
+    assert admin_client.post(f"/trips/{trip_id}/cost", json={"logistics_cost_actual": 8000}).status_code == 200
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+    exp = _expense_awaiting(trip_id)
+    with get_connection() as conn:
+        conn.execute("UPDATE material_expenses SET payment_status = 'paid' WHERE id = ?", (exp["id"],))
+        conn.commit()
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 400, cancel.text
+    # Остатки и статус не тронуты: рейс всё ещё закрыт, отгрузка отгружена.
+    assert admin_client.get(f"/trips/{trip_id}").json()["doc"]["status"] == "closed"
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "shipped"
+    assert _ready_net(client_id, pid) == 0
+
+
+def test_cancel_closed_trip_blocked_when_dispatch_invoiced(admin_client, client_id):
+    # Отгрузка в выставленном (не черновом) счёте — аннулирование рейса отклоняется.
+    import uuid as _uuid
+
+    doc_id, _, pid = _awaiting_dispatch(admin_client, client_id, qty=5)
+    trip_id = _trip_with_dispatch(admin_client, doc_id)
+    _drive_to_costing(admin_client, trip_id)
+    assert admin_client.post(f"/trips/{trip_id}/close").json()["message"] == "closed"
+
+    inv_id = str(_uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO invoice_docs (id,doc_number,client_id,status,total_amount,paid_amount,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (inv_id, f"INV-T{inv_id[:6]}", client_id, "issued", 1000, 0, "2026-06-11T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO invoice_shipments (id,invoice_id,shipment_doc_id,client_id,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (str(_uuid.uuid4()), inv_id, doc_id, client_id, "2026-06-11T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    cancel = admin_client.post(f"/trips/{trip_id}/cancel")
+    assert cancel.status_code == 400, cancel.text
+    assert "счёт" in cancel.json()["detail"]
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "shipped"
+    assert _ready_net(client_id, pid) == 0
+
+
 # --- Кандидаты, тип груза, направление ---
 
 def test_dispatch_candidates_include_dispatches_linked_to_other_trips(admin_client, client_id):

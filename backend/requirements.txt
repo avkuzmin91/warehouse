@@ -12,3 +12,4 @@ redis>=5.0
 alembic>=1.13
 segno>=1.6
 firebase-admin>=6.5
+httpx>=0.27

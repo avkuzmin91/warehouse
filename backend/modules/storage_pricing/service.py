@@ -369,42 +369,64 @@ def _convert_to_units(
 def run_storage_accruals(connection, today: date) -> int:
     """Идемпотентно начисляет хранение по всем клиентам с тарифом за дни до вчера.
 
-    Первый непокрытый день = max(старт тарифа, последнее начисление + 1); пропуски
-    (простой backend) добираются автоматически. День без платных лотов тоже пишется
-    (нулевой строкой) — он же якорь идемпотентности. Не коммитит — вызывающий."""
+    Не коммитит — вызывающий."""
     histories = load_storage_price_histories(connection)
-    if not histories:
-        return 0
-    yesterday = today - timedelta(days=1)
     created = 0
     for client_id, hist in histories.items():
-        start = billing_start(hist)
-        if not start:
-            continue
-        last_row = connection.execute(
-            "SELECT MAX(charge_date) AS d FROM storage_charges WHERE client_id = ?",
-            (client_id,),
-        ).fetchone()
-        first_day = date.fromisoformat(start)
-        if last_row and last_row["d"]:
-            first_day = max(first_day, date.fromisoformat(str(last_row["d"])) + timedelta(days=1))
-        if first_day > yesterday:
-            continue
-        last_day = min(yesterday, first_day + timedelta(days=_MAX_BACKFILL_DAYS - 1))
+        created += run_client_storage_accrual(connection, client_id, today, hist=hist)
+    return created
 
-        plus, minus = _load_client_lot_events(connection, client_id)
-        sink_events = _load_client_sink_events(connection, client_id)
-        day = first_day
-        while day <= last_day:
-            rec = storage_record_on(hist, day.isoformat())
-            if rec is None:
-                day += timedelta(days=1)
-                continue
-            created += _write_charge(
-                connection, client_id=client_id, day=day, rec=rec, start=start,
-                plus=plus, minus=minus, sink_events=sink_events,
-            )
+
+def run_client_storage_accrual(
+    connection, client_id: str, today: date, *, hist: list[dict] | None = None,
+) -> int:
+    """Начисляет клиенту все непокрытые дни от старта тарифа до вчера.
+
+    Идёт по «дырам»: день без строки в storage_charges вычисляется и пишется, уже
+    начисленные дни не трогаются (append-only). Это покрывает и пропуски (простой
+    backend), и ретро-включение — запись тарифа задним числом доначисляет прошлое
+    по ставке, действовавшей на каждый день. День без платных лотов тоже пишется
+    (нулевой строкой) — он же якорь «день посчитан». Не коммитит — вызывающий."""
+    if hist is None:
+        hist = load_storage_price_history(connection, client_id)
+    start = billing_start(hist)
+    if not start:
+        return 0
+    yesterday = today - timedelta(days=1)
+    first_day = date.fromisoformat(start)
+    if first_day > yesterday:
+        return 0
+    charged = {
+        str(r["charge_date"])
+        for r in connection.execute(
+            "SELECT charge_date FROM storage_charges WHERE client_id = ?", (client_id,)
+        ).fetchall()
+    }
+
+    created = 0
+    loaded = False
+    plus: list[dict] = []
+    minus: list[dict] = []
+    sink_events: list[dict] = []
+    day = first_day
+    while day <= yesterday and created < _MAX_BACKFILL_DAYS:
+        if day.isoformat() in charged:
             day += timedelta(days=1)
+            continue
+        rec = storage_record_on(hist, day.isoformat())
+        if rec is None:
+            day += timedelta(days=1)
+            continue
+        if not loaded:
+            # Журнал грузится один раз и только если есть что доначислять.
+            plus, minus = _load_client_lot_events(connection, client_id)
+            sink_events = _load_client_sink_events(connection, client_id)
+            loaded = True
+        created += _write_charge(
+            connection, client_id=client_id, day=day, rec=rec, start=start,
+            plus=plus, minus=minus, sink_events=sink_events,
+        )
+        day += timedelta(days=1)
     return created
 
 
@@ -590,6 +612,53 @@ def storage_charge_detail(connection, charge_id: str) -> dict | None:
             for r in rows
         ],
     }
+
+
+_MONTHS_RU = (
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+)
+
+
+def uninvoiced_storage_months(connection, client_id: str) -> dict:
+    """Невыставленное хранение клиента помесячно — подсказка менеджеру при выставлении.
+
+    Месяц = группа платных дней (amount > 0), не входящих ни в один активный счёт;
+    date_from/date_to — границы свободных дней внутри месяца, ими же и привязывают."""
+    rows = connection.execute(
+        """
+        SELECT SUBSTR(c.charge_date, 1, 7) AS month,
+               COUNT(*) AS days,
+               MIN(c.charge_date) AS date_from,
+               MAX(c.charge_date) AS date_to,
+               COALESCE(SUM(c.amount_kop), 0) AS amount_kop
+        FROM storage_charges c
+        WHERE c.client_id = ? AND c.amount_kop > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM invoice_storage_charges l
+              WHERE l.charge_id = c.id AND COALESCE(l.is_deleted, 0) = 0
+          )
+        GROUP BY SUBSTR(c.charge_date, 1, 7)
+        ORDER BY SUBSTR(c.charge_date, 1, 7)
+        """,
+        (client_id,),
+    ).fetchall()
+    items = []
+    for r in rows:
+        month = str(r["month"])
+        try:
+            label = f"{_MONTHS_RU[int(month[5:7]) - 1]} {month[:4]}"
+        except (ValueError, IndexError):
+            label = month
+        items.append({
+            "month": month,
+            "month_label": label,
+            "days": int(r["days"]),
+            "date_from": str(r["date_from"]),
+            "date_to": str(r["date_to"]),
+            "amount_kop": int(r["amount_kop"]),
+        })
+    return {"items": items, "total_amount_kop": sum(i["amount_kop"] for i in items)}
 
 
 # ── Доход для P&L ────────────────────────────────────────────────────────────
