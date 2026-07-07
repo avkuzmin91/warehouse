@@ -870,6 +870,102 @@ def packing_productivity(
     }
 
 
+def packing_day_detail(
+    connection, *, date: str, client_id: str | None = None, with_earnings: bool = False,
+) -> dict:
+    """Детализация упаковки за один день по задачам упаковки (shipment-документам).
+
+    Клик по столбику графика аналитики упаковки: показывает, из каких «Задач
+    упаковки» сложился день, с разбивкой по SKU внутри каждой задачи и переходом
+    в карточку задачи. Считает тем же нетто-правилом (_PACKED_NET_SQL), что и
+    packing_productivity — цифры совпадают со столбиком.
+    """
+    conds = ["zr.pack_entry_id IS NOT NULL", "zr.packed_date = ?"]
+    params: list = [date]
+    if client_id and client_id.strip():
+        conds.append("zr.client_id = ?"); params.append(client_id.strip())
+    where = " AND ".join(conds)
+
+    rows = connection.execute(
+        f"""SELECT l.doc_id,
+               MIN(d.doc_number) AS doc_number,
+               MIN(d.status) AS status,
+               zr.client_id,
+               MIN(cl.name) AS client_name,
+               zr.product_id,
+               COALESCE(NULLIF(TRIM(MIN(p.sku)), ''), MIN(zr.product_sku)) AS product_sku,
+               MIN(zr.product_name) AS product_name,
+               {_PACKED_NET_SQL.format(p='zr.')}
+           FROM zone_relocations zr
+           JOIN shipment_lines l ON l.id = zr.shipment_line_id
+           JOIN shipment_docs d ON d.id = l.doc_id
+           LEFT JOIN products p ON p.id = zr.product_id
+           LEFT JOIN clients cl ON cl.id = zr.client_id
+           WHERE {where}
+           GROUP BY l.doc_id, zr.client_id, zr.product_id
+           ORDER BY MIN(d.doc_number), MIN(zr.product_name)""",
+        params,
+    ).fetchall()
+
+    histories: dict = {}
+    if with_earnings:
+        from modules.pricing.service import load_histories
+        histories = load_histories(connection, [str(r["product_id"]) for r in rows])
+
+    def _priced(product_id, cid, quality, qty) -> tuple[int, bool]:
+        if not with_earnings or not cid or qty <= 0:
+            return 0, False
+        from modules.pricing.service import price_on
+        price = price_on(histories.get((str(product_id), str(cid), quality)), date)
+        if price is None:
+            return 0, True
+        return price * qty, False
+
+    docs: list[dict] = []
+    by_doc: dict[str, dict] = {}
+    for r in rows:
+        good, defect = int(r["good"] or 0), int(r["defect"] or 0)
+        if good == 0 and defect == 0:
+            continue
+        doc_id = str(r["doc_id"])
+        cid = r["client_id"]
+        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good)
+        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect)
+        earn = good_earn + defect_earn
+        price_missing = good_missing or defect_missing
+        doc = by_doc.get(doc_id)
+        if doc is None:
+            doc = {
+                "doc_id": doc_id, "doc_number": r["doc_number"], "status": str(r["status"]),
+                "client_id": cid, "client_name": r["client_name"],
+                "good": 0, "defect": 0, "total": 0, "earn_kop": 0,
+                "price_missing": False, "lines": [],
+            }
+            by_doc[doc_id] = doc
+            docs.append(doc)
+        doc["lines"].append({
+            "product_id": str(r["product_id"]), "product_sku": r["product_sku"],
+            "product_name": r["product_name"],
+            "good": good, "defect": defect, "total": good + defect,
+            "earn_kop": earn, "price_missing": price_missing,
+        })
+        doc["good"] += good
+        doc["defect"] += defect
+        doc["total"] += good + defect
+        doc["earn_kop"] += earn
+        doc["price_missing"] = doc["price_missing"] or price_missing
+
+    return {
+        "packed_date": date,
+        "good": sum(d["good"] for d in docs),
+        "defect": sum(d["defect"] for d in docs),
+        "total": sum(d["total"] for d in docs),
+        "earn_kop": sum(d["earn_kop"] for d in docs),
+        "with_earnings": with_earnings,
+        "docs": docs,
+    }
+
+
 def list_productivity_entries(
     connection, *, packed_date: str, client_id: str | None, product_id: str,
 ) -> list[dict]:

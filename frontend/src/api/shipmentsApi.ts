@@ -438,6 +438,54 @@ export function getPackingProductivity(params: PackingProductivityParams = {}, s
   return request<PackingProductivityResponse>(`/shipments/packing/productivity${q ? `?${q}` : ''}`, { signal })
 }
 
+export type PackingDayLine = {
+  product_id:    string
+  product_sku:   string | null
+  product_name:  string | null
+  good:          number
+  defect:        number
+  total:         number
+  earn_kop:      number
+  price_missing: boolean
+}
+
+export type PackingDayDoc = {
+  doc_id:        string
+  doc_number:    string
+  status:        string
+  client_id:     string | null
+  client_name:   string | null
+  good:          number
+  defect:        number
+  total:         number
+  earn_kop:      number
+  price_missing: boolean
+  lines:         PackingDayLine[]
+}
+
+export type PackingDayResponse = {
+  packed_date:   string
+  good:          number
+  defect:        number
+  total:         number
+  earn_kop:      number
+  with_earnings: boolean
+  docs:          PackingDayDoc[]
+}
+
+export function getPackingDay(
+  params: { date: string; client_id?: string },
+  signal?: AbortSignal,
+) {
+  const sp = new URLSearchParams()
+  sp.set('date', params.date)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<PackingDayResponse>(
+    `/shipments/packing/productivity/day?${sp.toString()}`,
+    { signal },
+  )
+}
+
 export type ProductivityPackEntry = {
   id:               string
   packed_date:      string | null

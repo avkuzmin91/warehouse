@@ -100,6 +100,41 @@ class ProductivityEntriesResponse(BaseModel):
     entries: list[ProductivityPackEntry]
 
 
+class PackingDayLine(BaseModel):
+    product_id:    str
+    product_sku:   str | None = None
+    product_name:  str | None = None
+    good:          int
+    defect:        int
+    total:         int
+    earn_kop:      int = 0
+    price_missing: bool = False
+
+
+class PackingDayDoc(BaseModel):
+    doc_id:        str
+    doc_number:    str
+    status:        str
+    client_id:     str | None = None
+    client_name:   str | None = None
+    good:          int
+    defect:        int
+    total:         int
+    earn_kop:      int = 0
+    price_missing: bool = False
+    lines:         list[PackingDayLine]
+
+
+class PackingDayResponse(BaseModel):
+    packed_date:   str
+    good:          int
+    defect:        int
+    total:         int
+    earn_kop:      int = 0
+    with_earnings: bool = False
+    docs:          list[PackingDayDoc]
+
+
 class PackDateMovePayload(BaseModel):
     entry_ids: list[str] = Field(min_length=1)
     new_date:  str  # YYYY-MM-DD — целевая бизнес-дата упаковки

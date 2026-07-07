@@ -13,6 +13,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { AnalyticsTabs } from './AnalyticsTabs'
+import { PackingDayDrawer } from './PackingDayDrawer'
 import {
   derive, ddmm, daysInclusive, isYmd, niceMax, fmtShort, shiftYmd, TOP_SKU_LIMIT,
 } from './packingAnalytics'
@@ -46,6 +47,7 @@ export function PackingAnalyticsFeature() {
   const [clientId, setClientId] = useFilterParam('client', '')
   const { setMany } = useFilterParamsActions()
   const [mode, setMode] = useState<Mode>('qty')
+  const [dayDetail, setDayDetail] = useState<string | null>(null)
 
   const { clients } = useLookups()
 
@@ -122,17 +124,19 @@ export function PackingAnalyticsFeature() {
           sub="Данные появляются после внесения упаковки в карточках отгрузок"
         />
       ) : (
-        <Body data={data} d={derived} mode={effMode} onMode={showMoney ? setMode : undefined} />
+        <Body data={data} d={derived} mode={effMode} onMode={showMoney ? setMode : undefined} onDay={setDayDetail} />
       )}
+      <PackingDayDrawer day={dayDetail} clientId={clientId || undefined} onClose={() => setDayDetail(null)} />
     </ListPage>
   )
 }
 
-function Body({ data, d, mode, onMode }: {
+function Body({ data, d, mode, onMode, onDay }: {
   data: PackingProductivityResponse
   d: Derived
   mode: Mode
   onMode?: (m: Mode) => void
+  onDay: (day: string) => void
 }) {
   const total = data.total || 1
   const goodPct = Math.round((data.total_good / total) * 100)
@@ -164,7 +168,7 @@ function Body({ data, d, mode, onMode }: {
           )}
         </div>
         <div style={{ padding: '18px 18px 12px' }}>
-          <VolumeChart d={d} mode={mode} />
+          <VolumeChart d={d} mode={mode} onDay={onDay} />
         </div>
       </div>
 
@@ -201,7 +205,7 @@ function Kpi({ icon, label, value, unit, sub, tone }: {
   )
 }
 
-function VolumeChart({ d, mode }: { d: Derived; mode: Mode }) {
+function VolumeChart({ d, mode, onDay }: { d: Derived; mode: Mode; onDay: (day: string) => void }) {
   const [hover, setHover] = useState<number | null>(null)
   const money = mode === 'money'
   const goodArr = money ? d.goodEarnSeries : d.goodSeries
@@ -234,11 +238,13 @@ function VolumeChart({ d, mode }: { d: Derived; mode: Mode }) {
           {d.axis.map((day, i) => {
             const g = goodArr[i], df = defectArr[i]
             const dim = hover != null && hover !== i ? 0.4 : 1
+            const hasData = d.totalSeries[i] > 0
             return (
               <div
                 key={day}
                 onMouseEnter={() => setHover(i)}
-                style={{ flex: '1 1 0', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column-reverse', cursor: 'default', borderRadius: 3, background: hover === i ? 'var(--c-bg-hover)' : undefined }}
+                onClick={hasData ? () => onDay(day) : undefined}
+                style={{ flex: '1 1 0', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column-reverse', cursor: hasData ? 'pointer' : 'default', borderRadius: 3, background: hover === i ? 'var(--c-bg-hover)' : undefined }}
               >
                 {g > 0 && <div style={{ height: `${(g / axisMax) * 100}%`, background: GOOD, opacity: dim }} />}
                 {df > 0 && <div style={{ height: `${(df / axisMax) * 100}%`, background: DEFECT, opacity: dim, borderRadius: g > 0 ? 0 : '3px 3px 0 0' }} />}
@@ -257,7 +263,7 @@ function VolumeChart({ d, mode }: { d: Derived; mode: Mode }) {
               <span>Итого</span>
               <span className="mono">{money ? formatMoneyKopecks(tip.earn) : `${tip.total.toLocaleString('ru-RU')} шт`}</span>
             </div>
-            <div style={{ marginTop: 4, fontSize: 10.5, color: 'var(--c-text-faint)' }}>{tip.docs} отгр. · {tip.skus} SKU</div>
+            <div style={{ marginTop: 4, fontSize: 10.5, color: 'var(--c-text-faint)' }}>{tip.docs} задач · {tip.skus} SKU · клик — детализация</div>
           </div>
         )}
       </div>

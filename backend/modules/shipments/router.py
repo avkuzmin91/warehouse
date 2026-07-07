@@ -66,6 +66,7 @@ from modules.shipments.schemas import (
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
     PackDateMovePayload,
+    PackingDayResponse,
     ProductivityEntriesResponse,
     ProductivityPackEntry,
     ShipmentPackingEntry,
@@ -89,6 +90,7 @@ from modules.shipments.service import (
     move_packing_date,
     next_doc_number,
     normalize_cargo_type,
+    packing_day_detail,
     packing_productivity,
     record_packing,
     relocate_packed,
@@ -975,6 +977,18 @@ def get_packing_productivity(
         return packing_productivity(
             conn, date_from=date_from, date_to=date_to, client_id=client_id, search=search,
             with_earnings=can_view_costs(user),
+        )
+
+
+@router.get("/shipments/packing/productivity/day", response_model=PackingDayResponse)
+def get_packing_day(
+    date: str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(_get_viewer),
+):
+    with get_connection() as conn:
+        return packing_day_detail(
+            conn, date=date, client_id=client_id, with_earnings=can_view_costs(user),
         )
 
 

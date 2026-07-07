@@ -907,6 +907,41 @@ def test_packing_productivity_report(api, client_id):
     assert (after["total_good"], after["total_defect"], after["total"]) == (12, 3, 15)
 
 
+def test_packing_day_detail_matches_bar(api, client_id):
+    """Детализация дня (клик по столбику): задачи упаковки за день с разбивкой по SKU,
+    цифры сходятся со столбиком отчёта; переход в карточку задачи по doc_id."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 40, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 30)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 35})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+
+    d1, d2 = "2026-06-08", "2026-06-09"
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": d1})
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 5, "defect_delta": 3, "packed_date": d2})
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 7, "packed_date": d2})
+
+    r = api.get("/shipments/packing/productivity/day", params={"client_id": client_id, "date": d2})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["packed_date"] == d2
+    assert (body["good"], body["defect"], body["total"]) == (12, 3, 15)  # = столбик дня d2
+    assert len(body["docs"]) == 1
+    doc = body["docs"][0]
+    assert doc["doc_id"] == doc_id  # для перехода в задачу упаковки
+    assert (doc["good"], doc["defect"], doc["total"]) == (12, 3, 15)
+    assert len(doc["lines"]) == 1
+    assert doc["lines"][0]["product_id"] == pos["product_id"]
+    assert (doc["lines"][0]["good"], doc["lines"][0]["defect"]) == (12, 3)
+
+    # Пустой день — без задач.
+    empty = api.get("/shipments/packing/productivity/day", params={"client_id": client_id, "date": "2026-06-01"}).json()
+    assert empty["docs"] == [] and empty["total"] == 0
+
+
 def test_move_packing_date_admin(api, client_id):
     """Менеджер/админ переносит дату упаковки из отчёта: запись (и её сторно) едут на другой день."""
     pos = _position()
