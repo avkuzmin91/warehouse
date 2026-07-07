@@ -625,7 +625,7 @@ def pnl_day_detail(
     }
 
 
-def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
+def trip_profitability(connection, *, date_from: str, date_to: str, client_id: str | None = None) -> dict:
     """Рентабельность рейсов в окне (по факту прибытия): доход рейса − его себестоимость.
 
     Доход рейса = логистика клиента по привязанным отгрузкам и поступлениям. Если документ
@@ -636,17 +636,31 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
     from config import TRIP_STATUS_RU_BY_DIRECTION
     from modules.invoices.service import rub_to_kop
 
+    params: list = [TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)]
+    client_filter = ""
+    cid = (client_id or "").strip()
+    if cid:
+        client_filter = (
+            " AND EXISTS (SELECT 1 FROM trip_lines tl WHERE tl.trip_id = t.id"
+            " AND tl.is_deleted = 0 AND tl.client_id = ?)"
+        )
+        params.append(cid)
     trips = connection.execute(
-        """
+        f"""
         SELECT t.id, t.trip_number, t.direction, t.cargo_type, t.status,
                SUBSTR(t.arrived_at, 1, 10) AS day, t.carrier_name,
-               COALESCE(t.logistics_cost_actual, 0) AS cost_actual
+               COALESCE(t.logistics_cost_actual, 0) AS cost_actual,
+               COALESCE((
+                   SELECT array_agg(DISTINCT tlc.client_name ORDER BY tlc.client_name)
+                   FROM trip_lines tlc
+                   WHERE tlc.trip_id = t.id AND tlc.is_deleted = 0 AND tlc.client_name IS NOT NULL
+               ), ARRAY[]::text[]) AS client_names
         FROM trip_docs t
         WHERE t.is_deleted = 0 AND t.status != ? AND t.arrived_at IS NOT NULL
-          AND t.arrived_at >= ? AND t.arrived_at < ?
+          AND t.arrived_at >= ? AND t.arrived_at < ?{client_filter}
         ORDER BY SUBSTR(t.arrived_at, 1, 10) DESC, t.trip_number DESC
         """,
-        (TRIP_STATUS_CANCELLED, date_from, _dt_exclusive(date_to)),
+        params,
     ).fetchall()
 
     trip_ids = [str(t["id"]) for t in trips]
@@ -727,6 +741,7 @@ def trip_profitability(connection, *, date_from: str, date_to: str) -> dict:
             "status_label": labels.get(status, status),
             "day": day,
             "carrier_name": t["carrier_name"],
+            "client_names": [str(n) for n in (t["client_names"] or []) if n],
             "income_kop": income,
             "cost_kop": cost,
             "margin_kop": margin,

@@ -12,6 +12,9 @@ backend/.env
 # Локальные файлы БД (проект на PostgreSQL)
 *.db
 
+# Node
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]

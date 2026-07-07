@@ -84,6 +84,7 @@ def get_pnl_day(
 def get_trip_profitability(
     date_from: str = Query(...),
     date_to:   str = Query(...),
+    client_id: str | None = Query(None),
     user=Depends(_get_finance),
 ):
     """Рентабельность рейсов в окне (по факту прибытия): доход рейса (логистика клиента,
@@ -92,5 +93,5 @@ def get_trip_profitability(
     dt = validate_date(date_to)
     ensure_analytics_window(df, dt)
     with get_connection() as conn:
-        data = trip_profitability(conn, date_from=df, date_to=dt)
+        data = trip_profitability(conn, date_from=df, date_to=dt, client_id=client_id)
     return TripProfitabilityResponse(**data)

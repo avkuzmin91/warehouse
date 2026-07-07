@@ -81,6 +81,7 @@ export type TripProfitItem = {
   status_label: string
   day: string | null
   carrier_name: string | null
+  client_names: string[]
   income_kop: number
   cost_kop: number
   margin_kop: number
@@ -126,9 +127,13 @@ export function getPnlDay(
   return request<PnlDay>(`/pnl/day?${sp.toString()}`, { signal })
 }
 
-export function getTripProfitability(params: { date_from: string; date_to: string }, signal?: AbortSignal) {
+export function getTripProfitability(
+  params: { date_from: string; date_to: string; client_id?: string },
+  signal?: AbortSignal,
+) {
   const sp = new URLSearchParams()
   sp.set('date_from', params.date_from)
   sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
   return request<TripProfitability>(`/pnl/trips?${sp.toString()}`, { signal })
 }

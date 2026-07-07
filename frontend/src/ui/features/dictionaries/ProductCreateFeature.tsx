@@ -249,7 +249,7 @@ export function ProductCreateFeature() {
                   <ErrMsg msg={err('name') ? 'Обязательное поле' : undefined} />
                 </Field>
 
-                <Field label="SKU / штрих-код" required={!skuPending}>
+                <Field label="SKU" required={!skuPending}>
                   <Input
                     value={skuPending ? '' : skuBase}
                     onChange={(e) => setSkuBase(e.target.value)}
@@ -265,6 +265,9 @@ export function ProductCreateFeature() {
                       onChange={(v) => { setSkuPending(v); if (v) setSubmitError('') }}
                       label="SKU будет уточнён позже"
                     />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginTop: 8 }}>
+                    Штрих-коды добавляются к вариантам в карточке товара после создания.
                   </div>
                 </Field>
 

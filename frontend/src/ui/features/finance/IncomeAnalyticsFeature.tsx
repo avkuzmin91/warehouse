@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { getIncomeAnalytics } from '../../../api/pnlApi'
 import type { IncomeAnalytics } from '../../../api/pnlApi'
 import { ListPage } from '../../layouts/ListPage'
-import { FiltersBar, FilterCombobox } from '../../data/FiltersBar'
+import { FilterCombobox } from '../../data/FiltersBar'
 import { DateRange } from '../../data/DateRange'
 import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
@@ -147,7 +147,7 @@ export function IncomeAnalyticsFeature() {
   }
 
   const actions = (
-    <>
+    <div className="row gap-8" style={{ flexWrap: 'wrap', gap: 8 }}>
       <div className="preset">
         {PRESETS.map((p) => (
           <button key={p} className={!hasCustom && period === p ? 'on' : ''}
@@ -161,12 +161,19 @@ export function IncomeAnalyticsFeature() {
         onToChange={(v) => { setToRaw(v); setHoverDay(null); setSelDay(null) }}
         onClear={() => { setMany({ from: null, to: null }); setHoverDay(null); setSelDay(null) }}
       />
+      <FilterCombobox
+        label="Клиент"
+        value={clientId}
+        options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+        onChange={(v) => setClientId(v)}
+        placeholder="Поиск клиента…"
+      />
       {isAdmin && (
         <button className="btn" onClick={exportCsv} disabled={!data || data.sources.length === 0}>
           <Icon name="download" size={14} />Выгрузить
         </button>
       )}
-    </>
+    </div>
   )
 
   return (
@@ -176,15 +183,6 @@ export function IncomeAnalyticsFeature() {
       actions={actions}
     >
       <AnalyticsTabs active="income" />
-      <FiltersBar>
-        <FilterCombobox
-          label="Клиент"
-          value={clientId}
-          options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-          onChange={(v) => setClientId(v)}
-          placeholder="Поиск клиента…"
-        />
-      </FiltersBar>
       {loading && !data ? (
         <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Загрузка аналитики…</div>
       ) : error ? (

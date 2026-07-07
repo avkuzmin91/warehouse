@@ -1,3 +1,5 @@
+import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { getTripProfitability } from '../../../api/pnlApi'
 import type { TripProfitItem } from '../../../api/pnlApi'
@@ -7,8 +9,10 @@ import type { IconName } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Table, Td } from '../../data/Table'
 import { DateRange } from '../../data/DateRange'
+import { FilterCombobox } from '../../data/FiltersBar'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
+import { useLookups } from '../../../hooks/useLookups'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
 import { AnalyticsTabs } from './AnalyticsTabs'
@@ -47,7 +51,9 @@ export function TripProfitabilityFeature() {
   const period = PRESETS.some((p) => p.d === Number(periodRaw)) ? Number(periodRaw) : DEFAULT_PERIOD
   const [fromRaw, setFromRaw] = useFilterParam('from', '')
   const [toRaw, setToRaw] = useFilterParam('to', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
   const { setMany } = useFilterParamsActions()
+  const { clients } = useLookups()
 
   const customFrom = isYmd(fromRaw) ? fromRaw : ''
   const customTo = isYmd(toRaw) ? toRaw : ''
@@ -59,8 +65,8 @@ export function TripProfitabilityFeature() {
   if (effFrom > effTo) [effFrom, effTo] = [effTo, effFrom]
 
   const { data, loading, error } = useApi(
-    (s) => getTripProfitability({ date_from: effFrom, date_to: effTo }, s),
-    [effFrom, effTo],
+    (s) => getTripProfitability({ date_from: effFrom, date_to: effTo, client_id: clientId || undefined }, s),
+    [effFrom, effTo, clientId],
   )
 
   if (!isFinance) {
@@ -89,6 +95,13 @@ export function TripProfitabilityFeature() {
         onFromChange={setFromRaw}
         onToChange={setToRaw}
         onClear={() => setMany({ from: null, to: null })}
+      />
+      <FilterCombobox
+        label="Клиент"
+        value={clientId}
+        options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+        onChange={(v) => setClientId(v)}
+        placeholder="Поиск клиента…"
       />
     </div>
   )
@@ -123,6 +136,7 @@ export function TripProfitabilityFeature() {
                   <th>Рейс</th>
                   <th>Прибытие</th>
                   <th>Перевозчик</th>
+                  <th>Клиент</th>
                   <th style={{ textAlign: 'right' }}>Доход</th>
                   <th style={{ textAlign: 'right' }}>Себестоимость</th>
                   <th style={{ textAlign: 'right' }}>Маржа</th>
@@ -157,11 +171,87 @@ function TripRow({ t }: { t: TripProfitItem }) {
       </Td>
       <Td><span className="dt">{t.day ? ddmm(t.day) : '—'}</span></Td>
       <Td>{t.carrier_name || <span className="dash">—</span>}</Td>
+      <Td className="t-sub" style={{ maxWidth: 200 }}><ClientsCell names={t.client_names} /></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono">{fmtRub(t.income_kop)}</span></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono">{fmtRub(t.cost_kop)}</span></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono" style={{ color: tone, fontWeight: 600 }}>{fmtSignedRub(t.margin_kop)}</span></Td>
       <Td style={{ textAlign: 'right' }}><span className="mono" style={{ color: tone }}>{t.margin_pct == null ? '—' : `${String(t.margin_pct).replace('.', ',')}%`}</span></Td>
     </tr>
+  )
+}
+
+function ClientsCell({ names }: { names: string[] }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+
+  if (!names || names.length === 0) return <>—</>
+  if (names.length === 1) {
+    return <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names[0]}</span>
+  }
+
+  const open = () => {
+    const el = ref.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - 288))
+    const placeAbove = window.innerHeight - r.bottom < 220
+    setPos(placeAbove
+      ? { left, bottom: window.innerHeight - r.top + 6 }
+      : { left, top: r.bottom + 6 })
+  }
+
+  return (
+    <span
+      ref={ref}
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}
+      onMouseEnter={open}
+      onMouseLeave={() => setPos(null)}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names[0]}</span>
+      <span style={{
+        flexShrink: 0,
+        fontSize: 11,
+        fontWeight: 600,
+        lineHeight: 1.4,
+        padding: '1px 6px',
+        borderRadius: 999,
+        background: 'var(--c-bg-sunken)',
+        color: 'var(--c-text-subtle)',
+      }}>+{names.length - 1}</span>
+      {pos && createPortal(
+        <div style={{
+          position: 'fixed',
+          left: pos.left,
+          top: pos.top,
+          bottom: pos.bottom,
+          zIndex: 80,
+          minWidth: 180,
+          maxWidth: 280,
+          padding: '5px 0',
+          background: 'var(--c-bg-elev)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--r-lg)',
+          boxShadow: 'var(--sh-2)',
+          pointerEvents: 'none',
+        }}>
+          {names.map((n, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '3px 12px',
+              fontSize: 12.5,
+              color: 'var(--c-text)',
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ width: 4, height: 4, borderRadius: 999, background: 'var(--c-text-subtle)', flexShrink: 0 }} />
+              {n}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </span>
   )
 }
 

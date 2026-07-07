@@ -230,6 +230,17 @@ def test_pnl_trip_profitability(admin_client, client_id):
     assert row["margin_kop"] == 60000
     assert row["margin_pct"] == 150.0           # рентабельность = 60000 / 40000
     assert row["day"] == "2026-06-12"
+    assert row["client_names"] == ["Test Client"]
+
+    # Фильтр по клиенту: свой клиент — рейс есть, чужой — отсутствует.
+    filtered = admin_client.get(
+        f"/pnl/trips?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+    assert any(it["trip_number"] == trip_number for it in filtered["items"])
+    other = admin_client.get(
+        f"/pnl/trips?date_from=2026-06-01&date_to=2026-06-30&client_id={uuid4()}"
+    ).json()
+    assert all(it["trip_number"] != trip_number for it in other["items"])
 
 
 def test_pnl_trip_margin_pct_zero_income(admin_client, client_id):

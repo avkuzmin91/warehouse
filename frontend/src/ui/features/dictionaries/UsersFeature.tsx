@@ -38,6 +38,13 @@ const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> 
 const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'warehouse_head', 'client'] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
+function shouldDropUp(triggerEl: HTMLElement | null, menuHeight: number): boolean {
+  if (!triggerEl) return false
+  const rect = triggerEl.getBoundingClientRect()
+  const spaceBelow = window.innerHeight - rect.bottom
+  return spaceBelow < menuHeight && rect.top > spaceBelow
+}
+
 const ROLE_FILTERS = [
   { role: 'all', label: 'Все', icon: 'users' },
   { role: 'admin', label: 'Администраторы', icon: 'shield' },
@@ -56,7 +63,9 @@ interface RoleMenuProps {
 
 function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -75,7 +84,12 @@ function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <div
-        onClick={() => setOpen((s) => !s)}
+        ref={triggerRef}
+        onClick={() => setOpen((s) => {
+          const next = !s
+          if (next) setDropUp(shouldDropUp(triggerRef.current, 280))
+          return next
+        })}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -95,10 +109,9 @@ function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
         <div
           style={{
             position: 'absolute',
-            top: '100%',
+            ...(dropUp ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }),
             left: 0,
             zIndex: 40,
-            marginTop: 4,
             minWidth: 180,
             background: 'var(--c-bg-elev)',
             border: '1px solid var(--c-border)',
@@ -155,7 +168,9 @@ interface ClientMenuProps {
 
 function ClientMenu({ currentClientId, currentClientName, clients, onSelect, disabled }: ClientMenuProps) {
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -173,7 +188,12 @@ function ClientMenu({ currentClientId, currentClientName, clients, onSelect, dis
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <div
-        onClick={() => setOpen((s) => !s)}
+        ref={triggerRef}
+        onClick={() => setOpen((s) => {
+          const next = !s
+          if (next) setDropUp(shouldDropUp(triggerRef.current, 280))
+          return next
+        })}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -195,10 +215,9 @@ function ClientMenu({ currentClientId, currentClientName, clients, onSelect, dis
         <div
           style={{
             position: 'absolute',
-            top: '100%',
+            ...(dropUp ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }),
             left: 0,
             zIndex: 40,
-            marginTop: 4,
             minWidth: 220,
             maxHeight: 260,
             overflowY: 'auto',

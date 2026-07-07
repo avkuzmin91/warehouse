@@ -6,9 +6,11 @@ import {
   getProductVariants,
   patchProductVariants,
   deleteProductVariant,
+  addVariantBarcode,
+  deleteVariantBarcode,
   uploadProductDictionaryImage,
 } from '../../../api/adminApi'
-import type { ProductItem, ProductVariantItem, ProductVariantWriteItem } from '../../../api/domainTypes'
+import type { ProductItem, ProductVariantItem, ProductVariantWriteItem, VariantBarcodeItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { getInventoryColors, getInventorySizes } from '../../../api/inventoryLookupsApi'
 import { useLookups } from '../../../hooks/useLookups'
@@ -109,9 +111,15 @@ export function ProductEditFeature({ id }: { id: string }) {
   )
   const [rows, setRows] = useState<ProductVariantWriteItem[]>([])
   const [variantMeta, setVariantMeta] = useState<Map<string, { hasReceipts: boolean; sku: string }>>(new Map())
+  const [barcodesByVariant, setBarcodesByVariant] = useState<Map<string, VariantBarcodeItem[]>>(new Map())
   const [varLoading, setVarLoading] = useState(false)
   const [varError, setVarError] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const [bcTargetId, setBcTargetId] = useState<string | null>(null)
+  const [bcCode, setBcCode] = useState('')
+  const [bcSource, setBcSource] = useState('')
+  const [bcSaving, setBcSaving] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -159,12 +167,59 @@ export function ProductEditFeature({ id }: { id: string }) {
         })),
       )
       setVariantMeta(new Map(items.map((v) => [v.id, { hasReceipts: v.has_receipts ?? false, sku: v.sku }])))
+      setBarcodesByVariant(new Map(items.map((v) => [v.id, v.barcodes])))
     } catch (e: unknown) {
       setVarError(e instanceof Error ? e.message : 'Ошибка загрузки вариантов')
     } finally {
       setVarLoading(false)
     }
   }, [id])
+
+  // Обновить только карту ШК, не трогая rows — иначе несохранённые правки вариантов слетят.
+  const refreshBarcodes = useCallback(async () => {
+    if (!id) return
+    const items = await getProductVariants(id)
+    setBarcodesByVariant(new Map(items.map((v) => [v.id, v.barcodes])))
+  }, [id])
+
+  async function handleAddBarcode() {
+    if (!id || !bcTargetId || !bcCode.trim() || bcSaving) return
+    setBcSaving(true)
+    try {
+      await addVariantBarcode(id, bcTargetId, { barcode: bcCode.trim(), source: bcSource.trim() || null })
+      toast('Штрих-код добавлен', 'success')
+      setBcTargetId(null)
+      await refreshBarcodes()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось добавить штрих-код', 'error')
+    } finally {
+      setBcSaving(false)
+    }
+  }
+
+  async function handleDeleteBarcode(variantId: string, bc: VariantBarcodeItem) {
+    if (!id) return
+    const ok = await confirm({
+      title: 'Снять штрих-код?',
+      body: `Код ${bc.barcode} перестанет опознавать этот вариант при сканировании.`,
+      danger: true,
+      confirmLabel: 'Снять',
+    })
+    if (!ok) return
+    try {
+      await deleteVariantBarcode(id, variantId, bc.id)
+      toast('Штрих-код снят', 'success')
+      await refreshBarcodes()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось снять штрих-код', 'error')
+    }
+  }
+
+  function openAddBarcode(variantId: string) {
+    setBcCode('')
+    setBcSource('')
+    setBcTargetId(variantId)
+  }
 
   useEffect(() => {
     void loadVariants()
@@ -569,13 +624,14 @@ export function ProductEditFeature({ id }: { id: string }) {
                       <th>Цвет</th>
                       {requiresSize && <th>Размер</th>}
                       <th>Д x Ш x В (см)</th>
+                      <th>Штрих-коды</th>
                       <th style={{ width: 28 }} />
                     </tr>
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={requiresSize ? 5 : 4} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                        <td colSpan={requiresSize ? 6 : 5} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
                           Нет вариантов — нажмите «Добавить»
                         </td>
                       </tr>
@@ -641,6 +697,36 @@ export function ProductEditFeature({ id }: { id: string }) {
                         </div>
                       </Td>
                       <Td>
+                        {row.id ? (
+                          <div className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                            {(barcodesByVariant.get(row.id) ?? []).map((bc) => (
+                              <span
+                                key={bc.id}
+                                className="mono"
+                                title={bc.source ?? undefined}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
+                              >
+                                {bc.barcode}
+                                <button
+                                  type="button"
+                                  title="Снять штрих-код"
+                                  disabled={busy}
+                                  onClick={() => void handleDeleteBarcode(row.id!, bc)}
+                                  style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                                >
+                                  <Icon name="x" size={12} />
+                                </button>
+                              </span>
+                            ))}
+                            <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" disabled={busy} onClick={() => openAddBarcode(row.id!)}>
+                              <Icon name="plus" size={13} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="faint text-xs">после сохранения</span>
+                        )}
+                      </Td>
+                      <Td>
                         <button
                           type="button"
                           className="btn ghost icon sm"
@@ -666,6 +752,42 @@ export function ProductEditFeature({ id }: { id: string }) {
           </div>
         </div>
       </div>
+      <Modal
+        open={bcTargetId !== null}
+        onClose={() => setBcTargetId(null)}
+        title="Добавить штрих-код"
+        subtitle={bcTargetId ? variantMeta.get(bcTargetId)?.sku : undefined}
+        width={420}
+        footer={
+          <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn ghost" onClick={() => setBcTargetId(null)}>Отмена</button>
+            <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
+              {bcSaving ? 'Добавление…' : 'Добавить'}
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <Field label="Штрих-код">
+            <Input
+              className="mono"
+              value={bcCode}
+              onChange={(e) => setBcCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleAddBarcode() }}
+              placeholder="Отсканируйте или введите код"
+              autoFocus
+            />
+          </Field>
+          <Field label="Источник (необязательно)">
+            <Input
+              value={bcSource}
+              onChange={(e) => setBcSource(e.target.value)}
+              placeholder="Ozon, WB, производитель…"
+            />
+          </Field>
+        </div>
+      </Modal>
+
       <Modal open={fullscreenImage !== null} onClose={closeFullscreenImage} width={960}>
         {fullscreenImage && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, minHeight: 320 }}>

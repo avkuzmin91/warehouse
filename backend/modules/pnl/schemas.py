@@ -92,6 +92,7 @@ class TripProfitItem(BaseModel):
     status_label:  str
     day:           str | None = None    # фактический день рейса (прибытие)
     carrier_name:  str | None = None
+    client_names:  list[str] = []
     income_kop:    int                  # логистика клиента + палеты
     cost_kop:      int                  # фактическая себестоимость рейса
     margin_kop:    int                  # income − cost; <0 — убыток
