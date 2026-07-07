@@ -49,6 +49,10 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
   const [priorityOpen, setPriorityOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
+  // Режим частичного (force) возврата: активируется, когда обычный возврат упёрся в уже
+  // отгруженный товар — тогда предлагаем вернуть только оставшийся остаток.
+  const [returnForce, setReturnForce] = useState(false)
+  const [returnForceMsg, setReturnForceMsg] = useState('')
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -85,6 +89,32 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
       load()
     } catch (err) {
       setActionErr(err instanceof Error ? err.message : 'Не удалось выполнить действие')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Возврат «на упаковку» с двухшаговым частичным возвратом: если сервер отклонил из-за
+  // уже отгруженного товара, не гасим подтверждение, а переключаем его в force-режим.
+  async function handleReturn(force: boolean) {
+    if (!doc || saving) return
+    setSaving(true)
+    setActionErr('')
+    try {
+      await returnShipmentToPacking(doc.id, force)
+      setConfirmAct('')
+      setReturnForce(false)
+      load()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Не удалось выполнить действие'
+      if (!force && msg.includes('уже отгружена или закреплена за рейсом')) {
+        setReturnForceMsg(msg)
+        setReturnForce(true)
+      } else {
+        setActionErr(msg)
+        setConfirmAct('')
+        setReturnForce(false)
+      }
     } finally {
       setSaving(false)
     }
@@ -170,16 +200,19 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                 )}
                 {returnable && (
                   <ConfirmAction
+                    danger={returnForce}
                     label={<><Icon name="refresh" size={16} /> Вернуть на упаковку</>}
-                    prompt={doc.status === 'packed'
-                      ? 'Раскладка по местам откатится, задача вернётся на упаковку. Продолжить?'
-                      : 'Задача вернётся на упаковку. Продолжить?'}
-                    confirmLabel="Да, вернуть"
+                    prompt={returnForce
+                      ? `${returnForceMsg} Часть уже отгружена и не вернётся на стол — вернуть только остаток?`
+                      : doc.status === 'packed'
+                        ? 'Раскладка по местам откатится, задача вернётся на упаковку. Продолжить?'
+                        : 'Задача вернётся на упаковку. Продолжить?'}
+                    confirmLabel={returnForce ? 'Да, вернуть остаток' : 'Да, вернуть'}
                     saving={saving}
                     open={confirmAct === 'return'}
                     onOpen={() => setConfirmAct('return')}
-                    onClose={() => setConfirmAct('')}
-                    onConfirm={() => void runAction(() => returnShipmentToPacking(doc.id))}
+                    onClose={() => { setConfirmAct(''); setReturnForce(false) }}
+                    onConfirm={() => void handleReturn(returnForce)}
                   />
                 )}
                 {cancellable && (

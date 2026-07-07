@@ -5,9 +5,10 @@ import { ListPage } from '../../../layouts/ListPage'
 import { Icon } from '../../../primitives/Icon'
 import type { IconName } from '../../../primitives/Icon'
 import { EmptyState } from '../../../primitives/EmptyState'
+import { DateRange } from '../../../data/DateRange'
 import { useApi } from '../../../../hooks/useApi'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
-import { useFilterParam } from '../../../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions } from '../../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../../utils/format'
 import { AnalyticsTabs } from '../AnalyticsTabs'
 import { PnlDayDrawer } from './PnlDayDrawer'
@@ -54,6 +55,7 @@ function shiftYmd(ymd: string, deltaDays: number): string {
 function ddmm(ymd: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}` : ymd
 }
+const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 function daysInclusive(from: string, to: string): number {
   const [fy, fm, fd] = from.split('-').map(Number)
   const [ty, tm, td] = to.split('-').map(Number)
@@ -100,18 +102,26 @@ export function PnlFeature() {
   const { user } = useCurrentUser()
   const isFinance = user?.role === 'admin' || user?.role === 'manager'
 
-  const [periodRaw, setPeriodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
+  const [periodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
   const period = PRESETS.some((p) => p.d === Number(periodRaw)) ? Number(periodRaw) : DEFAULT_PERIOD
+  const [fromRaw, setFromRaw] = useFilterParam('from', '')
+  const [toRaw, setToRaw] = useFilterParam('to', '')
+  const { setMany } = useFilterParamsActions()
   const [compare, setCompare] = useState(false)
   const [chartMode, setChartMode] = useState<ChartMode>('net')
 
+  const customFrom = isYmd(fromRaw) ? fromRaw : ''
+  const customTo = isYmd(toRaw) ? toRaw : ''
+  const hasCustom = Boolean(customFrom || customTo)
+
   const today = moscowTodayYmd()
-  const effTo = today
-  const rawFrom = shiftYmd(today, -(period - 1))
+  let effTo = hasCustom ? (customTo || customFrom) : today
+  let rawFrom = hasCustom ? (customFrom || customTo) : shiftYmd(today, -(period - 1))
+  if (rawFrom > effTo) [rawFrom, effTo] = [effTo, rawFrom]
   const effFrom = rawFrom < DATA_START ? DATA_START : rawFrom
   const shownDays = daysInclusive(effFrom, effTo)
   const prevTo = shiftYmd(effFrom, -1)
-  const prevFrom = shiftYmd(prevTo, -(period - 1))
+  const prevFrom = shiftYmd(prevTo, -(shownDays - 1))
   // Прошлый период сравниваем, только если он целиком после начала корректных данных.
   const canCompare = prevFrom >= DATA_START
 
@@ -137,9 +147,20 @@ export function PnlFeature() {
     <div className="row gap-8" style={{ flexWrap: 'wrap', gap: 8 }}>
       <div className="preset">
         {PRESETS.map((p) => (
-          <button key={p.d} className={period === p.d ? 'on' : ''} onClick={() => setPeriodRaw(String(p.d))}>{p.l}</button>
+          <button
+            key={p.d}
+            className={!hasCustom && period === p.d ? 'on' : ''}
+            onClick={() => setMany({ days: p.d === DEFAULT_PERIOD ? null : String(p.d), from: null, to: null })}
+          >{p.l}</button>
         ))}
       </div>
+      <DateRange
+        from={customFrom}
+        to={customTo}
+        onFromChange={setFromRaw}
+        onToChange={setToRaw}
+        onClear={() => setMany({ from: null, to: null })}
+      />
       <button
         className={`pnl-cmp${compare && canCompare ? ' on' : ''}`}
         disabled={!canCompare}

@@ -393,6 +393,7 @@ export type PackingProductivityRow = {
   good_earn_kop:   number
   defect_earn_kop: number
   earn_kop:        number
+  price_missing:   boolean
   doc_ids:         string[]
 }
 
@@ -500,8 +501,11 @@ export function rejectShipment(id: string, reason: string) {
 
 // Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
 // «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
-export function returnShipmentToPacking(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
+// force=true — частичный возврат: уже отгруженное с места остаётся вне задачи,
+// на упаковку возвращается только физически доступный остаток.
+export function returnShipmentToPacking(id: string, force = false) {
+  const q = force ? '?force=true' : ''
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing${q}`, { method: 'POST' })
 }
 
 export type ShipmentRelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }

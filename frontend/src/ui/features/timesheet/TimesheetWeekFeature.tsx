@@ -132,13 +132,15 @@ export function TimesheetWeekFeature() {
           <div className="t-wrap t-sticky" style={{ overflow: 'clip' }}>
             <table className="t" style={{ width: '100%', tableLayout: 'fixed' }}>
               <colgroup>
+                <col style={{ width: 40 }} />
                 <col style={{ width: 210 }} />
                 {data.days.map((d) => <col key={d.date} />)}
                 <col style={{ width: showMoney ? 168 : 120 }} />
               </colgroup>
               <thead>
                 <tr>
-                  <th style={{ paddingLeft: 14 }}>Сотрудник</th>
+                  <th style={{ paddingLeft: 12, textAlign: 'center', color: 'var(--c-text-faint)' }}>№</th>
+                  <th style={{ paddingLeft: 4 }}>Сотрудник</th>
                   {data.days.map((d) => (
                     <th key={d.date} onClick={() => setFactDate(d.date)} title="Внести факт за день" style={{ textAlign: 'center', borderLeft: '1px solid var(--c-border)', cursor: 'pointer', background: d.is_today ? 'var(--c-accent-bg)' : d.weekend ? 'var(--c-bg-active)' : undefined, color: d.is_today ? 'var(--c-accent-text)' : undefined }}>
                       <div style={{ fontWeight: 700, fontSize: 11.5 }}>{d.dow}</div>
@@ -149,9 +151,10 @@ export function TimesheetWeekFeature() {
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => (
+                {data.rows.map((row, rowIdx) => (
                   <tr key={row.employee_id}>
-                    <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${row.employee_id}`)}>
+                    <td className="mono" style={{ paddingLeft: 12, textAlign: 'center', color: 'var(--c-text-faint)', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{rowIdx + 1}</td>
+                    <td className="emp-cell" style={{ paddingLeft: 4 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${row.employee_id}`)}>
                       <EmpIdentity name={row.full_name} archived={row.archived} subtitle={row.position} />
                     </td>
                     {row.cells.map((cell, i) => (
@@ -181,7 +184,7 @@ export function TimesheetWeekFeature() {
               </tbody>
               <tfoot>
                 <tr>
-                  <td style={{ paddingLeft: 14, fontWeight: 600, fontSize: 12, background: 'var(--c-bg-active)' }}>Итого</td>
+                  <td colSpan={2} style={{ paddingLeft: 14, fontWeight: 600, fontSize: 12, background: 'var(--c-bg-active)' }}>Итого</td>
                   {data.totals.per_day.map((dh, i) => (
                     <td key={data.days[i].date} style={{ borderLeft: '1px solid var(--c-border)', background: 'var(--c-bg-active)', textAlign: 'center' }}>
                       <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: dh ? 'var(--c-text)' : 'var(--c-text-faint)' }}>{dh ? Math.round(dh) : '—'}</span>

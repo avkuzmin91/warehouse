@@ -1251,10 +1251,10 @@ def reject_shipment(
 
 
 @router.post("/shipments/{doc_id}/return-to-packing")
-def return_shipment_to_packing(doc_id: str, user=Depends(_get_manager)):
+def return_shipment_to_packing(doc_id: str, force: bool = False, user=Depends(_get_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
-        next_status = return_to_packing(conn, doc_id, uid)
+        next_status = return_to_packing(conn, doc_id, uid, force=force)
     return {"message": next_status}
 
 

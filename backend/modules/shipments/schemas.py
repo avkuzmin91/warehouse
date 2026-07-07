@@ -56,6 +56,7 @@ class ShipmentPackingProductivityRow(BaseModel):
     good_earn_kop:   int = 0
     defect_earn_kop: int = 0
     earn_kop:        int = 0
+    price_missing:   bool = False
     doc_ids:         list[str] = []
 
 

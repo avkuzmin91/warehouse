@@ -1141,6 +1141,51 @@ def test_return_to_packing_blocked_when_already_shipped(api, client_id):
     assert api.get(f"/shipments/{doc_id}").json()["status"] == "packed"
 
 
+def test_return_to_packing_force_returns_remainder_when_partly_shipped(api, client_id):
+    """force=true: часть уже отгружена → возвращаем только остаток, ушедшее остаётся вне задачи."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    good_zone = str(uuid.uuid4())
+    with get_connection() as c:
+        packing_id, _ = get_packing_zone(c)
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    _advance(api, doc_id, _WH)  # packing → on_packing
+    _as(_SHIFT)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/pack", json={"good_delta": 10, "packed_date": _TODAY})
+    _advance(api, doc_id, _SHIFT)  # on_packing → relocating
+    _finish_relocation(api, doc_id, [
+        {"line_id": line_id, "good": [{"zone_id": good_zone, "zone_name": "Годный-1", "qty": 10}], "defect": []},
+    ])
+    # Одна штука корректно уехала: ready → shipped из места.
+    from config import INV_OP_READY, INV_OP_SHIPPED, INV_Q_GOOD
+    from modules.balances.service import insert_inventory_move
+    with get_connection() as c:
+        insert_inventory_move(
+            c, product_id=pos["product_id"], product_name="P", product_sku="SKU",
+            color_id=pos["color_id"], color_name="Red", size_id=pos["size_id"], size_name=None,
+            client_id=client_id, client_name="C", from_op=INV_OP_READY, to_op=INV_OP_SHIPPED,
+            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+            from_zone_id=good_zone, from_zone_name="Годный-1", to_zone_id=None, to_zone_name=None,
+            qty=1, user_id=None, comment="seed-ship",
+        )
+        c.commit()
+
+    _as(_ADMIN)
+    # Без force — по-прежнему 409.
+    assert api.post(f"/shipments/{doc_id}/return-to-packing").status_code == 409
+    # С force — возврат остатка (9 шт.), 1 отгруженная остаётся вне задачи.
+    ret = api.post(f"/shipments/{doc_id}/return-to-packing?force=true")
+    assert ret.status_code == 200 and ret.json()["message"] == "on_packing", ret.text
+    detail = api.get(f"/shipments/{doc_id}").json()
+    assert detail["status"] == "on_packing"
+    assert _zone_qty(client_id, pos, good_zone, "good") == 0            # место опустело
+    assert _zone_qty(client_id, pos, packing_id, "good") == 9           # на стол вернулось только 9
+    # Журнал ready по строке сведён в ноль: 10 разложено − 9 возврат − 1 отгрузка.
+
+
 def test_return_to_packing_rejected_for_defect_cargo(api, client_id):
     """Брак-отгрузка минует упаковку — вернуть «на упаковку» нельзя."""
     pos = _position()

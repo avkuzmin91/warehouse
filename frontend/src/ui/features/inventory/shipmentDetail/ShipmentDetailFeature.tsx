@@ -664,16 +664,35 @@ export function ShipmentDetailFeature() {
     const ok = await confirm({
       title: 'Вернуть на упаковку?',
       body: isPacked
-        ? 'Задача вернётся на этап «На упаковке», а раскладка упакованного товара по местам будет отменена. Товар, уже отгружённый или закреплённый за рейсом, вернуть нельзя — сначала отмените рейс.'
+        ? 'Задача вернётся на этап «На упаковке», а раскладка упакованного товара по местам будет отменена. Если часть товара уже отгружена, предложим вернуть только оставшийся остаток.'
         : 'Задача вернётся на этап «На упаковке» — упаковщик сможет продолжить или исправить упаковку.',
       danger: true,
       confirmLabel: 'Вернуть на упаковку',
     })
     if (!ok) return
-    await act(async () => {
+    try {
       await returnShipmentToPacking(docId!)
       await refreshAfterLineChange()
-    })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Ошибка'
+      // Часть товара уже отгружена/уехала рейсом — предлагаем частичный (force) возврат:
+      // ушедшее останется вне задачи, остаток вернётся на упаковку для переразметки.
+      if (!msg.includes('уже отгружена или закреплена за рейсом')) {
+        toast(msg, 'error')
+        return
+      }
+      const forceOk = await confirm({
+        title: 'Вернуть остаток на упаковку?',
+        body: `${msg}\n\nЧасть уже отгружена и не вернётся на стол. Вернуть только оставшийся товар — годное и брак по нему можно будет разметить заново?`,
+        danger: true,
+        confirmLabel: 'Вернуть остаток',
+      })
+      if (!forceOk) return
+      await act(async () => {
+        await returnShipmentToPacking(docId!, true)
+        await refreshAfterLineChange()
+      })
+    }
   }
 
   async function handleReject() {

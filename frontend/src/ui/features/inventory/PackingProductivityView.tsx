@@ -16,6 +16,7 @@ import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { MOSCOW_TZ, moscowTodayYmd, parseMoscow } from '../../../utils/format'
 import { MovePackDateDrawer } from './MovePackDateDrawer'
+import { PackingPriceDrawer } from '../finance/pricing/PackingPriceDrawer'
 import { canMovePackDate } from '../../../utils/access'
 import type { PackingProductivityRow } from '../../../api/shipmentsApi'
 
@@ -100,6 +101,7 @@ export function PackingProductivityView() {
   const [reloadTick, setReloadTick] = useState(0)
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
   const [moveTarget, setMoveTarget] = useState<{ packedDate: string; row: PackingProductivityRow } | null>(null)
+  const [priceTarget, setPriceTarget] = useState<{ productId: string; clientId: string | null } | null>(null)
 
   const { user } = useCurrentUser()
   const canMoveDate = canMovePackDate(user)
@@ -118,6 +120,9 @@ export function PackingProductivityView() {
 
   const days = data?.days ?? []
   const showEarn = data?.with_earnings ?? false
+  // Хвостовой столбец действий: перенос даты (canMoveDate) и/или «задать тариф»
+  // (только в режиме заработка — когда упаковка товара не оценена).
+  const showActions = canMoveDate || showEarn
   const isDayOpen = (day: PackingProductivityDay, idx: number) =>
     toggled[day.packed_date] ?? idx === 0
 
@@ -205,7 +210,7 @@ export function PackingProductivityView() {
                   <th colSpan={2} style={{ textAlign: 'center', color: 'var(--c-warning)', borderLeft: BORDER }}>Брак</th>
                   <th rowSpan={2} style={{ width: 84, borderLeft: BORDER }} />
                   <th rowSpan={2} style={{ textAlign: 'right', width: 120, borderLeft: BORDER }}>Итого ₽</th>
-                  {canMoveDate && <th rowSpan={2} style={{ width: 40 }} />}
+                  {showActions && <th rowSpan={2} style={{ width: 76 }} />}
                 </tr>
                 <tr>
                   <th style={{ textAlign: 'right', width: 66, borderLeft: BORDER }}>шт</th>
@@ -223,7 +228,7 @@ export function PackingProductivityView() {
                   <th style={{ textAlign: 'right', width: 90, borderLeft: BORDER }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Всего</th>
-                  {canMoveDate && <th style={{ width: 40 }} />}
+                  {showActions && <th style={{ width: 40 }} />}
                 </tr>
               </thead>
             )}
@@ -244,7 +249,7 @@ export function PackingProductivityView() {
                       </span>
                     </Td>
                     {showEarn ? <EarnCells m={day} /> : <QtyCells m={day} />}
-                    {canMoveDate && <Td />}
+                    {showActions && <Td />}
                   </tr>
                   {open && day.rows.map((row) => {
                     const docId = row.doc_ids?.[0]
@@ -259,15 +264,29 @@ export function PackingProductivityView() {
                         <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
                         <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
                         {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
-                        {canMoveDate && (
+                        {showActions && (
                           <Td style={{ textAlign: 'center' }}>
-                            <button
-                              className="btn ghost icon sm"
-                              title="Перенести дату упаковки"
-                              onClick={(e) => { e.stopPropagation(); setMoveTarget({ packedDate: day.packed_date, row }) }}
-                            >
-                              <Icon name="calendar" size={14} />
-                            </button>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {showEarn && (
+                                <button
+                                  className="btn ghost icon sm"
+                                  style={{ color: row.price_missing ? 'var(--c-warning)' : 'var(--c-text-subtle)' }}
+                                  title={row.price_missing ? 'Упаковка не задана — задать тариф' : 'Изменить тариф упаковки'}
+                                  onClick={(e) => { e.stopPropagation(); setPriceTarget({ productId: row.product_id, clientId: row.client_id }) }}
+                                >
+                                  <Icon name={row.price_missing ? 'alert' : 'ruble'} size={14} />
+                                </button>
+                              )}
+                              {canMoveDate && (
+                                <button
+                                  className="btn ghost icon sm"
+                                  title="Перенести дату упаковки"
+                                  onClick={(e) => { e.stopPropagation(); setMoveTarget({ packedDate: day.packed_date, row }) }}
+                                >
+                                  <Icon name="calendar" size={14} />
+                                </button>
+                              )}
+                            </span>
                           </Td>
                         )}
                       </tr>
@@ -286,6 +305,14 @@ export function PackingProductivityView() {
           row={moveTarget.row}
           onClose={() => setMoveTarget(null)}
           onMoved={() => setReloadTick((t) => t + 1)}
+        />
+      )}
+      {priceTarget && (
+        <PackingPriceDrawer
+          productId={priceTarget.productId}
+          clientId={priceTarget.clientId ?? undefined}
+          onClose={() => setPriceTarget(null)}
+          onSaved={() => { setPriceTarget(null); setReloadTick((t) => t + 1) }}
         />
       )}
     </ListPage>

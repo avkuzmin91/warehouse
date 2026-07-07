@@ -221,8 +221,11 @@ export function cancelShipment(id: string) {
 
 // Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
 // «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
-export function returnShipmentToPacking(id: string) {
-  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, { method: 'POST' })
+// force=true — частичный возврат: уже отгруженное с места остаётся вне задачи,
+// на упаковку возвращается только физически доступный остаток.
+export function returnShipmentToPacking(id: string, force = false) {
+  const q = force ? '?force=true' : ''
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing${q}`, { method: 'POST' })
 }
 
 // Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.

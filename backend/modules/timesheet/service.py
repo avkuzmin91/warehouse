@@ -501,7 +501,8 @@ def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]
     """Начисленная ЗП за ОДИН день с разбивкой по сотрудникам (оклад и табель отдельно).
 
     Возвращает {"fixed": [...], "timesheet": [...]}, каждый элемент —
-    {"employee_id", "full_name", "amount"} (копейки > 0), отсортировано по сумме. Та же
+    {"employee_id", "full_name", "position", "amount"} (копейки > 0), отсортировано по
+    должности, затем ФИО (сотрудники без должности — в конце). Та же
     управленческая модель начисления по дням труда, что и `daily_payroll_accruals_split`,
     но с атрибуцией к сотруднику — для детализации дня в P&L. Оклад окладников (fixed) —
     чувствительные деньги (см. security.can_view_salary), фильтрацию по роли делает вызывающий."""
@@ -512,11 +513,14 @@ def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]
     day = d.isoformat()
 
     emp_rows = connection.execute(
-        "SELECT id, full_name, comp_type, status, "
-        "COALESCE(hired_on, SUBSTR(created_at, 1, 10)) AS start_on "
-        "FROM employees WHERE COALESCE(is_deleted, 0) = 0"
+        "SELECT e.id, e.full_name, e.comp_type, e.status, "
+        "COALESCE(p.name, e.position) AS position, "
+        "COALESCE(e.hired_on, SUBSTR(e.created_at, 1, 10)) AS start_on "
+        "FROM employees e LEFT JOIN positions p ON p.id = e.position_id "
+        "WHERE COALESCE(e.is_deleted, 0) = 0"
     ).fetchall()
     names = {str(r["id"]): str(r["full_name"]) for r in emp_rows}
+    positions = {str(r["id"]): (str(r["position"]) if r["position"] else None) for r in emp_rows}
     comp = {str(r["id"]): str(r["comp_type"] or EMPLOYEE_COMP_HOURLY) for r in emp_rows}
 
     timesheet: list[dict] = []
@@ -535,7 +539,8 @@ def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]
                 continue
             amt = round(h * r)
             if amt:
-                timesheet.append({"employee_id": emp_id, "full_name": names.get(emp_id, "—"), "amount": amt})
+                timesheet.append({"employee_id": emp_id, "full_name": names.get(emp_id, "—"),
+                                  "position": positions.get(emp_id), "amount": amt})
 
     fixed_out: list[dict] = []
     fixed_emps = [
@@ -564,10 +569,14 @@ def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]
                 share = base + (1 if idx < rem else 0)
                 if share:
                     eid = str(r["id"])
-                    fixed_out.append({"employee_id": eid, "full_name": names.get(eid, "—"), "amount": share})
+                    fixed_out.append({"employee_id": eid, "full_name": names.get(eid, "—"),
+                                      "position": positions.get(eid), "amount": share})
 
-    timesheet.sort(key=lambda x: x["amount"], reverse=True)
-    fixed_out.sort(key=lambda x: x["amount"], reverse=True)
+    # Сортировка по должности, затем ФИО; сотрудники без должности — в конце.
+    def by_position(x: dict) -> tuple[bool, str, str]:
+        return (x["position"] is None, x["position"] or "", x["full_name"])
+    timesheet.sort(key=by_position)
+    fixed_out.sort(key=by_position)
     return {"fixed": fixed_out, "timesheet": timesheet}
 
 

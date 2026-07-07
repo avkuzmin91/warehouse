@@ -810,12 +810,16 @@ def packing_productivity(
         from modules.pricing.service import load_histories
         histories = load_histories(connection, [str(r["product_id"]) for r in rows])
 
-    def _earn(product_id, cid, quality, qty, day_iso):
+    def _priced(product_id, cid, quality, qty, day_iso):
+        """(earn_kop, price_missing) по одной оси качества. price_missing — есть
+        штуки, но тариф упаковки на эту дату не заведён (менеджер видит «не задана»)."""
         if not with_earnings or not cid or qty <= 0:
-            return 0
+            return 0, False
         from modules.pricing.service import price_on
         price = price_on(histories.get((str(product_id), str(cid), quality)), day_iso)
-        return price * qty if price is not None else 0
+        if price is None:
+            return 0, True
+        return price * qty, False
 
     days: list[dict] = []
     by_day: dict[str, dict] = {}
@@ -826,8 +830,8 @@ def packing_productivity(
             continue
         day_key = str(r["packed_date"])
         cid = r["client_id"]
-        good_earn = _earn(r["product_id"], cid, INV_Q_GOOD, good, day_key)
-        defect_earn = _earn(r["product_id"], cid, INV_Q_DEFECT, defect, day_key)
+        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good, day_key)
+        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect, day_key)
         day = by_day.get(day_key)
         if day is None:
             day = {"packed_date": day_key, "good": 0, "defect": 0, "total": 0,
@@ -843,6 +847,7 @@ def packing_productivity(
             "good": good, "defect": defect, "total": good + defect,
             "good_earn_kop": good_earn, "defect_earn_kop": defect_earn,
             "earn_kop": good_earn + defect_earn,
+            "price_missing": good_missing or defect_missing,
             "doc_ids": doc_ids_by_row.get((day_key, cid, str(r["product_id"])), []),
         })
         day["good"] += good
@@ -1481,7 +1486,9 @@ def return_packing_pool_to_storage(connection, doc_id: str, user_id: str) -> int
     return total_returned
 
 
-def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str) -> int:
+def _undo_relocation_to_packing(
+    connection, doc_id: str, client_id, user_id: str, allow_partial: bool = False
+) -> tuple[int, int]:
     """Откат раскладки по местам (finish_relocation) при возврате «Упаковано» → «На упаковке».
 
     finish_relocation для товара разложил, по каждой строке: годный packed→ready
@@ -1494,7 +1501,10 @@ def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str
 
     Гейт: товар не должен быть уже отгружён/привязан рейсом — если в каком-то месте
     готового/брак-остатка меньше, чем нужно вернуть, откат запрещён (сначала отмените рейс).
-    Без commit — коммитит вызывающий.
+    При `allow_partial=True` вместо запрета возвращаем только физически доступный остаток
+    (уже отгруженное с места ушло безвозвратно), а недостачу копим в `skipped` — это
+    осознанный force-возврат, когда часть корректно уехала, а остаток надо переупаковать.
+    Возвращает `(returned, skipped)`. Без commit — коммитит вызывающий.
     """
     from modules.balances.service import get_available_in_zone, get_packing_zone, insert_inventory_move
 
@@ -1520,6 +1530,7 @@ def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str
     ).fetchall()
 
     total = 0
+    skipped = 0
     for line in lines:
         line_id = str(line["id"])
         label = line["product_sku"] or line["product_name"]
@@ -1564,15 +1575,20 @@ def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str
                     client_id=client_id, zone_id=zone_id, op=spec["avail_op"], quality=spec["quality"],
                 )
                 if avail < qty:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"Нельзя вернуть на упаковку «{line['product_name']}»: "
-                            f"часть товара уже отгружена или закреплена за рейсом "
-                            f"(в месте «{zone_name or 'без места'}» доступно {avail}, нужно {qty}). "
-                            "Сначала отмените отгрузку/рейс."
-                        ),
-                    )
+                    if not allow_partial:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Нельзя вернуть на упаковку «{line['product_name']}»: "
+                                f"часть товара уже отгружена или закреплена за рейсом "
+                                f"(в месте «{zone_name or 'без места'}» доступно {avail}, нужно {qty}). "
+                                "Сначала отмените отгрузку/рейс."
+                            ),
+                        )
+                    skipped += qty - avail
+                    qty = avail
+                    if qty <= 0:
+                        continue
                 insert_inventory_move(
                     connection,
                     product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
@@ -1587,10 +1603,10 @@ def _undo_relocation_to_packing(connection, doc_id: str, client_id, user_id: str
                     comment=f"Возврат на упаковку ({spec['kind_ru']}): {qty} шт ← {zone_name or 'без места'} — {label}",
                 )
                 total += qty
-    return total
+    return total, skipped
 
 
-def return_to_packing(connection, doc_id: str, user_id: str) -> str:
+def return_to_packing(connection, doc_id: str, user_id: str, force: bool = False) -> str:
     """Менеджерский возврат товарной задачи упаковки «на упаковку» (→ on_packing).
 
     Доступно из «Перемещение» и «Упаковано». Из «Перемещение» — чистая смена статуса
@@ -1598,6 +1614,10 @@ def return_to_packing(connection, doc_id: str, user_id: str) -> str:
     откатывается раскладка по местам (`_undo_relocation_to_packing`), восстанавливая
     состояние стола упаковки. «Дата упаковки (факт)» сбрасывается — её заново проставит
     следующая передача кладовщику. Брак упаковку минует — для брак-отгрузки запрещено.
+
+    `force=True` — осознанный частичный возврат: если часть товара уже отгружена (ушла с
+    места безвозвратно), возвращаем только остаток, а количество ушедшего фиксируем в
+    журнале. Нужен, когда отгрузка корректна, но годное/брак по остатку размечены неверно.
     """
     doc = connection.execute(
         "SELECT status, cargo_type, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
@@ -1612,19 +1632,23 @@ def return_to_packing(connection, doc_id: str, user_id: str) -> str:
         raise HTTPException(status_code=400, detail="Вернуть на упаковку можно только из «Перемещение» или «Упаковано»")
 
     returned = 0
+    skipped = 0
     if status == SHIPMENT_STATUS_PACKED:
-        returned = _undo_relocation_to_packing(connection, doc_id, doc["client_id"], user_id)
+        returned, skipped = _undo_relocation_to_packing(
+            connection, doc_id, doc["client_id"], user_id, allow_partial=force
+        )
 
     now = _now()
     connection.execute(
         "UPDATE shipment_docs SET status=?, actual_ship_date=NULL, updated_at=? WHERE id=?",
         (SHIPMENT_STATUS_ON_PACKING, now, doc_id),
     )
-    comment = (
-        f"Возврат на упаковку из «Упаковано»: раскладка откатана ({returned} шт.)"
-        if status == SHIPMENT_STATUS_PACKED
-        else "Возврат на упаковку из «Перемещение»"
-    )
+    if status == SHIPMENT_STATUS_PACKED:
+        comment = f"Возврат на упаковку из «Упаковано»: раскладка откатана ({returned} шт.)"
+        if skipped:
+            comment += f"; {skipped} шт. уже отгружено — остались вне задачи"
+    else:
+        comment = "Возврат на упаковку из «Перемещение»"
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_RETURN_TO_PACKING, comment, now, user_id),

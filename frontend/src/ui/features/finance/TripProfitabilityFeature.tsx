@@ -6,9 +6,10 @@ import { Icon } from '../../primitives/Icon'
 import type { IconName } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Table, Td } from '../../data/Table'
+import { DateRange } from '../../data/DateRange'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { useFilterParam } from '../../../hooks/useFilterParams'
+import { useFilterParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { moscowTodayYmd } from '../../../utils/format'
 import { AnalyticsTabs } from './AnalyticsTabs'
 
@@ -29,6 +30,7 @@ function shiftYmd(ymd: string, deltaDays: number): string {
 function ddmm(ymd: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}` : ymd
 }
+const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 function fmtRub(kopecks: number): string {
   return Math.round(kopecks / 100).toLocaleString('ru-RU')
 }
@@ -41,12 +43,20 @@ export function TripProfitabilityFeature() {
   const { user } = useCurrentUser()
   const isFinance = user?.role === 'admin' || user?.role === 'manager'
 
-  const [periodRaw, setPeriodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
+  const [periodRaw] = useFilterParam('days', String(DEFAULT_PERIOD))
   const period = PRESETS.some((p) => p.d === Number(periodRaw)) ? Number(periodRaw) : DEFAULT_PERIOD
+  const [fromRaw, setFromRaw] = useFilterParam('from', '')
+  const [toRaw, setToRaw] = useFilterParam('to', '')
+  const { setMany } = useFilterParamsActions()
+
+  const customFrom = isYmd(fromRaw) ? fromRaw : ''
+  const customTo = isYmd(toRaw) ? toRaw : ''
+  const hasCustom = Boolean(customFrom || customTo)
 
   const today = moscowTodayYmd()
-  const effTo = today
-  const effFrom = shiftYmd(today, -(period - 1))
+  let effTo = hasCustom ? (customTo || customFrom) : today
+  let effFrom = hasCustom ? (customFrom || customTo) : shiftYmd(today, -(period - 1))
+  if (effFrom > effTo) [effFrom, effTo] = [effTo, effFrom]
 
   const { data, loading, error } = useApi(
     (s) => getTripProfitability({ date_from: effFrom, date_to: effTo }, s),
@@ -63,10 +73,23 @@ export function TripProfitabilityFeature() {
   }
 
   const actions = (
-    <div className="preset">
-      {PRESETS.map((p) => (
-        <button key={p.d} className={period === p.d ? 'on' : ''} onClick={() => setPeriodRaw(String(p.d))}>{p.l}</button>
-      ))}
+    <div className="row gap-8" style={{ flexWrap: 'wrap', gap: 8 }}>
+      <div className="preset">
+        {PRESETS.map((p) => (
+          <button
+            key={p.d}
+            className={!hasCustom && period === p.d ? 'on' : ''}
+            onClick={() => setMany({ days: p.d === DEFAULT_PERIOD ? null : String(p.d), from: null, to: null })}
+          >{p.l}</button>
+        ))}
+      </div>
+      <DateRange
+        from={customFrom}
+        to={customTo}
+        onFromChange={setFromRaw}
+        onToChange={setToRaw}
+        onClear={() => setMany({ from: null, to: null })}
+      />
     </div>
   )
 

@@ -10,11 +10,12 @@ import { fmtDate, formatMoneyKopecks, moscowTodayYmd, parseRublesToKopecks } fro
 
 interface Props {
   productId: string
+  clientId?: string
   onClose: () => void
   onSaved: () => void
 }
 
-export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
+export function PackingPriceDrawer({ productId, clientId, onClose, onSaved }: Props) {
   const toast = useToast()
   const confirm = useConfirm()
   const [detail, setDetail] = useState<ProductPriceDetail | null>(null)
@@ -25,20 +26,20 @@ export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false)
 
   const reload = useCallback(() => {
-    return getProductPrices(productId)
+    return getProductPrices(productId, clientId || undefined)
       .then((d) => setDetail(d))
       .catch((e) => toast(e instanceof Error ? e.message : String(e), 'error'))
-  }, [productId, toast])
+  }, [productId, clientId, toast])
 
   useEffect(() => {
     let alive = true
     setLoading(true)
-    getProductPrices(productId)
+    getProductPrices(productId, clientId || undefined)
       .then((d) => { if (alive) setDetail(d) })
       .catch((e) => { if (alive) toast(e instanceof Error ? e.message : String(e), 'error') })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [productId, toast])
+  }, [productId, clientId, toast])
 
   const deleteEntry = useCallback(async (entry: PriceHistoryEntry) => {
     const ok = await confirm({
@@ -66,6 +67,7 @@ export function PackingPriceDrawer({ productId, onClose, onSaved }: Props) {
     if (goodKop === null && defectKop === null) { toast('Укажите стоимость годного или брака', 'error'); return }
     setSaving(true)
     setProductPrice(productId, {
+      client_id: clientId || undefined,
       good_price_kop: goodKop,
       defect_price_kop: defectKop,
       effective_from: effFrom,

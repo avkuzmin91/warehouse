@@ -875,20 +875,20 @@ def expense_day_detail(connection, *, day: str, can_view_salary: bool) -> list[d
     if ts_total:
         e = _cat(EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET, EXPENSE_KIND_SALARY)
         e["amount"] += ts_total
-        for x in payroll["timesheet"]:
+        for i, x in enumerate(payroll["timesheet"], 1):
             e["items"].append({
-                "type": "employee", "label": str(x["full_name"]), "amount": int(x["amount"]),
-                "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": None,
+                "type": "employee", "label": f"{i}. {x['full_name']}", "amount": int(x["amount"]),
+                "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": x.get("position") or None,
             })
     fixed_total = sum(int(x["amount"]) for x in payroll["fixed"])
     if fixed_total:
         e = _cat(EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED, EXPENSE_KIND_SALARY)
         e["amount"] += fixed_total
         if can_view_salary:
-            for x in payroll["fixed"]:
+            for i, x in enumerate(payroll["fixed"], 1):
                 e["items"].append({
-                    "type": "employee", "label": str(x["full_name"]), "amount": int(x["amount"]),
-                    "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": None,
+                    "type": "employee", "label": f"{i}. {x['full_name']}", "amount": int(x["amount"]),
+                    "ref_id": str(x["employee_id"]), "ref_kind": "employee", "note": x.get("position") or None,
                 })
         else:
             e["items"].append({
