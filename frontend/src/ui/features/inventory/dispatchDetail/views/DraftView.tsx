@@ -43,6 +43,7 @@ type Props = {
   onUpdateDoc: (body: { client_id?: string | null; client_name?: string | null; ship_date?: string | null; logistics_cost?: number | null; comment?: string | null }) => Promise<boolean>
   onReload: () => Promise<void>
   registerInfoFlush?: (fn: (() => Promise<boolean>) | null) => void
+  registerLinesFlush?: (fn: (() => Promise<boolean>) | null) => void
 }
 
 function variantKey(productId: string, colorId: string | null, sizeId: string | null): string {
@@ -62,7 +63,7 @@ function draftFromLine(line: DispatchLine): LineDraft {
   }
 }
 
-export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush }: Props) {
+export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush, registerLinesFlush }: Props) {
   const { user } = useCurrentUser()
   const toast = useToast()
   const showCosts = canViewCosts(user)
@@ -220,6 +221,25 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     }
   }
 
+  // Сохранить все несохранённые правки состава (короба/палеты/кол-во/ТЗ строки) без
+  // ручного нажатия «дискеты»: «Передать в подготовку» коммитит их автоматически.
+  async function flushDirtyLines(): Promise<boolean> {
+    for (const line of doc.lines) {
+      if (!lineDirty(line)) continue
+      const d = getDraft(line)
+      const ok = await onUpdateLine(line.id, {
+        qty:         d.qty,
+        pallets_qty: d.pallets,
+        boxes_qty:   d.boxes,
+        site_url:    d.siteUrl.trim() || null,
+        store_id:    d.storeId || null,
+        store_name:  d.storeId ? d.storeName : null,
+      })
+      if (!ok) return false
+    }
+    return true
+  }
+
   async function handleInfoSave(): Promise<boolean> {
     setInfoSaving(true)
     const costNum = Number(logisticsCost)
@@ -248,6 +268,15 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     registerInfoFlush(() => infoFlushRef.current())
     return () => registerInfoFlush(null)
   }, [registerInfoFlush])
+
+  // Аналогично — правки состава коммитятся при «Передать в подготовку».
+  const linesFlushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true))
+  linesFlushRef.current = flushDirtyLines
+  useEffect(() => {
+    if (!registerLinesFlush) return
+    registerLinesFlush(() => linesFlushRef.current())
+    return () => registerLinesFlush(null)
+  }, [registerLinesFlush])
 
   async function handleAssignSku(line: DispatchLine, skuBase: string) {
     await updateProduct(line.product_id, { sku_base: skuBase })

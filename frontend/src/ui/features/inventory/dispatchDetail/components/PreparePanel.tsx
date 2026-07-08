@@ -5,7 +5,6 @@ import { getBalancesByZone } from '../../../../../api/balancesApi'
 import type { BalanceZoneItem } from '../../../../../api/balancesApi'
 import { Combobox } from '../../../../data/Combobox'
 import type { ComboboxOption } from '../../../../data/Combobox'
-import { NumberStep } from '../../shared/NumberStep'
 import { Icon } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
 import { Panel } from '../../../shared/process/processUI'
@@ -440,14 +439,18 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
                             clearable
                           />
                         </div>
-                        <NumberStep
-                          value={row.qty}
-                          min={0}
-                          onChange={(v) => setRow(line.id, i, { qty: Math.max(0, v) })}
+                        <input
+                          className="input num"
+                          inputMode="numeric"
+                          placeholder="0"
+                          aria-label="Количество"
+                          value={row.qty > 0 ? String(row.qty) : ''}
                           disabled={!canEdit || saving}
-                          warning={rowOverflow(line.id, row)}
-                          width={96}
-                          height={34}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/\D/g, '')
+                            setRow(line.id, i, { qty: raw === '' ? 0 : Math.max(0, parseInt(raw, 10)) })
+                          }}
+                          style={{ width: 92, height: 34, textAlign: 'right', flexShrink: 0, borderColor: rowOverflow(line.id, row) ? 'var(--c-warning)' : undefined }}
                         />
                         <button
                           className="btn ghost icon sm"

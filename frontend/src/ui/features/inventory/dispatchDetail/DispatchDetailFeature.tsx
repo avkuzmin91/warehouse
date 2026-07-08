@@ -53,6 +53,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   // DraftView регистрирует здесь функцию сохранения «Основной информации» (в т.ч. ТЗ),
   // чтобы «Передать в подготовку» сохранило незакоммиченные правки до перехода по статусу.
   const flushDraftInfo = useRef<(() => Promise<boolean>) | null>(null)
+  // Аналогично — несохранённые правки состава (короба/палеты/кол-во): передача в
+  // подготовку коммитит их с черновика, ручное нажатие «дискеты» не требуется.
+  const flushDraftLines = useRef<(() => Promise<boolean>) | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -65,6 +68,17 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     }
   }, [docId])
 
+  // Тихая перезагрузка: обновляет doc БЕЗ полноэкранного спиннера, чтобы не размонтировать
+  // текущую вьюху. Иначе inline-сохранение (файл/короба/палеты/ссылка) сбрасывало
+  // несохранённые правки в других строках состава.
+  const refresh = useCallback(async () => {
+    try {
+      setDoc(await getDispatch(docId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка загрузки')
+    }
+  }, [docId])
+
   useEffect(() => { load() }, [load])
 
   async function act(fn: () => Promise<unknown>, redirectAfter?: string) {
@@ -73,7 +87,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     try {
       await fn()
       if (redirectAfter) navigate(redirectAfter)
-      else await load()
+      else await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка')
     } finally {
@@ -85,6 +99,10 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     setActing(true)
     setError('')
     try {
+      if (flushDraftLines.current) {
+        const ok = await flushDraftLines.current()
+        if (!ok) return
+      }
       if (flushDraftInfo.current) {
         const ok = await flushDraftInfo.current()
         if (!ok) return
@@ -133,7 +151,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleUpdateLine(lineId: string, body: { qty?: number; pallets_qty?: number | null; boxes_qty?: number | null; site_url?: string | null; store_id?: string | null; store_name?: string | null }): Promise<boolean> {
     try {
       await updateDispatchLine(docId, lineId, body)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения позиции', 'error')
@@ -144,7 +162,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleUpdatePallets(lineId: string, pallets: number | null): Promise<boolean> {
     try {
       await updateDispatchLinePallets(docId, lineId, pallets)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения палет', 'error')
@@ -155,7 +173,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleUpdateBoxes(lineId: string, boxes: number | null): Promise<boolean> {
     try {
       await updateDispatchLineBoxes(docId, lineId, boxes)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения коробов', 'error')
@@ -166,7 +184,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleUploadLineFile(lineId: string, file: File): Promise<boolean> {
     try {
       await uploadDispatchLineFile(docId, lineId, file)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось прикрепить файл', 'error')
@@ -177,7 +195,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleDeleteLineFile(lineId: string, fileId: string): Promise<boolean> {
     try {
       await deleteDispatchLineFile(docId, lineId, fileId)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось удалить файл', 'error')
@@ -199,7 +217,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   async function handleUpdateDoc(body: Parameters<typeof updateDispatch>[1]): Promise<boolean> {
     try {
       await updateDispatch(docId, body)
-      await load()
+      await refresh()
       return true
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка сохранения', 'error')
@@ -296,8 +314,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onUploadFile={handleUploadLineFile}
           onDeleteFile={handleDeleteLineFile}
           onUpdateDoc={handleUpdateDoc}
-          onReload={load}
+          onReload={refresh}
           registerInfoFlush={(fn) => { flushDraftInfo.current = fn }}
+          registerLinesFlush={(fn) => { flushDraftLines.current = fn }}
         />
       ) : (isPreparing && showPrepareTask) ? (
         <PreparePanel
