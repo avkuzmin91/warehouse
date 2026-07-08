@@ -362,7 +362,7 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
         # Деньги окладника видит только админ; деньги почасовика — весь платёжный состав.
         with_money = _money_visible(user, emp.get("comp_type"))
         meta = conn.execute(
-            "SELECT COALESCE(p.name, e.position) AS position_name, lu.email AS user_email "
+            "SELECT COALESCE(p.name, e.position) AS position_name, COALESCE(NULLIF(lu.display_name, ''), lu.email) AS user_email "
             "FROM employees e "
             "LEFT JOIN positions p ON p.id = e.position_id "
             "LEFT JOIN users lu ON lu.id = e.user_id "
@@ -641,7 +641,7 @@ def get_entry(
         ops: list[EntryOpItem] = []
         if entry:
             op_rows = conn.execute(
-                "SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by, u.email AS created_by_email "
+                "SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by, COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email "
                 "FROM timesheet_ops o LEFT JOIN users u ON u.id = o.created_by "
                 "WHERE o.entry_id = ? ORDER BY o.created_at DESC",
                 (str(entry["id"]),),

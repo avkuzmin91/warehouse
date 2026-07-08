@@ -11,6 +11,7 @@ from .schemas import (
     RoleUpdateRequest,
     UserClientAssignRequest,
     UserDeletePatchRequest,
+    UserDisplayNameUpdateRequest,
     UserListItem,
 )
 from utils import now_iso as _now
@@ -104,7 +105,7 @@ def list_users(admin=Depends(_get_users_admin)):
     with get_connection() as connection:
         users = connection.execute(
             """
-            SELECT u.id, u.email, u.role, u.created_at, u.client_id, c.name AS client_name
+            SELECT u.id, u.email, u.display_name, u.role, u.created_at, u.client_id, c.name AS client_name
             FROM users u
             LEFT JOIN clients c ON c.id = u.client_id
             WHERE COALESCE(u.is_deleted, 0) = 0
@@ -115,6 +116,7 @@ def list_users(admin=Depends(_get_users_admin)):
         UserListItem(
             id=u["id"],
             email=u["email"],
+            display_name=u["display_name"],
             role=u["role"],
             created_at=u["created_at"],
             client_id=u["client_id"],
@@ -122,6 +124,25 @@ def list_users(admin=Depends(_get_users_admin)):
         )
         for u in users
     ]
+
+
+@router.patch("/{user_id}/display-name", response_model=MessageResponse)
+def update_user_display_name(
+    user_id: str, payload: UserDisplayNameUpdateRequest, admin=Depends(_get_users_admin)
+):
+    _ = admin
+    raw = payload.display_name
+    new_name = (str(raw).strip() if raw is not None else "") or None
+    with get_connection() as connection:
+        target_user = connection.execute(
+            "SELECT id FROM users WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (user_id,),
+        ).fetchone()
+        if not target_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+        connection.execute("UPDATE users SET display_name = ? WHERE id = ?", (new_name, user_id))
+        connection.commit()
+    return MessageResponse(message="Отображаемое имя обновлено")
 
 
 @router.patch("/{user_id}/role", response_model=MessageResponse)

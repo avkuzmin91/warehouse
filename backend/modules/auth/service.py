@@ -183,7 +183,7 @@ def _get_user_by_refresh_cookie(raw_refresh: str | None):
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT u.id, u.email, u.role, u.created_at, u.client_id, s.expires_at
+            SELECT u.id, u.email, u.display_name, u.role, u.created_at, u.client_id, s.expires_at
             FROM auth_sessions s
             INNER JOIN users u ON u.id = s.user_id
             WHERE s.refresh_hash = ?
@@ -237,7 +237,7 @@ def get_current_user(
     with get_connection() as connection:
         user = connection.execute(
             """
-            SELECT id, email, role, created_at, client_id
+            SELECT id, email, display_name, role, created_at, client_id
             FROM users
             WHERE id = ?
               AND LOWER(TRIM(email)) = LOWER(TRIM(?))

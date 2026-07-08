@@ -38,5 +38,6 @@ class ChangePasswordRequest(BaseModel):
 class MeResponse(BaseModel):
     id: str
     email: EmailStr
+    display_name: str | None = Field(default=None)
     role: str
     client_id: str | None = Field(default=None)

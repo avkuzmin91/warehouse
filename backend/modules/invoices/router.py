@@ -224,7 +224,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     pay_rows = conn.execute(
         """
         SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by,
-               u.email AS created_by_email
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email
         FROM invoice_payments p
         LEFT JOIN users u ON u.id = p.created_by
         WHERE p.invoice_id = ? AND COALESCE(p.is_deleted, 0) = 0
@@ -264,7 +264,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     op_rows = conn.execute(
         """
         SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by,
-               u.email AS created_by_email
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email
         FROM invoice_ops o
         LEFT JOIN users u ON u.id = o.created_by
         WHERE o.invoice_id = ?

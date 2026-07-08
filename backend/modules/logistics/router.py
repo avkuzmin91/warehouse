@@ -374,7 +374,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
             ).fetchall()
             recv_by_line = {str(r["receipt_line_id"]): int(r["net"] or 0) for r in recv_net_rows}
         ops_rows = conn.execute(
-            "SELECT o.*, u.email AS user_email FROM trip_ops o "
+            "SELECT o.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS user_email FROM trip_ops o "
             "LEFT JOIN users u ON u.id = o.created_by WHERE o.trip_id = ? ORDER BY o.created_at DESC",
             (trip_id,),
         ).fetchall()

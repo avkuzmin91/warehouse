@@ -193,7 +193,7 @@ def get_dictionary_item(table_name: str, item_id: str, *, include_deleted: bool 
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
                    {color_hex_sql}, {rent_sql},
                    d.deleted_at, d.created_at, d.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -336,7 +336,7 @@ def list_client_stores(client_id: str, *, include_deleted: bool = False) -> list
             f"""
             SELECT s.id, s.client_id, s.name, s.is_active, COALESCE(s.is_deleted, 0) AS is_deleted,
                    s.deleted_at, s.created_at, s.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM client_stores s
             LEFT JOIN users creator ON creator.id = s.creator_id
             LEFT JOIN users editor ON editor.id = s.updated_by_id
@@ -490,7 +490,7 @@ def list_dictionary_items_page(
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
                    {color_hex_sql}, {rent_sql}, {packing_sql}, {shipping_sql},
                    d.deleted_at, d.created_at, d.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -543,7 +543,7 @@ def get_size_item(item_id: str, *, include_deleted: bool = False) -> SizeItem:
             """
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM sizes d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -588,7 +588,7 @@ def list_sizes_page(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM sizes d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -690,7 +690,7 @@ def get_product_type_item(item_id: str, *, include_deleted: bool = False) -> Pro
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(d.requires_color, 0) AS requires_color,
                    COALESCE(d.requires_size, 0) AS requires_size,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM product_types d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -751,7 +751,7 @@ def list_product_types_page(
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(d.requires_color, 0) AS requires_color,
                    COALESCE(d.requires_size, 0) AS requires_size,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM product_types d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id

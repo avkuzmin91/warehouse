@@ -119,6 +119,10 @@ def _ensure_runtime_schema() -> None:
             ALTER TABLE IF EXISTS colors
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS users
+                ADD COLUMN IF NOT EXISTS display_name TEXT
+        """)
         # «Наши склады» (own_warehouses) — отдельный admin-only справочник со ставкой
         # аренды; не путать с warehouses («Точки логистики», origin рейсов).
         conn.execute("""

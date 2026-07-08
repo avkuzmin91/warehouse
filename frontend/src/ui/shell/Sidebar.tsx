@@ -103,7 +103,11 @@ export function Sidebar({ user, collapsed = false, onToggle }: SidebarProps) {
   const hasTimesheetAccess = canManageTimesheet(user)
   const canSeePayroll = canViewPayroll(user)
 
-  const displayName = user?.email ? user.email.split('@')[0] : 'Пользователь'
+  const displayName = user?.display_name?.trim()
+    ? user.display_name.trim()
+    : user?.email
+      ? user.email.split('@')[0]
+      : 'Пользователь'
   const initials = getInitials(displayName)
 
   const [menuOpen, setMenuOpen] = useState(false)

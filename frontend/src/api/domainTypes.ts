@@ -74,6 +74,7 @@ export type SizeItem = {
 export type UserListItem = {
   id: string
   email: string
+  display_name?: string | null
   role: 'user' | 'manager' | 'admin' | 'client' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head'
   created_at: string
   client_id?: string | null

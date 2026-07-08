@@ -426,7 +426,7 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         arrived_by_line = arrived_qty_by_line(conn, doc_id)
         placements_by_line = received_placements_by_line(conn, doc_id)
         ops_rows = conn.execute(
-            "SELECT o.*, u.email AS user_email FROM receipt_ops o LEFT JOIN users u ON u.id = o.created_by WHERE o.doc_id = ? ORDER BY o.created_at DESC",
+            "SELECT o.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS user_email FROM receipt_ops o LEFT JOIN users u ON u.id = o.created_by WHERE o.doc_id = ? ORDER BY o.created_at DESC",
             (doc_id,),
         ).fetchall()
         can_close_short = receipt_shortage_final(conn, doc_id)

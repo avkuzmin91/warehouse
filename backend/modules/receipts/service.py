@@ -121,7 +121,7 @@ def find_duplicate_receipts(connection, *, client_id, arrival_date, lines) -> li
             continue
         email = None
         if doc["created_by"]:
-            u = connection.execute("SELECT email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
+            u = connection.execute("SELECT COALESCE(NULLIF(display_name, ''), email) AS email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
             email = u["email"] if u else None
         matches.append({
             "id": doc["id"],
@@ -573,7 +573,7 @@ def receipt_trip_allocations(connection, doc_id: str) -> dict[str, list[dict]]:
         """SELECT ta.receipt_line_id AS line_id, ta.qty AS qty, ta.created_at AS allocated_at,
                   td.trip_number AS trip_number, td.status AS trip_status,
                   td.direction AS direction, td.origin_name AS destination,
-                  u.email AS allocated_by
+                  COALESCE(NULLIF(u.display_name, ''), u.email) AS allocated_by
            FROM trip_alloc ta
            JOIN trip_lines tl ON tl.id = ta.trip_line_id
            JOIN trip_docs td ON td.id = tl.trip_id

@@ -114,7 +114,7 @@ def list_cabinet_products(
                p.is_active, COALESCE(p.is_deleted, 0) AS is_deleted,
                p.deleted_at, p.image_url, p.gallery_json,
                p.created_at, p.updated_at,
-               creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+               COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
         {join_sql}
         WHERE {where_sql}
         ORDER BY {order_sql}
@@ -142,7 +142,7 @@ def get_cabinet_product(connection, *, client_id: str, product_id: str) -> Produ
                p.is_active, COALESCE(p.is_deleted, 0) AS is_deleted,
                p.deleted_at, p.image_url, p.gallery_json,
                p.created_at, p.updated_at,
-               creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+               COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
         FROM products p
         LEFT JOIN product_types pt ON pt.id = p.type_id
         LEFT JOIN clients c ON c.id = p.client_id

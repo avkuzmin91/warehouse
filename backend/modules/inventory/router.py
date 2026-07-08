@@ -62,9 +62,9 @@ def _active_dictionary_rows(table_name: str) -> list[DictionaryBaseItem]:
         rows = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   d.deleted_at, deleter.email AS deleted_by,
-                   d.created_at, creator.email AS created_by,
-                   d.updated_at, editor.email AS updated_by
+                   d.deleted_at, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by,
+                   d.created_at, COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by,
+                   d.updated_at, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by
             FROM {table_name} d
             LEFT JOIN users creator ON creator.id = d.creator_id
             LEFT JOIN users editor ON editor.id = d.updated_by_id
@@ -92,7 +92,7 @@ def lookup_client_stores(client_id: str | None = Query(None), user=Depends(_get_
             """
             SELECT s.id, s.client_id, s.name, s.is_active, COALESCE(s.is_deleted, 0) AS is_deleted,
                    s.deleted_at, s.created_at, s.updated_at,
-                   creator.email AS created_by, editor.email AS updated_by, deleter.email AS deleted_by
+                   COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM client_stores s
             LEFT JOIN users creator ON creator.id = s.creator_id
             LEFT JOIN users editor ON editor.id = s.updated_by_id
@@ -297,9 +297,9 @@ def lookup_colors_for_sku(
         rows = connection.execute(
             f"""
             SELECT DISTINCT c.id, c.name, c.is_active, COALESCE(c.is_deleted, 0) AS is_deleted,
-                   c.deleted_at, deleter.email AS deleted_by,
-                   c.created_at, creator.email AS created_by,
-                   c.updated_at, editor.email AS updated_by
+                   c.deleted_at, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by,
+                   c.created_at, COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by,
+                   c.updated_at, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by
             FROM product_variants v
             JOIN products p ON p.id = v.product_id
             JOIN colors c ON c.id = v.color_id
@@ -340,9 +340,9 @@ def lookup_sizes_for_sku(
         rows = connection.execute(
             f"""
             SELECT DISTINCT sz.id, sz.name, sz.is_active, COALESCE(sz.is_deleted, 0) AS is_deleted,
-                   sz.deleted_at, deleter.email AS deleted_by,
-                   sz.created_at, creator.email AS created_by,
-                   sz.updated_at, editor.email AS updated_by
+                   sz.deleted_at, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by,
+                   sz.created_at, COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by,
+                   sz.updated_at, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by
             FROM product_variants v
             JOIN products p ON p.id = v.product_id
             JOIN sizes sz ON sz.id = v.size_id

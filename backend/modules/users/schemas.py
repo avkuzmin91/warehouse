@@ -6,6 +6,7 @@ from pydantic import BaseModel, EmailStr, Field
 class UserListItem(BaseModel):
     id: str
     email: EmailStr
+    display_name: str | None = None
     role: str
     created_at: str
     client_id: str | None = None
@@ -14,6 +15,10 @@ class UserListItem(BaseModel):
 
 class RoleUpdateRequest(BaseModel):
     role: str
+
+
+class UserDisplayNameUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None)
 
 
 class UserClientAssignRequest(BaseModel):

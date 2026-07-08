@@ -313,6 +313,7 @@ def me(user=Depends(get_current_user)):
     return MeResponse(
         id=user["id"],
         email=user["email"],
+        display_name=user["display_name"],
         role=user["role"],
         client_id=user_client_id_opt(user),
     )

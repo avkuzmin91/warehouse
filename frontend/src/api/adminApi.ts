@@ -41,6 +41,13 @@ export function updateUserClient(userId: string, clientId: string | null) {
   })
 }
 
+export function updateUserDisplayName(userId: string, displayName: string | null) {
+  return request<{ message: string }>(`/users/${userId}/display-name`, {
+    method: 'PATCH',
+    body: JSON.stringify({ display_name: displayName }),
+  })
+}
+
 export function fetchRecordActualityFilterItems() {
   return request<RecordActualityFilterItem[]>('/system/record-actuality')
 }

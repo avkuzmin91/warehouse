@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getUsers, updateUserRole, updateUserClient } from '../../../api/adminApi'
+import { getUsers, updateUserRole, updateUserClient, updateUserDisplayName } from '../../../api/adminApi'
 import type { DictionaryItem, UserListItem } from '../../../api/domainTypes'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { useLookups } from '../../../hooks/useLookups'
@@ -55,6 +55,48 @@ const ROLE_FILTERS = [
   { role: 'user', label: 'Без доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const
+
+interface DisplayNameCellProps {
+  value: string | null | undefined
+  onSave: (next: string | null) => Promise<boolean>
+}
+
+function DisplayNameCell({ value, onSave }: DisplayNameCellProps) {
+  const [text, setText] = useState(value ?? '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setText(value ?? '')
+  }, [value])
+
+  async function commit() {
+    const next = text.trim()
+    if (next === (value ?? '').trim()) return
+    setSaving(true)
+    const ok = await onSave(next || null)
+    setSaving(false)
+    if (!ok) setText(value ?? '')
+  }
+
+  return (
+    <input
+      className="input sm"
+      style={{ width: 200 }}
+      value={text}
+      placeholder="Не задано"
+      disabled={saving}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Escape') {
+          setText(value ?? '')
+          e.currentTarget.blur()
+        }
+      }}
+    />
+  )
+}
 
 interface RoleMenuProps {
   currentRole: string
@@ -342,7 +384,11 @@ export function UsersFeature() {
 
   const filtered = users.filter((item) => {
     if (roleFilter !== 'all' && item.role !== roleFilter) return false
-    if (search && !foldCiSearch(item.email).includes(foldCiSearch(search.trim()))) return false
+    if (search) {
+      const needle = foldCiSearch(search.trim())
+      const haystack = foldCiSearch(`${item.email} ${item.display_name ?? ''}`)
+      if (!haystack.includes(needle)) return false
+    }
     return true
   })
 
@@ -362,6 +408,20 @@ export function UsersFeature() {
       toast('Роль обновлена', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка', 'error')
+    }
+  }
+
+  async function handleDisplayNameChange(userId: string, displayName: string | null): Promise<boolean> {
+    try {
+      await updateUserDisplayName(userId, displayName)
+      setUsers((prev) => prev.map((item) => (
+        item.id === userId ? { ...item, display_name: displayName } : item
+      )))
+      toast('Отображаемое имя обновлено', 'success')
+      return true
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка', 'error')
+      return false
     }
   }
 
@@ -462,6 +522,7 @@ export function UsersFeature() {
               <thead>
                 <tr>
                   <th className="th">Пользователь</th>
+                  <th className="th">Отображаемое имя</th>
                   <th className="th">Роль</th>
                   <th className="th">Клиент</th>
                   <th className="th">Дата регистрации</th>
@@ -480,6 +541,12 @@ export function UsersFeature() {
                           </div>
                         </div>
                       </div>
+                    </td>
+                    <td className="td">
+                      <DisplayNameCell
+                        value={item.display_name}
+                        onSave={(next) => handleDisplayNameChange(item.id, next)}
+                      />
                     </td>
                     <td className="td">
                       <RoleMenu currentRole={item.role} onSelect={(role) => handleRoleChange(item.id, role)} />

@@ -422,7 +422,7 @@ _LIST_SELECT = """
            c.name AS category_name,
            ps.name AS payment_source_name,
            cr.name AS carrier_name,
-           u.email AS created_by_email,
+           COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email,
            (SELECT COUNT(*) FROM expense_files f
             WHERE f.expense_id = e.id AND COALESCE(f.is_deleted, 0) = 0) AS file_count
     FROM material_expenses e
@@ -939,7 +939,7 @@ def load_detail(connection, expense_id: str) -> dict:
     pay_rows = connection.execute(
         """
         SELECT p.id, p.amount, p.paid_on, p.payment_source_id, ps.name AS payment_source_name,
-               p.comment, p.created_at, p.created_by, u.email AS created_by_email
+               p.comment, p.created_at, p.created_by, COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email
         FROM expense_payments p
         LEFT JOIN expense_payment_sources ps ON ps.id = p.payment_source_id
         LEFT JOIN users u ON u.id = p.created_by
@@ -964,7 +964,7 @@ def load_detail(connection, expense_id: str) -> dict:
 
     op_rows = connection.execute(
         """
-        SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by, u.email AS created_by_email
+        SELECT o.id, o.op_type, o.comment, o.created_at, o.created_by, COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email
         FROM expense_ops o
         LEFT JOIN users u ON u.id = o.created_by
         WHERE o.expense_id = ?

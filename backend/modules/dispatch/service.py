@@ -106,7 +106,7 @@ def find_duplicate_dispatches(connection, *, client_id, cargo_type, ship_date, l
             continue
         email = None
         if doc["created_by"]:
-            u = connection.execute("SELECT email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
+            u = connection.execute("SELECT COALESCE(NULLIF(display_name, ''), email) AS email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
             email = u["email"] if u else None
         matches.append({
             "id": doc["id"],
@@ -469,7 +469,7 @@ def dispatch_trip_allocations(connection, doc_id: str) -> dict[str, list[dict]]:
         """SELECT ta.dispatch_line_id AS line_id, ta.qty AS qty, ta.created_at AS allocated_at,
                   td.trip_number AS trip_number, td.status AS trip_status,
                   td.direction AS direction, td.origin_name AS destination,
-                  u.email AS allocated_by
+                  COALESCE(NULLIF(u.display_name, ''), u.email) AS allocated_by
            FROM trip_alloc ta
            JOIN trip_lines tl ON tl.id = ta.trip_line_id
            JOIN trip_docs td ON td.id = tl.trip_id
@@ -1045,7 +1045,7 @@ def get_dispatch_detail(connection, doc_id: str, *, show_costs: bool = True) -> 
             "created_at": str(f["created_at"]),
         })
     ops_rows = connection.execute(
-        """SELECT o.*, u.email AS user_email
+        """SELECT o.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS user_email
            FROM dispatch_ops o LEFT JOIN users u ON u.id = o.created_by
            WHERE o.doc_id = ? ORDER BY o.created_at DESC""",
         (doc_id,),

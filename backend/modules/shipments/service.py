@@ -699,7 +699,7 @@ def list_packing_entries(connection, line_id: str) -> list[dict]:
               MIN(zr.packed_date) AS packed_date,
               MIN(zr.created_at) AS created_at,
               MIN(zr.created_by) AS created_by,
-              MIN(u.email) AS created_by_email,
+              MIN(COALESCE(NULLIF(u.display_name, ''), u.email)) AS created_by_email,
               COALESCE(SUM(CASE WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' THEN zr.qty ELSE 0 END), 0) AS good,
               COALESCE(SUM(CASE WHEN zr.to_quality='{INV_Q_DEFECT}'  THEN zr.qty ELSE 0 END), 0) AS defect
            FROM zone_relocations zr
@@ -978,7 +978,7 @@ def list_productivity_entries(
         """SELECT zr.pack_entry_id AS id,
               MIN(zr.packed_date) AS packed_date,
               MIN(zr.created_at) AS created_at,
-              MIN(u.email) AS created_by_email,
+              MIN(COALESCE(NULLIF(u.display_name, ''), u.email)) AS created_by_email,
               MIN(l.doc_id) AS doc_id,
               MIN(d.doc_number) AS doc_number,
               COALESCE(SUM(CASE WHEN zr.to_op = ? AND zr.to_quality = ? THEN zr.qty ELSE 0 END), 0) AS good,

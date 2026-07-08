@@ -1278,7 +1278,7 @@ def list_zone_relocations(
     rows = connection.execute(
         f"""
         SELECT r.*, COALESCE(NULLIF(TRIM(p.sku), ''), r.product_sku) AS effective_sku,
-               u.email AS created_by_email, COUNT(*) OVER() AS _total
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email, COUNT(*) OVER() AS _total
         FROM zone_relocations r
         LEFT JOIN products p ON p.id = r.product_id
         LEFT JOIN users u ON u.id = r.created_by
