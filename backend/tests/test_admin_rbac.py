@@ -43,7 +43,6 @@ def _clear_dependency_overrides():
     [
         ("client", "client-uuid-1"),
         ("user", None),
-        ("manager", None),
         ("warehouse_manager", None),
         ("shift_supervisor", None),
     ],
@@ -53,6 +52,13 @@ def test_get_users_forbidden_non_admin(role: str, client_id: str | None):
     r = TestClient(app).get("/users", headers={"Authorization": "Bearer test-token"})
     assert r.status_code == 403
     assert r.json()["detail"] == FORBIDDEN_DETAIL
+
+
+def test_get_users_allowed_for_manager():
+    # Менеджер ведёт список пользователей (роли/клиент/отображаемое имя), удаление — admin-only.
+    app.dependency_overrides[get_current_user] = _user_row("manager")
+    r = TestClient(app).get("/users", headers={"Authorization": "Bearer test-token"})
+    assert r.status_code == 200
 
 
 @pytest.mark.parametrize("role", ["client", "user"])
