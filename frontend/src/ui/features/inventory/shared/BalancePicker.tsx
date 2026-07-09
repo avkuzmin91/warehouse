@@ -34,6 +34,8 @@ type Props = {
 type PickRow = {
   item: PlannableItem
   ready: number
+  /** «На упаковке»: к отгрузке ещё не готово, но передать в подготовку можно (уйдёт в «Ожидание упаковки»). */
+  packing: number
   storage: number
   inTransit: number
   /** Уже обещано другим незакрытым отгрузкам — вычитается из главной цифры (только для dispatch). */
@@ -92,12 +94,15 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
           // «Упаковано» для отгрузки = разложенное «Готов к отгрузке» (ready) + ещё не
           // размещённое на столе упаковки (packed) — оба можно отгрузить.
           const ready = dispatchGood ? b.ready_good + (b.packed_good ?? 0) : 0
+          // «На упаковке» (packing_good): к отгрузке ещё не готово, но передать в
+          // подготовку можно — уйдёт в «Ожидание упаковки» и продолжится по готовности.
+          const packing = dispatchGood ? (b.packing_good ?? 0) : 0
           const storage = isDefect ? b.storage_defect : b.storage_good
           const inTransit = isDefect ? 0 : b.in_transit
           const primaryRaw = dispatchGood ? ready : storage
           const reserved = isDispatch ? (reservedMap[rowKey(b)] ?? 0) : 0
           const free = Math.max(0, primaryRaw - reserved)
-          return { item: b, ready, storage, inTransit, reserved, free, cap: ready + storage + inTransit }
+          return { item: b, ready, packing, storage, inTransit, reserved, free, cap: ready + packing + storage + inTransit }
         })
         setRows(next)
       })
@@ -130,6 +135,14 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
   }
 
   function defaultQty(row: PickRow): number {
+    // По умолчанию подсказываем то, что реально можно передать в подготовку: для отгрузки
+    // это готовое + «на упаковке» за вычетом резерва (для брака — свободный брак). Склад/в
+    // пути в подсказку не берём — их довозят и упаковывают отдельно, сейчас лишь черновик.
+    if (isDispatch) {
+      const sendable = dispatchGood ? Math.max(0, row.ready + row.packing - row.reserved) : row.free
+      if (sendable > 0) return sendable
+      return row.cap > 0 ? row.cap : 1
+    }
     const p = primaryQty(row)
     return p > 0 ? p : (row.cap > 0 ? row.cap : 1)
   }

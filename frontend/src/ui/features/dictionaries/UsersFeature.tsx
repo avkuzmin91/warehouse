@@ -100,10 +100,11 @@ function DisplayNameCell({ value, onSave }: DisplayNameCellProps) {
 
 interface RoleMenuProps {
   currentRole: string
+  isAdmin: boolean
   onSelect: (role: AssignableRole) => void
 }
 
-function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
+function RoleMenu({ currentRole, isAdmin, onSelect }: RoleMenuProps) {
   const [open, setOpen] = useState(false)
   const [dropUp, setDropUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -118,10 +119,14 @@ function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const isFixed = currentRole === 'admin'
+  // Админ-строки не редактирует никто; менеджер вдобавок не трогает других менеджеров.
+  const isFixed = currentRole === 'admin' || (!isAdmin && currentRole === 'manager')
   if (isFixed) {
     return <Badge tone={ROLE_TONE[currentRole] ?? ''}>{ROLE_LABELS[currentRole] ?? currentRole}</Badge>
   }
+
+  // Менеджер не может выдавать роль «Менеджер» — только админ.
+  const options = isAdmin ? ASSIGNABLE_ROLES : ASSIGNABLE_ROLES.filter((role) => role !== 'manager')
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
@@ -174,7 +179,7 @@ function RoleMenu({ currentRole, onSelect }: RoleMenuProps) {
           >
             Назначить роль
           </div>
-          {ASSIGNABLE_ROLES.map((role) => (
+          {options.map((role) => (
             <div
               key={role}
               onClick={() => { onSelect(role); setOpen(false) }}
@@ -376,6 +381,8 @@ export function UsersFeature() {
     return <AccessDeniedPage />
   }
 
+  const isAdmin = user?.role === 'admin'
+
   const counts = users.reduce<Record<string, number>>((acc, item) => {
     acc.all = (acc.all ?? 0) + 1
     acc[item.role] = (acc[item.role] ?? 0) + 1
@@ -549,7 +556,7 @@ export function UsersFeature() {
                       />
                     </td>
                     <td className="td">
-                      <RoleMenu currentRole={item.role} onSelect={(role) => handleRoleChange(item.id, role)} />
+                      <RoleMenu currentRole={item.role} isAdmin={isAdmin} onSelect={(role) => handleRoleChange(item.id, role)} />
                     </td>
                     <td className="td">
                       <ClientMenu

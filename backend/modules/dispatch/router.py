@@ -21,6 +21,7 @@ from config import (
     DISPATCH_OP_LINE_UPDATE,
     DISPATCH_OP_PRIORITY_UPDATE,
     DISPATCH_PRIORITY_LABELS,
+    DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_DRAFT,
@@ -67,6 +68,7 @@ from modules.dispatch.service import (
     next_doc_number,
     normalize_cargo_type,
     prepare_to_ready,
+    promote_to_preparing,
     reserved_by_variant,
     return_prepared_stock,
 )
@@ -213,11 +215,12 @@ def dispatches_summary(
             f"SELECT d.status FROM dispatch_docs d WHERE {where}", params
         ).fetchall()
     return {
-        "all":       len(rows),
-        "draft":     sum(1 for r in rows if r["status"] == DISPATCH_STATUS_DRAFT),
-        "preparing": sum(1 for r in rows if r["status"] == DISPATCH_STATUS_PREPARING),
-        "awaiting":  sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_TRIP),
-        "shipped":   sum(1 for r in rows if r["status"] in DISPATCH_TERMINAL_STATUSES),
+        "all":              len(rows),
+        "draft":            sum(1 for r in rows if r["status"] == DISPATCH_STATUS_DRAFT),
+        "awaiting_packing": sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_PACKING),
+        "preparing":        sum(1 for r in rows if r["status"] == DISPATCH_STATUS_PREPARING),
+        "awaiting":         sum(1 for r in rows if r["status"] == DISPATCH_STATUS_AWAITING_TRIP),
+        "shipped":          sum(1 for r in rows if r["status"] in DISPATCH_TERMINAL_STATUSES),
     }
 
 
@@ -718,15 +721,20 @@ def advance_dispatch(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_manager),
 ):
-    """Менеджер передаёт отгрузку кладовщику на подготовку (draft → preparing)."""
-    now = _now()
+    """Менеджер передаёт отгрузку в работу (draft → …).
+
+    Если весь товар уже покрыт готовым остатком — сразу в «Подготовку» (кладовщик получает
+    задачу). Если годного ещё нет (товар на упаковке) — паркуем в «Ожидание упаковки»: фоновой
+    цикл сам переведёт в подготовку, как только упаковка выдаст остаток. Брак упаковку не ждёт —
+    при нехватке остаётся прежняя ошибка (его свозит подготовка с хранения)."""
     uid = str(user["id"])
     with get_connection() as conn:
-        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_advance", response={"message": DISPATCH_STATUS_PREPARING})
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_advance")
         if not proceed:
             return stored
         row = conn.execute(
-            "SELECT status, comment FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+            "SELECT status, comment, cargo_type FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (doc_id,),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -742,17 +750,32 @@ def advance_dispatch(
         check_lines_have_sku(conn, doc_id)
         check_lines_have_pallets(conn, doc_id)
         check_lines_have_boxes(conn, doc_id)
-        check_lines_have_ready(conn, doc_id)
-        conn.execute(
-            "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (DISPATCH_STATUS_PREPARING, now, doc_id),
-        )
-        conn.execute(
-            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, DISPATCH_OP_ADVANCE, "Создание → Подготовка отгрузки", now, uid),
-        )
+        is_defect = normalize_cargo_type(row["cargo_type"]) == DISPATCH_CARGO_DEFECT
+        try:
+            check_lines_have_ready(conn, doc_id)
+            ready = True
+        except HTTPException:
+            if is_defect:
+                raise
+            ready = False
+        if ready:
+            promote_to_preparing(conn, doc_id, actor_id=uid, comment="Создание → Подготовка отгрузки")
+            next_status = DISPATCH_STATUS_PREPARING
+        else:
+            now = _now()
+            conn.execute(
+                "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
+                (DISPATCH_STATUS_AWAITING_PACKING, now, doc_id),
+            )
+            conn.execute(
+                "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, DISPATCH_OP_ADVANCE, "Создание → Ожидание упаковки", now, uid),
+            )
+            next_status = DISPATCH_STATUS_AWAITING_PACKING
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": DISPATCH_STATUS_PREPARING}
+    return result
 
 
 @router.post("/dispatches/{doc_id}/finish-preparation")

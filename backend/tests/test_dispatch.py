@@ -278,12 +278,15 @@ def test_create_dispatch_returns_doc_id(admin_client, client_id):
     assert d["total_qty"] == 3
 
 
-def test_advance_blocked_without_ready(admin_client, client_id):
+def test_advance_parks_without_ready(admin_client, client_id):
+    """Годный без готового остатка не блокируется, а паркуется в «Ожидание упаковки»
+    (товар ещё на упаковке) — фоновой цикл переведёт в подготовку по готовности."""
     pid = _make_product(client_id, sku="DSP-T2")
     doc_id = _create(admin_client, client_id, pid, "DSP-T2", 5)
     r = admin_client.post(f"/dispatches/{doc_id}/advance")
-    assert r.status_code == 400, r.text
-    assert "не готова" in r.json()["detail"].lower() or "готово" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "awaiting_packing"
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "awaiting_packing"
 
 
 def test_advance_succeeds_with_ready(admin_client, client_id):
@@ -428,23 +431,32 @@ def test_finish_preparation_requires_full_sources(admin_client, client_id):
     assert "ячеек" in r.json()["detail"].lower()
 
 
-def test_advance_blocked_when_ready_partial(admin_client, client_id):
+def test_advance_parks_when_ready_partial(admin_client, client_id):
+    """Частичный готовый остаток (меньше плана) — годный паркуется в «Ожидание упаковки»."""
     pid = _make_product(client_id, sku="DSP-T4")
     _seed_ready(client_id, product_id=pid, sku="DSP-T4", qty=3)
     doc_id = _create(admin_client, client_id, pid, "DSP-T4", 5)
     r = admin_client.post(f"/dispatches/{doc_id}/advance")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "awaiting_packing"
 
 
 def test_reservation_blocks_second_dispatch(admin_client, client_id):
-    """Свободный ready режется уже открытыми отгрузками — два документа не отгрузят одно и то же."""
+    """Свободный ready режется уже открытыми отгрузками — два документа не отгрузят одно и то же:
+    doc_a уходит в подготовку и держит резерв, doc_b паркуется в «Ожидание упаковки», и автоцикл
+    его не поднимает, пока свободного ready нет."""
+    from modules.dispatch.service import autopromote_ready_dispatches
     pid = _make_product(client_id, sku="DSP-T5")
     _seed_ready(client_id, product_id=pid, sku="DSP-T5", qty=5)
     doc_a = _create(admin_client, client_id, pid, "DSP-T5", 5)
     doc_b = _create(admin_client, client_id, pid, "DSP-T5", 5)
-    assert admin_client.post(f"/dispatches/{doc_a}/advance").status_code == 200
-    # doc_a зарезервировал все 5 ready → doc_b не проходит гейт
-    assert admin_client.post(f"/dispatches/{doc_b}/advance").status_code == 400
+    assert admin_client.post(f"/dispatches/{doc_a}/advance").json()["message"] == "preparing"
+    # doc_a зарезервировал все 5 ready → doc_b паркуется, а не проходит в подготовку
+    rb = admin_client.post(f"/dispatches/{doc_b}/advance")
+    assert rb.status_code == 200 and rb.json()["message"] == "awaiting_packing"
+    with get_connection() as conn:
+        autopromote_ready_dispatches(conn)
+    assert admin_client.get(f"/dispatches/{doc_b}").json()["status"] == "awaiting_packing"
 
 
 def test_reservations_endpoint_reports_reserved(admin_client, client_id):
@@ -722,13 +734,28 @@ def test_defect_prepared_does_not_reserve_fresh_storage(admin_client, client_id)
 
 # --- Годный отгружается только из «Готов к отгрузке» (storage-only не проходит) ---
 
-def test_good_advance_blocked_when_only_in_storage(admin_client, client_id):
-    """Годный только «На хранении» (не разложен «Готов к отгрузке») не проходит гейт."""
+def test_good_advance_parks_when_only_in_storage(admin_client, client_id):
+    """Годный только «На хранении» (не разложен «Готов к отгрузке») паркуется в «Ожидание упаковки»."""
     pid = _make_product(client_id, sku="DSP-G1")
     _seed_storage_good(client_id, product_id=pid, sku="DSP-G1", qty=5)
     doc_id = _create(admin_client, client_id, pid, "DSP-G1", 5)
     r = admin_client.post(f"/dispatches/{doc_id}/advance")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "awaiting_packing"
+
+
+def test_awaiting_packing_autopromotes_when_ready_arrives(admin_client, client_id):
+    """Как только упаковка выдала готовый остаток — фоновой цикл сам двигает
+    «Ожидание упаковки» → «Подготовка»."""
+    from modules.dispatch.service import autopromote_ready_dispatches
+    pid = _make_product(client_id, sku="DSP-AP1")
+    doc_id = _create(admin_client, client_id, pid, "DSP-AP1", 5)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").json()["message"] == "awaiting_packing"
+    _seed_ready(client_id, product_id=pid, sku="DSP-AP1", qty=5)
+    with get_connection() as conn:
+        promoted = autopromote_ready_dispatches(conn)
+    assert promoted >= 1
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "preparing"
 
 
 def test_good_prepare_then_consume(admin_client, client_id):

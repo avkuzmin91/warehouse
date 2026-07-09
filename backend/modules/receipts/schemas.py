@@ -115,6 +115,7 @@ class ReceiptDocResponse(BaseModel):
     trips: list[TripRef] = []
     created_at: str
     created_by: str | None = None
+    created_by_name: str | None = None
     updated_at: str | None = None
 
 

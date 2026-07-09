@@ -2,10 +2,11 @@ import { request, requestForm } from './http'
 import type { TripAllocBreakdownItem } from './tripsApi'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type DispatchStatus = 'draft' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
+export type DispatchStatus = 'draft' | 'awaiting_packing' | 'preparing' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 
 export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
   draft:             'Создание',
+  awaiting_packing:  'Ожидание упаковки',
   preparing:         'Подготовка отгрузки',
   awaiting_trip:     'Ожидает рейс',
   partially_shipped: 'Частично отгружено',
@@ -15,6 +16,7 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
 
 export const DISPATCH_STATUS_TONES: Record<DispatchStatus, string> = {
   draft:             '',
+  awaiting_packing:  'info',
   preparing:         'info',
   awaiting_trip:     'warning',
   partially_shipped: 'warning',
@@ -23,7 +25,7 @@ export const DISPATCH_STATUS_TONES: Record<DispatchStatus, string> = {
 }
 
 export const DISPATCH_STATUS_ORDER: DispatchStatus[] = [
-  'draft', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped',
+  'draft', 'awaiting_packing', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped',
 ]
 
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
@@ -141,6 +143,7 @@ export type DispatchDetail = {
   trips:            { id: string; number: string }[]
   created_at:       string
   created_by:       string | null
+  created_by_name:  string | null
   updated_at:       string | null
   lines:            DispatchLine[]
   ops:              DispatchOp[]
@@ -198,11 +201,12 @@ export type DispatchListParams = {
 }
 
 export type DispatchSummary = {
-  all:       number
-  draft:     number
-  preparing: number
-  awaiting:  number
-  shipped:   number
+  all:              number
+  draft:            number
+  awaiting_packing: number
+  preparing:        number
+  awaiting:         number
+  shipped:          number
 }
 
 export type DispatchLineIn = {

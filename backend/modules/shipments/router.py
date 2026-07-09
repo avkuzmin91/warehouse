@@ -573,7 +573,9 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT d.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_name "
+            "FROM shipment_docs d LEFT JOIN users u ON u.id = d.created_by "
+            "WHERE d.id = ? AND d.is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -738,6 +740,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
+        created_by_name=row["created_by_name"],
         updated_at=row["updated_at"],
         lines=lines,
         ops=ops,

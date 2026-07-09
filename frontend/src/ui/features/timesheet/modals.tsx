@@ -3,7 +3,7 @@ import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canManageUsers, canViewSalary } from '../../../utils/access'
+import { canViewSalary } from '../../../utils/access'
 import { getUsers } from '../../../api/adminApi'
 import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
@@ -231,7 +231,9 @@ export function AddEmployeeModal({
   const toast = useToast()
   const { positions } = useLookups()
   const { user } = useCurrentUser()
-  const isAdmin = canManageUsers(user)
+  // Привязка сотрудника табеля к учётке — только админ (не совпадает с ведением
+  // ролей пользователей, которое доступно и менеджеру).
+  const isAdmin = user?.role === 'admin'
   const users = useManageableUsers(isAdmin)
   const [name, setName] = useState('')
   const [positionId, setPositionId] = useState('')
@@ -310,7 +312,9 @@ export function EditEmployeeModal({
   const toast = useToast()
   const { positions } = useLookups()
   const { user } = useCurrentUser()
-  const isAdmin = canManageUsers(user)
+  // Привязка сотрудника табеля к учётке — только админ (не совпадает с ведением
+  // ролей пользователей, которое доступно и менеджеру).
+  const isAdmin = user?.role === 'admin'
   const users = useManageableUsers(isAdmin)
   const [name, setName] = useState(employee.full_name)
   const [positionId, setPositionId] = useState(employee.position_id ?? '')

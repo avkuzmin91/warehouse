@@ -399,9 +399,11 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
     show_costs = can_view_costs(user)
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT d.*, cl.name AS client_name "
+            "SELECT d.*, cl.name AS client_name, "
+            "COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_name "
             "FROM receipt_docs d "
             "LEFT JOIN clients cl ON cl.id = d.client_id "
+            "LEFT JOIN users u ON u.id = d.created_by "
             "WHERE d.id = ? AND d.is_deleted = 0",
             (doc_id,),
         ).fetchone()
@@ -493,6 +495,7 @@ def get_receipt(doc_id: str, user=Depends(_get_manager)):
         trips=[TripRef(id=str(tr["trip_id"]), number=str(tr["trip_number"])) for tr in trip_rows],
         created_at=str(doc_row["created_at"]),
         created_by=doc_row["created_by"],
+        created_by_name=doc_row["created_by_name"],
         updated_at=doc_row["updated_at"],
     )
     return ReceiptDetailResponse(

@@ -98,6 +98,7 @@ export function ClosedView({ detail, showCosts, onBack, onOpenReceipt, docsNode,
         status={doc.status}
         direction={direction}
         cargoType={doc.cargo_type}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={onBack}
         action={
           <div className="row gap-8">

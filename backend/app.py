@@ -821,6 +821,28 @@ async def _mp_sync_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _dispatch_autopromote_loop() -> None:
+    """Авто-перевод отгрузок «Ожидание упаковки» → «Подготовка», как только весь товар
+    покрыт готовым остатком (упаковка выдала годное). Отгрузку и упаковку не связывает
+    ссылка — только журнальный остаток, поэтому события «упаковано» нет; цикл раз в минуту
+    пересчитывает очередь по остатку. Тик (БД) блокирующий — уводим в поток, как пуш-цикл.
+    Отключается DISPATCH_AUTOPROMOTE_SCHEDULER=0 (тесты)."""
+    from modules.dispatch.service import autopromote_ready_dispatches
+
+    def _tick() -> None:
+        with get_connection() as conn:
+            autopromote_ready_dispatches(conn)
+
+    while True:
+        try:
+            await asyncio.to_thread(_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("wms.dispatch").exception("Сбой цикла авто-подготовки отгрузок, повтор через минуту")
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(exist_ok=True)
@@ -841,7 +863,14 @@ async def lifespan(app: FastAPI):
         if os.environ.get("MP_SCHEDULER", "1") == "1"
         else None
     )
+    dispatch_autopromote_task = (
+        asyncio.create_task(_dispatch_autopromote_loop())
+        if os.environ.get("DISPATCH_AUTOPROMOTE_SCHEDULER", "1") == "1"
+        else None
+    )
     yield
+    if dispatch_autopromote_task is not None:
+        dispatch_autopromote_task.cancel()
     if mp_task is not None:
         mp_task.cancel()
     if push_task is not None:

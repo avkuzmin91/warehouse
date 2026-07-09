@@ -387,6 +387,9 @@ SHIPMENT_OP_SHIP            = "ship"
 # при выезде рейса). Документы друг на друга не ссылаются.
 
 DISPATCH_STATUS_DRAFT             = "draft"
+# Промежуточная очередь: состав передан, но годного остатка ещё нет (товар на упаковке).
+# Как только весь спрос покрыт готовым остатком — фоновой цикл сам двигает в preparing.
+DISPATCH_STATUS_AWAITING_PACKING  = "awaiting_packing"
 DISPATCH_STATUS_PREPARING         = "preparing"
 DISPATCH_STATUS_AWAITING_TRIP     = "awaiting_trip"
 DISPATCH_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
@@ -395,6 +398,7 @@ DISPATCH_STATUS_CANCELLED         = "cancelled"
 
 DISPATCH_STATUSES_ALL: list[str] = [
     DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
@@ -410,6 +414,7 @@ DISPATCH_TERMINAL_STATUSES: frozenset[str] = frozenset({
 
 DISPATCH_STATUS_LABELS: dict[str, str] = {
     DISPATCH_STATUS_DRAFT:             "Создание",
+    DISPATCH_STATUS_AWAITING_PACKING:  "Ожидание упаковки",
     DISPATCH_STATUS_PREPARING:         "Подготовка отгрузки",
     DISPATCH_STATUS_AWAITING_TRIP:     "Ожидает рейс",
     DISPATCH_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
@@ -417,21 +422,26 @@ DISPATCH_STATUS_LABELS: dict[str, str] = {
     DISPATCH_STATUS_CANCELLED:         "Аннулирована",
 }
 
-# Состав/поля документа правятся только до перевода в «Ожидает рейс».
+# Состав/поля документа правятся в черновике и пока отгрузка ждёт упаковки
+# (менеджер корректирует план, пока склад пакует). С preparing состав заморожен.
 DISPATCH_EDITABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_PACKING,
 })
 
 # Вложения и ссылку по строке менеджер правит и на подготовке — поправить
 # ошибочно прикреплённый файл/ссылку, пока кладовщик ещё собирает отгрузку.
 DISPATCH_ATTACHMENT_EDITABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_PREPARING,
 })
 
-# Аннулировать можно, пока ничего не уехало (до первого рейса).
+# Аннулировать можно, пока ничего не уехало (до первого рейса). В «Ожидании упаковки»
+# остаток не двигали — отмена безопасна, как из черновика.
 DISPATCH_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_DRAFT,
+    DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_PREPARING,
     DISPATCH_STATUS_AWAITING_TRIP,
 })

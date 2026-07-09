@@ -79,9 +79,17 @@ export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispat
   // в отгрузке — «свободно» (готовое минус резерв).
   const primary = isPack ? avail.storage : avail.free
   const label = isPack ? 'на хранении' : avail.isDefect ? 'брак' : 'свободно'
-  // План сверх остатка допустим (добор со склада/в пути при подготовке) —
-  // это мягкое предупреждение, а не ошибка: на этом этапе сохраняется лишь черновик.
-  const over = plannedQty > primary
+  const shortfall = plannedQty - primary
+  // Годная отгрузка: нехватку свободного, покрытую «на упаковке», показываем как ожидание
+  // упаковки (нейтральный info), а не как проблему — товар пакуется и уйдёт в подготовку сам.
+  const waitingPacking = !isPack && !avail.isDefect && shortfall > 0 && shortfall <= avail.packing
+  // План сверх доступного (и не покрыт упаковкой) — мягкое предупреждение: нужен добор
+  // со склада/в пути, на этом этапе сохраняется лишь черновик.
+  const over = shortfall > 0 && !waitingPacking
+  const tone: 'warning' | 'info' | 'success' = over ? 'warning' : waitingPacking ? 'info' : 'success'
+  const toneBg = tone === 'warning' ? 'var(--c-warning-bg)' : tone === 'info' ? 'var(--c-info-bg)' : 'var(--c-success-bg)'
+  const toneFg = tone === 'warning' ? 'var(--c-warning)' : tone === 'info' ? 'var(--c-info)' : 'var(--c-success)'
+  const toneIcon = tone === 'warning' ? 'alert' : tone === 'info' ? 'clock' : 'check'
 
   return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 5 }}>
@@ -96,12 +104,12 @@ export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispat
             display: 'inline-flex', alignItems: 'center', gap: 4,
             padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'default', whiteSpace: 'nowrap',
-            background: over ? 'var(--c-warning-bg)' : 'var(--c-success-bg)',
-            color: over ? 'var(--c-warning)' : 'var(--c-success)',
+            background: toneBg,
+            color: toneFg,
           }}
         >
-          <Icon name={over ? 'alert' : 'check'} size={12} />
-          {label} {primary}
+          <Icon name={toneIcon} size={12} />
+          {waitingPacking ? `на упаковке ${Math.min(shortfall, avail.packing)}` : `${label} ${primary}`}
         </span>
       </span>
 
@@ -145,6 +153,12 @@ export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispat
               {!avail.isDefect && avail.storage > 0 && <Row label="На хранении" value={String(avail.storage)} tone="muted" />}
               {!avail.isDefect && avail.packing > 0 && <Row label="На упаковке" value={String(avail.packing)} tone="muted" />}
               {!avail.isDefect && avail.inTransit > 0 && <Row label="В пути" value={String(avail.inTransit)} tone="muted" />}
+              {waitingPacking && (
+                <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+                  <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+                  Не хватает {shortfall} — сейчас на упаковке, уйдёт в подготовку автоматически
+                </div>
+              )}
               {over && (
                 <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
                   <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />

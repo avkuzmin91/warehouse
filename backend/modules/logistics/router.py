@@ -155,13 +155,16 @@ def _doc_response(row, *, show_costs: bool = True) -> TripDocResponse:
         waiting_minutes=int(row["waiting_minutes"]) if row["waiting_minutes"] is not None else None,
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
+        created_by_name=row.get("created_by_name"),
         updated_at=row["updated_at"],
     )
 
 
 def _fetch_doc(conn, trip_id: str):
     row = conn.execute(
-        "SELECT * FROM trip_docs WHERE id = ? AND is_deleted = 0", (trip_id,)
+        "SELECT d.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_name "
+        "FROM trip_docs d LEFT JOIN users u ON u.id = d.created_by "
+        "WHERE d.id = ? AND d.is_deleted = 0", (trip_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Рейс не найден")

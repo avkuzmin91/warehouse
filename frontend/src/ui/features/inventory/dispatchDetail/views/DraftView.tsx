@@ -18,6 +18,8 @@ import { BalancePicker } from '../../shared/BalancePicker'
 import { AssignSkuDrawer } from '../../shared/AssignSkuDrawer'
 import { NumberStep } from '../../shared/NumberStep'
 import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
+import { FilePreviewModal } from '../../shipmentDetail/components/FilePreviewModal'
+import type { FilePreviewMeta } from '../../shipmentDetail/shared/types'
 import { dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from '../components/DispatchLineFiles'
 import { PackMultiplicity } from '../components/PackMultiplicity'
 import { PackPriceBanner } from '../components/PackPriceBanner'
@@ -44,6 +46,7 @@ type Props = {
   onReload: () => Promise<void>
   registerInfoFlush?: (fn: (() => Promise<boolean>) | null) => void
   registerLinesFlush?: (fn: (() => Promise<boolean>) | null) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 function variantKey(productId: string, colorId: string | null, sizeId: string | null): string {
@@ -63,7 +66,7 @@ function draftFromLine(line: DispatchLine): LineDraft {
   }
 }
 
-export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush, registerLinesFlush }: Props) {
+export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDeleteLine, onUploadFile, onDeleteFile, onUpdateDoc, onReload, registerInfoFlush, registerLinesFlush, onDirtyChange }: Props) {
   const { user } = useCurrentUser()
   const toast = useToast()
   const showCosts = canViewCosts(user)
@@ -72,8 +75,8 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<DispatchLine | null>(null)
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
-  const [savingLine, setSavingLine] = useState<string | null>(null)
   const [uploadingLine, setUploadingLine] = useState<string | null>(null)
+  const [filePreview, setFilePreview] = useState<{ filename: string; mimeType: string | null; url: string; meta: FilePreviewMeta } | null>(null)
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({})
   const [availMap, setAvailMap] = useState<Record<string, LineAvailability> | null>(null)
 
@@ -103,8 +106,6 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   const [shipDate, setShipDate] = useState(doc.ship_date ?? '')
   const [logisticsCost, setLogisticsCost] = useState(doc.logistics_cost != null ? String(doc.logistics_cost) : '')
   const [comment, setComment] = useState(doc.comment ?? '')
-  const [infoSaving, setInfoSaving] = useState(false)
-  const [infoSaved, setInfoSaved] = useState(false)
   const [infoDirty, setInfoDirty] = useState(false)
 
   // Не затираем несохранённые правки «Основной информации» при перезагрузке doc
@@ -204,23 +205,6 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       || d.storeName !== (line.store_name ?? null)
   }
 
-  async function saveLine(line: DispatchLine) {
-    const d = getDraft(line)
-    setSavingLine(line.id)
-    try {
-      await onUpdateLine(line.id, {
-        qty:         d.qty,
-        pallets_qty: d.pallets,
-        boxes_qty:   d.boxes,
-        site_url:    d.siteUrl.trim() || null,
-        store_id:    d.storeId || null,
-        store_name:  d.storeId ? d.storeName : null,
-      })
-    } finally {
-      setSavingLine(null)
-    }
-  }
-
   // Сохранить все несохранённые правки состава (короба/палеты/кол-во/ТЗ строки) без
   // ручного нажатия «дискеты»: «Передать в подготовку» коммитит их автоматически.
   async function flushDirtyLines(): Promise<boolean> {
@@ -241,7 +225,6 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
   }
 
   async function handleInfoSave(): Promise<boolean> {
-    setInfoSaving(true)
     const costNum = Number(logisticsCost)
     const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
     const ok = await onUpdateDoc({
@@ -249,12 +232,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       comment: comment.trim() || null,
       ...(showCosts ? { logistics_cost: costFilled ? costNum : null } : {}),
     })
-    setInfoSaving(false)
-    if (ok) {
-      setInfoDirty(false)
-      setInfoSaved(true)
-      setTimeout(() => setInfoSaved(false), 2000)
-    }
+    if (ok) setInfoDirty(false)
     return ok
   }
 
@@ -277,6 +255,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     registerLinesFlush(() => linesFlushRef.current())
     return () => registerLinesFlush(null)
   }, [registerLinesFlush])
+
+  // Сообщаем наверх, есть ли несохранённые правки плана — кнопка «Сохранить» в шапке
+  // появляется только когда действительно есть что сохранять.
+  const planDirty = infoDirty || doc.lines.some((l) => lineDirty(l))
+  useEffect(() => {
+    onDirtyChange?.(planDirty)
+    return () => onDirtyChange?.(false)
+  }, [planDirty, onDirtyChange])
 
   async function handleAssignSku(line: DispatchLine, skuBase: string) {
     await updateProduct(line.product_id, { sku_base: skuBase })
@@ -315,15 +301,6 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           role="manager"
           state="active"
           hint={canEdit ? 'План можно править до передачи в подготовку' : undefined}
-          right={canEdit && infoSaved ? (
-            <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon name="check" size={12} />Сохранено
-            </span>
-          ) : canEdit && infoDirty ? (
-            <button className="btn sm" disabled={infoSaving} onClick={() => void handleInfoSave()}>
-              <Icon name="save" size={12} />Сохранить
-            </button>
-          ) : undefined}
         >
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Клиент" style={{ marginBottom: 0 }}>
@@ -459,7 +436,12 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                             uploading={uploadingLine === l.id}
                             accept={DISPATCH_FILE_ACCEPT}
                             glyphFor={dispatchFileGlyph}
-                            onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
+                            onPreview={(entry) => { if (entry.href) setFilePreview({
+                              filename: entry.filename,
+                              mimeType: entry.mimeType,
+                              url: entry.href,
+                              meta: { productName: l.product_name, sku: l.product_sku, colorName: l.color_name, sizeName: l.size_name, qty: l.qty },
+                            }) }}
                             onAdd={(files) => void handleUploadFiles(l.id, files)}
                             onReplace={(fileId, file) => void handleReplaceFile(l.id, fileId, file)}
                             onRemove={(fileId) => void onDeleteFile(l.id, fileId)}
@@ -534,16 +516,6 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                       </td>
                       <td>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
-                          {canEdit && dirty && (
-                            <button
-                              className="btn ghost icon sm"
-                              title="Сохранить позицию"
-                              disabled={savingLine === l.id}
-                              onClick={() => void saveLine(l)}
-                            >
-                              <Icon name={savingLine === l.id ? 'refresh' : 'save'} size={13} style={savingLine === l.id ? { animation: 'spin 0.7s linear infinite' } : undefined} />
-                            </button>
-                          )}
                           {canEdit && (
                             <button className="btn ghost icon sm" disabled={acting} onClick={() => void onDeleteLine(l.id)}>
                               <Icon name="trash" size={13} />
@@ -576,7 +548,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <RailPanel status="draft" ops={doc.ops} />
+        <RailPanel status={doc.status} ops={doc.ops} />
         <Panel icon="chart" title="Итого">
           <div style={{ padding: '0 2px' }}>
             <ReadRow label="SKU" mono>{skuCount}</ReadRow>
@@ -614,6 +586,14 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
           onClose={() => setSkuLine(null)}
         />
       )}
+
+      <FilePreviewModal
+        filename={filePreview?.filename ?? null}
+        mimeType={filePreview?.mimeType ?? null}
+        url={filePreview?.url ?? ''}
+        meta={filePreview?.meta ?? null}
+        onClose={() => setFilePreview(null)}
+      />
     </div>
   )
 }

@@ -9,7 +9,9 @@ from config import (
     DISPATCH_ALLOW_SHIP_FROM_PACKED,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
+    DISPATCH_OP_ADVANCE,
     DISPATCH_OP_PREPARE,
+    DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_CANCELLED,
     DISPATCH_STATUS_LABELS,
@@ -381,6 +383,81 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
             else "Недостаточно готового к отгрузке товара (свободного, не в резерве). "
         )
         raise HTTPException(status_code=400, detail=head + "; ".join(short))
+
+
+def promote_to_preparing(connection, doc_id: str, *, actor_id: str | None, comment: str) -> None:
+    """Двигает отгрузку в «Подготовку отгрузки» + журнальная запись. Без commit — коммитит
+    вызывающий. Общий шаг для ручного, принудительного и авто-перехода из очереди упаковки."""
+    now = _now()
+    connection.execute(
+        "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
+        (DISPATCH_STATUS_PREPARING, now, doc_id),
+    )
+    connection.execute(
+        "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, DISPATCH_OP_ADVANCE, comment, now, actor_id),
+    )
+
+
+def preparation_gate_blocked(connection, doc_id: str) -> bool:
+    """True, если отгрузку ещё нельзя двигать в подготовку: не заполнены обязательные поля
+    (состав/ТЗ/SKU/палеты/короба) ИЛИ не хватает готового остатка. Гейты те же, что на ручном
+    переходе, только без выброса — для авто-цикла, который молча пропускает не-готовые."""
+    has_lines = connection.execute(
+        "SELECT 1 FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+        (doc_id,),
+    ).fetchone()
+    if not has_lines:
+        return True
+    row = connection.execute("SELECT comment FROM dispatch_docs WHERE id = ?", (doc_id,)).fetchone()
+    if not str((row["comment"] if row else "") or "").strip():
+        return True
+    try:
+        check_lines_have_sku(connection, doc_id)
+        check_lines_have_pallets(connection, doc_id)
+        check_lines_have_boxes(connection, doc_id)
+        check_lines_have_ready(connection, doc_id)
+    except HTTPException:
+        return True
+    return False
+
+
+def _queue_actor(connection, doc_id: str) -> str | None:
+    """Кто отправил отгрузку в очередь на упаковку — на него атрибутируем авто-переход,
+    чтобы в журнале остался живой инициатор, а не пустой автор."""
+    row = connection.execute(
+        "SELECT created_by FROM dispatch_ops WHERE doc_id = ? AND op_type = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (doc_id, DISPATCH_OP_ADVANCE),
+    ).fetchone()
+    return str(row["created_by"]) if row and row["created_by"] else None
+
+
+def autopromote_ready_dispatches(connection) -> int:
+    """Переводит отгрузки «Ожидание упаковки» → «Подготовка», как только весь товар покрыт
+    готовым остатком (упаковка выдала годное). Обрабатывает по приоритету/дате: каждый перевод
+    сразу начинает держать резерв на `ready` (см. reserved-статусы в reserved_by_variant),
+    поэтому следующая в очереди на тот же вариант видит уже уменьшенный остаток — без овербукинга
+    общего пула. Идемпотентно: переведённая отгрузка выпадает из выборки. Коммитит сам."""
+    rows = connection.execute(
+        "SELECT id FROM dispatch_docs WHERE status = ? AND COALESCE(is_deleted, 0) = 0 "
+        "ORDER BY priority_rank ASC NULLS LAST, created_at ASC",
+        (DISPATCH_STATUS_AWAITING_PACKING,),
+    ).fetchall()
+    promoted = 0
+    for r in rows:
+        doc_id = str(r["id"])
+        if preparation_gate_blocked(connection, doc_id):
+            continue
+        promote_to_preparing(
+            connection, doc_id,
+            actor_id=_queue_actor(connection, doc_id),
+            comment="Ожидание упаковки → Подготовка отгрузки (авто: товар упакован)",
+        )
+        promoted += 1
+    if promoted:
+        connection.commit()
+    return promoted
 
 
 def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
@@ -1018,6 +1095,14 @@ def get_dispatch_detail(connection, doc_id: str, *, show_costs: bool = True) -> 
     if not row:
         return None
 
+    created_by_name = None
+    if row["created_by"]:
+        _u = connection.execute(
+            "SELECT COALESCE(NULLIF(display_name, ''), email) AS name FROM users WHERE id = ?",
+            (row["created_by"],),
+        ).fetchone()
+        created_by_name = _u["name"] if _u else None
+
     remaining = dispatch_alloc_remaining(connection, doc_id)
 
     lines_rows = connection.execute(
@@ -1116,6 +1201,7 @@ def get_dispatch_detail(connection, doc_id: str, *, show_costs: bool = True) -> 
         "trips": trips,
         "created_at": str(row["created_at"]),
         "created_by": row["created_by"],
+        "created_by_name": created_by_name,
         "updated_at": row["updated_at"],
         "lines": lines,
         "ops": ops,

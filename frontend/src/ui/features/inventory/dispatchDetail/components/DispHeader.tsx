@@ -8,11 +8,12 @@ import type { DispatchCargoType, DispatchStatus } from '../../../../../api/dispa
 
 /** Шапка карточки отгрузки (DSP): бейдж статуса, «Брак», приоритет,
  *  «сейчас у: роль», номер (mono) и контекстные действия справа. */
-export function DispHeader({ status, cargoType, title, subtitle, priority, actions, blockReasons = [], onBack }: {
+export function DispHeader({ status, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], onBack }: {
   status: DispatchStatus
   cargoType?: DispatchCargoType
   title: string
   subtitle?: string
+  initiator?: { name?: string | null; createdAt?: string | null }
   priority?: ReactNode
   actions?: ReactNode
   blockReasons?: string[]
@@ -32,6 +33,7 @@ export function DispHeader({ status, cargoType, title, subtitle, priority, actio
       role={dispatchStatusRole(status)}
       title={title}
       subtitle={subtitle}
+      initiator={initiator}
       actions={actions}
       blockReasons={blockReasons}
       onBack={onBack}

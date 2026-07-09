@@ -41,6 +41,8 @@ export type PlannableItem = {
   ready_defect: number
   /** Упаковано, но ещё не разложено «Готов к отгрузке» (на столе упаковки) — тоже отгружаемо. */
   packed_good: number
+  /** В процессе упаковки («На упаковке») — ещё не готово, но отгрузку можно передать в «Ожидание упаковки». */
+  packing_good: number
   storage_good: number
   storage_defect: number
   in_transit: number

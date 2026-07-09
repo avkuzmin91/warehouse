@@ -77,6 +77,7 @@ from fastapi.testclient import TestClient
 os.environ["SALARY_SCHEDULER"] = "0"
 os.environ["PUSH_SCHEDULER"] = "0"
 os.environ["MP_SCHEDULER"] = "0"
+os.environ["DISPATCH_AUTOPROMOTE_SCHEDULER"] = "0"
 
 from app import app
 from dbconn import close_pool, get_connection

@@ -26,6 +26,16 @@ def _get_users_admin(user=Depends(get_current_user)):
     return user
 
 
+def _get_users_manager(user=Depends(get_current_user)):
+    """Просмотр списка и не-деструктивное ведение учёток (роль, привязка клиента,
+    отображаемое имя) — админ и менеджер. Менеджер не может выдавать/править роль
+    admin и manager (см. update_user_role), а удаление/восстановление остаётся
+    только за админом."""
+    if user["role"] not in ("admin", "manager"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+    return user
+
+
 def _require_active_client(connection, raw: str | None) -> str:
     if raw is None or str(raw).strip() == "":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Поле Клиент обязательно")
@@ -100,8 +110,8 @@ def _apply_user_deleted_flag(user_id: str, admin: dict, *, is_deleted: bool) -> 
 
 
 @router.get("", response_model=list[UserListItem])
-def list_users(admin=Depends(_get_users_admin)):
-    _ = admin
+def list_users(actor=Depends(_get_users_manager)):
+    _ = actor
     with get_connection() as connection:
         users = connection.execute(
             """
@@ -128,9 +138,9 @@ def list_users(admin=Depends(_get_users_admin)):
 
 @router.patch("/{user_id}/display-name", response_model=MessageResponse)
 def update_user_display_name(
-    user_id: str, payload: UserDisplayNameUpdateRequest, admin=Depends(_get_users_admin)
+    user_id: str, payload: UserDisplayNameUpdateRequest, actor=Depends(_get_users_manager)
 ):
-    _ = admin
+    _ = actor
     raw = payload.display_name
     new_name = (str(raw).strip() if raw is not None else "") or None
     with get_connection() as connection:
@@ -146,16 +156,22 @@ def update_user_display_name(
 
 
 @router.patch("/{user_id}/role", response_model=MessageResponse)
-def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(_get_users_admin)):
+def update_user_role(user_id: str, payload: RoleUpdateRequest, actor=Depends(_get_users_manager)):
     if payload.role not in ("user", "manager", "warehouse_manager", "shift_supervisor", "warehouse_head", "client"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Можно назначить роль: user, manager, warehouse_manager, shift_supervisor, warehouse_head или client",
         )
-    if user_id == admin["id"]:
+    if user_id == actor["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Нельзя изменить роль самому себе",
+        )
+    is_admin_actor = actor["role"] == "admin"
+    if not is_admin_actor and payload.role == "manager":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Роль «Менеджер» может назначить только администратор",
         )
     with get_connection() as connection:
         target_user = connection.execute(
@@ -169,6 +185,11 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(_ge
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Нельзя изменить роль администратора",
             )
+        if not is_admin_actor and target_user["role"] == "manager":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Изменить роль менеджера может только администратор",
+            )
         if payload.role == "client":
             connection.execute("UPDATE users SET role = ? WHERE id = ?", (payload.role, user_id))
         else:
@@ -179,8 +200,8 @@ def update_user_role(user_id: str, payload: RoleUpdateRequest, admin=Depends(_ge
 
 
 @router.patch("/{user_id}/client", response_model=MessageResponse)
-def update_user_client(user_id: str, payload: UserClientAssignRequest, admin=Depends(_get_users_admin)):
-    if user_id == admin["id"]:
+def update_user_client(user_id: str, payload: UserClientAssignRequest, actor=Depends(_get_users_manager)):
+    if user_id == actor["id"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Нельзя изменить привязку самому себе",

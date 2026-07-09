@@ -93,6 +93,7 @@ export function InWarehouseView({ detail, form, onField, showCosts, canEditTrans
         status={doc.status}
         direction={direction}
         cargoType={doc.cargo_type}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>

@@ -294,3 +294,18 @@ export async function requestForm<T>(path: string, init?: RequestOptions): Promi
   }
   return response.json() as Promise<T>
 }
+
+// Тело ответа как Blob (для вложений: сервер отдаёт их с Content-Disposition: attachment,
+// поэтому inline-показ по прямому URL невозможен — читаем байты сами и рендерим через object-URL).
+export async function requestBlob(path: string, init?: RequestOptions): Promise<Blob> {
+  const headers = buildAuthHeaders(path, init, false)
+  const response = await doFetch(path, init, headers)
+  if (!init?.skipUnauthorizedHandler) {
+    throwIfUnauthorizedApi(path, response, headers)
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(formatApiErrorDetail(body, response.status))
+  }
+  return response.blob()
+}

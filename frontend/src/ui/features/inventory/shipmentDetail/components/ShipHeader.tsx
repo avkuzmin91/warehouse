@@ -8,11 +8,12 @@ import type { ShipmentCargoType, ShipmentStatus } from '../../../../../api/shipm
 
 /** Шапка карточки отгрузки в стиле рейсов: бейдж статуса, приоритет,
  *  «сейчас у: роль», номер (mono) и контекстные действия справа. */
-export function ShipHeader({ status, cargoType, title, subtitle, priority, actions, blockReasons = [], onBack }: {
+export function ShipHeader({ status, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], onBack }: {
   status: ShipmentStatus
   cargoType?: ShipmentCargoType
   title: string
   subtitle?: string
+  initiator?: { name?: string | null; createdAt?: string | null }
   priority?: ReactNode
   actions?: ReactNode
   blockReasons?: string[]
@@ -32,6 +33,7 @@ export function ShipHeader({ status, cargoType, title, subtitle, priority, actio
       role={shipStatusRole(status)}
       title={title}
       subtitle={subtitle}
+      initiator={initiator}
       actions={actions}
       blockReasons={blockReasons}
       onBack={onBack}

@@ -83,6 +83,10 @@ export function BalancePickerSheet({
     // «Готов к отгрузке» = разложенное ready + упакованное на столе (packed) — оба отгружаемы.
     return dispatchGood ? b.ready_good + (b.packed_good ?? 0) : 0
   }
+  function packing(b: PlannableItem): number {
+    // «На упаковке»: к отгрузке ещё не готово, но передать в подготовку можно (уйдёт в «Ожидание упаковки»).
+    return dispatchGood ? (b.packing_good ?? 0) : 0
+  }
   function storage(b: PlannableItem): number {
     return cargoType === 'defect' ? b.storage_defect : b.storage_good
   }
@@ -90,7 +94,7 @@ export function BalancePickerSheet({
     return cargoType === 'defect' ? 0 : b.in_transit
   }
   function cap(b: PlannableItem): number {
-    return ready(b) + storage(b) + transitOf(b)
+    return ready(b) + packing(b) + storage(b) + transitOf(b)
   }
   function stockChips(b: PlannableItem) {
     return lineStockChips(b, { source, cargoType, reserved: reservedMap[balanceKey(b)] ?? 0 })

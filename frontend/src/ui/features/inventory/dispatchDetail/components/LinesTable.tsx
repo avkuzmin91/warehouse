@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { DispatchLine } from '../../../../../api/dispatchApi'
 import { Icon } from '../../../../primitives/Icon'
+import { resolvePublicUploadSrc } from '../../../../../api/constants'
+import { DispatchLineFiles } from './DispatchLineFiles'
 
 type Props = {
   lines: DispatchLine[]
@@ -47,6 +49,14 @@ export function LinesTable({ lines, onSavePallets, onSaveBoxes }: Props) {
                 <div style={{ fontWeight: 500, fontSize: 13 }}>{l.product_name}</div>
                 <div className="t-sub mono">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
                 {l.sku_pending && <span className="badge warning" style={{ marginTop: 4 }}>Без SKU</span>}
+                {l.files.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <DispatchLineFiles
+                      entries={l.files.map((f) => ({ id: f.id, filename: f.filename, mimeType: f.mime_type, href: resolvePublicUploadSrc(f.url) }))}
+                      canEdit={false}
+                    />
+                  </div>
+                )}
               </td>
               <td>{l.store_name ?? <span style={{ color: 'var(--c-text-faint)' }}>—</span>}</td>
               <td>

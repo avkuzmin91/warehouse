@@ -49,6 +49,7 @@ type DraftLine = DispatchLineIn & {
   _serverId: string | null
   ready: number
   onHand: number
+  packing: number
   inTransit: number
   sku_pending: boolean
   itemsPerBox: number | null
@@ -141,6 +142,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             qty: l.qty,
             ready: d.cargo_type === 'defect' ? 0 : ((p?.ready_good ?? 0) + (p?.packed_good ?? 0)),
             onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
+            packing: d.cargo_type === 'defect' ? 0 : (p?.packing_good ?? 0),
             inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
             sku_pending: !!p?.sku_pending,
             itemsPerBox: l.items_per_box ?? p?.items_per_box ?? null,
@@ -201,13 +203,16 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   // Цену подсказываем, пока единица «релевантна»: не задана (null) либо задана >0.
   const needBoxPrice = lines.some((l) => (l.boxes ?? 1) > 0)
   const needPalletPrice = lines.some((l) => (l.pallets ?? 1) > 0)
-  // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
-  // отгрузке» (ready), брак — со склада (storage_defect = onHand), минус остаток, уже
-  // обещанный другим незакрытым отгрузкам (резерв). Склад/в пути/зарезервированное
-  // можно сохранить черновиком, но не передать в рейс.
+  // Что можно передать на подготовку: годный — «Готов к отгрузке» (ready+packed) плюс
+  // «На упаковке» (packing): последнее уйдёт в «Ожидание упаковки» и продолжится
+  // автоматически по готовности (бэк паркует). Брак упаковку минует — только со склада.
+  // Товар лишь на хранении/в пути пакуется отдельной задачей — его сохраняем черновиком.
   const reservedFor = (l: DraftLine) => reservedMap[l._key] ?? 0
   const srcAvail = (l: DraftLine) => Math.max(0, (isDefect ? l.onHand : l.ready) - reservedFor(l))
-  const allReady = lines.every((l) => l.qty <= srcAvail(l))
+  const sendAvail = (l: DraftLine) => isDefect
+    ? Math.max(0, l.onHand - reservedFor(l))
+    : Math.max(0, l.ready + l.packing - reservedFor(l))
+  const allSendable = lines.every((l) => l.qty <= sendAvail(l))
   const costNum = Number(logisticsCost)
   const costFilled = logisticsCost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
 
@@ -220,10 +225,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (lines.some((l) => l.sku_pending)) blockReasons.push('Укажите SKU для товаров без артикула')
   if (lines.some((l) => l.pallets == null)) blockReasons.push('Укажите количество палет для каждой позиции (можно 0)')
   if (lines.some((l) => l.boxes == null)) blockReasons.push('Укажите количество коробов для каждой позиции (можно 0)')
-  if (!allReady) blockReasons.push(
+  if (!allSendable) blockReasons.push(
     isDefect
       ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество'
-      : 'Часть запрошенного недоступна: товар не упакован, ещё в пути или в резерве у других отгрузок — отгрузить можно только свободный упакованный остаток, сохраните черновик',
+      : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик',
   )
 
   function changeClient(id: string, name: string | null) {
@@ -254,6 +259,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         qty,
         ready: cargoType === 'defect' ? 0 : b.ready_good + (b.packed_good ?? 0),
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
+        packing: cargoType === 'defect' ? 0 : (b.packing_good ?? 0),
         inTransit: cargoType === 'defect' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
         itemsPerBox: b.items_per_box,
@@ -419,7 +425,8 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   async function save(advance: boolean) {
     if (saving) return
     if (advance && blockReasons.length > 0) { setError(blockReasons[0]); return }
-    if (!clientId || lines.length === 0) { setError('Выберите клиента и добавьте позиции'); return }
+    if (!clientId) { setError('Выберите клиента'); return }
+    if (advance && lines.length === 0) { setError('Добавьте хотя бы одну позицию'); return }
     setError('')
     // Дубль ищем только для нового документа (не правка, черновик ещё не создан).
     if (!editing && !createdIdRef.current) {
@@ -557,7 +564,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           lines.map((l) => {
             const reserved = reservedFor(l)
             const freeQ = srcAvail(l)
-            const overCap = l.qty > l.ready + l.onHand + l.inTransit
+            const overCap = l.qty > l.ready + l.packing + l.onHand + l.inTransit
             const waiting = !overCap && l.qty > freeQ
             const fullySet = l.itemsPerBox != null && l.boxesPerPallet != null
             // Предложение = целочисленное деление введённых вручную чисел, если ось ещё не
@@ -575,6 +582,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     <div className="tile-meta">
                       {`свободно ${freeQ}`}
                       {reserved > 0 ? ` · ${isDefect ? 'брак' : 'упаковано'} ${isDefect ? l.onHand : l.ready}, в резерве ${reserved}` : ''}
+                      {!isDefect && l.packing > 0 ? ` · на упаковке ${l.packing}` : ''}
                       {!isDefect && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
                       {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
                       {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">сверх свободного</span></> : ''}
@@ -749,7 +757,7 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         )}
 
         <div className="line-row" style={{ marginTop: 14 }}>
-          <button className="btn ghost" style={{ flex: 1 }} disabled={saving || !clientId || lines.length === 0} onClick={() => void save(false)}>
+          <button className="btn ghost" style={{ flex: 1 }} disabled={saving || !clientId} onClick={() => void save(false)}>
             {editing ? 'Сохранить' : 'Черновик'}
           </button>
           <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>

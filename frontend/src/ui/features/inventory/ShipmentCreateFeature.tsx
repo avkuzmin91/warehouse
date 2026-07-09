@@ -256,6 +256,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         cargoType={cargoType}
         title={isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
         subtitle="номер присвоится при сохранении"
+        initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={

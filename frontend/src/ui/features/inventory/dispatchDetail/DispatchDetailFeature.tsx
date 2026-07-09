@@ -50,6 +50,9 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
+  // Есть ли несохранённые правки плана (DraftView сообщает при изменении состава/инфо) —
+  // кнопка «Сохранить» показывается только когда действительно есть что сохранять.
+  const [planDirty, setPlanDirty] = useState(false)
   // DraftView регистрирует здесь функцию сохранения «Основной информации» (в т.ч. ТЗ),
   // чтобы «Передать в подготовку» сохранило незакоммиченные правки до перехода по статусу.
   const flushDraftInfo = useRef<(() => Promise<boolean>) | null>(null)
@@ -111,6 +114,26 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
       await load()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Передать в подготовку не удалось', 'error')
+    } finally {
+      setActing(false)
+    }
+  }
+
+  async function handleSaveDraft() {
+    setActing(true)
+    setError('')
+    try {
+      if (flushDraftLines.current) {
+        const ok = await flushDraftLines.current()
+        if (!ok) return
+      }
+      if (flushDraftInfo.current) {
+        const ok = await flushDraftInfo.current()
+        if (!ok) return
+      }
+      toast(doc && doc.status === 'draft' ? 'Черновик сохранён' : 'Изменения сохранены', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось сохранить черновик', 'error')
     } finally {
       setActing(false)
     }
@@ -246,9 +269,12 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
   const status = doc.status as DispatchStatus
   const cargoType = doc.cargo_type as DispatchCargoType
   const isDraft = status === 'draft'
+  const isAwaitingPacking = status === 'awaiting_packing'
   const isPreparing = status === 'preparing'
   const isAwaiting = status === 'awaiting_trip'
   const isPartially = status === 'partially_shipped'
+  // В черновике и в «Ожидании упаковки» менеджер правит состав/план (пока склад пакует).
+  const isEditablePlan = isDraft || isAwaitingPacking
   // Палеты/короба менеджер правит на любом статусе (включая отгруженные), пока отгрузка
   // не аннулирована. Правка палет/коробов не влияет на сумму выставленных счетов.
   const canEditPallets = status !== 'cancelled' && canEditPlanning
@@ -259,7 +285,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         <Icon name="layers" size={14} />Журнал
         {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
       </button>
-      {canEditPlanning && (isDraft || isPreparing || isAwaiting) && (
+      {canEditPlanning && (isDraft || isAwaitingPacking || isPreparing || isAwaiting) && (
         <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
           <Icon name="x" size={14} />Аннулировать
         </button>
@@ -269,6 +295,11 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           <Icon name="truckOut" size={14} />Рейс {t.number}
         </button>
       ))}
+      {canEditPlanning && isEditablePlan && planDirty && (
+        <button className="btn" disabled={acting} onClick={() => void handleSaveDraft()}>
+          <Icon name="save" size={14} />{isDraft ? 'Сохранить черновик' : 'Сохранить изменения'}
+        </button>
+      )}
       {canEditPlanning && isDraft && (
         <PrimaryAction
           icon="arrowRight"
@@ -288,6 +319,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         cargoType={cargoType}
         title={doc.doc_number}
         subtitle={`${cargoType === 'defect' ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         priority={
           <DispatchPriorityControl
@@ -303,7 +335,14 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>{error}</Alert>
       )}
 
-      {isDraft ? (
+      {isAwaitingPacking && (
+        <Alert tone="info" style={{ marginBottom: 16 }}>
+          Ожидание упаковки: как только весь товар будет упакован, отгрузка автоматически уйдёт
+          в подготовку. Пока можно скорректировать план.
+        </Alert>
+      )}
+
+      {isEditablePlan ? (
         <DraftView
           doc={doc}
           canEdit={canEditPlanning}
@@ -317,6 +356,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onReload={refresh}
           registerInfoFlush={(fn) => { flushDraftInfo.current = fn }}
           registerLinesFlush={(fn) => { flushDraftLines.current = fn }}
+          onDirtyChange={setPlanDirty}
         />
       ) : (isPreparing && showPrepareTask) ? (
         <PreparePanel

@@ -23,9 +23,10 @@ from app import app
 from dbconn import get_connection
 from modules.auth.service import get_current_user
 from security import FORBIDDEN_DETAIL
-from tests.conftest import admin_client, cleanup_client, make_client_id  # noqa: F401
+from tests.conftest import admin_client, cleanup_client, make_client_id, manager_client  # noqa: F401
 
 ADMIN_ID = "test-admin-id"  # id админа из conftest._admin_user_row
+MANAGER_ID = "test-manager-id"  # id менеджера из conftest._manager_user_row
 
 
 def _insert_user(role: str = "user", client_id: str | None = None) -> dict:
@@ -102,21 +103,36 @@ def _clear_dependency_overrides():
     [
         ("client", "client-uuid-1"),
         ("user", None),
-        ("manager", None),
         ("warehouse_manager", None),
         ("shift_supervisor", None),
         ("warehouse_head", None),
     ],
 )
-def test_users_endpoints_forbidden_non_admin(role: str, cid: str | None):
+def test_users_endpoints_forbidden_low_roles(role: str, cid: str | None):
+    """Роли ниже менеджера не имеют доступа ни к одному эндпоинту модуля."""
     app.dependency_overrides[get_current_user] = _user_row(role, client_id=cid)
     c = TestClient(app)
     headers = {"Authorization": "Bearer test-token"}
 
     for method, path, body in [
         ("GET", "/users", None),
-        ("PATCH", "/users/some-id/role", {"role": "manager"}),
+        ("PATCH", "/users/some-id/role", {"role": "warehouse_manager"}),
         ("PATCH", "/users/some-id/client", {"client_id": None}),
+        ("PATCH", "/users/some-id", {"is_deleted": True}),
+        ("DELETE", "/users/some-id", None),
+    ]:
+        r = c.request(method, path, json=body, headers=headers)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+        assert r.json()["detail"] == FORBIDDEN_DETAIL
+
+
+def test_manager_forbidden_on_destructive_endpoints():
+    """Менеджер ведёт роли/привязку, но удаление/восстановление — только админ."""
+    app.dependency_overrides[get_current_user] = _user_row("manager")
+    c = TestClient(app)
+    headers = {"Authorization": "Bearer test-token"}
+
+    for method, path, body in [
         ("PATCH", "/users/some-id", {"is_deleted": True}),
         ("DELETE", "/users/some-id", None),
     ]:
@@ -204,6 +220,49 @@ def test_update_role_revokes_sessions(admin_client, user_factory):
     r = admin_client.patch(f"/users/{u['id']}/role", json={"role": "manager"})
     assert r.status_code == 200, r.text
     assert _session_revoked(session_id)
+
+
+# ---------------------------------------------------------------- менеджер: выдача ролей
+
+
+def test_manager_can_list_users(manager_client, user_factory):
+    u = user_factory("user")
+    assert _find(manager_client, u["id"]) is not None
+
+
+def test_manager_assigns_non_privileged_role(manager_client, user_factory):
+    u = user_factory("user")
+    r = manager_client.patch(f"/users/{u['id']}/role", json={"role": "warehouse_manager"})
+    assert r.status_code == 200, r.text
+    assert _find(manager_client, u["id"])["role"] == "warehouse_manager"
+
+
+def test_manager_cannot_grant_manager_role(manager_client, user_factory):
+    u = user_factory("user")
+    r = manager_client.patch(f"/users/{u['id']}/role", json={"role": "manager"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Роль «Менеджер» может назначить только администратор"
+
+
+def test_manager_cannot_change_manager_role(manager_client, user_factory):
+    other_manager = user_factory("manager")
+    r = manager_client.patch(f"/users/{other_manager['id']}/role", json={"role": "user"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Изменить роль менеджера может только администратор"
+
+
+def test_manager_cannot_change_admin_role(manager_client, user_factory):
+    other_admin = user_factory("admin")
+    r = manager_client.patch(f"/users/{other_admin['id']}/role", json={"role": "user"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Нельзя изменить роль администратора"
+
+
+def test_manager_can_bind_client(manager_client, user_factory, client_id):
+    u = user_factory("client")
+    r = manager_client.patch(f"/users/{u['id']}/client", json={"client_id": client_id})
+    assert r.status_code == 200, r.text
+    assert _find(manager_client, u["id"])["client_id"] == client_id
 
 
 # ---------------------------------------------------------------- привязка клиента

@@ -159,6 +159,7 @@ export type ShipmentDetail = ShipmentListItem & {
   trip_number?:     string | null
   trips?:           { id: string; number: string }[]
   created_by:       string | null
+  created_by_name:  string | null
   updated_at:       string | null
   lines:            ShipmentLine[]
   ops:              ShipmentOp[]

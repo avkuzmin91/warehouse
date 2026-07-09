@@ -73,9 +73,10 @@ export function ReceiptFormScreen() {
     setShowAdd(false)
   }, [])
 
-  async function save() {
+  async function save(toPlanned: boolean) {
     if (saving) return
-    if (blockReasons.length > 0) { setError(blockReasons[0]); return }
+    if (toPlanned && blockReasons.length > 0) { setError(blockReasons[0]); return }
+    if (!clientId) { setError('Выберите клиента'); return }
     setError('')
     setSaving(true)
     try {
@@ -87,7 +88,8 @@ export function ReceiptFormScreen() {
         logistics_cost: logisticsCost.trim() !== '' && Number.isFinite(costNum) ? costNum : null,
         lines: lines.map(({ _id, ...l }) => l),
       })
-      await advanceReceiptStatus(res.message)
+      // Черновик остаётся в статусе draft — план склада его не видит, пока не запланируют.
+      if (toPlanned) await advanceReceiptStatus(res.message)
       back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
@@ -196,10 +198,10 @@ export function ReceiptFormScreen() {
         )}
 
         <div className="line-row" style={{ marginTop: 14 }}>
-          <button className="btn ghost" style={{ flex: 1 }} onClick={back} disabled={saving}>
-            Отмена
+          <button className="btn ghost" style={{ flex: 1 }} disabled={saving || !clientId} onClick={() => void save(false)}>
+            Черновик
           </button>
-          <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save()}>
+          <button className="btn" style={{ flex: 2 }} disabled={saving || blockReasons.length > 0} onClick={() => void save(true)}>
             {saving ? <span className="spin spin-sm" /> : 'Запланировать'}
           </button>
         </div>

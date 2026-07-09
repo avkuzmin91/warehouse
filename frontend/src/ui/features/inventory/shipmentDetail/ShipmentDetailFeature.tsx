@@ -109,13 +109,16 @@ export function ShipmentDetailFeature() {
 
   useEffect(() => {
     if (!doc) return
+    // Не затирать несохранённые правки реквизитов (ТЗ, даты) при фоновом refresh документа —
+    // напр. прикрепление файла к строке перечитывает doc, но введённый текст должен остаться.
+    if (infoDirty) return
     setInfoClientId(doc.client_id ?? null)
     setInfoClientName(doc.client_name ?? null)
     setInfoShipDate(doc.ship_date ?? '')
     setInfoActualShipDate(doc.actual_ship_date ?? '')
     setInfoComment(doc.comment ?? '')
     setInfoDirty(false)
-  }, [doc])
+  }, [doc, infoDirty])
 
   const load = useCallback(async () => {
     if (!docId) return
@@ -816,6 +819,7 @@ export function ShipmentDetailFeature() {
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
         subtitle={`${isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         blockReasons={showBlockReasons ? advanceBlockReasons : []}
         priority={

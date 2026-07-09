@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
 import { createDispatch, advanceDispatch, getDispatch, uploadDispatchLineFile, recommendedPallets, recommendedBoxes, getDispatchReservations, checkDispatchDuplicate } from '../../../api/dispatchApi'
@@ -26,6 +26,8 @@ import { DispHeader } from './dispatchDetail/components/DispHeader'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './dispatchDetail/components/processUI'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
 import { LineFilesCell } from './shipmentDetail/components/LineFilesCell'
+import { FilePreviewModal } from './shipmentDetail/components/FilePreviewModal'
+import type { FilePreviewMeta } from './shipmentDetail/shared/types'
 import { validateDispatchFile, dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from './dispatchDetail/components/DispatchLineFiles'
 import { PackMultiplicity } from './dispatchDetail/components/PackMultiplicity'
 import { PackPriceBanner } from './dispatchDetail/components/PackPriceBanner'
@@ -40,6 +42,8 @@ type DraftLine = DispatchLineIn & {
   boxesPerPallet: number | null; pallets: number | null; palletsTouched: boolean; files: File[]
 }
 
+type DraftFilePreview = FilePreviewMeta & { file: File }
+
 function variantKey(productId: string, colorId: string | null | undefined, sizeId: string | null | undefined): string {
   return `${productId}|${colorId ?? ''}|${sizeId ?? ''}`
 }
@@ -51,6 +55,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
   const [logisticsCost, setLogisticsCost] = useState('')
+  const [filePreview, setFilePreview] = useState<DraftFilePreview | null>(null)
   const [shipDate, setShipDate] = useState('')
   const [comment, setComment] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
@@ -120,15 +125,21 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   // при пустых полях (частый случай — у товара нет кратности, поле не заполнено).
   const needBoxPrice = lines.some((l) => (l.boxes ?? 1) > 0)
   const needPalletPrice = lines.some((l) => (l.pallets ?? 1) > 0)
-  // Источник отгрузки совпадает с бэк-гейтом: годный отгружается только из «Готов к
-  // отгрузке» (ready), брак — со склада (storage_defect = onHand), минус остаток, уже
-  // обещанный другим незакрытым отгрузкам (резерв). Товар на складе/в пути и зарезер-
-  // вированный можно сохранить черновиком, но не передать в подготовку.
+  // Немедленно свободный остаток (для витрины): годный — «Готов к отгрузке» (ready+packed),
+  // брак — со склада (storage_defect = onHand), минус обещанное другим отгрузкам (резерв).
   const srcAvail = (l: DraftLine) => Math.max(0, (isDefectCargo ? l.onHand : l.ready) - l.reserved)
-  const hasNotPacked = lines.some((l) => !isDefectCargo && l.qty > l.ready && l.qty <= l.ready + l.onHand)
-  const hasInTransit = lines.some((l) => l.qty > l.ready + l.onHand && l.qty <= l.ready + l.onHand + l.inTransit)
-  const hasOverCap = lines.some((l) => l.qty > l.ready + l.onHand + l.inTransit)
-  const allReady = lines.every((l) => l.qty <= srcAvail(l))
+  // Что можно передать на подготовку: годный — «Готов к отгрузке» плюс «На упаковке»
+  // (`packing`): последнее уйдёт в «Ожидание упаковки» и продолжится автоматически по
+  // готовности (бэк паркует). Брак упаковку минует — только со склада. Товар лишь на
+  // хранении/в пути пакуется отдельной задачей — его сохраняем черновиком.
+  const sendAvail = (l: DraftLine) => isDefectCargo
+    ? Math.max(0, l.onHand - l.reserved)
+    : Math.max(0, l.ready + l.packing - l.reserved)
+  const hasOnPacking = lines.some((l) => !isDefectCargo && l.qty > l.ready && l.qty <= l.ready + l.packing)
+  const hasNeedStorage = lines.some((l) => !isDefectCargo && l.qty > l.ready + l.packing && l.qty <= l.ready + l.packing + l.onHand)
+  const hasInTransit = lines.some((l) => l.qty > l.ready + l.packing + l.onHand && l.qty <= l.ready + l.packing + l.onHand + l.inTransit)
+  const hasOverCap = lines.some((l) => l.qty > l.ready + l.packing + l.onHand + l.inTransit)
+  const allSendable = lines.every((l) => l.qty <= sendAvail(l))
   const logisticsCostNumber = Number(logisticsCost)
   const logisticsCostFilled = logisticsCost.trim() !== '' && Number.isFinite(logisticsCostNumber) && logisticsCostNumber >= 0
 
@@ -142,7 +153,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
     { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет для каждой позиции (можно 0)' },
     { ok: allBoxes, label: 'Указано количество коробов', error: 'Укажите количество коробов для каждой позиции (можно 0)' },
-    { ok: allReady, label: isDefectCargo ? 'Брак свободен на складе' : 'Товар свободен к отгрузке', error: isDefectCargo ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество' : 'Часть запрошенного недоступна: товар не упакован, ещё в пути или в резерве у других отгрузок — отгрузить можно только свободный упакованный остаток, сохраните черновик' },
+    { ok: allSendable, label: isDefectCargo ? 'Брак свободен на складе' : 'Товар готов или на упаковке', error: isDefectCargo ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество' : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик' },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -398,6 +409,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         cargoType={cargoType}
         title={isDefectCargo ? 'Новая отгрузка брака' : 'Новая отгрузка'}
         subtitle="номер присвоится при сохранении"
+        initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
@@ -405,16 +417,16 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
             <button className="btn" disabled={saving} onClick={goBack}>Отмена</button>
             <button
               className="btn"
-              disabled={saving || !clientId || lines.length === 0}
+              disabled={saving || !clientId}
               onClick={() => void handleSave(false)}
-              title="Сохранить как черновик — для товара, который ещё в пути"
+              title="Сохранить как черновик — можно без товара или для товара, который ещё в пути"
             >
               <Icon name="save" size={13} />Сохранить черновик
             </button>
             <PrimaryAction
               icon="arrowRight"
               label="Передать на подготовку"
-              hint="уйдёт в очередь на привязку к рейсу — статус «Ожидает рейс»"
+              hint="готовый товар — в подготовку; на упаковке — в «Ожидание упаковки»"
               disabled={saving}
               onClick={handleSendToAwaiting}
             />
@@ -432,9 +444,14 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
           <span>Часть товара ещё в пути. Сохраните черновик — передать в рейс можно будет после прихода.</span>
         </Alert>
       )}
-      {!hasOverCap && !hasInTransit && hasNotPacked && (
+      {!hasOverCap && !hasInTransit && hasNeedStorage && (
         <Alert tone="info" style={{ marginBottom: 14 }}>
-          <span>Часть товара ещё не упакована. Отгрузить можно только упакованный товар — создайте задачу упаковки, а пока сохраните черновик.</span>
+          <span>Часть товара лишь на хранении, ещё не в упаковке. Создайте задачу упаковки, а пока сохраните черновик.</span>
+        </Alert>
+      )}
+      {!hasOverCap && !hasInTransit && !hasNeedStorage && hasOnPacking && (
+        <Alert tone="info" style={{ marginBottom: 14 }}>
+          <span>Часть товара ещё на упаковке. Можно передать на подготовку — отгрузка уйдёт в «Ожидание упаковки» и продолжится автоматически по готовности.</span>
         </Alert>
       )}
 
@@ -569,7 +586,14 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                               glyphFor={dispatchFileGlyph}
                               onPreview={(entry) => {
                                 const file = l.files[Number(entry.id)]
-                                if (file) window.open(URL.createObjectURL(file), '_blank', 'noopener')
+                                if (file) setFilePreview({
+                                  file,
+                                  productName: l.product_name,
+                                  sku: l.product_sku,
+                                  colorName: l.color_name ?? null,
+                                  sizeName: l.size_name ?? null,
+                                  qty: l.qty,
+                                })
                               }}
                               onAdd={(files) => addLineFiles(l._uid, files)}
                               onReplace={(entryId, file) => replaceLineFile(l._uid, Number(entryId), file)}
@@ -710,6 +734,28 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
         onProceed={() => { setDupMatches([]); void runSave(pendingAwaitingRef.current) }}
         onCancel={() => setDupMatches([])}
       />
+
+      <DraftFilePreviewModal preview={filePreview} onClose={() => setFilePreview(null)} />
     </div>
+  )
+}
+
+/** Обёртка общей модалки для локальных (ещё не загруженных) файлов отгрузки: object URL + revoke. */
+function DraftFilePreviewModal({ preview, onClose }: {
+  preview: DraftFilePreview | null
+  onClose: () => void
+}) {
+  const file = preview?.file ?? null
+  const url = useMemo(() => (file ? URL.createObjectURL(file) : ''), [file])
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+
+  return (
+    <FilePreviewModal
+      filename={file?.name ?? null}
+      mimeType={file ? (file.type || null) : null}
+      url={url}
+      meta={preview}
+      onClose={onClose}
+    />
   )
 }

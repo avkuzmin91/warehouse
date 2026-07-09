@@ -8,8 +8,12 @@ export function canEditPlannedArrival(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }
 
+// Страница «Пользователи»: просмотр списка + не-деструктивное ведение учёток
+// (роль, привязка клиента, отображаемое имя) — админ и менеджер. Менеджер не может
+// выдавать/править роль admin и manager, а удаление доступно только админу (в UI
+// удаления нет; на backend это гейтит _get_users_admin).
 export function canManageUsers(user: User | null | undefined): boolean {
-  return user?.role === 'admin'
+  return user?.role === 'admin' || user?.role === 'manager'
 }
 
 // Справочник «Наши склады» (ставки аренды) — только админ.

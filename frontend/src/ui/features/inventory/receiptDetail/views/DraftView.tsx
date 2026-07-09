@@ -142,7 +142,8 @@ export function DraftView({ docId, detail, onReload, onAdvance, advancing }: Pro
         badges={<Badge dot>{RECEIPT_STATUS_LABELS['draft']}</Badge>}
         role="manager"
         title={doc.doc_number}
-        subtitle={`Поступление · создано ${fmtDate(doc.created_at)}${doc.created_by ? ` · ${doc.created_by}` : ''}`}
+        subtitle={`Поступление · ${doc.client_name ?? '—'}`}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={

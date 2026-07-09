@@ -131,6 +131,7 @@ export function PlannedView({ docId, detail, onReload, onCancel, advancing }: Pr
         role={receiptStatusRole(status, hasTrip)}
         title={doc.doc_number}
         subtitle={`Поступление · ${doc.client_name ?? '—'}`}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         actions={
           <>

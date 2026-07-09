@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
 import {
@@ -55,6 +55,8 @@ export function ReceiptCreateFeature() {
   const [showAddLine, setShowAddLine] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
   const [dupMatches, setDupMatches] = useState<DuplicateMatch[]>([])
+  // Куда идти после подтверждения дубля: черновик или сразу «Запланировать».
+  const pendingPlannedRef = useRef(false)
 
   const { clients: clientsAll } = useLookups()
   const { user } = useCurrentUser()
@@ -77,7 +79,7 @@ export function ReceiptCreateFeature() {
 
   const blockReasons = readyChecks.filter((c) => !c.ok).map((c) => c.error)
 
-  async function runCreate() {
+  async function runCreate(toPlanned: boolean) {
     setSaving(true)
     try {
       const res = await createReceipt({
@@ -88,6 +90,11 @@ export function ReceiptCreateFeature() {
         lines: lines.map(({ _id, ...l }) => l),
       })
       const docId = res.message
+      // Черновик остаётся в статусе draft — план склада его не видит, пока не запланируют.
+      if (!toPlanned) {
+        navigate(`/inventory/receipts/${docId}`, { replace: true })
+        return
+      }
       await advanceReceiptStatus(docId)
       if (tripParam) {
         // Создано из рейса — привязываем и возвращаемся к рейсу.
@@ -105,7 +112,7 @@ export function ReceiptCreateFeature() {
     }
   }
 
-  async function handleSave() {
+  async function handleSave(toPlanned: boolean) {
     if (!clientId) { setError('Укажите клиента'); return }
     setError('')
     setSaving(true)
@@ -115,9 +122,9 @@ export function ReceiptCreateFeature() {
         arrival_date: arrivalDate || null,
         lines: lines.map((l) => ({ product_id: l.product_id, color_id: l.color_id ?? null, size_id: l.size_id ?? null, planned_qty: l.planned_qty })),
       })
-      if (dup.matches.length > 0) { setDupMatches(dup.matches); setSaving(false); return }
+      if (dup.matches.length > 0) { pendingPlannedRef.current = toPlanned; setDupMatches(dup.matches); setSaving(false); return }
     } catch { /* проверка на дубль не критична — не блокируем создание */ }
-    await runCreate()
+    await runCreate(toPlanned)
   }
 
   function handleRemoveLine(id: number) {
@@ -144,6 +151,7 @@ export function ReceiptCreateFeature() {
         role="manager"
         title="Новое поступление"
         subtitle="номер присвоится при сохранении"
+        initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}
         blockReasons={showBlockReasons ? blockReasons : []}
         actions={
@@ -151,12 +159,20 @@ export function ReceiptCreateFeature() {
             <button className="btn" onClick={goBack} disabled={saving}>
               Отмена
             </button>
+            <button
+              className="btn"
+              disabled={saving || !clientId}
+              onClick={() => void handleSave(false)}
+              title="Сохранить как черновик — можно без товара, план склада его не увидит, пока не запланируете"
+            >
+              <Icon name="save" size={13} />Сохранить черновик
+            </button>
             <PrimaryAction
               icon="check"
               label="Запланировать поступление"
               hint="уйдёт в план склада — статус «В плане»"
               disabled={saving}
-              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave() } }}
+              onClick={() => { if (blockReasons.length > 0) { setShowBlockReasons(true) } else { void handleSave(true) } }}
             />
           </>
         }
@@ -358,7 +374,7 @@ export function ReceiptCreateFeature() {
         entityAccusative="поступление"
         busy={saving}
         onOpenExisting={(id) => navigate(`/inventory/receipts/${id}`)}
-        onProceed={() => { setDupMatches([]); void runCreate() }}
+        onProceed={() => { setDupMatches([]); void runCreate(pendingPlannedRef.current) }}
         onCancel={() => setDupMatches([])}
       />
     </div>

@@ -54,6 +54,7 @@ export type ReceiptDoc = {
   trips: TripRef[]
   created_at: string
   created_by: string | null
+  created_by_name: string | null
   updated_at: string | null
 }
 

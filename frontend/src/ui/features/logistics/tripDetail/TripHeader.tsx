@@ -6,6 +6,7 @@ import { tripStatusLabel, tripStatusTone } from '../../../../api/tripsApi'
 import type { TripStatus, TripDirection, TripCargoType } from '../../../../api/tripsApi'
 import { RoleChip } from '../components/RoleChip'
 import type { TripRole } from '../components/RoleChip'
+import { InitiatorLine } from '../../shared/process/InitiatorLine'
 
 const STATUS_ROLE: Record<TripStatus, TripRole | null> = {
   draft: 'manager',
@@ -17,11 +18,12 @@ const STATUS_ROLE: Record<TripStatus, TripRole | null> = {
 }
 
 /** Шапка карточки рейса: номер (mono) + статус + «сейчас у: роль» + контекстное действие. */
-export function TripHeader({ number, status, direction = 'inbound', cargoType = 'good', onBack, action }: {
+export function TripHeader({ number, status, direction = 'inbound', cargoType = 'good', initiator, onBack, action }: {
   number: string
   status: TripStatus
   direction?: TripDirection
   cargoType?: TripCargoType
+  initiator?: { name?: string | null; createdAt?: string | null }
   onBack: () => void
   action?: ReactNode
 }) {
@@ -49,6 +51,7 @@ export function TripHeader({ number, status, direction = 'inbound', cargoType = 
           <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', fontFamily: 'var(--font-code)' }}>{number}</span>
           <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{subtitle}</span>
         </div>
+        {initiator && <InitiatorLine name={initiator.name} createdAt={initiator.createdAt} />}
       </div>
       {action}
     </div>

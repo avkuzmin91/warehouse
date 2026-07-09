@@ -12,6 +12,8 @@ import { RoleChip } from '../../../shared/process/RoleChip'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
 import { DispatchLineFiles, dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from './DispatchLineFiles'
 import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
+import { FilePreviewModal } from '../../shipmentDetail/components/FilePreviewModal'
+import type { FilePreviewMeta } from '../../shipmentDetail/shared/types'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { useToast } from '../../../../feedback/Toast'
 import { balanceKey } from '../../../../../utils/balanceKey'
@@ -52,6 +54,7 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
   })
   const [saving, setSaving] = useState(false)
   const [showReasons, setShowReasons] = useState(false)
+  const [filePreview, setFilePreview] = useState<{ filename: string; mimeType: string | null; url: string; meta: FilePreviewMeta } | null>(null)
 
   // Менеджер правит ссылку и вложения по строке прямо на подготовке (поправить ошибку).
   const [urlDrafts, setUrlDrafts] = useState<Record<string, string>>(() => {
@@ -392,7 +395,12 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
                         uploading={uploadingLine === line.id}
                         accept={DISPATCH_FILE_ACCEPT}
                         glyphFor={dispatchFileGlyph}
-                        onPreview={(entry) => { if (entry.href) window.open(entry.href, '_blank', 'noopener') }}
+                        onPreview={(entry) => { if (entry.href) setFilePreview({
+                          filename: entry.filename,
+                          mimeType: entry.mimeType,
+                          url: entry.href,
+                          meta: { productName: line.product_name, sku: line.product_sku, colorName: line.color_name, sizeName: line.size_name, qty: line.qty },
+                        }) }}
                         onAdd={(files) => void handleUploadFiles(line.id, files)}
                         onReplace={(fileId, file) => void handleReplaceFile(line.id, fileId, file)}
                         onRemove={(fileId) => void onDeleteFile(line.id, fileId)}
@@ -479,6 +487,14 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
           Кладовщик указывает ячейки-источники, затем жмёт «Отгрузка подготовлена».
         </div>
       )}
+
+      <FilePreviewModal
+        filename={filePreview?.filename ?? null}
+        mimeType={filePreview?.mimeType ?? null}
+        url={filePreview?.url ?? ''}
+        meta={filePreview?.meta ?? null}
+        onClose={() => setFilePreview(null)}
+      />
     </div>
   )
 }

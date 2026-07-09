@@ -2,15 +2,18 @@ import type { ReactNode } from 'react'
 import { Icon } from '../../../primitives/Icon'
 import { RoleChip } from './RoleChip'
 import type { ProcessRole } from './roles'
+import { InitiatorLine } from './InitiatorLine'
 
 /** Шапка карточки документа-процесса (отгрузка, поступление): статус-бейджи,
  *  «сейчас у: роль», номер (mono) и контекстные действия справа. */
-export function DocHeader({ badges, role, title, subtitle, actions, blockReasons = [], onBack }: {
+export function DocHeader({ badges, role, title, subtitle, initiator, actions, blockReasons = [], onBack }: {
   /** Статус-бейдж и дополнительные бейджи («Брак», «Ожидает рейс», приоритет). */
   badges: ReactNode
   role?: ProcessRole | null
   title: string
   subtitle?: string
+  /** Инициатор (создатель) документа — единое поле под номером. */
+  initiator?: { name?: string | null; createdAt?: string | null }
   actions?: ReactNode
   /** Причины блокировки перехода — под всем рядом кнопок, чтобы не сдвигать их. */
   blockReasons?: string[]
@@ -37,6 +40,7 @@ export function DocHeader({ badges, role, title, subtitle, actions, blockReasons
           <span className="mono" style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</span>
           {subtitle && <span style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{subtitle}</span>}
         </div>
+        {initiator && <InitiatorLine name={initiator.name} createdAt={initiator.createdAt} />}
       </div>
       {actions && (
         <div className="detail-actions" style={{ flexShrink: 0 }}>

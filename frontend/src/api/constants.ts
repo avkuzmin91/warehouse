@@ -19,3 +19,10 @@ export function resolvePublicUploadSrc(url: string): string {
   if (s.startsWith('/')) return `${API_BASE_URL}${s}`
   return s
 }
+
+/** Обратно к `resolvePublicUploadSrc`: публичный URL вложения → путь для `request*` (без базы API). */
+export function apiPathFromPublicSrc(src: string): string {
+  const s = String(src).trim()
+  if (API_BASE_URL && s.startsWith(API_BASE_URL)) return s.slice(API_BASE_URL.length)
+  return s
+}

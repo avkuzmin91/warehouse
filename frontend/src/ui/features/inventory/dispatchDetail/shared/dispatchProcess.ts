@@ -10,6 +10,7 @@ import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
 /** Маршрут отгрузки (DSP): владелец, иконка и подсказка для каждого статуса. */
 const DSP_META: Record<DispatchStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle: string }> = {
   draft:             { role: 'manager',   icon: 'edit',     sub: 'состав, ссылки и план',          doneTitle: 'Создано' },
+  awaiting_packing:  { role: 'manager',   icon: 'clock',    sub: 'ждём, пока склад упакует товар',  doneTitle: 'Упаковано' },
   preparing:         { role: 'warehouse', icon: 'forklift', sub: 'кладовщик готовит отгрузку',      doneTitle: 'Подготовлено' },
   awaiting_trip:     { role: 'manager',   icon: 'clock',    sub: 'привязка и отправка рейса',       doneTitle: 'Готово к рейсу' },
   partially_shipped: { role: 'manager',   icon: 'truckOut', sub: 'часть уехала, остаток ждёт рейс', doneTitle: 'Часть отгружена' },
@@ -18,7 +19,7 @@ const DSP_META: Record<DispatchStatus, { role: ProcessRole | null; icon: IconNam
 }
 
 /** Линейный маршрут DSP для ProcessRail (без отмены). */
-const DSP_STATUS_ORDER: DispatchStatus[] = ['draft', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped']
+const DSP_STATUS_ORDER: DispatchStatus[] = ['draft', 'awaiting_packing', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped']
 
 /** Роль-владелец текущего шага (для «сейчас у:» в шапке). */
 export function dispatchStatusRole(status: DispatchStatus): ProcessRole | null {
@@ -30,7 +31,14 @@ function getStepTimestamps(ops: DispatchOp[]): Partial<Record<DispatchStatus, st
   const ts: Partial<Record<DispatchStatus, string>> = {}
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
-    if (op.op_type === 'advance' && !ts.preparing) ts.preparing = op.created_at
+    // «advance» пишется и при парковке в «Ожидание упаковки», и при переводе в подготовку —
+    // различаем по comment: только те, что дошли до подготовки, содержат «Подготов». Иначе
+    // отметка времени попала бы на ещё не достигнутый шаг «Подготовка». Прямой draft→preparing
+    // — один advance с «Подготов»: отметит и упаковку (пропущена), и подготовку.
+    if (op.op_type === 'advance') {
+      if (!ts.awaiting_packing) ts.awaiting_packing = op.created_at
+      if ((op.comment ?? '').includes('Подготов') && !ts.preparing) ts.preparing = op.created_at
+    }
     if (op.op_type === 'prepare' && !ts.awaiting_trip) ts.awaiting_trip = op.created_at
     if (op.op_type === 'ship') {
       // Первая отгрузка по рейсу — отметка «частично», последняя — «отгружено».

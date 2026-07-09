@@ -3,6 +3,7 @@ import { request, requestForm, requestIdHeaders } from './http'
 // --- Types --- (подмножество backend/modules/dispatch/schemas.py)
 export type DispatchStatus =
   | 'draft'
+  | 'awaiting_packing'
   | 'preparing'
   | 'awaiting_trip'
   | 'partially_shipped'
@@ -321,6 +322,7 @@ export function getDispatches(params: DispatchListParams = {}, signal?: AbortSig
 // --- Labels ---
 export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
   draft: 'Создание',
+  awaiting_packing: 'Ожидание упаковки',
   preparing: 'Подготовка отгрузки',
   awaiting_trip: 'Ожидает рейс',
   partially_shipped: 'Частично отгружено',
@@ -331,6 +333,7 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
 export function dispatchStatusTone(status: DispatchStatus): string {
   const map: Record<DispatchStatus, string> = {
     draft: '',
+    awaiting_packing: 'info',
     preparing: 'info',
     awaiting_trip: 'warning',
     partially_shipped: 'warning',

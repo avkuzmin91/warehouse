@@ -83,6 +83,7 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
         role={receiptStatusRole(doc.status)}
         title={doc.doc_number}
         subtitle={`Поступление · ${doc.client_name ?? '—'}`}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         actions={
           <>

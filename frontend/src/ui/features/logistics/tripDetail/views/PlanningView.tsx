@@ -57,6 +57,7 @@ export function PlanningView({ detail, form, onField, link, enrich, busy, checks
         status="draft"
         direction={direction}
         cargoType={doc.cargo_type}
+        initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={onBack}
         action={
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
