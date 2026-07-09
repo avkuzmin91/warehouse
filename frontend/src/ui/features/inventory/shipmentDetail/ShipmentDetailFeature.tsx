@@ -132,6 +132,18 @@ export function ShipmentDetailFeature() {
     }
   }, [docId])
 
+  // Тихая перезагрузка: обновляет doc БЕЗ полноэкранного спиннера, чтобы не размонтировать
+  // текущую вьюху. Иначе inline-сохранение (напр. прикрепление файла к строке) сбрасывало
+  // несохранённые правки в других полях состава/реквизитов.
+  const refresh = useCallback(async () => {
+    if (!docId) return
+    try {
+      setDoc(await getShipment(docId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка загрузки')
+    }
+  }, [docId])
+
   useEffect(() => { load() }, [load])
 
   async function handleInfoSave() {
@@ -582,7 +594,7 @@ export function ShipmentDetailFeature() {
       for (const file of files) {
         await uploadShipmentLineFile(docId, lineId, file)
       }
-      await load()
+      await refresh()
       toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка загрузки файла', 'error')
@@ -599,7 +611,7 @@ export function ShipmentDetailFeature() {
     try {
       await uploadShipmentLineFile(docId, lineId, file)
       await deleteShipmentLineFile(docId, lineId, oldFileId)
-      await load()
+      await refresh()
       toast('Файл заменён', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка замены файла', 'error')
@@ -612,7 +624,7 @@ export function ShipmentDetailFeature() {
     if (!docId) return
     try {
       await deleteShipmentLineFile(docId, lineId, fileId)
-      await load()
+      await refresh()
       toast('Файл удалён', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка удаления файла', 'error')
