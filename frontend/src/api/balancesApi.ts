@@ -337,6 +337,10 @@ export type ZoneRelocationItem = {
   qty:              number
   reason:           string | null
   comment:          string | null
+  /** id оригинала — заполнен у записей-сторно. */
+  reverses_id:      string | null
+  /** Запись уже откачена (по ней есть сторно). */
+  is_reversed:      boolean
 }
 
 export type ZoneRelocationListParams = {
@@ -361,4 +365,11 @@ export function getZoneRelocations(params: ZoneRelocationListParams = {}, signal
   if (params.search) sp.set('search', params.search)
   const q = sp.toString()
   return request<ZoneRelocationListResponse>(`/balances/relocations${q ? `?${q}` : ''}`, { signal })
+}
+
+/** Откат ошибочного списания: возвращает товар из «Списан» обратно в исходный бакет/место. */
+export function undoWriteOff(relocationId: string) {
+  return request<{ message: string }>(`/balances/write-offs/${relocationId}/undo`, {
+    method: 'POST',
+  })
 }

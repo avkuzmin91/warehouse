@@ -1,17 +1,24 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getZoneRelocations, INV_OP_LABELS, INV_QUALITY_LABELS, WRITEOFF_REASON_LABELS } from '../../../../../api/balancesApi'
+import { getZoneRelocations, undoWriteOff, INV_OP_LABELS, INV_QUALITY_LABELS, WRITEOFF_REASON_LABELS } from '../../../../../api/balancesApi'
 import type { WriteOffReason } from '../../../../../api/balancesApi'
 import type { ZoneRelocationItem } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
 import { FiltersBar, FilterCombobox } from '../../../../data/FiltersBar'
+import { useConfirm } from '../../../../feedback/ConfirmDialog'
+import { useToast } from '../../../../feedback/Toast'
 import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
+
+// Роли, которым доступны ручные операции с остатками (совпадает с backend
+// ensure_stock_write_access) — только они могут откатывать списание.
+const STOCK_WRITE_ROLES = ['admin', 'manager', 'warehouse_manager', 'shift_supervisor', 'warehouse_head']
 
 const PAGE_SIZE = 50
 
@@ -21,6 +28,7 @@ const QUALITY_TONE: Record<string, BadgeTone> = { good: 'success', defect: 'warn
 function moveLabel(item: ZoneRelocationItem): string {
   if (item.from_op === 'intake') return 'Приёмка'
   if (item.to_op === 'shipped') return 'Отгрузка'
+  if (item.from_op === 'written_off') return 'Откат списания'
   if (item.to_op === 'written_off') {
     const reason = item.reason ? WRITEOFF_REASON_LABELS[item.reason as WriteOffReason] : undefined
     return reason ? `Списание · ${reason}` : 'Списание'
@@ -48,7 +56,12 @@ export function RelocationsView() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [clientId, setClientId] = useState('')
+  const [undoing, setUndoing] = useState<string | null>(null)
   const { clients } = useLookups()
+  const { user } = useCurrentUser()
+  const confirm = useConfirm()
+  const toast = useToast()
+  const canUndo = !!user && STOCK_WRITE_ROLES.includes(user.role)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -67,6 +80,25 @@ export function RelocationsView() {
   }, [page, search, clientId])
 
   useEffect(() => { load() }, [load])
+
+  async function handleUndo(item: ZoneRelocationItem) {
+    const ok = await confirm({
+      title: 'Откатить списание?',
+      body: `${item.product_name ?? 'Товар'} — ${item.qty} шт вернётся на остатки${item.from_zone_name ? ` в «${item.from_zone_name}»` : ''}.`,
+      confirmLabel: 'Откатить',
+    })
+    if (!ok) return
+    setUndoing(item.id)
+    try {
+      await undoWriteOff(item.id)
+      toast('Списание откачено', 'success')
+      await load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось откатить списание', 'error')
+    } finally {
+      setUndoing(null)
+    }
+  }
 
   return (
     <>
@@ -120,13 +152,14 @@ export function RelocationsView() {
             <th style={{ textAlign: 'right', width: 90 }}>Кол-во</th>
             <th>Комментарий</th>
             <th style={{ width: 160 }}>Кто</th>
+            <th style={{ width: 96 }} />
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={9} />
+            <SkeletonRows rows={8} cols={10} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={9}><EmptyState title="Движений нет" sub="Здесь появятся движения товара между местоположениями и статусами" /></td></tr>
+            <tr><td colSpan={10}><EmptyState title="Движений нет" sub="Здесь появятся движения товара между местоположениями и статусами" /></td></tr>
           ) : (
             items.map((item) => (
               <tr key={item.id}>
@@ -148,6 +181,23 @@ export function RelocationsView() {
                 <Td className="num" style={{ fontWeight: 600 }}>{item.qty.toLocaleString('ru-RU')}</Td>
                 <Td style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{item.comment ?? '—'}</Td>
                 <Td className="t-sub" style={{ fontSize: 12 }}>{item.created_by_email ?? '—'}</Td>
+                <Td style={{ textAlign: 'right' }}>
+                  {item.to_op === 'written_off' && !item.reverses_id && (
+                    item.is_reversed ? (
+                      <span className="t-sub" style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Откачено</span>
+                    ) : canUndo ? (
+                      <button
+                        className="btn ghost sm"
+                        title="Вернуть товар на остатки"
+                        onClick={() => void handleUndo(item)}
+                        disabled={undoing === item.id}
+                      >
+                        <Icon name="refresh" size={13} style={undoing === item.id ? { animation: 'spin 0.7s linear infinite' } : undefined} />
+                        Откат
+                      </button>
+                    ) : null
+                  )}
+                </Td>
               </tr>
             ))
           )}

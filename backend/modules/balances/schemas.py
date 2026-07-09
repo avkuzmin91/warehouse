@@ -215,6 +215,9 @@ class ZoneRelocationItem(BaseModel):
     qty: int
     reason: str | None = None
     comment: str | None
+    # Ссылка на оригинал (заполнена у записей-сторно) и признак, что запись уже откачена.
+    reverses_id: str | None = None
+    is_reversed: bool = False
 
 
 class ZoneRelocationListResponse(BaseModel):

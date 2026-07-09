@@ -658,6 +658,67 @@ def test_write_off_reduces_storage(admin_client, client_id, product_ids):
         _cleanup_test_docs(client_id)
 
 
+def test_undo_write_off_restores_storage(admin_client, client_id, product_ids):
+    """Откат ошибочного списания возвращает товар в исходный бакет/место; повтор запрещён."""
+    pid, color_id, size_id = product_ids
+    zone = str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone, 10)
+    try:
+        w = admin_client.post("/balances/write-offs", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "zone_id": zone, "quality": "good", "qty": 4, "reason": "damage",
+        })
+        assert w.status_code == 200, w.text
+
+        j = admin_client.get(f"/balances/relocations?client_id={client_id}").json()
+        woff = next(i for i in j["items"] if i["to_op"] == "written_off")
+        assert woff["is_reversed"] is False
+
+        r = admin_client.post(f"/balances/write-offs/{woff['id']}/undo")
+        assert r.status_code == 200, r.text
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone, "storage", "good") == 10
+
+        j2 = admin_client.get(f"/balances/relocations?client_id={client_id}").json()
+        again = next(i for i in j2["items"] if i["id"] == woff["id"])
+        assert again["is_reversed"] is True
+        assert any(i["from_op"] == "written_off" and i["reverses_id"] == woff["id"] for i in j2["items"])
+
+        dup = admin_client.post(f"/balances/write-offs/{woff['id']}/undo")
+        assert dup.status_code == 400, dup.text
+        assert "уже отменено" in dup.json()["detail"]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_undo_rejects_non_write_off_move(admin_client, client_id, product_ids):
+    """Откатить можно только списание — обычное перемещение отклоняется."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 5)
+    try:
+        admin_client.post("/balances/relocations", json={
+            "product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+            "op": "storage", "quality": "good", "from_zone_id": zone_a, "to_zone_id": zone_b, "qty": 2,
+        })
+        j = admin_client.get(f"/balances/relocations?client_id={client_id}").json()
+        move = next(i for i in j["items"] if i["from_op"] == "storage" and i["to_op"] == "storage")
+        r = admin_client.post(f"/balances/write-offs/{move['id']}/undo")
+        assert r.status_code == 400, r.text
+        assert "списания" in r.json()["detail"]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
 def test_write_off_over_available_returns_400(admin_client, client_id, product_ids):
     pid, color_id, size_id = product_ids
     zone = str(uuid.uuid4())

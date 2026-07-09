@@ -26,6 +26,7 @@ from modules.balances.service import (
     get_balances_summary,
     get_plannable_items,
     list_zone_relocations,
+    reverse_write_off,
 )
 
 router = APIRouter(tags=["balances"])
@@ -135,6 +136,13 @@ def create_relocation(
 def create_write_off_op(payload: WriteOffCreate, user=Depends(get_current_stock_operator)):
     with get_connection() as conn:
         create_write_off(conn, payload, str(user["id"]))
+    return {"message": "ok"}
+
+
+@router.post("/balances/write-offs/{relocation_id}/undo")
+def undo_write_off_op(relocation_id: str, user=Depends(get_current_stock_operator)):
+    with get_connection() as conn:
+        reverse_write_off(conn, relocation_id, str(user["id"]))
     return {"message": "ok"}
 
 

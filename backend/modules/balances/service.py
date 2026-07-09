@@ -1198,6 +1198,50 @@ def create_write_off(connection, payload, user_id: str) -> None:
     connection.commit()
 
 
+def reverse_write_off(connection, relocation_id: str, user_id: str) -> None:
+    """Откат ошибочного списания: зеркальное движение written_off → исходный бакет.
+
+    Append-only, как и все реверсы журнала (см. reverse_packing_entry): пишем обратную
+    запись со ссылкой reverses_id на оригинал и запрещаем повторный откат. Атрибуция к
+    строкам документов (shipment_line_id / dispatch_line_id) восстанавливается — пул строки
+    возвращается ровно тем куском, что списание из него забрало. Списание могло разбиться
+    по FIFO на несколько строк журнала — каждая откатывается своей записью отдельно.
+    """
+    from fastapi import HTTPException
+
+    row = connection.execute(
+        "SELECT * FROM zone_relocations WHERE id = ?", (relocation_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Запись движения не найдена")
+    if str(row["to_op"]) != INV_OP_WRITTEN_OFF or row["reverses_id"]:
+        raise HTTPException(status_code=400, detail="Откатить можно только запись списания")
+
+    already = connection.execute(
+        "SELECT 1 FROM zone_relocations WHERE reverses_id = ? LIMIT 1", (relocation_id,)
+    ).fetchone()
+    if already:
+        raise HTTPException(status_code=400, detail="Это списание уже отменено")
+
+    qty = int(row["qty"] or 0)
+    insert_inventory_move(
+        connection,
+        product_id=str(row["product_id"]), product_name=row["product_name"], product_sku=row["product_sku"],
+        color_id=row["color_id"], color_name=row["color_name"],
+        size_id=row["size_id"], size_name=row["size_name"],
+        client_id=row["client_id"], client_name=row["client_name"],
+        from_op=INV_OP_WRITTEN_OFF, to_op=str(row["from_op"]),
+        from_quality=str(row["from_quality"]), to_quality=str(row["from_quality"]),
+        from_zone_id=None, from_zone_name=None,
+        to_zone_id=row["from_zone_id"], to_zone_name=row["from_zone_name"],
+        qty=qty, user_id=user_id,
+        shipment_line_id=row["shipment_line_id"], dispatch_line_id=row["dispatch_line_id"],
+        reverses_id=relocation_id,
+        comment=f"Откат списания: {qty} шт.",
+    )
+    connection.commit()
+
+
 def create_stock_entry(connection, payload, user_id: str) -> int:
     """Историческое заведение остатков — то, что лежало на складе до системы.
 
@@ -1278,7 +1322,9 @@ def list_zone_relocations(
     rows = connection.execute(
         f"""
         SELECT r.*, COALESCE(NULLIF(TRIM(p.sku), ''), r.product_sku) AS effective_sku,
-               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email, COUNT(*) OVER() AS _total
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email,
+               EXISTS(SELECT 1 FROM zone_relocations x WHERE x.reverses_id = r.id) AS is_reversed,
+               COUNT(*) OVER() AS _total
         FROM zone_relocations r
         LEFT JOIN products p ON p.id = r.product_id
         LEFT JOIN users u ON u.id = r.created_by
@@ -1309,6 +1355,8 @@ def list_zone_relocations(
             qty=int(row["qty"] or 0),
             reason=row["reason"],
             comment=row["comment"],
+            reverses_id=str(row["reverses_id"]) if row["reverses_id"] else None,
+            is_reversed=bool(row["is_reversed"]),
         )
         for row in rows
     ]
