@@ -81,14 +81,29 @@ class InvoiceAttachStorage(BaseModel):
     date_to:   str
 
 
+class InvoiceDiscountCreate(BaseModel):
+    amount_kop: int = Field(ge=1)      # копейки
+    reason:     str                    # обязательный текст «за что скидка»
+
+
+class InvoiceDiscountItem(BaseModel):
+    id:              str
+    amount_kop:      int
+    reason:          str
+    created_at:      str
+    created_by:      str | None = None
+    created_by_name: str | None = None
+
+
 class InvoicePaymentItem(BaseModel):
     id:               str
-    amount:           int                    # копейки
+    amount:           int                    # копейки; отрицательная — сторно
     paid_on:          str | None = None
     comment:          str | None = None
     created_at:       str
     created_by:       str | None = None
     created_by_email: str | None = None
+    reverses_id:      str | None = None      # заполнено у сторно-записи
 
 
 class InvoiceFileItem(BaseModel):
@@ -128,10 +143,12 @@ class InvoiceDetailResponse(BaseModel):
     receipt_logistics_kop:  int = 0
     extra_income_kop:       int = 0
     storage_kop:            int = 0
+    discount_kop:           int = 0
     storage:      InvoiceStorageBlock | None = None
     shipments:    list[InvoiceShipmentItem]
     receipts:     list[InvoiceReceiptItem] = []
     extra_income: list[InvoiceExtraIncomeItem] = []
+    discounts:    list[InvoiceDiscountItem] = []
     payments:     list[InvoicePaymentItem]
     files:        list[InvoiceFileItem]
     ops:          list[InvoiceOpItem]
@@ -271,6 +288,55 @@ class InvoiceAmountUpdate(BaseModel):
     """Корректировка суммы выставленного счёта (спор клиента и т.п.)."""
     total_amount: int = Field(ge=1)    # копейки
     reason:       str                  # обязательная причина корректировки
+
+
+class SettlementDayPoint(BaseModel):
+    date:            str
+    issued_kop:      int
+    cancelled_kop:   int = 0  # аннулировано в этот день (отрицательное начисление)
+    paid_kop:        int
+    outstanding_kop: int      # долг на конец дня (накопительно)
+
+
+class SettlementAgingBucket(BaseModel):
+    key:        str
+    label:      str
+    count:      int
+    amount_kop: int
+
+
+class ReceivableClientRow(BaseModel):
+    client_id:           str | None
+    client_name:         str | None
+    issued_kop:          int      # выставлено в периоде
+    paid_kop:            int      # получено в периоде
+    debt_kop:            int      # долг на конец периода
+    overdue_kop:         int
+    oldest_overdue_days: int
+    debt_count:          int      # счетов с непогашенным остатком
+
+
+class ReceivablesAnalyticsResponse(BaseModel):
+    date_from:        str
+    date_to:          str
+    issued_kop:       int
+    issued_count:     int
+    paid_kop:         int
+    payment_count:    int
+    cancelled_kop:    int = 0      # аннулировано в периоде (по сумме счетов)
+    cancelled_count:  int = 0
+    cohort_paid_kop:  int          # оплачено по счетам, выставленным в периоде
+    collected_pct:    float
+    opening_debt_kop: int          # долг на начало периода
+    debt_kop:         int          # долг на конец периода
+    debt_count:       int
+    overdue_kop:      int
+    overdue_count:    int
+    avg_days_to_pay:  float        # взвешенный по сумме срок оплаты, дней
+    series:   list[SettlementDayPoint]
+    aging:    list[SettlementAgingBucket]
+    clients:  list[ReceivableClientRow]
+    clients_total: int             # всего клиентов в срезе (clients усечён)
 
 
 class InvoiceAlertsResponse(BaseModel):

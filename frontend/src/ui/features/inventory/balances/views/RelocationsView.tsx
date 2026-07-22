@@ -3,6 +3,7 @@ import { getZoneRelocations, undoWriteOff, INV_OP_LABELS, INV_QUALITY_LABELS, WR
 import type { WriteOffReason } from '../../../../../api/balancesApi'
 import type { ZoneRelocationItem } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useFilterParam, usePageParam } from '../../../../../hooks/useFilterParams'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
@@ -52,10 +53,10 @@ function fmtDateTime(iso: string): string {
 export function RelocationsView() {
   const [items, setItems] = useState<ZoneRelocationItem[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = usePageParam()
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [clientId, setClientId] = useState('')
+  const [search, setSearch] = useFilterParam('search', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
   const [undoing, setUndoing] = useState<string | null>(null)
   const { clients } = useLookups()
   const { user } = useCurrentUser()
@@ -111,12 +112,12 @@ export function RelocationsView() {
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Товар, SKU…"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              onChange={(e) => setSearch(e.target.value)}
             />
             {search && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => { setSearch(''); setPage(1) }}
+                onClick={() => setSearch('')}
               >
                 <Icon name="x" size={12} />
               </button>
@@ -126,11 +127,11 @@ export function RelocationsView() {
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            onChange={(v) => { setClientId(v); setPage(1) }}
+            onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
           {clientId && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setPage(1) }}>
+            <button className="btn ghost sm" onClick={() => setClientId('')}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

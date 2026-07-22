@@ -11,6 +11,7 @@ from config import (
     EMPLOYEE_COMP_FIXED,
     EMPLOYEE_COMP_HOURLY,
     EMPLOYEE_STATUS_ACTIVE,
+    EXPENSE_KIND_DISCOUNT,
     EXPENSE_KIND_LABELS,
     EXPENSE_KIND_LOGISTICS,
     EXPENSE_KIND_RENT,
@@ -33,15 +34,19 @@ from config import (
     EXPENSE_SALARY_SUBTYPE_LABELS,
     EXPENSE_SALARY_SUBTYPE_TIMESHEET,
     EXPENSE_SOURCE_EMPLOYEE,
+    EXPENSE_SOURCE_INVOICE_DISCOUNT,
     EXPENSE_SOURCE_PAYROLL,
     EXPENSE_SOURCE_TRIP,
     EXPENSE_SOURCE_WAREHOUSE,
+    EXPENSE_SYSTEM_CATEGORY_DISCOUNT,
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,
     EXPENSE_SYSTEM_CATEGORY_SALARY,
     EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED,
     EXPENSE_SYSTEM_CATEGORY_SALARY_TIMESHEET,
+    PAYABLE_AGING_BUCKETS,
     PAYROLL_KIND_LABELS,
+    aging_bucket_key,
 )
 from dbconn import ci_like_substring_param
 from modules.production_calendar.service import working_days_in_range, working_days_of_month
@@ -1165,6 +1170,88 @@ def reverse_trip_logistics_expense(connection, trip_id: str, uid: str) -> None:
     )
 
 
+def create_invoice_discount_expense(
+    connection,
+    *,
+    discount_id: str,
+    invoice_number: str,
+    client_name: str | None,
+    amount_kop: int,
+    reason: str,
+    spent_on: str,
+    uid: str,
+) -> None:
+    """Заводит расход по скидке в счёте (kind=discount, source_kind=invoice_discount).
+
+    Скидка — не денежный отток (зачитывается уменьшением суммы счёта), поэтому расход
+    сразу «оплачен» с paid_on = spent_on и без источника оплаты — он не должен висеть
+    в «ожидает оплаты» и попадать в очереди оплат. Инвариант «1 скидка → 1 расход».
+    Не коммитит — это делает вызывающий."""
+    expense_id = str(uuid4())
+    exp_number = next_expense_number(connection)
+    category_id = resolve_system_category_id(connection, EXPENSE_SYSTEM_CATEGORY_DISCOUNT)
+    name = f"Скидка по счёту {invoice_number}: {reason}"
+    now = now_iso()
+    connection.execute(
+        """INSERT INTO material_expenses
+           (id,exp_number,spent_on,category_id,name,quantity,unit,amount,paid_amount,
+            payment_source_id,supplier,comment,kind,payment_status,paid_on,
+            source_kind,source_id,created_at,created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (expense_id, exp_number, spent_on, category_id, name, 1, None,
+         int(amount_kop), int(amount_kop), None, (client_name or None), None,
+         EXPENSE_KIND_DISCOUNT, EXPENSE_PAYMENT_PAID, spent_on,
+         EXPENSE_SOURCE_INVOICE_DISCOUNT, discount_id, now, uid),
+    )
+    connection.execute(
+        "INSERT INTO expense_payments "
+        "(id,expense_id,amount,paid_on,payment_source_id,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, int(amount_kop), spent_on, None,
+         "Скидка зачтена в счёте (не денежная операция)", now, uid),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), expense_id, EXPENSE_OP_CREATE,
+         f"Заведено из счёта {invoice_number}: {format_kopecks(int(amount_kop))} · скидка",
+         now, uid),
+    )
+
+
+def reverse_invoice_discount_expense(connection, discount_id: str, uid: str) -> None:
+    """Снимает расход скидки при её удалении из счёта или аннулировании счёта.
+
+    Парный к create_invoice_discount_expense. В отличие от рейсовой логистики,
+    статус оплаты не гейтит: «оплата» скидки виртуальная (зачёт в счёте), реальных
+    платежей за ней нет — снимаем расход вместе с его платежами. Если расхода нет —
+    тихо выходим. Не коммитит — это делает вызывающий."""
+    existing = connection.execute(
+        "SELECT id, amount FROM material_expenses "
+        "WHERE source_kind = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (EXPENSE_SOURCE_INVOICE_DISCOUNT, discount_id),
+    ).fetchone()
+    if not existing:
+        return
+    now = now_iso()
+    connection.execute(
+        "UPDATE material_expenses SET is_deleted = 1, updated_at = ? WHERE id = ?",
+        (now, str(existing["id"])),
+    )
+    connection.execute(
+        "UPDATE expense_payments SET is_deleted = 1 "
+        "WHERE expense_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (str(existing["id"]),),
+    )
+    connection.execute(
+        "INSERT INTO expense_ops (id,expense_id,op_type,comment,created_at,created_by) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), str(existing["id"]), EXPENSE_OP_DELETE,
+         f"Скидка снята со счёта: {format_kopecks(int(existing['amount']))} · расход снят",
+         now, uid),
+    )
+
+
 def reattribute_trip_logistics_carrier(
     connection, trip_id: str, *, carrier_id: str | None, carrier_name: str | None, uid: str
 ) -> None:
@@ -1440,3 +1527,257 @@ def run_rent_accruals(connection, on_date: date, uid: str | None = None) -> int:
         )
         created += 1
     return created
+
+
+# ── Аналитика кредиторки (расчёты с контрагентами за период) ────────────────────
+
+# Фактические выплаты = журнал expense_payments (0068) ПЛЮС легаси-хвост: у расходов,
+# оплаченных до появления журнала, миграция проставила paid_amount без журнальных
+# записей. Без хвоста ряд выплат и долг по таким расходам «зависли» бы навсегда.
+_PAYABLE_JOURNAL_SUM = (
+    "COALESCE((SELECT SUM(p2.amount) FROM expense_payments p2 "
+    "WHERE p2.expense_id = e.id AND COALESCE(p2.is_deleted, 0) = 0), 0)"
+)
+
+_PAYABLE_PAY_CTE = f"""
+    WITH pay AS (
+        SELECT p.expense_id AS expense_id,
+               COALESCE(NULLIF(p.paid_on, ''), SUBSTR(p.created_at, 1, 10)) AS day,
+               p.amount AS amount
+        FROM expense_payments p
+        WHERE COALESCE(p.is_deleted, 0) = 0
+        UNION ALL
+        SELECT e.id, COALESCE(NULLIF(e.paid_on, ''), e.spent_on),
+               COALESCE(e.paid_amount, 0) - {_PAYABLE_JOURNAL_SUM}
+        FROM material_expenses e
+        WHERE COALESCE(e.paid_amount, 0) - {_PAYABLE_JOURNAL_SUM} > 0
+    )
+"""
+
+_MAX_COUNTERPARTY_ROWS = 50
+
+# Контрагент: перевозчик (FK) приоритетнее текстового поставщика — по нему идёт
+# массовая оплата, и только он гарантированно один и тот же у разных расходов.
+_COUNTERPARTY_KEY = "COALESCE(e.carrier_id, NULLIF(e.supplier, ''), '')"
+_COUNTERPARTY_NAME = "COALESCE(cr.name, NULLIF(e.supplier, ''), 'Без контрагента')"
+
+
+def payables_analytics(
+    connection,
+    *,
+    date_from: str,
+    date_to: str,
+    kinds: list[str] | None = None,
+    carrier_id: str | None = None,
+) -> dict:
+    """Расчёты с контрагентами за [date_from..date_to] (вкл.): что начислили, что выплатили,
+    сколько должны и сколько долг висит. Зеркало дебиторки счетов для расходной стороны.
+
+    Начисление берётся по `spent_on` реестровой строкой как есть (в отличие от аналитики
+    расходов, где ЗП идёт из табеля, а аренда размазана по дням) — здесь считаются денежные
+    обязательства, а не себестоимость дня, поэтому размазывать нечего.
+
+    Старение считается по ВОЗРАСТУ долга от `spent_on`: срока оплаты у расхода в схеме нет,
+    поэтому «просрочка» для кредиторки не определена — меряем, сколько обязательство висит.
+    Аннулированные расходы исключены целиком.
+    """
+    try:
+        df = date.fromisoformat(str(date_from)[:10])
+        dt = date.fromisoformat(str(date_to)[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Укажите период в формате ГГГГ-ММ-ДД") from exc
+    if dt < df:
+        df, dt = dt, df
+    df_s, dt_s = df.isoformat(), dt.isoformat()
+
+    scope = list(kinds) if kinds else list(EXPENSE_KINDS_ALL)
+    cid = (carrier_id or "").strip() or None
+
+    kind_ph = ",".join("?" for _ in scope)
+    exp_where = (
+        f"COALESCE(e.is_deleted, 0) = 0 AND e.payment_status != ? AND e.kind IN ({kind_ph})"
+    )
+    exp_params: list = [EXPENSE_PAYMENT_CANCELLED, *scope]
+    if cid:
+        exp_where += " AND e.carrier_id = ?"
+        exp_params.append(cid)
+
+    days: list[str] = []
+    d = df
+    while d <= dt:
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+
+    # 1) Начислено по дням окна + открывающий остаток начислений.
+    accrued_rows = connection.execute(
+        f"""
+        SELECT e.spent_on AS day, COALESCE(SUM(e.amount), 0) AS amount, COUNT(*) AS n
+        FROM material_expenses e
+        WHERE {exp_where} AND e.spent_on >= ? AND e.spent_on <= ?
+        GROUP BY e.spent_on
+        """,
+        [*exp_params, df_s, dt_s],
+    ).fetchall()
+    accrued_by_day = {str(r["day"]): int(r["amount"]) for r in accrued_rows}
+    accrued_kop = sum(accrued_by_day.values())
+    accrued_count = sum(int(r["n"]) for r in accrued_rows)
+
+    opening_accrued = int(connection.execute(
+        f"SELECT COALESCE(SUM(e.amount), 0) AS amount FROM material_expenses e "
+        f"WHERE {exp_where} AND e.spent_on < ?",
+        [*exp_params, df_s],
+    ).fetchone()["amount"])
+
+    # 2) Выплачено по дням окна + открывающий остаток выплат.
+    paid_rows = connection.execute(
+        f"""
+        {_PAYABLE_PAY_CTE}
+        SELECT pay.day AS day, COALESCE(SUM(pay.amount), 0) AS amount, COUNT(*) AS n
+        FROM pay JOIN material_expenses e ON e.id = pay.expense_id
+        WHERE {exp_where} AND pay.day >= ? AND pay.day <= ?
+        GROUP BY pay.day
+        """,
+        [*exp_params, df_s, dt_s],
+    ).fetchall()
+    paid_by_day = {str(r["day"]): int(r["amount"]) for r in paid_rows}
+    paid_kop = sum(paid_by_day.values())
+    payment_count = sum(int(r["n"]) for r in paid_rows)
+
+    opening_paid = int(connection.execute(
+        f"""
+        {_PAYABLE_PAY_CTE}
+        SELECT COALESCE(SUM(pay.amount), 0) AS amount
+        FROM pay JOIN material_expenses e ON e.id = pay.expense_id
+        WHERE {exp_where} AND pay.day < ?
+        """,
+        [*exp_params, df_s],
+    ).fetchone()["amount"])
+
+    running = opening_accrued - opening_paid
+    series: list[dict] = []
+    for day in days:
+        running += accrued_by_day.get(day, 0) - paid_by_day.get(day, 0)
+        series.append({
+            "date": day,
+            "accrued_kop": accrued_by_day.get(day, 0),
+            "paid_kop": paid_by_day.get(day, 0),
+            "outstanding_kop": running,
+        })
+
+    # 3) Средний срок оплаты — взвешенный по сумме, по выплатам окна.
+    speed = connection.execute(
+        f"""
+        {_PAYABLE_PAY_CTE}
+        SELECT COALESCE(SUM(pay.amount), 0) AS amount,
+               COALESCE(SUM(pay.amount * (pay.day::date - e.spent_on::date)), 0) AS weighted
+        FROM pay JOIN material_expenses e ON e.id = pay.expense_id
+        WHERE {exp_where} AND pay.day >= ? AND pay.day <= ?
+        """,
+        [*exp_params, df_s, dt_s],
+    ).fetchone()
+    speed_amount = int(speed["amount"] or 0)
+    avg_days_to_pay = round(int(speed["weighted"] or 0) / speed_amount, 1) if speed_amount else 0.0
+
+    # 4) Долг по каждому расходу на конец окна → старение, контрагенты, виды расхода.
+    debt_rows = connection.execute(
+        f"""
+        {_PAYABLE_PAY_CTE}
+        SELECT e.id, e.kind, e.spent_on, e.amount,
+               {_COUNTERPARTY_KEY} AS cp_key, {_COUNTERPARTY_NAME} AS cp_name,
+               COALESCE((SELECT SUM(pay.amount) FROM pay
+                         WHERE pay.expense_id = e.id AND pay.day <= ?), 0) AS paid_to_date
+        FROM material_expenses e
+        LEFT JOIN carriers cr ON cr.id = e.carrier_id
+        WHERE {exp_where} AND e.spent_on <= ?
+        """,
+        [dt_s, *exp_params, dt_s],
+    ).fetchall()
+
+    aging = {key: {"key": key, "label": label, "count": 0, "amount_kop": 0}
+             for key, label, _lo, _hi in PAYABLE_AGING_BUCKETS}
+    counterparties: dict[str, dict] = {}
+    by_kind: dict[str, dict] = {}
+    debt_kop = debt_count = 0
+
+    def _kind_entry(kind: str) -> dict:
+        return by_kind.setdefault(kind, {
+            "kind": kind, "kind_label": EXPENSE_KIND_LABELS.get(kind, kind),
+            "accrued_kop": 0, "paid_kop": 0, "debt_kop": 0,
+        })
+
+    def _cp_entry(key: str, name: str) -> dict:
+        return counterparties.setdefault(key, {
+            "key": key, "name": name or "Без контрагента",
+            "accrued_kop": 0, "paid_kop": 0, "debt_kop": 0,
+            "oldest_days": 0, "debt_count": 0,
+        })
+
+    for r in debt_rows:
+        debt = int(r["amount"]) - int(r["paid_to_date"])
+        if debt <= 0:
+            continue
+        age = max(0, (dt - date.fromisoformat(str(r["spent_on"])[:10])).days)
+        debt_kop += debt
+        debt_count += 1
+        bucket = aging[aging_bucket_key(PAYABLE_AGING_BUCKETS, age)]
+        bucket["count"] += 1
+        bucket["amount_kop"] += debt
+        _kind_entry(str(r["kind"]))["debt_kop"] += debt
+
+        cp = _cp_entry(str(r["cp_key"] or ""), str(r["cp_name"] or ""))
+        cp["debt_kop"] += debt
+        cp["debt_count"] += 1
+        cp["oldest_days"] = max(int(cp["oldest_days"]), age)
+
+    # 5) Обороты периода — по контрагентам и по видам расхода.
+    for row in connection.execute(
+        f"""
+        SELECT {_COUNTERPARTY_KEY} AS cp_key, {_COUNTERPARTY_NAME} AS cp_name,
+               e.kind AS kind, COALESCE(SUM(e.amount), 0) AS amount
+        FROM material_expenses e
+        LEFT JOIN carriers cr ON cr.id = e.carrier_id
+        WHERE {exp_where} AND e.spent_on >= ? AND e.spent_on <= ?
+        GROUP BY 1, 2, 3
+        """,
+        [*exp_params, df_s, dt_s],
+    ).fetchall():
+        amount = int(row["amount"])
+        _kind_entry(str(row["kind"]))["accrued_kop"] += amount
+        _cp_entry(str(row["cp_key"] or ""), str(row["cp_name"] or ""))["accrued_kop"] += amount
+
+    for row in connection.execute(
+        f"""
+        {_PAYABLE_PAY_CTE}
+        SELECT {_COUNTERPARTY_KEY} AS cp_key, {_COUNTERPARTY_NAME} AS cp_name,
+               e.kind AS kind, COALESCE(SUM(pay.amount), 0) AS amount
+        FROM pay
+        JOIN material_expenses e ON e.id = pay.expense_id
+        LEFT JOIN carriers cr ON cr.id = e.carrier_id
+        WHERE {exp_where} AND pay.day >= ? AND pay.day <= ?
+        GROUP BY 1, 2, 3
+        """,
+        [*exp_params, df_s, dt_s],
+    ).fetchall():
+        amount = int(row["amount"])
+        _kind_entry(str(row["kind"]))["paid_kop"] += amount
+        _cp_entry(str(row["cp_key"] or ""), str(row["cp_name"] or ""))["paid_kop"] += amount
+
+    cp_rows = sorted(counterparties.values(), key=lambda c: (-int(c["debt_kop"]), -int(c["accrued_kop"])))
+    kind_rows = sorted(by_kind.values(), key=lambda k: -int(k["accrued_kop"]))
+    return {
+        "date_from": df_s,
+        "date_to": dt_s,
+        "accrued_kop": accrued_kop,
+        "accrued_count": accrued_count,
+        "paid_kop": paid_kop,
+        "payment_count": payment_count,
+        "opening_debt_kop": opening_accrued - opening_paid,
+        "debt_kop": debt_kop,
+        "debt_count": debt_count,
+        "avg_days_to_pay": avg_days_to_pay,
+        "series": series,
+        "aging": [aging[key] for key, _l, _lo, _hi in PAYABLE_AGING_BUCKETS],
+        "by_kind": kind_rows,
+        "counterparties": cp_rows[:_MAX_COUNTERPARTY_ROWS],
+        "counterparties_total": len(cp_rows),
+    }

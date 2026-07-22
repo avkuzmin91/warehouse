@@ -253,6 +253,19 @@ SHIPMENT_RETURN_TO_PACKING_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKED,
 })
 
+# Виды переупаковки (задача была поставлена с ошибкой, товар пакуется заново).
+# Первый проход упаковки остаётся оплаченным; повторные pack-записи штампуются:
+# free — за наш счёт (в производительности объём виден, деньги 0);
+# paid — за счёт клиента (при завершении задачи автоматически создаётся запись
+#        «Доп. работы»: кастомная цена за единицу либо стандартный тариф упаковки,
+#        плюс работы сверх тарифа — удаление старой упаковки, пересборка коробов).
+SHIPMENT_REPACK_FREE = "free"
+SHIPMENT_REPACK_PAID = "paid"
+SHIPMENT_REPACK_KINDS: frozenset[str] = frozenset({SHIPMENT_REPACK_FREE, SHIPMENT_REPACK_PAID})
+# Системный вид работ для автосозданных записей платной переупаковки
+# (find-or-create по имени — нейтральное значение, безопасно для новых инстансов).
+EXTRA_INCOME_REPACK_CATEGORY_NAME = "Переупаковка"
+
 SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_ASSIGNED,
@@ -373,6 +386,10 @@ SHIPMENT_OP_PACK_DATE_MOVE  = "pack_date_move"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
+# Менеджер запустил переупаковку (ошибка постановки задачи) / платная переупаковка
+# выставлена клиенту автосозданной записью «Доп. работы» при выходе в «Упаковано».
+SHIPMENT_OP_REPACK_START  = "repack_start"
+SHIPMENT_OP_REPACK_CHARGE = "repack_charge"
 # Начальник склада отклонил задачу: assigned → draft с причиной, возврат менеджеру.
 SHIPMENT_OP_REJECT          = "reject"
 SHIPMENT_OP_SHIP            = "ship"
@@ -446,6 +463,15 @@ DISPATCH_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     DISPATCH_STATUS_AWAITING_TRIP,
 })
 
+# «Вернуть на корректировку»: откат в черновик, пока ничего не уехало рейсом. Из
+# «Ожидает рейс» подготовленный товар сторнируется на исходные места (return_prepared_stock).
+# После первого выезда (partially_shipped/shipped) возврата нет — только отмена рейса.
+DISPATCH_RETURNABLE_STATUSES: frozenset[str] = frozenset({
+    DISPATCH_STATUS_AWAITING_PACKING,
+    DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+})
+
 # Статусы, в которых отгрузка — кандидат на привязку к рейсу (есть готовый остаток).
 # Рейс можно заказать как на «Ожидает рейс», так и на ещё готовящиеся кладовщиком
 # («Подготовка отгрузки») — товар всё равно лежит в `ready`, спишется при выезде.
@@ -497,6 +523,7 @@ DISPATCH_OP_ADVANCE         = "advance"
 DISPATCH_OP_PREPARE         = "prepare"
 DISPATCH_OP_SHIP            = "ship"
 DISPATCH_OP_CANCEL          = "cancel"
+DISPATCH_OP_RETURN          = "return_to_draft"
 
 # ---------------------------------------------------------------------------
 # Логистика — Рейсы (trip_*)
@@ -585,6 +612,7 @@ TRIP_OP_ARRIVAL         = "arrival"
 TRIP_OP_DEPARTURE       = "departure"
 TRIP_OP_UNLOAD_DONE     = "unload_done"
 TRIP_OP_LOAD_DONE       = "load_done"
+TRIP_OP_RECEIVE_CORRECTION = "receive_correction"
 TRIP_OP_COST_ACTUAL     = "cost_actual"
 TRIP_OP_CLOSE           = "close"
 TRIP_OP_CANCEL          = "cancel"
@@ -652,6 +680,39 @@ INVOICE_OP_EXTRA_LINK      = "extra_income_link"
 INVOICE_OP_EXTRA_UNLINK    = "extra_income_unlink"
 INVOICE_OP_STORAGE_LINK    = "storage_link"
 INVOICE_OP_STORAGE_UNLINK  = "storage_unlink"
+INVOICE_OP_DISCOUNT_ADD    = "discount_add"
+INVOICE_OP_DISCOUNT_REMOVE = "discount_remove"
+
+# ---------------------------------------------------------------------------
+# Аналитика расчётов: старение долга
+# ---------------------------------------------------------------------------
+# Бакеты старения — (ключ, подпись, нижняя граница дней вкл., верхняя вкл. или None).
+# Дебиторка стареет по ДНЯМ ПРОСРОЧКИ (дата отчёта − due_date): у счёта есть срок
+# расчёта. Кредиторка — по ВОЗРАСТУ ДОЛГА (дата отчёта − spent_on): у расхода срока
+# оплаты нет, поэтому «просрочка» для него не определена, меряем сколько висит.
+
+RECEIVABLE_AGING_BUCKETS: list[tuple[str, str, int | None, int | None]] = [
+    ("current",  "Срок не наступил", None,  0),
+    ("d1_7",     "1–7 дней",            1,  7),
+    ("d8_30",    "8–30 дней",           8,  30),
+    ("d31_60",   "31–60 дней",         31,  60),
+    ("d60_plus", "Более 60 дней",      61,  None),
+]
+
+PAYABLE_AGING_BUCKETS: list[tuple[str, str, int | None, int | None]] = [
+    ("d0_7",     "До 7 дней",        None,  7),
+    ("d8_30",    "8–30 дней",           8,  30),
+    ("d31_60",   "31–60 дней",         31,  60),
+    ("d60_plus", "Более 60 дней",      61,  None),
+]
+
+
+def aging_bucket_key(buckets, days: int) -> str:
+    """Ключ бакета старения по количеству дней (границы включительно, None — открыто)."""
+    for key, _label, lo, hi in buckets:
+        if (lo is None or days >= lo) and (hi is None or days <= hi):
+            return key
+    return buckets[-1][0]
 
 # ---------------------------------------------------------------------------
 # Доп. работы (прочие доходы): переборка брака, переклейка ШК и т.п.
@@ -781,10 +842,11 @@ EXPENSE_KIND_LOGISTICS = "logistics"   # автоматически из рей�
 EXPENSE_KIND_RENT      = "rent"        # оплата склада (аренда)
 EXPENSE_KIND_SALARY    = "salary"      # выплата ЗП сотруднику
 EXPENSE_KIND_RECURRING = "recurring"   # авто из шаблона регулярного расхода (погрузчик и т.п.)
+EXPENSE_KIND_DISCOUNT  = "discount"    # автоматически из скидки в счёте клиенту
 
 EXPENSE_KINDS_ALL: tuple[str, ...] = (
     EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
-    EXPENSE_KIND_RECURRING,
+    EXPENSE_KIND_RECURRING, EXPENSE_KIND_DISCOUNT,
 )
 EXPENSE_KIND_LABELS: dict[str, str] = {
     EXPENSE_KIND_MANUAL:    "Хозрасход",
@@ -792,11 +854,12 @@ EXPENSE_KIND_LABELS: dict[str, str] = {
     EXPENSE_KIND_RENT:      "Аренда",
     EXPENSE_KIND_SALARY:    "Зарплата",
     EXPENSE_KIND_RECURRING: "Регулярный",
+    EXPENSE_KIND_DISCOUNT:  "Скидка клиенту",
 }
-# Видимость по ролям: менеджер видит хозрасходы, логистику и регулярные расходы;
+# Видимость по ролям: менеджер видит хозрасходы, логистику, регулярные расходы и скидки;
 # аренда и ЗП — только админ. Реестр-список и сводка фильтруются этим набором (см. security).
 EXPENSE_KINDS_MANAGER_VISIBLE: frozenset[str] = frozenset({
-    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RECURRING,
+    EXPENSE_KIND_MANUAL, EXPENSE_KIND_LOGISTICS, EXPENSE_KIND_RECURRING, EXPENSE_KIND_DISCOUNT,
 })
 EXPENSE_KINDS_ADMIN_ONLY: frozenset[str] = frozenset({
     EXPENSE_KIND_RENT, EXPENSE_KIND_SALARY,
@@ -808,6 +871,7 @@ EXPENSE_SOURCE_EMPLOYEE  = "employee"   # сотрудник (ЗП-оклад, �
 EXPENSE_SOURCE_WAREHOUSE = "warehouse"  # склад (аренда)
 EXPENSE_SOURCE_PAYROLL   = "payroll"    # выплата по табелю (ЗП почасовика), source_id = payroll_payments.id
 EXPENSE_SOURCE_RECURRING = "recurring"  # шаблон регулярного расхода, source_id = recurring_expenses.id
+EXPENSE_SOURCE_INVOICE_DISCOUNT = "invoice_discount"  # скидка в счёте, source_id = invoice_discounts.id
 
 # Подтип ЗП (производный, не хранится): оклад vs табель. На витринах ЗП разносится на
 # две строки, чтобы фикс и почасовая не смешивались. Оклад — авто-начисление по сотруднику
@@ -855,6 +919,7 @@ EXPENSE_PAYMENT_STATUS_LABELS: dict[str, str] = {
 EXPENSE_SYSTEM_CATEGORY_LOGISTICS = "Логистика"
 EXPENSE_SYSTEM_CATEGORY_RENT      = "Аренда склада"
 EXPENSE_SYSTEM_CATEGORY_SALARY    = "Зарплата"
+EXPENSE_SYSTEM_CATEGORY_DISCOUNT  = "Скидки клиентам"  # авто-расход скидки в счёте (сид 0088)
 # Виртуальные категории аналитики для разнесения ЗП на оклад/табель (в справочнике
 # категорий их нет, id=None — как и у общей «Зарплата»).
 EXPENSE_SYSTEM_CATEGORY_SALARY_FIXED     = "Оклад (фикс)"
@@ -863,6 +928,7 @@ EXPENSE_SYSTEM_CATEGORY_SEED: tuple[str, ...] = (
     EXPENSE_SYSTEM_CATEGORY_LOGISTICS,
     EXPENSE_SYSTEM_CATEGORY_RENT,
     EXPENSE_SYSTEM_CATEGORY_SALARY,
+    EXPENSE_SYSTEM_CATEGORY_DISCOUNT,
 )
 
 # Стартовое наполнение справочников расходов (сид миграции 0056 и dev-guard).

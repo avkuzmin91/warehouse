@@ -452,7 +452,7 @@ export function CostBreakdown({ goods, logistics, pallets = 0, boxes = 0, extra 
  *  на любом статусе: реквизиты + живой расчёт Товары/Логистика/Итого по текущему
  *  набору отгрузок и поступлений (товары пересчитываются при смене состава). */
 export function InvoiceSummaryPanel({
-  clientName, shipmentCount, receiptCount, extraCount = 0, extraAmountKop = 0, totalQty, dueDateText, amountKop,
+  clientName, shipmentCount, receiptCount, extraCount = 0, extraAmountKop = 0, discountKop = 0, totalQty, dueDateText, amountKop,
   shipmentIds, receiptIds, onApplyAmount, footer,
 }: {
   clientName: string | null
@@ -460,6 +460,7 @@ export function InvoiceSummaryPanel({
   receiptCount: number
   extraCount?: number
   extraAmountKop?: number
+  discountKop?: number
   totalQty: number
   dueDateText: string
   amountKop: number
@@ -477,6 +478,11 @@ export function InvoiceSummaryPanel({
         {extraCount > 0 && <ReadRow label="Доп. работ" mono strong>{extraCount}</ReadRow>}
         <ReadRow label="Всего мест" mono>{totalQty.toLocaleString('ru-RU')} шт</ReadRow>
         <ReadRow label="Срок расчёта" mono>{dueDateText}</ReadRow>
+        {discountKop > 0 && (
+          <ReadRow label="Скидка" mono>
+            <span style={{ color: 'var(--c-danger)' }}>−{formatMoneyKopecks(discountKop)}</span>
+          </ReadRow>
+        )}
         <ReadRow label="Сумма счёта" mono strong>{formatMoneyKopecks(amountKop)}</ReadRow>
       </div>
       {(shipmentIds.length > 0 || receiptIds.length > 0 || extraAmountKop > 0) && (

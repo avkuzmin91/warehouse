@@ -3,12 +3,12 @@ import { Badge } from '../../../../primitives/Badge'
 import type { BadgeTone } from '../../../../primitives/Badge'
 import { DocHeader } from '../../../shared/process/DocHeader'
 import { shipStatusRole } from '../shared/shipProcess'
-import { SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../../api/shipmentsApi'
-import type { ShipmentCargoType, ShipmentStatus } from '../../../../../api/shipmentsApi'
+import { SHIPMENT_REPACK_KIND_LABELS, SHIPMENT_STATUS_LABELS, SHIPMENT_STATUS_TONES } from '../../../../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentRepackKind, ShipmentStatus } from '../../../../../api/shipmentsApi'
 
 /** Шапка карточки отгрузки в стиле рейсов: бейдж статуса, приоритет,
  *  «сейчас у: роль», номер (mono) и контекстные действия справа. */
-export function ShipHeader({ status, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], onBack }: {
+export function ShipHeader({ status, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], repackKind, repackReason, onBack }: {
   status: ShipmentStatus
   cargoType?: ShipmentCargoType
   title: string
@@ -17,6 +17,9 @@ export function ShipHeader({ status, cargoType, title, subtitle, initiator, prio
   priority?: ReactNode
   actions?: ReactNode
   blockReasons?: string[]
+  // Бейдж «Переупаковка» живёт с момента запуска и остаётся после завершения задачи.
+  repackKind?: ShipmentRepackKind | null
+  repackReason?: string | null
   onBack: () => void
 }) {
   return (
@@ -27,6 +30,11 @@ export function ShipHeader({ status, cargoType, title, subtitle, initiator, prio
             {SHIPMENT_STATUS_LABELS[status]}
           </Badge>
           {cargoType === 'defect' && <Badge tone="warning">Брак</Badge>}
+          {repackKind && (
+            <span title={`${SHIPMENT_REPACK_KIND_LABELS[repackKind]}${repackReason ? `: ${repackReason}` : ''}`}>
+              <Badge tone="info">Переупаковка</Badge>
+            </span>
+          )}
           {priority}
         </>
       }

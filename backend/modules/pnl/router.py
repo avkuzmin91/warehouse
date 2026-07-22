@@ -7,11 +7,18 @@ from modules.auth.service import get_current_manager
 from modules.expenses.service import ensure_analytics_window, validate_date
 from modules.pnl.schemas import (
     IncomeAnalyticsResponse,
+    LogisticsAnalyticsResponse,
     PnlDayResponse,
     PnlResponse,
     TripProfitabilityResponse,
 )
-from modules.pnl.service import income_analytics, pnl_day_detail, pnl_report, trip_profitability
+from modules.pnl.service import (
+    income_analytics,
+    logistics_analytics,
+    pnl_day_detail,
+    pnl_report,
+    trip_profitability,
+)
 from security import can_view_salary, ensure_finance_access
 
 router = APIRouter(tags=["pnl"])
@@ -95,3 +102,29 @@ def get_trip_profitability(
     with get_connection() as conn:
         data = trip_profitability(conn, date_from=df, date_to=dt, client_id=client_id)
     return TripProfitabilityResponse(**data)
+
+
+@router.get("/pnl/logistics", response_model=LogisticsAnalyticsResponse)
+def get_logistics_analytics(
+    date_from:       str = Query(...),
+    date_to:         str = Query(...),
+    client_id:       str | None = Query(None),
+    direction:       str | None = Query(None),
+    vehicle_type_id: str | None = Query(None),
+    carrier_id:      str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Аналитика логистики (по факту прибытия): количество рейсов поступлений/отгрузок,
+    потрачено (себестоимость + простой) и заработано (логистика клиента) — динамика по
+    дням и разрезы по типам кузова и перевозчикам. База расчёта дохода — та же, что
+    в «Рентабельности рейсов»."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    ensure_analytics_window(df, dt)
+    with get_connection() as conn:
+        data = logistics_analytics(
+            conn, date_from=df, date_to=dt, client_id=(client_id or None),
+            direction=(direction or None), vehicle_type_id=(vehicle_type_id or None),
+            carrier_id=(carrier_id or None),
+        )
+    return LogisticsAnalyticsResponse(**data)

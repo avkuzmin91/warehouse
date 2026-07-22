@@ -73,6 +73,17 @@ export type ShipmentCargoType = 'good' | 'defect'
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
   | 'pack' | 'pack_correction' | 'move_return' | 'relocate' | 'return_to_packing' | 'reject'
+  | 'repack_start' | 'repack_charge'
+
+// Переупаковка (задача была поставлена с ошибкой, товар пакуется заново):
+// free — за наш счёт (объём в производительности виден, деньги 0),
+// paid — за счёт клиента (при завершении задачи автосоздаётся запись «Доп. работы»).
+export type ShipmentRepackKind = 'free' | 'paid'
+
+export const SHIPMENT_REPACK_KIND_LABELS: Record<ShipmentRepackKind, string> = {
+  free: 'Переупаковка без оплаты',
+  paid: 'Переупаковка за счёт клиента',
+}
 
 export type ShipmentOp = {
   id:               string
@@ -158,6 +169,14 @@ export type ShipmentDetail = ShipmentListItem & {
   trip_id?:         string | null
   trip_number?:     string | null
   trips?:           { id: string; number: string }[]
+  // Переупаковка: kind остаётся после завершения (бейдж «была переупакована»),
+  // repack_active=true — пока пакуют заново. Денежные поля видят только роли со стоимостями.
+  repack_kind:      ShipmentRepackKind | null
+  repack_reason:    string | null
+  repack_active:    boolean
+  repack_price_kop:        number | null
+  repack_extra_amount_kop: number | null
+  repack_extra_comment:    string | null
   created_by:       string | null
   created_by_name:  string | null
   updated_at:       string | null
@@ -360,6 +379,7 @@ export type ShipmentPackingEntry = {
   created_at:       string
   created_by:       string | null
   created_by_email: string | null
+  repack_kind?:     ShipmentRepackKind | null
   reversed:         boolean
 }
 
@@ -395,6 +415,7 @@ export type PackingProductivityRow = {
   defect_earn_kop: number
   earn_kop:        number
   price_missing:   boolean
+  repack_kind?:    ShipmentRepackKind | null
   doc_ids:         string[]
 }
 
@@ -448,6 +469,7 @@ export type PackingDayLine = {
   total:         number
   earn_kop:      number
   price_missing: boolean
+  repack_kind?:  ShipmentRepackKind | null
 }
 
 export type PackingDayDoc = {
@@ -550,11 +572,25 @@ export function rejectShipment(id: string, reason: string) {
 
 // Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
 // «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
+// mode: rework — обычная доработка; repack_free/repack_paid — переупаковка (reason
+// обязателен; для paid — unit_price_kop кастомная цена за единицу либо null =
+// стандартный тариф, extra_amount_kop/extra_comment — работы сверх тарифа).
 // force=true — частичный возврат: уже отгруженное с места остаётся вне задачи,
 // на упаковку возвращается только физически доступный остаток.
-export function returnShipmentToPacking(id: string, force = false) {
-  const q = force ? '?force=true' : ''
-  return request<{ message: string }>(`/shipments/${id}/return-to-packing${q}`, { method: 'POST' })
+export type ReturnToPackingPayload = {
+  mode?: 'rework' | 'repack_free' | 'repack_paid'
+  reason?: string
+  unit_price_kop?: number | null
+  extra_amount_kop?: number | null
+  extra_comment?: string | null
+  force?: boolean
+}
+
+export function returnShipmentToPacking(id: string, payload: ReturnToPackingPayload = {}) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'rework', ...payload }),
+  })
 }
 
 export type ShipmentRelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }

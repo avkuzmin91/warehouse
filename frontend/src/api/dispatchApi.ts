@@ -448,3 +448,12 @@ export function finishDispatchPreparation(id: string, lines: DispatchPrepareLine
 export function cancelDispatch(id: string) {
   return request<{ message: string }>(`/dispatches/${id}/cancel`, { method: 'POST' })
 }
+
+// Возврат на корректировку (→ черновик) до выезда первого рейса; из «Ожидает рейс»
+// бэк сторнирует подготовку. Блокируется распределением в активный рейс.
+export function returnDispatchToDraft(id: string, reason?: string) {
+  return request<{ message: string }>(`/dispatches/${id}/return-to-draft`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason ?? null }),
+  })
+}

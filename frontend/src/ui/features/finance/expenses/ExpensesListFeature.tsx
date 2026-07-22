@@ -101,10 +101,10 @@ export function ExpensesListFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const isAdmin = canManageAdminFinance(user)
-  // Типы, доступные роли: админ — все 4, менеджер — только хозрасходы и логистика.
+  // Типы, доступные роли: админ — все; менеджер — без аренды и ЗП.
   const kindOptions: ExpenseKind[] = isAdmin
-    ? ['manual', 'logistics', 'rent', 'salary', 'recurring']
-    : ['manual', 'logistics', 'recurring']
+    ? ['manual', 'logistics', 'rent', 'salary', 'recurring', 'discount']
+    : ['manual', 'logistics', 'recurring', 'discount']
 
   const [search, setSearch] = useFilterParam('search', '')
   const [categoryF, setCategoryF] = useFilterParam('category', '')
@@ -134,14 +134,15 @@ export function ExpensesListFeature() {
     kindOptions.includes(kindF as ExpenseKind) ? (kindF as ExpenseKind) : ''
   const isSalaryMode = selectedKind === 'salary'
   const isRentMode = selectedKind === 'rent'
-  // Логистика заводится из рейса, регулярный — из справочника «Регулярные расходы»;
-  // вручную в реестре их не создают.
+  // Логистика заводится из рейса, регулярный — из справочника «Регулярные расходы»,
+  // скидка — из счёта клиента; вручную в реестре их не создают.
   const createKind: ExpenseKind | null =
     selectedKind === 'logistics' ? null
       : selectedKind === 'recurring' ? null
-        : selectedKind === 'rent' ? 'rent'
-          : selectedKind === 'salary' ? 'salary'
-            : 'manual'
+        : selectedKind === 'discount' ? null
+          : selectedKind === 'rent' ? 'rent'
+            : selectedKind === 'salary' ? 'salary'
+              : 'manual'
   const canCreate = createKind != null
   const createLabel =
     createKind === 'rent' ? 'Добавить оплату аренды'

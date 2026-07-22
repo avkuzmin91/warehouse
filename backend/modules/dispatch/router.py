@@ -52,6 +52,7 @@ from modules.dispatch.schemas import (
     DispatchListItem,
     DispatchListResponse,
     DispatchPriorityUpdate,
+    DispatchReturnToDraftPayload,
     DispatchReservationItem,
     DispatchReservationsResponse,
 )
@@ -70,6 +71,7 @@ from modules.dispatch.service import (
     prepare_to_ready,
     promote_to_preparing,
     reserved_by_variant,
+    return_dispatch_to_draft,
     return_prepared_stock,
 )
 
@@ -843,3 +845,29 @@ def cancel_dispatch(
         )
         conn.commit()
     return {"message": DISPATCH_STATUS_CANCELLED}
+
+
+@router.post("/dispatches/{doc_id}/return-to-draft")
+def return_dispatch_to_draft_endpoint(
+    doc_id: str,
+    body: DispatchReturnToDraftPayload | None = None,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
+    """Менеджер возвращает отгрузку на корректировку (→ черновик).
+
+    Вместо «аннулировать и создать заново» при ошибке в составе: документ откатывается
+    в черновик с сохранением строк/файлов/палет, из «Ожидает рейс» подготовленный товар
+    журнально возвращается на исходные места. Блокеры — распределение в активный рейс
+    и уехавшие статусы (см. return_dispatch_to_draft).
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_return_to_draft")
+        if not proceed:
+            return stored
+        next_status = return_dispatch_to_draft(conn, doc_id, uid, body.reason if body else None)
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result

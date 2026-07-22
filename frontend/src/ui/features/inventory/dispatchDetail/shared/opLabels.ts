@@ -9,6 +9,7 @@ export const OP_LABELS: Record<string, string> = {
   prepare:         'Подготовка завершена',
   ship:            'Отгружено рейсом',
   cancel:          'Аннулирована',
+  return_to_draft: 'Возврат на корректировку',
 }
 
 export const OP_ICONS: Record<string, string> = {
@@ -22,6 +23,7 @@ export const OP_ICONS: Record<string, string> = {
   prepare:         'check',
   ship:            'truckOut',
   cancel:          'x',
+  return_to_draft: 'arrowLeft',
 }
 
 export const OP_TONES: Record<string, string> = {
@@ -35,4 +37,5 @@ export const OP_TONES: Record<string, string> = {
   prepare:         'success',
   ship:            'success',
   cancel:          'danger',
+  return_to_draft: 'warning',
 }

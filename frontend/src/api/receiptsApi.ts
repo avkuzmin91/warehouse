@@ -380,15 +380,6 @@ export function expectRedelivery(docId: string) {
   })
 }
 
-/** Корректировка обсчёта приёмки по строке (менеджер / начальник склада): новое
- *  принятое + причина. Правит сток и пишет в журнал. */
-export function correctReceivedQty(docId: string, lineId: string, payload: { accepted_qty: number; reason: string }) {
-  return request<{ message: string }>(`/receipts/${docId}/lines/${lineId}/correct-received`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
 // --- Labels & helpers ---
 
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { getBalances, getBalancesSummary, INV_OP_LABELS } from '../../../../../api/balancesApi'
 import type { BalanceItem, BalanceSummary } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useFilterParam, usePageParam } from '../../../../../hooks/useFilterParams'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
 import { FiltersBar, FilterChip, FilterCombobox } from '../../../../data/FiltersBar'
@@ -17,10 +18,10 @@ export function ByProductView() {
   const [items, setItems] = useState<BalanceItem[]>([])
   const [summary, setSummary] = useState<BalanceSummary | null>(null)
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = usePageParam()
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [clientId, setClientId] = useState('')
+  const [search, setSearch] = useFilterParam('search', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
   const [onlyPositive, setOnlyPositive] = useState(true)
   const [hasDefect, setHasDefect] = useState(false)
   const { clients } = useLookups()
@@ -78,12 +79,12 @@ export function ByProductView() {
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
               placeholder="Товар, SKU, клиент…"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              onChange={(e) => setSearch(e.target.value)}
             />
             {search && (
               <button
                 style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
-                onClick={() => { setSearch(''); setPage(1) }}
+                onClick={() => setSearch('')}
               >
                 <Icon name="x" size={12} />
               </button>
@@ -93,7 +94,7 @@ export function ByProductView() {
             label="Клиент"
             value={clientId}
             options={[{ value: '', label: 'Все клиенты' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-            onChange={(v) => { setClientId(v); setPage(1) }}
+            onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
           <FilterChip
@@ -109,7 +110,7 @@ export function ByProductView() {
             onClear={() => { setHasDefect(false); setPage(1) }}
           />
           {(clientId) && (
-            <button className="btn ghost sm" onClick={() => { setClientId(''); setPage(1) }}>
+            <button className="btn ghost sm" onClick={() => setClientId('')}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

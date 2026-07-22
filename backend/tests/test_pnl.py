@@ -362,6 +362,72 @@ def test_income_analytics_empty_window_ok(admin_client, client_id):
     assert inc["by_client"] == []
 
 
+def test_logistics_analytics_by_vehicle(admin_client, client_id):
+    """Аналитика логистики: KPI, «потрачено» = себестоимость + простой, разрез по кузовам
+    (рейс без кузова — в строке «Не указан»), динамика по дням и фильтр направления."""
+    _, trip_a = _dispatch_in_trip(
+        admin_client, client_id, pallets=[1], logistics_rub=1000.0, trip_cost_rub=400.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+    _, trip_b = _dispatch_in_trip(
+        admin_client, client_id, pallets=[1], logistics_rub=500.0, trip_cost_rub=300.0,
+        ship_date="2026-06-11", arrived_at="2026-06-13T08:00:00+00:00",
+    )
+    with get_connection() as conn:
+        # Рейс A — «Фура», с простоем 100 ₽ / 30 мин; рейс B — кузов не указан.
+        conn.execute(
+            "UPDATE trip_docs SET vehicle_type_id = ?, vehicle_type_name = ?, "
+            "waiting_cost = ?, waiting_minutes = ?, load_factor = ? WHERE trip_number = ?",
+            ("vt-fura", "Фура", 100.0, 30, "full", trip_a),
+        )
+        conn.commit()
+
+    body = admin_client.get(
+        f"/pnl/logistics?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}"
+    ).json()
+
+    assert body["trips_total"] == 2
+    assert body["trips_inbound"] == 0
+    assert body["trips_outbound"] == 2
+    assert body["income_total"] == 150000                  # 1000 + 500 ₽ логистики клиента
+    assert body["spent_total"] == 80000                    # (400+100) + 300 ₽
+    assert body["margin_total"] == 70000
+    assert body["waiting_total_kop"] == 10000
+    assert body["waiting_minutes_total"] == 30
+    assert body["trips_full"] == 1
+    assert body["trips_no_income"] == 0
+
+    by_vehicle = {g["name"]: g for g in body["by_vehicle"]}
+    fura = by_vehicle["Фура"]
+    assert fura["trips"] == 1
+    assert fura["spent_kop"] == 50000                      # 400 ₽ + 100 ₽ простоя
+    assert fura["income_kop"] == 100000
+    assert fura["margin_pct"] == 100.0
+    none_row = by_vehicle["Не указан"]
+    assert none_row["id"] is None
+    assert none_row["spent_kop"] == 30000
+    assert none_row["income_kop"] == 50000
+
+    # Динамика: деньги легли на дни фактического прибытия рейсов.
+    series = {p["date"]: p for p in body["series"]}
+    assert series["2026-06-12"]["trips_outbound"] == 1
+    assert series["2026-06-12"]["income_kop"] == 100000
+    assert series["2026-06-13"]["spent_kop"] == 30000
+    assert series["2026-06-10"]["trips_outbound"] == 0
+
+    # Фильтр направления: поступлений в сценарии нет.
+    inbound = admin_client.get(
+        f"/pnl/logistics?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}&direction=inbound"
+    ).json()
+    assert inbound["trips_total"] == 0
+    # Фильтр по кузову: остаётся только «Фура».
+    only_fura = admin_client.get(
+        f"/pnl/logistics?date_from=2026-06-01&date_to=2026-06-30&client_id={client_id}&vehicle_type_id=vt-fura"
+    ).json()
+    assert only_fura["trips_total"] == 1
+    assert only_fura["spent_total"] == 50000
+
+
 def test_pnl_requires_finance_role(warehouse_client, client_id):
     assert warehouse_client.get(
         "/pnl?date_from=2026-06-01&date_to=2026-06-30"
@@ -371,4 +437,7 @@ def test_pnl_requires_finance_role(warehouse_client, client_id):
     ).status_code == 403
     assert warehouse_client.get(
         "/pnl/trips?date_from=2026-06-01&date_to=2026-06-30"
+    ).status_code == 403
+    assert warehouse_client.get(
+        "/pnl/logistics?date_from=2026-06-01&date_to=2026-06-30"
     ).status_code == 403

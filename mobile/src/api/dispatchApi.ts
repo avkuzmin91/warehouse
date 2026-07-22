@@ -210,6 +210,15 @@ export function cancelDispatch(id: string) {
   return request<{ message: string }>(`/dispatches/${id}/cancel`, { method: 'POST' })
 }
 
+// Возврат на корректировку (→ черновик) до выезда первого рейса; из «Ожидает рейс»
+// бэк сторнирует подготовку. Блокируется распределением в активный рейс.
+export function returnDispatchToDraft(id: string, reason?: string) {
+  return request<{ message: string }>(`/dispatches/${id}/return-to-draft`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason ?? null }),
+  })
+}
+
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
 export const DISPATCH_PRIORITY_URGENT = 1
 export const DISPATCH_PRIORITY_HIGH   = 2

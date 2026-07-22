@@ -183,6 +183,16 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
                   {e.good > 0 && e.defect > 0 && <span style={{ color: 'var(--c-text-faint)' }}> · </span>}
                   {e.defect > 0 && <span style={{ color: 'var(--c-danger)' }}>+{e.defect} брак</span>}
                 </span>
+                {e.repack_kind && (
+                  <span
+                    title={e.repack_kind === 'free'
+                      ? 'Переупаковка без оплаты — запись не тарифицируется'
+                      : 'Переупаковка за счёт клиента — войдёт в доп. работы'}
+                    style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--c-border)', color: 'var(--c-text-subtle)', whiteSpace: 'nowrap' }}
+                  >
+                    {e.repack_kind === 'free' ? 'без оплаты' : 'за счёт клиента'}
+                  </span>
+                )}
                 {e.created_by_email && (
                   <span className="t-sub" style={{ fontSize: 11.5, color: 'var(--c-text-faint)' }}>{e.created_by_email}</span>
                 )}

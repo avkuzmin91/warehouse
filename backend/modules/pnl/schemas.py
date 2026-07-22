@@ -84,19 +84,26 @@ class PnlDayResponse(BaseModel):
 
 
 class TripProfitItem(BaseModel):
-    trip_id:       str
-    trip_number:   str
-    direction:     str
-    cargo_type:    str | None = None
-    status:        str
-    status_label:  str
-    day:           str | None = None    # фактический день рейса (прибытие)
-    carrier_name:  str | None = None
-    client_names:  list[str] = []
-    income_kop:    int                  # логистика клиента + палеты
-    cost_kop:      int                  # фактическая себестоимость рейса
-    margin_kop:    int                  # income − cost; <0 — убыток
-    margin_pct:    float | None = None   # None — дохода нет
+    trip_id:           str
+    trip_number:       str
+    direction:         str
+    cargo_type:        str | None = None
+    status:            str
+    status_label:      str
+    day:               str | None = None    # фактический день рейса (прибытие)
+    carrier_id:        str | None = None
+    carrier_name:      str | None = None
+    vehicle_type_id:   str | None = None
+    vehicle_type_name: str | None = None
+    load_factor:       str | None = None    # full | partial
+    income_kop:        int                  # логистика клиента + палеты
+    cost_kop:          int                  # фактическая себестоимость рейса
+    waiting_kop:       int = 0              # стоимость простоя
+    waiting_minutes:   int = 0
+    spent_kop:         int = 0              # cost + waiting — сумма расхода рейса в реестре
+    margin_kop:        int                  # income − cost; <0 — убыток
+    margin_pct:        float | None = None   # None — дохода нет
+    client_names:      list[str] = []
 
 
 class TripProfitabilityResponse(BaseModel):
@@ -106,3 +113,50 @@ class TripProfitabilityResponse(BaseModel):
     cost_total:   int
     margin_total: int
     items:        list[TripProfitItem]
+
+
+class LogisticsGroupRow(BaseModel):
+    id:              str | None = None   # None — «Не указан» (кузов/перевозчик не заведён)
+    name:            str
+    trips:           int
+    trips_inbound:   int
+    trips_outbound:  int
+    income_kop:      int
+    spent_kop:       int                 # себестоимость + простой
+    margin_kop:      int
+    margin_pct:      float | None = None
+    waiting_kop:     int
+    waiting_minutes: int
+    trips_no_income: int                 # рейсы без выставленной клиенту логистики
+
+
+class LogisticsDayPoint(BaseModel):
+    date:           str
+    trips_inbound:  int
+    trips_outbound: int
+    income_kop:     int
+    spent_kop:      int
+
+
+class LogisticsAnalyticsResponse(BaseModel):
+    date_from:            str
+    date_to:              str
+    days:                 int
+    trips_total:          int
+    trips_inbound:        int
+    trips_outbound:       int
+    income_total:         int
+    spent_total:          int
+    margin_total:         int
+    margin_pct:           float | None = None
+    avg_spent_kop:        int
+    avg_income_kop:       int
+    waiting_total_kop:    int
+    waiting_minutes_total: int
+    trips_no_income:      int
+    trips_full:           int
+    trips_partial:        int
+    series:               list[LogisticsDayPoint]
+    by_vehicle:           list[LogisticsGroupRow]
+    by_carrier:           list[LogisticsGroupRow]
+    items:                list[TripProfitItem]

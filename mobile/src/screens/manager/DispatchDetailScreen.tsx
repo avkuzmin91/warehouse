@@ -3,6 +3,7 @@ import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
 import {
   cancelDispatch,
+  returnDispatchToDraft,
   dispatchPriorityLabel,
   dispatchPriorityTone,
   getDispatch,
@@ -27,6 +28,8 @@ import { fmtDate, fmtDateTime } from '../../utils/format'
 
 // Зеркало DISPATCH_CANCELLABLE_STATUSES (config.py): пока ничего не уехало.
 const CANCELLABLE = new Set<DispatchStatus>(['draft', 'preparing', 'awaiting_trip'])
+// Зеркало DISPATCH_RETURNABLE_STATUSES (config.py): возврат в черновик до первого рейса.
+const RETURNABLE = new Set<DispatchStatus>(['awaiting_packing', 'preparing', 'awaiting_trip'])
 const PRIORITY_FINAL = new Set<DispatchStatus>(['shipped', 'partially_shipped', 'cancelled'])
 
 export function DispatchDetailScreen({ docId }: { docId: string }) {
@@ -40,6 +43,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const [plannable, setPlannable] = useState<PlannableItem[]>([])
   const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [confirmCancel, setConfirmCancel] = useState(false)
+  const [confirmReturn, setConfirmReturn] = useState(false)
   const [priorityOpen, setPriorityOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
@@ -83,6 +87,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
     setSaving(true)
     setActionErr('')
     setConfirmCancel(false)
+    setConfirmReturn(false)
     try {
       await fn()
       load()
@@ -96,6 +101,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const tone = doc ? dispatchStatusTone(doc.status) : ''
   const plannableByKey = new Map(plannable.map((p) => [balanceKey(p), p]))
   const cancellable = doc ? CANCELLABLE.has(doc.status) : false
+  const returnable = doc ? RETURNABLE.has(doc.status) : false
   const priorityEditable = doc ? !PRIORITY_FINAL.has(doc.status) : false
   const priorityTone = doc ? dispatchPriorityTone(doc.priority_rank) : ''
 
@@ -173,12 +179,26 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               </button>
             )}
 
-            {canEdit && cancellable && (
+            {canEdit && (cancellable || returnable) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
                 {actionErr && (
                   <div className="alert"><Icon name="alert" size={15} />{actionErr}</div>
                 )}
-                <ConfirmAction
+                {returnable && (
+                  <ConfirmAction
+                    label={<><Icon name="arrowLeft" size={16} /> Вернуть на корректировку</>}
+                    prompt={doc.status === 'awaiting_trip'
+                      ? 'Отгрузка вернётся в черновик, подготовка отменится: товар вернётся на исходные места. Состав и файлы сохранятся.'
+                      : 'Отгрузка вернётся в черновик для правки состава. Задача у склада будет снята.'}
+                    confirmLabel="Да, вернуть"
+                    saving={saving}
+                    open={confirmReturn}
+                    onOpen={() => setConfirmReturn(true)}
+                    onClose={() => setConfirmReturn(false)}
+                    onConfirm={() => void runAction(() => returnDispatchToDraft(doc.id))}
+                  />
+                )}
+                {cancellable && <ConfirmAction
                   danger
                   label={<><Icon name="x" size={16} /> Аннулировать отгрузку</>}
                   prompt={doc.status === 'awaiting_trip'
@@ -190,7 +210,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                   onOpen={() => setConfirmCancel(true)}
                   onClose={() => setConfirmCancel(false)}
                   onConfirm={() => void runAction(() => cancelDispatch(doc.id))}
-                />
+                />}
               </div>
             )}
 

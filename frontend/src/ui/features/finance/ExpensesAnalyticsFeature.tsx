@@ -16,6 +16,7 @@ import { PnlDayDrawer } from './pnl/PnlDayDrawer'
 
 const PRESETS = [7, 14, 30] as const
 const DEFAULT_PERIOD = 30
+const CATS_PREVIEW = 12
 
 // Цвета статусов оплаты — семантические переменные темы.
 const STATUS_COLOR: Record<string, string> = {
@@ -308,6 +309,8 @@ function AnalyticsBody({
 
   const breakdown = [...enabledCats].sort((a, b) => totalByName[b.name] - totalByName[a.name])
   const bdMax = Math.max(1, ...breakdown.map((c) => totalByName[c.name]))
+  const [allCats, setAllCats] = useState(false)
+  const shownBreakdown = allCats ? breakdown : breakdown.slice(0, CATS_PREVIEW)
 
   const statusTotal = byStatus.reduce((s, r) => s + r.amount, 0)
   const stMax = Math.max(1, ...byStatus.map((r) => r.amount))
@@ -469,7 +472,7 @@ function AnalyticsBody({
           <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {breakdown.length === 0 ? (
               <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Нет выбранных категорий</div>
-            ) : breakdown.slice(0, 12).map((c) => {
+            ) : shownBreakdown.map((c) => {
               const amt = totalByName[c.name]
               const pct = Math.round((amt / bdMax) * 100)
               const share = grandTotal > 0 ? Math.round((amt / grandTotal) * 100) : 0
@@ -489,8 +492,10 @@ function AnalyticsBody({
                 </div>
               )
             })}
-            {breakdown.length > 12 && (
-              <div style={{ fontSize: 11.5, color: 'var(--c-text-faint)', textAlign: 'center' }}>…и ещё {breakdown.length - 12} категорий</div>
+            {breakdown.length > CATS_PREVIEW && (
+              <button type="button" className="an-more" onClick={() => setAllCats((v) => !v)}>
+                {allCats ? 'Свернуть' : `…и ещё ${breakdown.length - CATS_PREVIEW} категорий`}
+              </button>
             )}
           </div>
         </div>

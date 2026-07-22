@@ -40,7 +40,6 @@ from modules.receipts.schemas import (
     ReceiptActualArrivalUpdate,
     ReceiptDetailResponse,
     ReceiptDuplicateCheck,
-    ReceiptReceivedCorrection,
     ReceiptDocCreate,
     ReceiptDocResponse,
     ReceiptDocUpdate,
@@ -59,7 +58,6 @@ from modules.receipts.service import (
     advance_receipt,
     arrived_qty_by_line,
     compute_state,
-    correct_received,
     ensure_receipt_line_unique,
     find_duplicate_receipts,
     list_receipt_lines,
@@ -75,7 +73,6 @@ from security import (
     can_view_costs,
     ensure_cost_access,
     ensure_planned_arrival_access,
-    ensure_received_correction_access,
 )
 
 router = APIRouter(tags=["receipts"])
@@ -750,26 +747,6 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
                 )
             conn.commit()
     return {"message": "ok"}
-
-
-@router.post("/receipts/{doc_id}/lines/{line_id}/correct-received")
-def correct_received_line(
-    doc_id: str, line_id: str, payload: ReceiptReceivedCorrection, user=Depends(_get_manager),
-):
-    """Корректировка обсчёта приёмки по строке (менеджер / начальник склада).
-
-    Правит принятое количество пост-фактум вместе со стоком и журналом — замена
-    ручному SQL-фиксу. Гейты и движения склада — в service.correct_received.
-    """
-    ensure_received_correction_access(user)
-    uid = str(user["id"])
-    with get_connection() as conn:
-        result = correct_received(
-            conn, doc_id, line_id,
-            new_accepted=payload.accepted_qty, reason=payload.reason, uid=uid,
-        )
-        conn.commit()
-    return {"message": "ok", **result}
 
 
 @router.delete("/receipts/{doc_id}/lines/{line_id}")

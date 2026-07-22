@@ -4,6 +4,7 @@ import { useBackNav } from '../../../hooks/useBackNav'
 import {
   cancelInvoice,
   deleteInvoiceFile,
+  removeInvoiceDiscount,
   detachInvoiceExtraIncome,
   detachInvoiceReceipt,
   detachInvoiceShipment,
@@ -34,7 +35,7 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDate, fmtDateShort, fmtDateTime, formatMoneyKopecks, parseRublesToKopecks } from '../../../utils/format'
 import { FinanceSummary, InvoiceSection, CargoTag, FileTypeIcon, ShipmentContentsPanel, SelectedContentsRollup, SelectedReceiptsRollup, InvoiceSummaryPanel } from './financeUI'
 import { InvoiceRailPanel, invoicePhase } from './InvoiceRail'
-import { PayModal, DueModal, AmountModal, AttachModal, AttachReceiptsModal, AttachExtraIncomeModal, AttachStorageModal } from './InvoiceModals'
+import { PayModal, DueModal, AmountModal, DiscountModal, AttachModal, AttachReceiptsModal, AttachExtraIncomeModal, AttachStorageModal } from './InvoiceModals'
 
 const OP_DOT: Partial<Record<InvoiceOpType, string>> = {
   issue: 'var(--c-accent)',
@@ -73,6 +74,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const [attachRecOpen, setAttachRecOpen] = useState(false)
   const [attachExtraOpen, setAttachExtraOpen] = useState(false)
   const [attachStorageOpen, setAttachStorageOpen] = useState(false)
+  const [discountOpen, setDiscountOpen] = useState(false)
   const [expandedShip, setExpandedShip] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -184,6 +186,17 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     const ok = await confirm({ title: 'Отвязать доп. работу?', body: `«${label}» вернётся в пул невыставленных доп. работ.`, confirmLabel: 'Отвязать' })
     if (!ok) return
     detachInvoiceExtraIncome(inv.id, entryId).then(() => { toast('Доп. работа отвязана', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
+  }
+
+  async function handleRemoveDiscount(discountId: string, reason: string, amountKop: number) {
+    if (!inv) return
+    const ok = await confirm({
+      title: 'Снять скидку?',
+      body: `Скидка ${formatMoneyKopecks(amountKop)} («${reason}») будет снята: сумма счёта восстановится, расход в реестре сторнируется.`,
+      danger: true, confirmLabel: 'Снять',
+    })
+    if (!ok) return
+    removeInvoiceDiscount(inv.id, discountId).then(() => { toast('Скидка снята', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
   }
 
   async function handleDetachStorage() {
@@ -466,6 +479,51 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             )}
           </InvoiceSection>
 
+          <InvoiceSection
+            icon="tag" title="Скидки" count={inv.discounts.length} accent="var(--c-danger)" state={editable ? 'active' : 'done'}
+            right={editable ? (
+              <button className="btn ghost sm" onClick={() => setDiscountOpen(true)}>
+                <Icon name="plus" size={12} />Добавить
+              </button>
+            ) : undefined}
+          >
+            {inv.discounts.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--c-text-subtle)', padding: '4px 0' }}>
+                Скидок нет. Скидка вычитается из суммы счёта и автоматически попадает в «Расходы».
+              </div>
+            ) : (
+              <>
+              <table className="t" style={{ margin: '0 -14px', width: 'calc(100% + 28px)' }}>
+                <tbody>
+                  {inv.discounts.map((d) => (
+                    <tr key={d.id}>
+                      <td style={{ width: 104 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(d.created_at.slice(0, 10))}</span></td>
+                      <td>{d.reason}</td>
+                      <td style={{ width: 190, textAlign: 'right' }}><span className="t-sub">{d.created_by_name ?? '—'}</span></td>
+                      <td style={{ width: 110, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-danger)' }}>−{formatMoneyKopecks(d.amount_kop)}</span>
+                      </td>
+                      <td style={{ width: 58, textAlign: 'right' }}>
+                        <span style={{ width: 26, display: 'inline-flex', justifyContent: 'center' }}>
+                          {editable && (
+                            <button className="btn ghost icon sm" title="Снять скидку" onClick={() => handleRemoveDiscount(d.id, d.reason, d.amount_kop)}>
+                              <Icon name="x" size={13} />
+                            </button>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12.5 }}>
+                <span style={{ color: 'var(--c-text-subtle)' }}>Итого скидка:</span>
+                <span className="mono" style={{ fontWeight: 600, color: 'var(--c-danger)' }}>−{formatMoneyKopecks(inv.discount_kop)}</span>
+              </div>
+              </>
+            )}
+          </InvoiceSection>
+
           {!draft && (
             <InvoiceSection
               icon="coins" title="Оплаты" count={inv.payments.length} accent="var(--c-warning)" state={active ? 'active' : 'done'}
@@ -482,7 +540,9 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
                   <tbody>
                     {inv.payments.map((p) => (
                       <tr key={p.id}>
-                        <td className="num" style={{ width: 150, fontWeight: 600 }}>{formatMoneyKopecks(p.amount)}</td>
+                        <td className="num" style={{ width: 150, fontWeight: 600, color: p.reverses_id ? 'var(--c-danger)' : undefined }}>
+                          {p.reverses_id && '−'}{formatMoneyKopecks(Math.abs(p.amount))}
+                        </td>
                         <td style={{ width: 120 }}><span className="mono" style={{ color: 'var(--c-text-subtle)', fontSize: 12 }}>{fmtDate(p.paid_on)}</span></td>
                         <td><span style={{ color: 'var(--c-text-muted)' }}>{p.comment ?? ''}</span></td>
                         <td style={{ width: 190, textAlign: 'right' }}><span className="t-sub">{p.created_by_email ?? '—'}</span></td>
@@ -549,6 +609,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
             receiptCount={inv.receipts.length}
             extraCount={inv.extra_income.length}
             extraAmountKop={inv.extra_income_kop}
+            discountKop={inv.discount_kop}
             totalQty={inv.shipments.reduce((a, s) => a + s.total_qty, 0) + inv.receipts.reduce((a, r) => a + r.total_qty, 0)}
             dueDateText={fmtDate(inv.due_date)}
             amountKop={inv.total_amount}
@@ -595,6 +656,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
       {attachRecOpen && <AttachReceiptsModal invoice={inv} onClose={() => setAttachRecOpen(false)} onDone={() => { setAttachRecOpen(false); reload() }} />}
       {attachExtraOpen && <AttachExtraIncomeModal invoice={inv} onClose={() => setAttachExtraOpen(false)} onDone={() => { setAttachExtraOpen(false); reload() }} />}
       {attachStorageOpen && <AttachStorageModal invoice={inv} onClose={() => setAttachStorageOpen(false)} onDone={() => { setAttachStorageOpen(false); reload() }} />}
+      {discountOpen && <DiscountModal invoice={inv} onClose={() => setDiscountOpen(false)} onDone={() => { setDiscountOpen(false); reload() }} />}
     </div>
   )
 }

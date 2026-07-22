@@ -166,6 +166,14 @@ export function ShiftPackingDetailScreen({ shipmentId, focus }: { shipmentId: st
                 <span className="v">{fmtDate(doc.ship_date)}</span>
               </div>
             </div>
+            {doc.repack_active && (
+              <div className="tzcard">
+                <div className="tztitle"><Icon name="refresh" size={12} /> Переупаковка</div>
+                <div className="tzbody">
+                  Задачу переделываем{doc.repack_reason ? `: ${doc.repack_reason}` : ''}. Сверьтесь с обновлённым ТЗ.
+                </div>
+              </div>
+            )}
             {doc.comment && (
               <div className="tzcard">
                 <div className="tztitle"><Icon name="file" size={12} /> Техническое задание</div>

@@ -32,11 +32,13 @@ import { useConfirm } from '../../feedback/ConfirmDialog'
 import { Alert } from '../../primitives/Alert'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
-import { canViewCosts } from '../../../utils/access'
+import { canCorrectReceived, canViewCosts } from '../../../utils/access'
 import { isDateTimeComplete, isDateTimeBefore } from './components/dateTimeValue'
 import type { PlanningFormValue } from './tripDetail/PlanningForm'
 import type { CostForm } from './tripDetail/views/CostingView'
+import { ReceiptsBlock } from './tripDetail/ReceiptsBlock'
 import type { ReceiptLink, ReceiptEnrich } from './tripDetail/ReceiptsBlock'
+import { CorrectReceiveDrawer } from './tripDetail/components/CorrectReceiveDrawer'
 import { DispatchesBlock } from './tripDetail/DispatchesBlock'
 import type { DispatchLink, DispatchEnrich } from './tripDetail/DispatchesBlock'
 import type { Check } from './tripDetail/panels'
@@ -92,6 +94,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const [available, setAvailable] = useState<ReceiptListItem[]>([])
   const [availableDispatches, setAvailableDispatches] = useState<DispatchListItem[]>([])
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [correctOpen, setCorrectOpen] = useState(false)
 
   const outbound = isOutbound(detail?.doc.direction)
   const lex = tripLexicon(detail?.doc.direction)
@@ -407,6 +410,12 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   const dispatchEnrich: DispatchEnrich = {}
   for (const d of availableDispatches) dispatchEnrich[d.id] = { sku: d.sku_count, qty: d.total_qty }
 
+  // Корректировка обсчёта приёмки живёт в рейсе: разгруженный inbound-рейс,
+  // менеджер / начальник склада. Правится «принято этим рейсом» по ячейкам.
+  const canCorrectReceive = !outbound && canCorrectReceived(user)
+    && (status === 'costing' || status === 'closed') && !!doc.unload_finished_at
+    && receipts.length > 0
+
   /** Блок документов рейса по направлению; передаётся во view как docsNode. */
   const docsNode = outbound ? (
     <DispatchesBlock
@@ -419,7 +428,15 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       expandable
       resetKey={doc.id}
     />
-  ) : undefined
+  ) : (canCorrectReceive ? (
+    <ReceiptsBlock
+      receipts={receipts}
+      onOpen={onOpenReceipt}
+      expandable
+      resetKey={doc.id}
+      onCorrectReceive={() => setCorrectOpen(true)}
+    />
+  ) : undefined)
 
   // Приёмка inbound-рейса при разгрузке: таблица «принято + место» по строкам.
   const storageZones = unloadingZones.filter((z) => z.is_active && !z.is_deleted)
@@ -545,6 +562,17 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
         </div>
       )}
       {view}
+      {canCorrectReceive && (
+        <CorrectReceiveDrawer
+          key={correctOpen ? 'open' : 'closed'}
+          tripId={tripId}
+          receipts={receipts}
+          zones={storageZones}
+          open={correctOpen}
+          onClose={() => setCorrectOpen(false)}
+          onSaved={async () => { setCorrectOpen(false); await load() }}
+        />
+      )}
     </>
   )
 }

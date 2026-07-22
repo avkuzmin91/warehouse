@@ -9,6 +9,7 @@ from psycopg import IntegrityError
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
+    EXPENSE_KIND_DISCOUNT,
     EXPENSE_KIND_LOGISTICS,
     EXPENSE_KIND_MANUAL,
     EXPENSE_KINDS_ADMIN_ONLY,
@@ -45,6 +46,7 @@ from modules.expenses.schemas import (
     ExpenseSummaryResponse,
     ExpenseUpdate,
     MessageResponse,
+    PayablesAnalyticsResponse,
 )
 from modules.expenses.service import (
     add_expense_payment,
@@ -59,6 +61,7 @@ from modules.expenses.service import (
     next_expense_number,
     now_iso,
     pay_carrier_fifo,
+    payables_analytics,
     resolve_category,
     resolve_payment_source,
     revert_expense_payments,
@@ -236,6 +239,29 @@ def expenses_analytics(
     return ExpenseAnalyticsResponse(**data)
 
 
+@router.get("/expenses/payables", response_model=PayablesAnalyticsResponse)
+def expenses_payables(
+    date_from:  str = Query(...),
+    date_to:    str = Query(...),
+    kinds:      str | None = Query(None),
+    carrier_id: str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Расчёты с контрагентами за период: начислено, выплачено, долг с накопительной
+    кривой, старение по возрасту долга и разрез по контрагентам. Расходная сторона
+    платёжного баланса — зеркало `/invoices/analytics`. Как и аналитика расходов,
+    видна всем финансовым ролям целиком, включая аренду и ЗП."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    ensure_analytics_window(df, dt)
+    with get_connection() as conn:
+        data = payables_analytics(
+            conn, date_from=df, date_to=dt,
+            kinds=_resolve_kinds_analytics(kinds), carrier_id=(carrier_id or None),
+        )
+    return PayablesAnalyticsResponse(**data)
+
+
 # ── Массовая оплата перевозчику (логистика, FIFO от ранних к поздним) ────────────
 
 @router.get("/expenses/carriers/outstanding", response_model=list[CarrierOutstandingItem])
@@ -400,6 +426,8 @@ def create_expense(
         raise HTTPException(status_code=400, detail="Неизвестный тип расхода")
     if kind == EXPENSE_KIND_LOGISTICS:
         raise HTTPException(status_code=400, detail="Логистический расход заводится из рейса")
+    if kind == EXPENSE_KIND_DISCOUNT:
+        raise HTTPException(status_code=400, detail="Расход-скидка заводится из счёта клиента")
     if kind in EXPENSE_KINDS_ADMIN_ONLY:
         ensure_admin_finance(user)
 

@@ -11,9 +11,12 @@ from config import (
     DISPATCH_CARGO_GOOD,
     DISPATCH_OP_ADVANCE,
     DISPATCH_OP_PREPARE,
+    DISPATCH_OP_RETURN,
+    DISPATCH_RETURNABLE_STATUSES,
     DISPATCH_STATUS_AWAITING_PACKING,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_CANCELLED,
+    DISPATCH_STATUS_DRAFT,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
@@ -781,13 +784,14 @@ def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
     return DISPATCH_STATUS_AWAITING_TRIP
 
 
-def return_prepared_stock(connection, doc_id: str, user_id: str) -> None:
+def return_prepared_stock(connection, doc_id: str, user_id: str,
+                          *, cause: str = "при аннулировании") -> None:
     """Возврат подготовленного товара из «Зоны отгрузки» обратно по исходным ячейкам.
 
-    Вызывается при аннулировании подготовленной отгрузки (awaiting_trip): каждое
-    движение подготовки (… → ready@зона отгрузки) сторнируется обратной записью
-    ready@зона отгрузки → исходная корзина/ячейка. Без commit — коммитит вызывающий.
-    Списанное рейсом не трогаем (аннулировать можно только до отправки).
+    Вызывается при аннулировании или возврате на корректировку подготовленной отгрузки
+    (awaiting_trip): каждое движение подготовки (… → ready@зона отгрузки) сторнируется
+    обратной записью ready@зона отгрузки → исходная корзина/ячейка. Без commit — коммитит
+    вызывающий. Списанное рейсом не трогаем (откат возможен только до отправки).
     """
     moves = connection.execute(
         """SELECT * FROM zone_relocations
@@ -809,12 +813,73 @@ def return_prepared_stock(connection, doc_id: str, user_id: str) -> None:
             from_zone_id=mv["to_zone_id"], from_zone_name=mv["to_zone_name"],
             to_zone_id=mv["from_zone_id"], to_zone_name=mv["from_zone_name"],
             qty=int(mv["qty"]), user_id=user_id, dispatch_line_id=str(mv["dispatch_line_id"]),
-            comment=f"Возврат подготовки при аннулировании: {int(mv['qty'])} шт.",
+            comment=f"Возврат подготовки {cause}: {int(mv['qty'])} шт.",
             reverses_id=str(mv["id"]),
             # Источник из «Упаковано» был атрибутирован к строке упаковки — восстанавливаем,
             # чтобы packed-остаток строки (line_packed_pending) вернулся.
             shipment_line_id=mv["shipment_line_id"],
         )
+
+
+def return_dispatch_to_draft(connection, doc_id: str, user_id: str,
+                             reason: str | None = None) -> str:
+    """«Вернуть на корректировку»: откат отгрузки в черновик до выезда первого рейса.
+
+    Из «Ожидает рейс» сторнирует движения подготовки (товар журнально возвращается
+    из зоны отгрузки на исходные места). Гейт — нет распределения в активные рейсы:
+    молча менять состав рейса за логиста нельзя, сначала отвязать. Без commit —
+    коммитит вызывающий.
+    """
+    row = connection.execute(
+        "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    status = str(row["status"])
+    if status == DISPATCH_STATUS_DRAFT:
+        raise HTTPException(status_code=400, detail="Документ уже в черновике")
+    if status not in DISPATCH_RETURNABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="Вернуть на корректировку можно только до выезда первого рейса",
+        )
+    trips = connection.execute(
+        """SELECT DISTINCT td.trip_number
+           FROM trip_alloc ta
+           JOIN trip_lines tl ON tl.id = ta.trip_line_id
+           JOIN trip_docs td ON td.id = tl.trip_id
+           JOIN dispatch_lines dl ON dl.id = ta.dispatch_line_id
+           WHERE dl.doc_id = ?
+             AND COALESCE(ta.is_deleted, 0) = 0
+             AND COALESCE(tl.is_deleted, 0) = 0
+             AND td.status IN (?, ?, ?)
+           ORDER BY td.trip_number""",
+        (doc_id, TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING),
+    ).fetchall()
+    if trips:
+        numbers = ", ".join(str(t["trip_number"]) for t in trips)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Отгрузка распределена в рейс: {numbers}. Сначала отвяжите её от рейса",
+        )
+    if dispatch_is_invoiced(connection, doc_id):
+        raise HTTPException(status_code=400, detail="По отгрузке выставлен счёт — возврат невозможен")
+    if status == DISPATCH_STATUS_AWAITING_TRIP:
+        return_prepared_stock(connection, doc_id, user_id, cause="при возврате на корректировку")
+    now = _now()
+    connection.execute(
+        "UPDATE dispatch_docs SET status = ?, updated_at = ? WHERE id = ?",
+        (DISPATCH_STATUS_DRAFT, now, doc_id),
+    )
+    comment = f"Возврат на корректировку из «{DISPATCH_STATUS_LABELS.get(status, status)}»"
+    if reason and reason.strip():
+        comment += f". Причина: {reason.strip()}"
+    connection.execute(
+        "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, DISPATCH_OP_RETURN, comment, now, user_id),
+    )
+    return DISPATCH_STATUS_DRAFT
 
 
 def consume_stock_for_dispatch(

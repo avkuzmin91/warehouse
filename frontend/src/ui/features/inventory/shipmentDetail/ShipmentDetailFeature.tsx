@@ -17,7 +17,7 @@ import {
   returnShipmentToPacking,
   SHIPMENT_STATUS_LABELS,
 } from '../../../../api/shipmentsApi'
-import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine } from '../../../../api/shipmentsApi'
+import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ReturnToPackingPayload } from '../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../api/constants'
 import { getBalances, getBalancesByZone, getPlannableItems } from '../../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem, PlannableItem } from '../../../../api/balancesApi'
@@ -44,6 +44,7 @@ import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
 import { PlacePackedDrawer } from './components/PlacePackedDrawer'
+import { ReturnToPackingDrawer } from './components/ReturnToPackingDrawer'
 import { FinishPackingConfirmModal } from './components/FinishPackingConfirmModal'
 import type { LineAvailability } from '../shared/AvailabilityCell'
 import { FilePreviewModal } from './components/FilePreviewModal'
@@ -79,6 +80,7 @@ export function ShipmentDetailFeature() {
   const [finishConfirm, setFinishConfirm] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  const [returnOpen, setReturnOpen] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [skuLine, setSkuLine] = useState<ShipmentLine | null>(null)
@@ -672,21 +674,20 @@ export function ShipmentDetailFeature() {
   }
 
   // Менеджерский возврат «на упаковку» из «Перемещение» / «Упаковано» — для товарной
-  // задачи упаковки. Из «Упаковано» откатывается раскладка по местам, поэтому подтверждаем.
+  // задачи упаковки. Режим выбирается в шторке: доработка (как раньше) либо переупаковка
+  // без оплаты / за счёт клиента (задача была поставлена с ошибкой).
   const canReturnToPacking = canEdit && !isDefectCargo && (isRelocating || isPacked)
 
-  async function handleReturnToPacking() {
-    const ok = await confirm({
-      title: 'Вернуть на упаковку?',
-      body: isPacked
-        ? 'Задача вернётся на этап «На упаковке», а раскладка упакованного товара по местам будет отменена. Если часть товара уже отгружена, предложим вернуть только оставшийся остаток.'
-        : 'Задача вернётся на этап «На упаковке» — упаковщик сможет продолжить или исправить упаковку.',
-      danger: true,
-      confirmLabel: 'Вернуть на упаковку',
-    })
-    if (!ok) return
+  async function handleReturnToPacking(payload: ReturnToPackingPayload) {
     try {
-      await returnShipmentToPacking(docId!)
+      await returnShipmentToPacking(docId!, payload)
+      setReturnOpen(false)
+      toast(
+        payload.mode === 'repack_free' ? 'Задача возвращена на переупаковку (без оплаты)'
+        : payload.mode === 'repack_paid' ? 'Задача возвращена на переупаковку (за счёт клиента)'
+        : 'Задача возвращена на упаковку',
+        'success',
+      )
       await refreshAfterLineChange()
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Ошибка'
@@ -704,7 +705,8 @@ export function ShipmentDetailFeature() {
       })
       if (!forceOk) return
       await act(async () => {
-        await returnShipmentToPacking(docId!, true)
+        await returnShipmentToPacking(docId!, { ...payload, force: true })
+        setReturnOpen(false)
         await refreshAfterLineChange()
       })
     }
@@ -816,6 +818,9 @@ export function ShipmentDetailFeature() {
     canPlace: canPlacePacked,
     acting,
     savingLine,
+    repackActive: doc.repack_active,
+    repackKind: doc.repack_kind,
+    repackReason: doc.repack_reason,
     onOpenMove: (line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' }),
     onReturn: handleReturnFromPacking,
     onOpenPacking: setPackingLine,
@@ -832,6 +837,8 @@ export function ShipmentDetailFeature() {
         title={doc.doc_number}
         subtitle={`${isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
+        repackKind={doc.repack_kind}
+        repackReason={doc.repack_reason}
         onBack={goBack}
         blockReasons={showBlockReasons ? advanceBlockReasons : []}
         priority={
@@ -853,7 +860,7 @@ export function ShipmentDetailFeature() {
               </button>
             )}
             {canReturnToPacking && (
-              <button className="btn ghost" disabled={acting} onClick={handleReturnToPacking}>
+              <button className="btn ghost" disabled={acting} onClick={() => setReturnOpen(true)}>
                 <Icon name="arrowLeft" size={14} />Вернуть на упаковку
               </button>
             )}
@@ -935,6 +942,15 @@ export function ShipmentDetailFeature() {
           onLinesChanged={refreshAfterLineChange}
         />
       )}
+
+      <ReturnToPackingDrawer
+        open={returnOpen}
+        docNumber={doc.doc_number}
+        isPacked={isPacked}
+        acting={acting}
+        onClose={() => setReturnOpen(false)}
+        onSubmit={handleReturnToPacking}
+      />
 
       <Drawer
         open={rejectOpen}

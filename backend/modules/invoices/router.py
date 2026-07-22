@@ -13,6 +13,8 @@ from config import (
     INVOICE_OP_AMOUNT_CHANGE,
     INVOICE_OP_CANCEL,
     INVOICE_OP_CLOSE,
+    INVOICE_OP_DISCOUNT_ADD,
+    INVOICE_OP_DISCOUNT_REMOVE,
     INVOICE_OP_DOC_CREATE,
     INVOICE_OP_DOC_UPDATE,
     INVOICE_OP_DUE_DATE_CHANGE,
@@ -43,6 +45,8 @@ from modules.invoices.schemas import (
     InvoiceAmountUpdate,
     InvoiceCreate,
     InvoiceDetailResponse,
+    InvoiceDiscountCreate,
+    InvoiceDiscountItem,
     InvoiceDueDateUpdate,
     InvoiceExtraIncomeItem,
     InvoiceFileItem,
@@ -55,6 +59,7 @@ from modules.invoices.schemas import (
     InvoiceShipmentItem,
     InvoiceUpdate,
     ReceiptContentsResponse,
+    ReceivablesAnalyticsResponse,
     ShipmentContentsResponse,
     UninvoicedExtraIncomeItem,
     UninvoicedExtraIncomeResponse,
@@ -83,10 +88,19 @@ from modules.invoices.service import (
     list_uninvoiced_shipments,
     logistics_amount_for_docs,
     next_invoice_number,
+    receivables_analytics,
     recompute_paid,
+    reverse_payments,
     rub_to_kop,
     suggested_amount_for_dispatches,
 )
+from modules.expenses.service import (
+    create_invoice_discount_expense,
+    ensure_analytics_window,
+    reverse_invoice_discount_expense,
+    validate_date,
+)
+from modules.timesheet.service import business_today
 from security import ensure_finance_access
 from utils import now_iso as _now
 
@@ -221,9 +235,33 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
     storage = InvoiceStorageBlock(**storage_block) if storage_block else None
     storage_kop = storage.amount_kop if storage else 0
 
+    discount_rows = conn.execute(
+        """
+        SELECT d.id, d.amount_kop, d.reason, d.created_at, d.created_by,
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_name
+        FROM invoice_discounts d
+        LEFT JOIN users u ON u.id = d.created_by
+        WHERE d.invoice_id = ? AND COALESCE(d.is_deleted, 0) = 0
+        ORDER BY d.created_at
+        """,
+        (invoice_id,),
+    ).fetchall()
+    discounts = [
+        InvoiceDiscountItem(
+            id=str(r["id"]),
+            amount_kop=int(r["amount_kop"]),
+            reason=str(r["reason"]),
+            created_at=str(r["created_at"]),
+            created_by=r["created_by"],
+            created_by_name=r["created_by_name"],
+        )
+        for r in discount_rows
+    ]
+    discount_kop = sum(d.amount_kop for d in discounts)
+
     pay_rows = conn.execute(
         """
-        SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by,
+        SELECT p.id, p.amount, p.paid_on, p.comment, p.created_at, p.created_by, p.reverses_id,
                COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email
         FROM invoice_payments p
         LEFT JOIN users u ON u.id = p.created_by
@@ -241,6 +279,7 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
             created_at=str(r["created_at"]),
             created_by=r["created_by"],
             created_by_email=r["created_by_email"],
+            reverses_id=r["reverses_id"],
         )
         for r in pay_rows
     ]
@@ -305,10 +344,12 @@ def _load_detail(conn, invoice_id: str) -> InvoiceDetailResponse:
         receipt_logistics_kop=receipt_logistics_kop,
         extra_income_kop=extra_income_kop,
         storage_kop=storage_kop,
+        discount_kop=discount_kop,
         storage=storage,
         shipments=shipments,
         receipts=receipts,
         extra_income=extra_income,
+        discounts=discounts,
         payments=payments,
         files=files,
         ops=ops,
@@ -419,10 +460,29 @@ def list_uninvoiced(
 
 
 @router.get("/invoices/alerts", response_model=InvoiceAlertsResponse)
-def invoice_alerts(user=Depends(_get_finance)):
+def invoice_alerts(client_id: str | None = Query(None), user=Depends(_get_finance)):
     with get_connection() as conn:
-        counts = alerts_counts(conn)
+        counts = alerts_counts(conn, client_id=(client_id or None))
     return InvoiceAlertsResponse(**counts)
+
+
+@router.get("/invoices/analytics", response_model=ReceivablesAnalyticsResponse)
+def invoice_analytics(
+    date_from: str = Query(...),
+    date_to:   str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Расчёты с клиентами за период: выставлено, получено, долг с накопительной
+    кривой, старение просрочки и разрез по должникам. В отличие от `/invoices/alerts`
+    (снимок «на сейчас») все величины считаются на дату, поэтому отчёт за закрытый
+    период воспроизводится. Видна финансовым ролям, как и остальная аналитика."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    ensure_analytics_window(df, dt)
+    with get_connection() as conn:
+        data = receivables_analytics(conn, date_from=df, date_to=dt, client_id=(client_id or None))
+    return ReceivablesAnalyticsResponse(**data)
 
 
 @router.get("/invoices/shipment-contents", response_model=ShipmentContentsResponse)
@@ -734,6 +794,133 @@ def detach_invoice_storage(invoice_id: str, user=Depends(_get_finance)):
     return {"message": "ok"}
 
 
+# ── Discounts ───────────────────────────────────────────────────────────────────
+
+@router.post("/invoices/{invoice_id}/discounts")
+def add_invoice_discount(
+    invoice_id: str,
+    body: InvoiceDiscountCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
+    """Скидка клиенту: вычитается из суммы счёта и заводит расход kind=discount."""
+    uid = str(user["id"])
+    now = _now()
+    reason = str(body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите, за что предоставлена скидка")
+    amount = int(body.amount_kop)
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_discount_add", response={"message": "ok"})
+        if not proceed:
+            return stored
+        doc = conn.execute(
+            "SELECT status, doc_number, client_name, total_amount, paid_amount FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        old_total = int(doc["total_amount"])
+        paid = int(doc["paid_amount"])
+        new_total = old_total - amount
+        if new_total < paid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Скидка превышает остаток к оплате ({format_kopecks(max(0, old_total - paid))})",
+            )
+        discount_id = str(uuid4())
+        conn.execute(
+            "INSERT INTO invoice_discounts (id,invoice_id,amount_kop,reason,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (discount_id, invoice_id, amount, reason, now, uid),
+        )
+        conn.execute(
+            "UPDATE invoice_docs SET total_amount = ?, updated_at = ? WHERE id = ?",
+            (new_total, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DISCOUNT_ADD,
+             f"Скидка {format_kopecks(amount)} — {reason}. "
+             f"Сумма: {format_kopecks(old_total)} → {format_kopecks(new_total)}",
+             now, uid),
+        )
+        create_invoice_discount_expense(
+            conn,
+            discount_id=discount_id,
+            invoice_number=str(doc["doc_number"]),
+            client_name=doc["client_name"],
+            amount_kop=amount,
+            reason=reason,
+            spent_on=business_today().isoformat(),
+            uid=uid,
+        )
+        # Скидка опустила сумму ровно до оплаченной — счёт полностью оплачен
+        # и закрывается (зеркало PATCH /amount, иначе висел бы активным).
+        if new_total > 0 and paid >= new_total:
+            conn.execute(
+                "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
+                (INVOICE_STATUS_CLOSED, now, invoice_id),
+            )
+            conn.execute(
+                "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+                "VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), invoice_id, INVOICE_OP_CLOSE,
+                 "Счёт завершён (оплачен полностью)", now, uid),
+            )
+        result = {"message": discount_id}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    invalidate_alerts_cache()
+    return result
+
+
+@router.delete("/invoices/{invoice_id}/discounts/{discount_id}")
+def remove_invoice_discount(invoice_id: str, discount_id: str, user=Depends(_get_finance)):
+    """Снимает скидку: сумма счёта восстанавливается, расход-скидка сторнируется."""
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT status, total_amount FROM invoice_docs "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE",
+            (invoice_id,),
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Счёт не найден")
+        _require_mutable(doc)
+        disc = conn.execute(
+            "SELECT id, amount_kop, reason FROM invoice_discounts "
+            "WHERE id = ? AND invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (discount_id, invoice_id),
+        ).fetchone()
+        if not disc:
+            raise HTTPException(status_code=404, detail="Скидка не найдена")
+        amount = int(disc["amount_kop"])
+        old_total = int(doc["total_amount"])
+        new_total = old_total + amount
+        conn.execute("UPDATE invoice_discounts SET is_deleted = 1 WHERE id = ?", (discount_id,))
+        conn.execute(
+            "UPDATE invoice_docs SET total_amount = ?, updated_at = ? WHERE id = ?",
+            (new_total, now, invoice_id),
+        )
+        conn.execute(
+            "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, INVOICE_OP_DISCOUNT_REMOVE,
+             f"Снята скидка {format_kopecks(amount)} — {disc['reason']}. "
+             f"Сумма: {format_kopecks(old_total)} → {format_kopecks(new_total)}",
+             now, uid),
+        )
+        reverse_invoice_discount_expense(conn, discount_id, uid)
+        conn.commit()
+    invalidate_alerts_cache()
+    return {"message": "ok"}
+
+
 # ── Draft: правка реквизитов и выставление ───────────────────────────────────────
 
 @router.patch("/invoices/{invoice_id}")
@@ -857,8 +1044,8 @@ def issue_invoice(
             raise HTTPException(status_code=400, detail="Прикрепите файл счёта (например, расчёт Excel)")
 
         conn.execute(
-            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (INVOICE_STATUS_ISSUED, now, invoice_id),
+            "UPDATE invoice_docs SET status = ?, issued_on = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_ISSUED, business_today().isoformat(), now, invoice_id),
         )
         conn.execute(
             "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
@@ -916,8 +1103,8 @@ def add_payment(
         fully_paid = paid >= int(doc["total_amount"])
         new_status = INVOICE_STATUS_CLOSED if fully_paid else INVOICE_STATUS_PARTIALLY_PAID
         conn.execute(
-            "UPDATE invoice_docs SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ?",
-            (paid, new_status, now, invoice_id),
+            "UPDATE invoice_docs SET paid_amount = ?, status = ?, closed_on = ?, updated_at = ? WHERE id = ?",
+            (paid, new_status, paid_on if fully_paid else None, now, invoice_id),
         )
         conn.execute(
             "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
@@ -1053,8 +1240,8 @@ def close_invoice(
         if int(doc["paid_amount"]) < int(doc["total_amount"]):
             raise HTTPException(status_code=400, detail="Счёт оплачен не полностью")
         conn.execute(
-            "UPDATE invoice_docs SET status = ?, updated_at = ? WHERE id = ?",
-            (INVOICE_STATUS_CLOSED, now, invoice_id),
+            "UPDATE invoice_docs SET status = ?, closed_on = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_CLOSED, business_today().isoformat(), now, invoice_id),
         )
         conn.execute(
             "INSERT INTO invoice_ops (id,invoice_id,op_type,comment,created_at,created_by) "
@@ -1074,6 +1261,7 @@ def cancel_invoice(
 ):
     uid = str(user["id"])
     now = _now()
+    cancelled_on = business_today().isoformat()
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_cancel", response={"message": INVOICE_STATUS_CANCELLED})
         if not proceed:
@@ -1085,13 +1273,10 @@ def cancel_invoice(
         if not doc:
             raise HTTPException(status_code=404, detail="Счёт не найден")
         _require_mutable(doc)
-        # Сторнируем платежи, иначе деньги «повиснут» оплаченными на аннулированном счёте.
-        reversed_paid = recompute_paid(conn, invoice_id)
-        conn.execute(
-            "UPDATE invoice_payments SET is_deleted = 1 "
-            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
-            (invoice_id,),
-        )
+        # Платежи сторнируем ОТДЕЛЬНОЙ записью на дату аннулирования, а не мягким
+        # удалением исходной: иначе оплата исчезает из фактов и отчёт по кассе за уже
+        # закрытый месяц меняется задним числом.
+        reversed_paid = reverse_payments(conn, invoice_id=invoice_id, on_date=cancelled_on, uid=uid, now=now)
         # Освобождаем отгрузки и поступления — снова попадают в реестр «без счёта».
         conn.execute(
             "UPDATE invoice_shipments SET is_deleted = 1 "
@@ -1113,9 +1298,18 @@ def cancel_invoice(
             "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
         )
+        # Скидки остаются в карточке как история, но их расходы сторнируются —
+        # аннулированный счёт не должен давать расход в реестре и P&L.
+        discount_rows = conn.execute(
+            "SELECT id FROM invoice_discounts "
+            "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (invoice_id,),
+        ).fetchall()
+        for r in discount_rows:
+            reverse_invoice_discount_expense(conn, str(r["id"]), uid)
         conn.execute(
-            "UPDATE invoice_docs SET status = ?, paid_amount = 0, updated_at = ? WHERE id = ?",
-            (INVOICE_STATUS_CANCELLED, now, invoice_id),
+            "UPDATE invoice_docs SET status = ?, paid_amount = 0, cancelled_on = ?, updated_at = ? WHERE id = ?",
+            (INVOICE_STATUS_CANCELLED, cancelled_on, now, invoice_id),
         )
         cancel_comment = "Счёт аннулирован"
         if reversed_paid > 0:

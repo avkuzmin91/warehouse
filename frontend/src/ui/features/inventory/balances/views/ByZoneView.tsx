@@ -11,6 +11,7 @@ import {
 } from '../../../../../api/balancesApi'
 import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality, WriteOffReason } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
+import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../../../hooks/useFilterParams'
 import { Table, Td } from '../../../../data/Table'
 import { Combobox } from '../../../../data/Combobox'
 import { FiltersBar, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
@@ -53,14 +54,15 @@ export function ByZoneView() {
   const [items, setItems] = useState<BalanceZoneItem[]>([])
   const [summary, setSummary] = useState<BalanceSummary | null>(null)
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = usePageParam()
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [place, setPlace] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [opFilter, setOpFilter] = useState('')
-  const [qualityFilter, setQualityFilter] = useState('')
+  const [search, setSearch] = useFilterParam('search', '')
+  const [place, setPlace] = useFilterParam('place', '')
+  const [clientId, setClientId] = useFilterParam('client', '')
+  const [opFilter, setOpFilter] = useFilterParam('op', '')
+  const [qualityFilter, setQualityFilter] = useFilterParam('quality', '')
   const { clients, unloadingZones } = useLookups()
+  const { setMany } = useFilterParamsActions()
   const toast = useToast()
 
   // Перемещение между местоположениями: любой нетерминальный статус — товар можно
@@ -301,14 +303,13 @@ export function ByZoneView() {
   }, [summary, opFilter, qualityFilter])
 
   const kpiVal = (n: number) => (summary ? n.toLocaleString('ru-RU') : '—')
-  // Любая смена фильтра возвращает на первую страницу (пагинация серверная).
-  const changeSearch = (v: string) => { setSearch(v); setPage(1) }
-  const changePlace = (v: string) => { setPlace(v); setPage(1) }
-  const changeClient = (v: string) => { setClientId(v); setPage(1) }
-  const changeOp = (v: string) => { setOpFilter(v); setPage(1) }
-  const changeQuality = (v: string) => { setQualityFilter(v); setPage(1) }
-  const toggleOp = (op: InvOpStatus) => { setOpFilter(opFilter === op ? '' : op); setPage(1) }
-  const resetFilters = () => { setClientId(''); setOpFilter(''); setQualityFilter(''); setPlace(''); setSearch(''); setPage(1) }
+  const changeSearch = (v: string) => setSearch(v)
+  const changePlace = (v: string) => setPlace(v)
+  const changeClient = (v: string) => setClientId(v)
+  const changeOp = (v: string) => setOpFilter(v)
+  const changeQuality = (v: string) => setQualityFilter(v)
+  const toggleOp = (op: InvOpStatus) => setOpFilter(opFilter === op ? '' : op)
+  const resetFilters = () => setMany({ client: null, op: null, quality: null, place: null, search: null })
 
   return (
     <>

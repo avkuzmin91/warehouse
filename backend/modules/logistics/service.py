@@ -22,9 +22,12 @@ from config import (
     INV_OP_STORAGE,
     INV_Q_GOOD,
     RECEIPT_OP_ARRIVAL_ACCEPT,
+    RECEIPT_OP_RECEIVING_CORRECTION,
+    RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     TRIP_OP_RECEIPT_LINK,
+    TRIP_OP_RECEIVE_CORRECTION,
     TRIP_OP_SHIPMENT_LINK,
     TRIP_STATUS_CANCELLED,
 )
@@ -524,6 +527,251 @@ def receive_receipts_for_trip(
     for rid in affected:
         recompute_trip_receipt_status(connection, rid, uid, note=f"разгрузка рейса {trip_number}")
     return len(affected)
+
+
+def correct_trip_received(
+    connection, trip_id: str, line_id: str, *,
+    new_received: int, reason: str, uid: str,
+    placements: list[dict] | None = None,
+) -> dict:
+    """Пост-фактум корректировка обсчёта приёмки ЭТОГО рейса по строке поступления.
+
+    Корректировка живёт в рейсе (а не в поступлении): исправляется цифра, которую
+    кладовщик насчитал при разгрузке, поэтому движения пишутся с trip_id и карточка
+    рейса показывает исправленное «принято». Меняет synchronно accepted_qty строки
+    (на дельту) и сток в журнале по ячейкам; сверх аллокации рейса — поднимает
+    trip_alloc (как излишек при разгрузке). placements — полная новая раскладка
+    принятого рейсом по ячейкам (сумма = new_received; ячейки приёмки рейса, не
+    попавшие в список, обнуляются). Без placements дельта применяется к ячейкам
+    приёмки рейса: вверх — в зону строки, вниз — по ячейкам по порядку. Гейт вниз —
+    физический остаток ячейки (отгруженное/перемещённое сначала верните). Без commit.
+    """
+    from modules.balances.service import insert_inventory_move, net_storage_good_in_zone
+    from modules.receipts.service import recompute_trip_receipt_status as _recompute
+
+    trip = connection.execute(
+        "SELECT * FROM trip_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (trip_id,)
+    ).fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Рейс не найден")
+    if str(trip["status"]) == TRIP_STATUS_CANCELLED:
+        raise HTTPException(status_code=400, detail="Рейс аннулирован — его приёмка уже сторнирована")
+    if not trip["unload_finished_at"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Скорректировать приёмку можно только у разгруженного рейса — разгрузка ещё не завершена",
+        )
+    trip_number = str(trip["trip_number"])
+
+    line = connection.execute(
+        "SELECT rl.*, d.status AS doc_status, d.client_id AS doc_client_id, cl.name AS doc_client_name "
+        "FROM receipt_lines rl "
+        "JOIN receipt_docs d ON d.id = rl.doc_id AND d.is_deleted = 0 "
+        "LEFT JOIN clients cl ON cl.id = d.client_id "
+        "WHERE rl.id = ? AND COALESCE(rl.is_deleted, 0) = 0",
+        (line_id,),
+    ).fetchone()
+    if not line:
+        raise HTTPException(status_code=404, detail="Строка поступления не найдена")
+    doc_id = str(line["doc_id"])
+    if str(line["doc_status"]) not in (RECEIPT_STATUS_PARTIALLY_RECEIVED, RECEIPT_STATUS_DONE):
+        raise HTTPException(
+            status_code=400,
+            detail="Корректировать принятое можно только у принятого поступления (частично принято / завершён)",
+        )
+    if new_received < 0:
+        raise HTTPException(status_code=400, detail="Количество не может быть отрицательным")
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите причину корректировки")
+
+    alloc_rows = connection.execute(
+        "SELECT ta.id, ta.qty FROM trip_alloc ta "
+        "JOIN trip_lines tl ON tl.id = ta.trip_line_id "
+        "WHERE tl.trip_id = ? AND ta.receipt_line_id = ? "
+        "AND COALESCE(ta.is_deleted, 0) = 0 AND COALESCE(tl.is_deleted, 0) = 0",
+        (trip_id, line_id),
+    ).fetchall()
+    if not alloc_rows:
+        raise HTTPException(status_code=404, detail="Эта строка не ехала данным рейсом")
+    alloc_qty = sum(int(a["qty"] or 0) for a in alloc_rows)
+
+    attrs = " / ".join(x for x in [line["color_name"], line["size_name"]] if x)
+    label = f"{line['product_sku']}" + (f" ({attrs})" if attrs else "")
+
+    # Раскладка принятого этим рейсом по ячейкам: нетто журнала по trip_id
+    # (приход приёмки минус реверсы корректировок).
+    cell_rows = connection.execute(
+        """SELECT CASE WHEN from_op = ? THEN to_zone_id   ELSE from_zone_id   END AS zone_id,
+                  CASE WHEN from_op = ? THEN to_zone_name ELSE from_zone_name END AS zone_name,
+                  SUM(CASE WHEN from_op = ? THEN qty ELSE -qty END) AS net
+           FROM zone_relocations
+           WHERE trip_id = ? AND receipt_line_id = ?
+             AND ((from_op = ? AND to_op = ?) OR (from_op = ? AND to_op = ?))
+           GROUP BY zone_id, zone_name""",
+        (INV_OP_INTAKE, INV_OP_INTAKE, INV_OP_INTAKE, trip_id, line_id,
+         INV_OP_INTAKE, INV_OP_STORAGE, INV_OP_STORAGE, INV_OP_INTAKE),
+    ).fetchall()
+    cur_received = sum(int(r["net"] or 0) for r in cell_rows)
+    current_by_zone = {
+        str(r["zone_id"] or ""): int(r["net"] or 0) for r in cell_rows if int(r["net"] or 0) > 0
+    }
+    names_by_zone = {str(r["zone_id"] or ""): r["zone_name"] for r in cell_rows}
+
+    delta = new_received - cur_received
+
+    def _available(zone_id: str) -> int:
+        return net_storage_good_in_zone(
+            connection, product_id=str(line["product_id"]), client_id=line["doc_client_id"],
+            color_id=line["color_id"], size_id=line["size_id"], zone_id=zone_id,
+        )
+
+    # cell_deltas: zone_id → (zone_name, дельта). Отрицательная — снять с места,
+    # положительная — доложить.
+    cell_deltas: dict[str, tuple[str | None, int]] = {}
+
+    if placements is not None:
+        seen: set[str] = set()
+        total = 0
+        for p in placements:
+            zid = str(p.get("storage_zone_id") or "").strip()
+            qty = int(p.get("qty") or 0)
+            if not zid:
+                raise HTTPException(status_code=400, detail=f"Укажите место хранения в раскладке ({label})")
+            if zid in seen:
+                raise HTTPException(status_code=400, detail=f"Место повторяется в раскладке ({label})")
+            seen.add(zid)
+            total += qty
+            d = qty - current_by_zone.get(zid, 0)
+            if d != 0:
+                cell_deltas[zid] = (p.get("storage_zone_name") or names_by_zone.get(zid), d)
+        if total != new_received:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Раскладка по ячейкам ({total} шт.) не сходится с принятым ({new_received} шт.) ({label})",
+            )
+        for zid, qty in current_by_zone.items():
+            if zid and zid not in seen and qty > 0:
+                cell_deltas[zid] = (names_by_zone.get(zid), -qty)
+    else:
+        if delta == 0:
+            return {"changed": False, "received_qty": cur_received, "accepted_qty": int(line["accepted_qty"] or 0)}
+        if delta > 0 or not any(z for z in current_by_zone if z):
+            zone_id = str(line["storage_zone_id"] or "").strip()
+            if not zone_id:
+                raise HTTPException(status_code=400, detail=f"У строки не задано место хранения ({label})")
+            cell_deltas[zone_id] = (line["storage_zone_name"], delta)
+        else:
+            # Снимаем с ячеек приёмки рейса: сначала зона строки, дальше по имени,
+            # каждая — не глубже физического остатка.
+            need = -delta
+            order = sorted(
+                (z for z in current_by_zone if z),
+                key=lambda z: (z != str(line["storage_zone_id"] or ""), names_by_zone.get(z) or ""),
+            )
+            for zid in order:
+                if need <= 0:
+                    break
+                take = min(need, current_by_zone[zid], _available(zid))
+                if take > 0:
+                    cell_deltas[zid] = (names_by_zone.get(zid), -take)
+                    need -= take
+            if need > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Нельзя уменьшить на {-delta} шт.: на хранении по местам приёмки рейса лежит меньше "
+                        f"(остальное уже отгружено или перемещено) — сначала отмените отгрузку/перемещение ({label})"
+                    ),
+                )
+
+    if not cell_deltas:
+        return {"changed": False, "received_qty": cur_received, "accepted_qty": int(line["accepted_qty"] or 0)}
+
+    # Уменьшения проверяем по физическому остатку места.
+    for zid, (zname, d) in cell_deltas.items():
+        if d >= 0:
+            continue
+        available = _available(zid)
+        if available < -d:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Нельзя уменьшить на {-d} шт.: на хранении в «{zname or '—'}» только {available} шт. "
+                    f"(остальное уже отгружено или перемещено) — сначала отмените отгрузку/перемещение ({label})"
+                ),
+            )
+
+    # Сверх аллокации рейса — поднимаем trip_alloc до факта (как излишек при разгрузке):
+    # «привезено рейсами» и «остаток к распределению» считаются от факта.
+    surplus = max(new_received - alloc_qty, 0)
+    if surplus > 0:
+        last = alloc_rows[-1]
+        connection.execute(
+            "UPDATE trip_alloc SET qty = ? WHERE id = ?",
+            (int(last["qty"] or 0) + surplus, str(last["id"])),
+        )
+
+    move = dict(
+        product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+        color_id=line["color_id"], color_name=line["color_name"],
+        size_id=line["size_id"], size_name=line["size_name"],
+        client_id=line["doc_client_id"], client_name=line["doc_client_name"],
+        from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+        user_id=uid, receipt_line_id=line_id, trip_id=trip_id,
+    )
+    ordered = sorted(cell_deltas.items(), key=lambda kv: kv[1][1])  # сначала снятия
+    for zid, (zname, d) in ordered:
+        if d < 0:
+            insert_inventory_move(
+                connection, from_op=INV_OP_STORAGE, to_op=INV_OP_INTAKE, qty=-d,
+                from_zone_id=zid, from_zone_name=zname, to_zone_id=zid, to_zone_name=zname,
+                comment=f"Корректировка приёмки рейса {trip_number}: −{-d} шт. из «{zname or '—'}» ({reason})",
+                **move,
+            )
+        else:
+            insert_inventory_move(
+                connection, from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE, qty=d,
+                from_zone_id=zid, from_zone_name=zname, to_zone_id=zid, to_zone_name=zname,
+                comment=f"Корректировка приёмки рейса {trip_number}: +{d} шт. в «{zname or '—'}» ({reason})",
+                **move,
+            )
+
+    now = _now()
+    current_accepted = int(line["accepted_qty"] or 0)
+    new_accepted = current_accepted + delta
+    connection.execute("UPDATE receipt_lines SET accepted_qty = ? WHERE id = ?", (new_accepted, line_id))
+    # Денормализованная зона строки следует за раскладкой: первая ячейка с остатком.
+    left: dict[str, int] = {zid: qty for zid, qty in current_by_zone.items() if zid}
+    zone_names: dict[str, str | None] = {z: n for z, n in names_by_zone.items() if z}
+    for zid, (zname, d) in cell_deltas.items():
+        left[zid] = left.get(zid, 0) + d
+        if zname and not zone_names.get(zid):
+            zone_names[zid] = zname
+    live = [zid for zid, q in left.items() if q > 0]
+    if live and str(line["storage_zone_id"] or "") not in live:
+        connection.execute(
+            "UPDATE receipt_lines SET storage_zone_id = ?, storage_zone_name = ? WHERE id = ?",
+            (live[0], zone_names.get(live[0]), line_id),
+        )
+    cells_note = " · " + ", ".join(
+        f"{zname or '—'}: {current_by_zone.get(zid, 0)} → {current_by_zone.get(zid, 0) + d}"
+        for zid, (zname, d) in cell_deltas.items()
+    )
+    surplus_note = f", сверх плана рейса +{surplus}" if surplus > 0 else ""
+    connection.execute(
+        "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, line_id, RECEIPT_OP_RECEIVING_CORRECTION, new_received,
+         f"Корректировка приёмки рейсом {trip_number}: {cur_received} → {new_received} шт."
+         f"{surplus_note} (итого {new_accepted}) ({reason}) ({label}){cells_note}", now, uid),
+    )
+    connection.execute(
+        "INSERT INTO trip_ops (id, trip_id, op_type, comment, created_at, created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), trip_id, TRIP_OP_RECEIVE_CORRECTION,
+         f"Корректировка приёмки: {cur_received} → {new_received} шт. ({reason}) ({label})", now, uid),
+    )
+    _recompute(connection, doc_id, uid, note=f"корректировка приёмки рейса {trip_number}")
+    return {"changed": True, "delta": delta, "received_qty": new_received, "accepted_qty": new_accepted}
 
 
 def reverse_receipt_intake_for_trip(connection, trip_id: str, uid: str) -> None:

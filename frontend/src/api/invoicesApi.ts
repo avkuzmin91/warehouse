@@ -17,6 +17,8 @@ export type InvoiceOpType =
   | 'extra_income_unlink'
   | 'storage_link'
   | 'storage_unlink'
+  | 'discount_add'
+  | 'discount_remove'
   | 'payment'
   | 'due_date_change'
   | 'amount_change'
@@ -64,14 +66,24 @@ export type InvoiceExtraIncome = {
   comment: string | null
 }
 
+export type InvoiceDiscount = {
+  id: string
+  amount_kop: number
+  reason: string
+  created_at: string
+  created_by: string | null
+  created_by_name: string | null
+}
+
 export type InvoicePayment = {
   id: string
-  amount: number
+  amount: number                  // копейки; отрицательная — сторно
   paid_on: string | null
   comment: string | null
   created_at: string
   created_by: string | null
   created_by_email: string | null
+  reverses_id: string | null      // заполнено у сторно-записи
 }
 
 export type InvoiceFile = {
@@ -111,10 +123,12 @@ export type InvoiceDetail = {
   receipt_logistics_kop: number
   extra_income_kop: number
   storage_kop: number
+  discount_kop: number
   storage: InvoiceStorageBlock | null
   shipments: InvoiceShipment[]
   receipts: InvoiceReceipt[]
   extra_income: InvoiceExtraIncome[]
+  discounts: InvoiceDiscount[]
   payments: InvoicePayment[]
   files: InvoiceFile[]
   ops: InvoiceOp[]
@@ -235,6 +249,52 @@ export type InvoiceAlerts = {
   active_outstanding: number
 }
 
+export type SettlementDayPoint = {
+  date: string
+  issued_kop: number
+  cancelled_kop: number
+  paid_kop: number
+  outstanding_kop: number
+}
+
+export type SettlementAgingBucket = { key: string; label: string; count: number; amount_kop: number }
+
+export type ReceivableClientRow = {
+  client_id: string | null
+  client_name: string | null
+  issued_kop: number
+  paid_kop: number
+  debt_kop: number
+  overdue_kop: number
+  oldest_overdue_days: number
+  debt_count: number
+}
+
+export type ReceivablesAnalytics = {
+  date_from: string
+  date_to: string
+  issued_kop: number
+  issued_count: number
+  paid_kop: number
+  payment_count: number
+  cancelled_kop: number
+  cancelled_count: number
+  cohort_paid_kop: number
+  collected_pct: number
+  opening_debt_kop: number
+  debt_kop: number
+  debt_count: number
+  overdue_kop: number
+  overdue_count: number
+  avg_days_to_pay: number
+  series: SettlementDayPoint[]
+  aging: SettlementAgingBucket[]
+  clients: ReceivableClientRow[]
+  clients_total: number
+}
+
+export type ReceivablesAnalyticsParams = { date_from: string; date_to: string; client_id?: string }
+
 export type InvoiceCreatePayload = {
   client_id: string
   client_name?: string | null
@@ -297,8 +357,17 @@ export function getUninvoicedShipments(params: UninvoicedParams = {}, signal?: A
   return request<UninvoicedShipmentsResponse>(`/invoices/uninvoiced-shipments${q ? `?${q}` : ''}`, { signal })
 }
 
-export function getInvoiceAlerts(signal?: AbortSignal) {
-  return request<InvoiceAlerts>('/invoices/alerts', { signal })
+export function getInvoiceAlerts(clientId?: string, signal?: AbortSignal) {
+  const q = clientId ? `?${new URLSearchParams({ client_id: clientId }).toString()}` : ''
+  return request<InvoiceAlerts>(`/invoices/alerts${q}`, { signal })
+}
+
+export function getReceivablesAnalytics(params: ReceivablesAnalyticsParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<ReceivablesAnalytics>(`/invoices/analytics?${sp.toString()}`, { signal })
 }
 
 export function getShipmentContents(shipmentIds: string[], signal?: AbortSignal) {
@@ -411,6 +480,19 @@ export function detachInvoiceStorage(invoiceId: string) {
   })
 }
 
+export function addInvoiceDiscount(invoiceId: string, payload: { amount_kop: number; reason: string }) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/discounts`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function removeInvoiceDiscount(invoiceId: string, discountId: string) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/discounts/${discountId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function addInvoicePayment(invoiceId: string, payload: { amount: number; paid_on?: string | null; comment?: string | null }) {
   return request<{ message: string }>(`/invoices/${invoiceId}/payments`, {
     method: 'POST',
@@ -486,6 +568,8 @@ export const INVOICE_OP_LABELS: Record<InvoiceOpType, string> = {
   extra_income_unlink: 'Отвязана доп. работа',
   storage_link: 'Привязано хранение',
   storage_unlink: 'Отвязано хранение',
+  discount_add: 'Скидка',
+  discount_remove: 'Скидка снята',
   payment: 'Оплата',
   due_date_change: 'Перенос срока',
   amount_change: 'Корректировка суммы',

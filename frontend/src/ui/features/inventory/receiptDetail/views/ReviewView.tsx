@@ -13,23 +13,19 @@ import { Icon } from '../../../../primitives/Icon'
 import { Drawer } from '../../../../feedback/Drawer'
 import { ReadOnlyField } from '../../../inventory/shared/ReadOnlyField'
 import { fmtDate } from '../../../../../utils/format'
-import { canCorrectReceived, canViewCosts } from '../../../../../utils/access'
+import { canViewCosts } from '../../../../../utils/access'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { useBackNav } from '../../../../../hooks/useBackNav'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { DocHeader } from '../../../shared/process/DocHeader'
 import { Panel, ReadRow } from '../../../shared/process/processUI'
 import { receiptStatusRole } from '../shared/receiptProcess'
-import { CorrectReceivedDrawer } from '../components/CorrectReceivedDrawer'
 import { OpEntry } from '../components/OpEntry'
 import { ReceiptLinesTable } from '../components/ReceiptLinesTable'
 import { ReceiptRailPanel } from '../components/ReceiptRailPanel'
 
 type Props = {
-  docId: string
   detail: ReceiptDetail
-  onReload: () => Promise<void>
-  onAdvance: () => void
   onCloseShort?: () => void
   onExpectRedelivery?: () => void
   advancing: boolean
@@ -38,7 +34,7 @@ type Props = {
 // Поступление завершается на приёмке (done): товар встал на остатки годным «На хранении».
 // Брак фиксируется позже при упаковке отгрузки. Вью — только просмотр; для частично
 // принятого менеджер может закрыть его с недопоставкой.
-export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRedelivery, advancing }: Props) {
+export function ReviewView({ detail, onCloseShort, onExpectRedelivery, advancing }: Props) {
   const navigate = useNavigate()
   const goBack = useBackNav('/inventory/receipts')
   const { doc, lines, ops } = detail
@@ -46,7 +42,6 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
   const [filterLine, setFilterLine] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string | null>(null)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
-  const [correctOpen, setCorrectOpen] = useState(false)
 
   const { user } = useCurrentUser()
   const showCosts = canViewCosts(user)
@@ -55,8 +50,6 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
   const canExpectRedelivery = canManage && detail.can_close_short && !!onExpectRedelivery
 
   const isCancelled = doc.status === 'cancelled'
-  const canCorrect = canCorrectReceived(user) && !isCancelled
-    && (doc.status === 'partially_received' || doc.status === 'done')
   const plannedUnits = lines.reduce((s, l) => s + l.planned_qty, 0)
   const arrivedUnits = lines.reduce((s, l) => s + (l.accepted_qty ?? 0), 0)
   const acceptedPct = plannedUnits > 0 ? Math.floor((arrivedUnits / plannedUnits) * 100) : 0
@@ -91,11 +84,6 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
               <Icon name="layers" size={14} />Журнал
               {ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({ops.length})</span>}
             </button>
-            {canCorrect && (
-              <button className="btn ghost" onClick={() => setCorrectOpen(true)}>
-                <Icon name="edit" size={14} />Исправить приёмку
-              </button>
-            )}
             {canExpectRedelivery && (
               <button className="btn ghost" onClick={onExpectRedelivery} disabled={advancing}>
                 <Icon name="truckIn" size={14} />Ожидается довоз
@@ -236,15 +224,6 @@ export function ReviewView({ docId, detail, onReload, onCloseShort, onExpectRede
           </div>
         )}
       </Drawer>
-
-      <CorrectReceivedDrawer
-        key={correctOpen ? 'open' : 'closed'}
-        docId={docId}
-        lines={lines}
-        open={correctOpen}
-        onClose={() => setCorrectOpen(false)}
-        onSaved={async () => { setCorrectOpen(false); await onReload() }}
-      />
     </div>
   )
 }

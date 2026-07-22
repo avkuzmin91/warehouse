@@ -6,7 +6,7 @@ export type ExpenseDictKind = 'categories' | 'payment-sources'
 
 export type ExpenseDictItem = { id: string; name: string }
 
-export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring'
+export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring' | 'discount'
 export type ExpensePaymentStatus = 'awaiting' | 'partially_paid' | 'paid' | 'cancelled'
 
 export type ExpenseFile = {
@@ -148,6 +148,7 @@ export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
   rent: 'Аренда',
   salary: 'Зарплата',
   recurring: 'Регулярный',
+  discount: 'Скидка клиенту',
 }
 
 export const EXPENSE_PAYMENT_STATUS_LABELS: Record<ExpensePaymentStatus, string> = {

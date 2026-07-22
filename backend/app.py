@@ -113,7 +113,20 @@ def _ensure_runtime_schema() -> None:
         """)
         conn.execute("""
             ALTER TABLE IF EXISTS shipment_docs
-                ADD COLUMN IF NOT EXISTS priority_rank INTEGER
+                ADD COLUMN IF NOT EXISTS priority_rank INTEGER,
+                ADD COLUMN IF NOT EXISTS repack_kind TEXT,
+                ADD COLUMN IF NOT EXISTS repack_reason TEXT,
+                ADD COLUMN IF NOT EXISTS repack_active INTEGER,
+                ADD COLUMN IF NOT EXISTS repack_price_kop INTEGER,
+                ADD COLUMN IF NOT EXISTS repack_extra_amount_kop INTEGER,
+                ADD COLUMN IF NOT EXISTS repack_extra_comment TEXT,
+                ADD COLUMN IF NOT EXISTS repack_started_at TEXT,
+                ADD COLUMN IF NOT EXISTS repack_charge_entry_id TEXT
+        """)
+        conn.execute("""
+            ALTER TABLE IF EXISTS zone_relocations
+                ADD COLUMN IF NOT EXISTS repack_kind TEXT,
+                ADD COLUMN IF NOT EXISTS repack_price_kop INTEGER
         """)
         conn.execute("""
             ALTER TABLE IF EXISTS colors
@@ -323,6 +336,18 @@ def _ensure_runtime_schema() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_files_invoice ON invoice_files(invoice_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_discounts (
+                id         TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL REFERENCES invoice_docs(id),
+                amount_kop INTEGER NOT NULL,
+                reason     TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_discounts_invoice ON invoice_discounts(invoice_id)")
         # Расходы на материалы (хозрасходы) — на случай dev-старта без alembic.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expense_categories (

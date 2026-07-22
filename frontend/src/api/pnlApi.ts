@@ -80,10 +80,17 @@ export type TripProfitItem = {
   status: string
   status_label: string
   day: string | null
+  carrier_id: string | null
   carrier_name: string | null
+  vehicle_type_id: string | null
+  vehicle_type_name: string | null
+  load_factor: string | null       // full | partial
   client_names: string[]
   income_kop: number
   cost_kop: number
+  waiting_kop: number
+  waiting_minutes: number
+  spent_kop: number                // cost + waiting — сумма расхода рейса в реестре
   margin_kop: number
   margin_pct: number | null
 }
@@ -95,6 +102,62 @@ export type TripProfitability = {
   cost_total: number
   margin_total: number
   items: TripProfitItem[]
+}
+
+export type LogisticsGroupRow = {
+  id: string | null                // null — «Не указан»
+  name: string
+  trips: number
+  trips_inbound: number
+  trips_outbound: number
+  income_kop: number
+  spent_kop: number
+  margin_kop: number
+  margin_pct: number | null
+  waiting_kop: number
+  waiting_minutes: number
+  trips_no_income: number
+}
+
+export type LogisticsDayPoint = {
+  date: string
+  trips_inbound: number
+  trips_outbound: number
+  income_kop: number
+  spent_kop: number
+}
+
+export type LogisticsAnalytics = {
+  date_from: string
+  date_to: string
+  days: number
+  trips_total: number
+  trips_inbound: number
+  trips_outbound: number
+  income_total: number
+  spent_total: number
+  margin_total: number
+  margin_pct: number | null
+  avg_spent_kop: number
+  avg_income_kop: number
+  waiting_total_kop: number
+  waiting_minutes_total: number
+  trips_no_income: number
+  trips_full: number
+  trips_partial: number
+  series: LogisticsDayPoint[]
+  by_vehicle: LogisticsGroupRow[]
+  by_carrier: LogisticsGroupRow[]
+  items: TripProfitItem[]
+}
+
+export type LogisticsAnalyticsParams = {
+  date_from: string
+  date_to: string
+  client_id?: string
+  direction?: string
+  vehicle_type_id?: string
+  carrier_id?: string
 }
 
 // --- API functions ---
@@ -125,6 +188,17 @@ export function getPnlDay(
   sp.set('date_to', params.date_to)
   if (params.client_id) sp.set('client_id', params.client_id)
   return request<PnlDay>(`/pnl/day?${sp.toString()}`, { signal })
+}
+
+export function getLogisticsAnalytics(params: LogisticsAnalyticsParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.direction) sp.set('direction', params.direction)
+  if (params.vehicle_type_id) sp.set('vehicle_type_id', params.vehicle_type_id)
+  if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
+  return request<LogisticsAnalytics>(`/pnl/logistics?${sp.toString()}`, { signal })
 }
 
 export function getTripProfitability(

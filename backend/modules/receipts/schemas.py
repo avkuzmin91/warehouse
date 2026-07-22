@@ -63,12 +63,6 @@ class ReceiptActualArrivalUpdate(BaseModel):
     actual_arrival_date: str | None = None
 
 
-class ReceiptReceivedCorrection(BaseModel):
-    """Пост-фактум корректировка обсчёта приёмки по строке: новое принятое + причина."""
-    accepted_qty: int = Field(ge=0)
-    reason: str
-
-
 class ReceiptArriveLine(BaseModel):
     line_id: str
     accepted_qty: int = Field(ge=0)

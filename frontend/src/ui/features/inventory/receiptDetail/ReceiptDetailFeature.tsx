@@ -157,10 +157,7 @@ export function ReceiptDetailFeature({ docId }: Props) {
   // partially_received / done (и легаси on_intake/on_review) — через ReviewView
   return (
     <ReviewView
-      docId={docId}
       detail={detail}
-      onReload={load}
-      onAdvance={handleAdvance}
       onCloseShort={handleCloseShort}
       onExpectRedelivery={handleExpectRedelivery}
       advancing={advancing}

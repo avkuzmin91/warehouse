@@ -255,13 +255,25 @@ export function PackingProductivityView() {
                     const docId = row.doc_ids?.[0]
                     return (
                       <tr
-                        key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}`}
+                        key={`${day.packed_date}|${row.client_id ?? ''}|${row.product_id}|${row.repack_kind ?? ''}`}
                         onClick={docId ? () => navigate(`/inventory/shipments/${docId}`) : undefined}
                         style={docId ? { cursor: 'pointer' } : undefined}
                         title={docId ? 'Открыть задачу упаковки' : undefined}
                       >
                         <Td className="mono" style={ELLIP}>{row.product_sku ?? '—'}</Td>
-                        <Td style={ELLIP}>{row.product_name ?? '—'}</Td>
+                        <Td style={ELLIP}>
+                          {row.product_name ?? '—'}
+                          {row.repack_kind && (
+                            <span
+                              title={row.repack_kind === 'free'
+                                ? 'Переупаковка без оплаты — объём не тарифицируется'
+                                : 'Переупаковка за счёт клиента — тарифицируется доп. работой'}
+                              style={{ marginLeft: 6, fontSize: 10.5, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--c-border)', color: 'var(--c-text-subtle)', whiteSpace: 'nowrap' }}
+                            >
+                              {row.repack_kind === 'free' ? 'переупаковка' : 'переупаковка (платно)'}
+                            </span>
+                          )}
+                        </Td>
                         <Td className="t-sub" style={ELLIP}>{row.client_name ?? '—'}</Td>
                         {showEarn ? <EarnCells m={row} /> : <QtyCells m={row} />}
                         {showActions && (

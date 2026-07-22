@@ -37,6 +37,12 @@ export type TripDoc = {
   updated_at: string | null
 }
 
+export type TripReceiptCell = {
+  storage_zone_id: string | null
+  storage_zone_name: string | null
+  qty: number
+}
+
 export type TripReceiptAlloc = {
   line_id: string
   product_sku: string | null
@@ -46,6 +52,8 @@ export type TripReceiptAlloc = {
   planned_qty: number
   accepted_qty: number // принято всего по всем рейсам
   received_qty: number // принято в этом рейсе (нетто журнала)
+  /** Раскладка принятого этим рейсом по ячейкам (нетто журнала). */
+  placements: TripReceiptCell[]
   storage_zone_id: string | null
   storage_zone_name: string | null
 }
@@ -259,6 +267,20 @@ export function tripUnload(tripId: string, payload: TripUnloadPayload, requestId
     method: 'POST',
     body: JSON.stringify(payload),
     headers: requestIdHeaders(requestId),
+  })
+}
+
+/** Корректировка обсчёта приёмки этого рейса по строке поступления (менеджер /
+ *  начальник склада): новое принятое рейсом + причина. Дельту по ячейкам разберёт
+ *  backend (веб шлёт полную раскладку, мобилка — одно число). */
+export function correctTripReceived(
+  tripId: string,
+  lineId: string,
+  payload: { received_qty: number; reason: string },
+): Promise<{ message: string }> {
+  return request<{ message: string }>(`/trips/${tripId}/receipt-lines/${lineId}/correct-received`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

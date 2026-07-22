@@ -16,6 +16,8 @@ export type InvoiceOpType =
   | 'extra_income_unlink'
   | 'storage_link'
   | 'storage_unlink'
+  | 'discount_add'
+  | 'discount_remove'
   | 'payment'
   | 'due_date_change'
   | 'amount_change'
@@ -64,6 +66,14 @@ export type InvoiceExtraIncome = {
   comment: string | null
 }
 
+export type InvoiceDiscount = {
+  id: string
+  amount_kop: number
+  reason: string
+  created_at: string
+  created_by_name: string | null
+}
+
 export type InvoiceDetail = {
   id: string
   doc_number: string
@@ -78,9 +88,11 @@ export type InvoiceDetail = {
   due_reached: boolean
   comment: string | null
   created_at: string
+  discount_kop: number
   shipments: InvoiceShipment[]
   receipts: InvoiceReceipt[]
   extra_income: InvoiceExtraIncome[]
+  discounts: InvoiceDiscount[]
   payments: InvoicePayment[]
   ops: InvoiceOp[]
 }
@@ -197,6 +209,19 @@ export function addInvoicePayment(invoiceId: string, payload: { amount: number; 
   })
 }
 
+export function addInvoiceDiscount(invoiceId: string, payload: { amount_kop: number; reason: string }) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/discounts`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function removeInvoiceDiscount(invoiceId: string, discountId: string) {
+  return request<{ message: string }>(`/invoices/${invoiceId}/discounts/${discountId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function getUninvoicedShipments(params: UninvoicedParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
@@ -259,6 +284,8 @@ export const INVOICE_OP_LABELS: Record<InvoiceOpType, string> = {
   extra_income_unlink: 'Отвязана доп. работа',
   storage_link: 'Привязано хранение',
   storage_unlink: 'Отвязано хранение',
+  discount_add: 'Скидка',
+  discount_remove: 'Скидка снята',
   payment: 'Оплата',
   due_date_change: 'Перенос срока',
   amount_change: 'Корректировка суммы',

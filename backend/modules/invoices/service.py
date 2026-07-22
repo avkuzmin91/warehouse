@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
@@ -25,6 +25,8 @@ from config import (
     INVOICE_STATUS_LABELS,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_LABELS,
+    RECEIVABLE_AGING_BUCKETS,
+    aging_bucket_key,
 )
 from dbconn import ci_like_substring_param
 from utils import now_iso as _now
@@ -80,6 +82,37 @@ def recompute_paid(connection, invoice_id: str) -> int:
         (invoice_id,),
     ).fetchone()
     return int(row["paid"] if row else 0)
+
+
+def reverse_payments(connection, *, invoice_id: str, on_date: str, uid: str, now: str) -> int:
+    """Сторнировать все действующие платежи счёта отдельными записями на `on_date`.
+
+    Исходный платёж остаётся в журнале со своей датой — иначе касса за уже закрытый
+    период менялась бы задним числом. Сторно — парная строка с отрицательной суммой и
+    `reverses_id` на исходный платёж, поэтому `recompute_paid` даёт ноль без правки фактов.
+    Возвращает сторнированную сумму. Не коммитит.
+    """
+    rows = connection.execute(
+        "SELECT id, amount FROM invoice_payments "
+        "WHERE invoice_id = ? AND COALESCE(is_deleted, 0) = 0 AND reverses_id IS NULL "
+        "AND id NOT IN (SELECT reverses_id FROM invoice_payments "
+        "               WHERE invoice_id = ? AND reverses_id IS NOT NULL)",
+        (invoice_id, invoice_id),
+    ).fetchall()
+    total = 0
+    for r in rows:
+        amount = int(r["amount"])
+        if not amount:
+            continue
+        connection.execute(
+            "INSERT INTO invoice_payments "
+            "(id,invoice_id,amount,paid_on,comment,created_at,created_by,reverses_id) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid4()), invoice_id, -amount, on_date,
+             "Сторно при аннулировании счёта", now, uid, str(r["id"])),
+        )
+        total += amount
+    return total
 
 
 def next_invoice_number(connection) -> str:
@@ -942,15 +975,24 @@ def invalidate_alerts_cache() -> None:
     _alerts_cache["value"] = None
 
 
-def alerts_counts(connection) -> dict[str, int]:
+def alerts_counts(connection, *, client_id: str | None = None) -> dict[str, int]:
+    cid = (client_id or "").strip() or None
     now_mono = time.monotonic()
     cached = _alerts_cache["value"]
-    if cached is not None and (now_mono - float(_alerts_cache["at"])) < _ALERTS_TTL_SEC:
+    # Кешируется только общий срез — он и опрашивается часто (бейдж главной).
+    # Разрез по клиенту считается каждый раз: запросов мало, а ключей кеша было бы
+    # столько же, сколько клиентов.
+    if cid is None and cached is not None and (now_mono - float(_alerts_cache["at"])) < _ALERTS_TTL_SEC:
         return dict(cached)  # type: ignore[arg-type]
 
     today = date.today().isoformat()
     active = list(INVOICE_ACTIVE_STATUSES)
     placeholders = ",".join("?" for _ in active)
+    conds = f"COALESCE(is_deleted, 0) = 0 AND status IN ({placeholders})"
+    params: list = [today, today, *active]
+    if cid:
+        conds += " AND client_id = ?"
+        params.append(cid)
     row = connection.execute(
         f"""
         SELECT
@@ -959,9 +1001,9 @@ def alerts_counts(connection) -> dict[str, int]:
             COUNT(*) FILTER (WHERE due_date IS NOT NULL AND due_date <= ?) AS due_count,
             COUNT(*) FILTER (WHERE due_date IS NOT NULL AND due_date <  ?) AS overdue_count
         FROM invoice_docs
-        WHERE COALESCE(is_deleted, 0) = 0 AND status IN ({placeholders})
+        WHERE {conds}
         """,
-        [today, today, *active],
+        params,
     ).fetchone()
     value = {
         "due_count": int(row["due_count"] or 0),
@@ -969,6 +1011,288 @@ def alerts_counts(connection) -> dict[str, int]:
         "active_count": int(row["active_count"] or 0),
         "active_outstanding": int(row["active_outstanding"] or 0),
     }
-    _alerts_cache["at"] = now_mono
-    _alerts_cache["value"] = value
+    if cid is None:
+        _alerts_cache["at"] = now_mono
+        _alerts_cache["value"] = value
     return dict(value)
+
+
+# ── Аналитика дебиторки (расчёты с клиентами за период) ─────────────────────────
+
+# Дата оплаты для срезов: `paid_on` обязателен с версии реестра, но у исторических
+# записей мог быть пуст — тогда падаем на день создания, иначе сумма выпала бы из
+# ряда по дням, оставшись в paid_amount, и долг по счёту завысился бы.
+_PAY_DAY = "COALESCE(NULLIF(p.paid_on, ''), SUBSTR(p.created_at, 1, 10))"
+
+_MAX_CLIENT_ROWS = 50
+
+
+def _parse_window(date_from: str, date_to: str) -> tuple[date, date]:
+    try:
+        df = date.fromisoformat(str(date_from)[:10])
+        dt = date.fromisoformat(str(date_to)[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Укажите период в формате ГГГГ-ММ-ДД") from exc
+    return (dt, df) if dt < df else (df, dt)
+
+
+def receivables_analytics(
+    connection,
+    *,
+    date_from: str,
+    date_to: str,
+    client_id: str | None = None,
+) -> dict:
+    """Расчёты с клиентами за [date_from..date_to] (вкл.): что выставили, что получили,
+    сколько должны и насколько долг просрочен.
+
+    Ключевое отличие от `alerts_counts` (снимок «на сейчас»): все величины считаются
+    НА ДАТУ — долг на конец дня D = выставлено (issued_on <= D) минус оплачено
+    (paid_on <= D). Поэтому ряд по дням даёт накопительную кривую долга, а отчёт за
+    закрытый месяц воспроизводится позже с тем же результатом.
+
+    Черновики не участвуют (issued_on пуст) — это ещё не обязательство клиента.
+    Аннулирование — событие СВОЕЙ даты, а не стирание истории: до `cancelled_on` счёт
+    остаётся обязательством, в день аннулирования гасится отрицательным начислением, а
+    его платежи сторнируются парной записью (см. `reverse_payments`). Сумма счёта берётся
+    текущая: истории корректировок `PATCH /amount` в схеме нет, ретро-правка суммы сдвинет
+    и прошлое.
+
+    Собираемость — когортная: сколько оплачено ПО СЧЕТАМ, выставленным в периоде и не
+    аннулированным (без ограничения датой оплаты), а не отношение кассы к начислению за
+    те же дни.
+    """
+    df, dt = _parse_window(date_from, date_to)
+    df_s, dt_s = df.isoformat(), dt.isoformat()
+    cid = (client_id or "").strip() or None
+
+    days: list[str] = []
+    d = df
+    while d <= dt:
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+
+    doc_where = "COALESCE(d.is_deleted, 0) = 0 AND d.issued_on IS NOT NULL"
+    doc_params: list = []
+    if cid:
+        doc_where += " AND d.client_id = ?"
+        doc_params.append(cid)
+
+    # 1) Выставлено по дням окна + открывающий остаток начислений до окна.
+    issued_rows = connection.execute(
+        f"""
+        SELECT d.issued_on AS day, COALESCE(SUM(d.total_amount), 0) AS amount, COUNT(*) AS n
+        FROM invoice_docs d
+        WHERE {doc_where} AND d.issued_on >= ? AND d.issued_on <= ?
+        GROUP BY d.issued_on
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchall()
+    issued_by_day = {str(r["day"]): int(r["amount"]) for r in issued_rows}
+    issued_kop = sum(issued_by_day.values())
+    issued_count = sum(int(r["n"]) for r in issued_rows)
+
+    opening_issued = int(connection.execute(
+        f"SELECT COALESCE(SUM(d.total_amount), 0) AS amount FROM invoice_docs d "
+        f"WHERE {doc_where} AND d.issued_on < ?",
+        [*doc_params, df_s],
+    ).fetchone()["amount"])
+
+    # 1a) Аннулировано по дням окна — отрицательное начисление на дату аннулирования.
+    cancelled_rows = connection.execute(
+        f"""
+        SELECT d.cancelled_on AS day, COALESCE(SUM(d.total_amount), 0) AS amount, COUNT(*) AS n
+        FROM invoice_docs d
+        WHERE {doc_where} AND d.cancelled_on IS NOT NULL
+          AND d.cancelled_on >= ? AND d.cancelled_on <= ?
+        GROUP BY d.cancelled_on
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchall()
+    cancelled_by_day = {str(r["day"]): int(r["amount"]) for r in cancelled_rows}
+    cancelled_kop = sum(cancelled_by_day.values())
+    cancelled_count = sum(int(r["n"]) for r in cancelled_rows)
+
+    opening_cancelled = int(connection.execute(
+        f"SELECT COALESCE(SUM(d.total_amount), 0) AS amount FROM invoice_docs d "
+        f"WHERE {doc_where} AND d.cancelled_on IS NOT NULL AND d.cancelled_on < ?",
+        [*doc_params, df_s],
+    ).fetchone()["amount"])
+
+    # 2) Оплачено по дням окна + открывающий остаток оплат до окна.
+    # Сторно-записи (отрицательные) сидят здесь же и гасят кассу датой аннулирования.
+    pay_join = f"""
+        FROM invoice_payments p
+        JOIN invoice_docs d ON d.id = p.invoice_id
+        WHERE COALESCE(p.is_deleted, 0) = 0 AND {doc_where}
+    """
+    paid_rows = connection.execute(
+        f"""
+        SELECT {_PAY_DAY} AS day, COALESCE(SUM(p.amount), 0) AS amount, COUNT(*) AS n
+        {pay_join} AND {_PAY_DAY} >= ? AND {_PAY_DAY} <= ?
+        GROUP BY {_PAY_DAY}
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchall()
+    paid_by_day = {str(r["day"]): int(r["amount"]) for r in paid_rows}
+    paid_kop = sum(paid_by_day.values())
+    payment_count = sum(int(r["n"]) for r in paid_rows)
+
+    opening_paid = int(connection.execute(
+        f"SELECT COALESCE(SUM(p.amount), 0) AS amount {pay_join} AND {_PAY_DAY} < ?",
+        [*doc_params, df_s],
+    ).fetchone()["amount"])
+
+    # 3) Кривая долга: открывающий остаток + нарастающий итог по дням окна.
+    running = opening_issued - opening_cancelled - opening_paid
+    series: list[dict] = []
+    for day in days:
+        running += issued_by_day.get(day, 0) - cancelled_by_day.get(day, 0) - paid_by_day.get(day, 0)
+        series.append({
+            "date": day,
+            "issued_kop": issued_by_day.get(day, 0),
+            "cancelled_kop": cancelled_by_day.get(day, 0),
+            "paid_kop": paid_by_day.get(day, 0),
+            "outstanding_kop": running,
+        })
+
+    # 4) Средний срок оплаты — взвешенный по сумме, по оплатам окна.
+    # Сторно исключаем: скорость расчётов меряется по реальным поступлениям, а
+    # отрицательная запись с датой аннулирования исказила бы и знак, и срок.
+    pay_speed = connection.execute(
+        f"""
+        SELECT COALESCE(SUM(p.amount), 0) AS amount,
+               COALESCE(SUM(p.amount * ({_PAY_DAY}::date - d.issued_on::date)), 0) AS weighted
+        {pay_join} AND p.reverses_id IS NULL AND {_PAY_DAY} >= ? AND {_PAY_DAY} <= ?
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchone()
+    speed_amount = int(pay_speed["amount"] or 0)
+    avg_days_to_pay = round(int(pay_speed["weighted"] or 0) / speed_amount, 1) if speed_amount else 0.0
+
+    # 5) Собираемость когорты: оплаты по неаннулированным счетам, выставленным в окне.
+    cohort_issued = int(connection.execute(
+        f"SELECT COALESCE(SUM(d.total_amount), 0) AS amount FROM invoice_docs d "
+        f"WHERE {doc_where} AND d.cancelled_on IS NULL AND d.issued_on >= ? AND d.issued_on <= ?",
+        [*doc_params, df_s, dt_s],
+    ).fetchone()["amount"])
+    cohort_paid = int(connection.execute(
+        f"""
+        SELECT COALESCE(SUM(p.amount), 0) AS amount
+        {pay_join} AND d.cancelled_on IS NULL AND d.issued_on >= ? AND d.issued_on <= ?
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchone()["amount"])
+    collected_pct = round(cohort_paid * 100 / cohort_issued, 1) if cohort_issued else 0.0
+
+    # 6) Долг по каждому счёту на конец окна → старение и разрез по клиентам.
+    # Аннулированный к этой дате счёт обязательством уже не является.
+    debt_rows = connection.execute(
+        f"""
+        SELECT d.id, d.client_id, d.client_name, d.due_date, d.total_amount,
+               COALESCE((
+                   SELECT SUM(p.amount) FROM invoice_payments p
+                   WHERE p.invoice_id = d.id AND COALESCE(p.is_deleted, 0) = 0
+                     AND {_PAY_DAY} <= ?
+               ), 0) AS paid_to_date
+        FROM invoice_docs d
+        WHERE {doc_where} AND d.issued_on <= ?
+          AND (d.cancelled_on IS NULL OR d.cancelled_on > ?)
+        """,
+        [dt_s, *doc_params, dt_s, dt_s],
+    ).fetchall()
+
+    aging = {key: {"key": key, "label": label, "count": 0, "amount_kop": 0}
+             for key, label, _lo, _hi in RECEIVABLE_AGING_BUCKETS}
+    clients: dict[str, dict] = {}
+    debt_kop = overdue_kop = 0
+    overdue_count = debt_count = 0
+
+    for r in debt_rows:
+        debt = int(r["total_amount"]) - int(r["paid_to_date"])
+        if debt <= 0:
+            continue
+        due = str(r["due_date"] or "")
+        days_overdue = (dt - date.fromisoformat(due[:10])).days if due else 0
+        is_late = bool(due) and days_overdue > 0
+        debt_kop += debt
+        debt_count += 1
+        if is_late:
+            overdue_kop += debt
+            overdue_count += 1
+        bucket = aging[aging_bucket_key(RECEIVABLE_AGING_BUCKETS, days_overdue if due else 0)]
+        bucket["count"] += 1
+        bucket["amount_kop"] += debt
+
+        key = str(r["client_id"] or "")
+        c = clients.setdefault(key, {
+            "client_id": r["client_id"], "client_name": r["client_name"],
+            "issued_kop": 0, "paid_kop": 0, "debt_kop": 0, "overdue_kop": 0,
+            "oldest_overdue_days": 0, "debt_count": 0,
+        })
+        c["debt_kop"] += debt
+        c["debt_count"] += 1
+        if is_late:
+            c["overdue_kop"] += debt
+            c["oldest_overdue_days"] = max(int(c["oldest_overdue_days"]), days_overdue)
+
+    # 7) Обороты периода по клиентам — накладываются на долг из п.6.
+    for row in connection.execute(
+        f"""
+        SELECT d.client_id, d.client_name, COALESCE(SUM(d.total_amount), 0) AS amount
+        FROM invoice_docs d
+        WHERE {doc_where} AND d.issued_on >= ? AND d.issued_on <= ?
+        GROUP BY d.client_id, d.client_name
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchall():
+        key = str(row["client_id"] or "")
+        c = clients.setdefault(key, {
+            "client_id": row["client_id"], "client_name": row["client_name"],
+            "issued_kop": 0, "paid_kop": 0, "debt_kop": 0, "overdue_kop": 0,
+            "oldest_overdue_days": 0, "debt_count": 0,
+        })
+        c["issued_kop"] += int(row["amount"])
+
+    for row in connection.execute(
+        f"""
+        SELECT d.client_id, d.client_name, COALESCE(SUM(p.amount), 0) AS amount
+        {pay_join} AND {_PAY_DAY} >= ? AND {_PAY_DAY} <= ?
+        GROUP BY d.client_id, d.client_name
+        """,
+        [*doc_params, df_s, dt_s],
+    ).fetchall():
+        key = str(row["client_id"] or "")
+        c = clients.setdefault(key, {
+            "client_id": row["client_id"], "client_name": row["client_name"],
+            "issued_kop": 0, "paid_kop": 0, "debt_kop": 0, "overdue_kop": 0,
+            "oldest_overdue_days": 0, "debt_count": 0,
+        })
+        c["paid_kop"] += int(row["amount"])
+
+    client_rows = sorted(
+        clients.values(),
+        key=lambda c: (-int(c["debt_kop"]), -int(c["issued_kop"])),
+    )
+    return {
+        "date_from": df_s,
+        "date_to": dt_s,
+        "issued_kop": issued_kop,
+        "issued_count": issued_count,
+        "paid_kop": paid_kop,
+        "payment_count": payment_count,
+        "cancelled_kop": cancelled_kop,
+        "cancelled_count": cancelled_count,
+        "cohort_paid_kop": cohort_paid,
+        "collected_pct": collected_pct,
+        "opening_debt_kop": opening_issued - opening_cancelled - opening_paid,
+        "debt_kop": debt_kop,
+        "debt_count": debt_count,
+        "overdue_kop": overdue_kop,
+        "overdue_count": overdue_count,
+        "avg_days_to_pay": avg_days_to_pay,
+        "series": series,
+        "aging": [aging[key] for key, _l, _lo, _hi in RECEIVABLE_AGING_BUCKETS],
+        "clients": client_rows[:_MAX_CLIENT_ROWS],
+        "clients_total": len(client_rows),
+    }

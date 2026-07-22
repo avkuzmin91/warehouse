@@ -97,6 +97,16 @@ class TripUnloadPayload(BaseModel):
     receipt_lines: list[TripUnloadReceiptLine] = Field(default_factory=list)
 
 
+class TripReceivedCorrection(BaseModel):
+    """Корректировка обсчёта приёмки этого рейса по строке поступления: новое принятое
+    рейсом + причина. placements — полная новая раскладка принятого рейсом по ячейкам
+    (сумма = received_qty); без него дельта применяется к ячейкам приёмки рейса.
+    """
+    received_qty: int = Field(ge=0)
+    reason: str
+    placements: list[TripUnloadPlacement] | None = None
+
+
 class TripCostPayload(BaseModel):
     logistics_cost_actual: float | None = Field(default=None, ge=0)
     waiting_cost: float | None = Field(default=None, ge=0)
@@ -141,6 +151,12 @@ class TripDocResponse(BaseModel):
     updated_at: str | None = None
 
 
+class TripReceiptCell(BaseModel):
+    storage_zone_id: str | None = None
+    storage_zone_name: str | None = None
+    qty: int = 0
+
+
 class TripReceiptAllocItem(BaseModel):
     line_id: str
     product_sku: str | None = None
@@ -150,6 +166,8 @@ class TripReceiptAllocItem(BaseModel):
     planned_qty: int = 0   # план по строке
     accepted_qty: int = 0  # принято всего (по всем рейсам)
     received_qty: int = 0  # принято кладовщиком в этом рейсе (нетто журнала по trip_id)
+    # Раскладка принятого этим рейсом по ячейкам (нетто журнала по trip_id).
+    placements: list[TripReceiptCell] = Field(default_factory=list)
     storage_zone_id: str | None = None    # место хранения строки (план/факт)
     storage_zone_name: str | None = None
 

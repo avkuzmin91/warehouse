@@ -894,3 +894,86 @@ def test_uploads_rejects_path_traversal(admin_client):
     """Имя файла с разделителями/traversal не проходит — 404, а не выход из каталога."""
     assert admin_client.get("/uploads/..%2f..%2fapp.py").status_code == 404
     assert admin_client.get("/uploads/nonexistent-file.pdf").status_code == 404
+
+
+# --- «Вернуть на корректировку» (return-to-draft) ---
+
+def test_return_to_draft_from_preparing(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-R1")
+    _seed_ready(client_id, product_id=pid, sku="DSP-R1", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-R1", 2)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    r = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={"reason": "Ошибка в количестве"})
+    assert r.status_code == 200, r.text
+    detail = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert detail["status"] == "draft"
+    # состав сохранён, документ снова редактируем и передаётся в подготовку повторно
+    assert len(detail["lines"]) == 1
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    # причина попала в журнал
+    ops = admin_client.get(f"/dispatches/{doc_id}").json()["ops"]
+    ret = [o for o in ops if o["op_type"] == "return_to_draft"]
+    assert len(ret) == 1
+    assert "Ошибка в количестве" in ret[0]["comment"]
+
+
+def test_return_to_draft_from_awaiting_trip_restores_stock(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-R2")
+    _seed_ready(client_id, product_id=pid, sku="DSP-R2", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-R2", 2)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_id).status_code == 200
+    r = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={})
+    assert r.status_code == 200, r.text
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "draft"
+    # сторно подготовки: остаток вернулся в исходную ячейку, ничего не потеряно
+    assert _ready_net(client_id, pid) == 2
+    # цикл замыкается: снова в подготовку и снова подготовить
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_id).status_code == 200
+
+
+def test_return_to_draft_from_awaiting_packing(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-R3")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-R3", qty=5)
+    doc_id = _create(admin_client, client_id, pid, "DSP-R3", 5)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 200 and r.json()["message"] == "awaiting_packing"
+    r = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={})
+    assert r.status_code == 200, r.text
+    assert admin_client.get(f"/dispatches/{doc_id}").json()["status"] == "draft"
+
+
+def test_return_to_draft_blocked_from_draft_and_cancelled(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-R4")
+    _seed_ready(client_id, product_id=pid, sku="DSP-R4", qty=2)
+    doc_id = _create(admin_client, client_id, pid, "DSP-R4", 2)
+    assert admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={}).status_code == 400
+    assert admin_client.post(f"/dispatches/{doc_id}/cancel").status_code == 200
+    assert admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={}).status_code == 400
+
+
+def test_return_to_draft_blocked_by_active_trip(admin_client, client_id):
+    pid = _make_product(client_id, sku="DSP-R5")
+    _seed_ready(client_id, product_id=pid, sku="DSP-R5", qty=3)
+    doc_id = _create(admin_client, client_id, pid, "DSP-R5", 3)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_id).status_code == 200
+    line_id = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]["id"]
+    trip_id = admin_client.post("/trips", json={
+        "direction": "outbound", "cargo_type": "good",
+        "origin_id": "wh-2", "origin_name": "Склад-получатель",
+    }).json()["message"]
+    link = admin_client.post(f"/trips/{trip_id}/dispatches", json={
+        "items": [{"dispatch_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 3}]}],
+    })
+    assert link.status_code == 200, link.text
+    blocked = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={})
+    assert blocked.status_code == 400
+    assert "рейс" in blocked.json()["detail"]
+    # отвязали от рейса — возврат проходит
+    unlink = admin_client.delete(f"/trips/{trip_id}/dispatches/{doc_id}")
+    assert unlink.status_code == 200, unlink.text
+    r = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={})
+    assert r.status_code == 200, r.text
+    assert _ready_net(client_id, pid) == 3

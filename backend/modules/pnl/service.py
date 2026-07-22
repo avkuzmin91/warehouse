@@ -648,8 +648,11 @@ def trip_profitability(connection, *, date_from: str, date_to: str, client_id: s
     trips = connection.execute(
         f"""
         SELECT t.id, t.trip_number, t.direction, t.cargo_type, t.status,
-               SUBSTR(t.arrived_at, 1, 10) AS day, t.carrier_name,
+               SUBSTR(t.arrived_at, 1, 10) AS day, t.carrier_id, t.carrier_name,
+               t.vehicle_type_id, t.vehicle_type_name, t.load_factor,
                COALESCE(t.logistics_cost_actual, 0) AS cost_actual,
+               COALESCE(t.waiting_cost, 0) AS waiting_cost,
+               COALESCE(t.waiting_minutes, 0) AS waiting_minutes,
                COALESCE((
                    SELECT array_agg(DISTINCT tlc.client_name ORDER BY tlc.client_name)
                    FROM trip_lines tlc
@@ -732,6 +735,7 @@ def trip_profitability(connection, *, date_from: str, date_to: str, client_id: s
         direction = str(t["direction"])
         status = str(t["status"])
         labels = TRIP_STATUS_RU_BY_DIRECTION.get(direction, {})
+        waiting_kop = rub_to_kop(t["waiting_cost"])
         items.append({
             "trip_id": trip_id,
             "trip_number": str(t["trip_number"]),
@@ -740,7 +744,16 @@ def trip_profitability(connection, *, date_from: str, date_to: str, client_id: s
             "status": status,
             "status_label": labels.get(status, status),
             "day": day,
+            "carrier_id": (str(t["carrier_id"]) if t["carrier_id"] else None),
             "carrier_name": t["carrier_name"],
+            "vehicle_type_id": (str(t["vehicle_type_id"]) if t["vehicle_type_id"] else None),
+            "vehicle_type_name": t["vehicle_type_name"],
+            "load_factor": t["load_factor"],
+            "waiting_kop": waiting_kop,
+            "waiting_minutes": int(t["waiting_minutes"] or 0),
+            # «Потрачено» рейса для аналитики логистики: себестоимость + простой —
+            # ровно сумма логистического расхода рейса в реестре расходов.
+            "spent_kop": cost + waiting_kop,
             "client_names": [str(n) for n in (t["client_names"] or []) if n],
             "income_kop": income,
             "cost_kop": cost,
@@ -757,5 +770,127 @@ def trip_profitability(connection, *, date_from: str, date_to: str, client_id: s
         "income_total": income_total,
         "cost_total": cost_total,
         "margin_total": income_total - cost_total,
+        "items": items,
+    }
+
+
+def logistics_analytics(
+    connection, *, date_from: str, date_to: str,
+    client_id: str | None = None, direction: str | None = None,
+    vehicle_type_id: str | None = None, carrier_id: str | None = None,
+) -> dict:
+    """Аналитика логистики в окне (по факту прибытия): рейсы, деньги и разрезы.
+
+    База — тот же расчёт, что и «Рентабельность рейсов» (`trip_profitability`), поэтому
+    доход рейса копейка-в-копейку совпадает между вкладками. Отличие в трактовке
+    «потрачено»: здесь это себестоимость + простой (`spent_kop`) — ровно сумма
+    логистического расхода рейса в реестре расходов; маржа и % считаются от него.
+    Разрезы: по дням (динамика), по типам кузова и по перевозчикам. Рейсы без
+    заведённого типа кузова / перевозчика собираются в строку «Не указан» — чтобы
+    итоги разрезов сходились с KPI. Копейки INTEGER."""
+    base = trip_profitability(connection, date_from=date_from, date_to=date_to, client_id=client_id)
+    items = base["items"]
+    if direction in ("inbound", "outbound"):
+        items = [t for t in items if t["direction"] == direction]
+    if vehicle_type_id and vehicle_type_id.strip():
+        items = [t for t in items if t["vehicle_type_id"] == vehicle_type_id.strip()]
+    if carrier_id and carrier_id.strip():
+        items = [t for t in items if t["carrier_id"] == carrier_id.strip()]
+
+    axis = _days_axis(date_from, date_to)
+    idx = {d: i for i, d in enumerate(axis)}
+    n = len(axis)
+    series = [
+        {"date": d, "trips_inbound": 0, "trips_outbound": 0, "income_kop": 0, "spent_kop": 0}
+        for d in axis
+    ]
+
+    def _group_row(gid: str | None, name: str | None) -> dict:
+        return {
+            "id": gid, "name": name or "Не указан",
+            "trips": 0, "trips_inbound": 0, "trips_outbound": 0,
+            "income_kop": 0, "spent_kop": 0, "margin_kop": 0, "margin_pct": None,
+            "waiting_kop": 0, "waiting_minutes": 0, "trips_no_income": 0,
+        }
+
+    by_vehicle: dict[str, dict] = {}
+    by_carrier: dict[str, dict] = {}
+    income_total = spent_total = waiting_total = waiting_minutes_total = 0
+    trips_inbound = trips_outbound = trips_no_income = trips_full = trips_partial = 0
+
+    for t in items:
+        inbound = t["direction"] == "inbound"
+        income = int(t["income_kop"])
+        spent = int(t["spent_kop"])
+        income_total += income
+        spent_total += spent
+        waiting_total += int(t["waiting_kop"])
+        waiting_minutes_total += int(t["waiting_minutes"])
+        if inbound:
+            trips_inbound += 1
+        else:
+            trips_outbound += 1
+        if income == 0:
+            trips_no_income += 1
+        if t["load_factor"] == "full":
+            trips_full += 1
+        elif t["load_factor"] == "partial":
+            trips_partial += 1
+
+        i = idx.get(str(t["day"]))
+        if i is not None:
+            p = series[i]
+            p["trips_inbound" if inbound else "trips_outbound"] += 1
+            p["income_kop"] += income
+            p["spent_kop"] += spent
+
+        for groups, gid, gname in (
+            (by_vehicle, t["vehicle_type_id"], t["vehicle_type_name"]),
+            (by_carrier, t["carrier_id"], t["carrier_name"]),
+        ):
+            g = groups.setdefault(gid or "__none", _group_row(gid, gname))
+            g["trips"] += 1
+            g["trips_inbound" if inbound else "trips_outbound"] += 1
+            g["income_kop"] += income
+            g["spent_kop"] += spent
+            g["waiting_kop"] += int(t["waiting_kop"])
+            g["waiting_minutes"] += int(t["waiting_minutes"])
+            if income == 0:
+                g["trips_no_income"] += 1
+
+    def _finalize(groups: dict[str, dict]) -> list[dict]:
+        out = list(groups.values())
+        for g in out:
+            g["margin_kop"] = g["income_kop"] - g["spent_kop"]
+            # Как в рентабельности рейсов: % от затрат; без затрат отношение не определено.
+            g["margin_pct"] = (
+                round(g["margin_kop"] / g["spent_kop"] * 100, 1) if g["spent_kop"] > 0 else None
+            )
+        out.sort(key=lambda g: g["spent_kop"], reverse=True)
+        return out
+
+    trips_total = trips_inbound + trips_outbound
+    margin_total = income_total - spent_total
+    return {
+        "date_from": axis[0],
+        "date_to": axis[-1],
+        "days": n,
+        "trips_total": trips_total,
+        "trips_inbound": trips_inbound,
+        "trips_outbound": trips_outbound,
+        "income_total": income_total,
+        "spent_total": spent_total,
+        "margin_total": margin_total,
+        "margin_pct": round(margin_total / spent_total * 100, 1) if spent_total > 0 else None,
+        "avg_spent_kop": round(spent_total / trips_total) if trips_total else 0,
+        "avg_income_kop": round(income_total / trips_total) if trips_total else 0,
+        "waiting_total_kop": waiting_total,
+        "waiting_minutes_total": waiting_minutes_total,
+        "trips_no_income": trips_no_income,
+        "trips_full": trips_full,
+        "trips_partial": trips_partial,
+        "series": series,
+        "by_vehicle": _finalize(by_vehicle),
+        "by_carrier": _finalize(by_carrier),
         "items": items,
     }

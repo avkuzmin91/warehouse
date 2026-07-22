@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNav } from '../nav/NavContext'
+import { useAuth } from '../auth/AuthContext'
 import { newRequestId } from '../api/http'
 import { getUnloadingZones, type Zone } from '../api/lookupsApi'
 import {
+  correctTripReceived,
   getTrip,
   tripArrival,
   tripLexicon,
@@ -18,7 +20,10 @@ import { getDispatch, type DispatchLine } from '../api/dispatchApi'
 import { AppBar } from '../components/AppBar'
 import { ZoneField } from '../components/ZoneField'
 import { DateTimeField } from '../components/DateTimeField'
+import { TextArea } from '../components/TextArea'
 import { Icon } from '../components/Icon'
+import { useHardwareBack } from '../nav/backHandlers'
+import { canCorrectReceived } from '../utils/access'
 import { MOSCOW_TZ, moscowNowIso, parseMoscow, variantTitle } from '../utils/format'
 
 const RECEIPT_STATUS: Record<string, { label: string; tone: string }> = {
@@ -67,6 +72,8 @@ function lineTitle(a: { product_name: string | null; product_sku: string | null;
 
 export function TripDetailScreen({ tripId }: { tripId: string }) {
   const { back } = useNav()
+  const { user } = useAuth()
+  const [correctLine, setCorrectLine] = useState<TripReceiptAlloc | null>(null)
   const [detail, setDetail] = useState<TripDetail | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [loading, setLoading] = useState(true)
@@ -433,17 +440,55 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
             )}
 
             {(doc.status === 'costing' || doc.status === 'closed') && (
-              <div className="center">
-                <div className="center-ico green">
-                  <Icon name="check" size={26} />
+              <>
+                <div className="center">
+                  <div className="center-ico green">
+                    <Icon name="check" size={26} />
+                  </div>
+                  <div>
+                    {lex.warehousePhase} завершена. {doc.status === 'closed' ? 'Рейс закрыт.' : 'Передано менеджеру.'}
+                  </div>
+                  <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
+                    Назад
+                  </button>
                 </div>
-                <div>
-                  {lex.warehousePhase} завершена. {doc.status === 'closed' ? 'Рейс закрыт.' : 'Передано менеджеру.'}
-                </div>
-                <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
-                  Назад
-                </button>
-              </div>
+
+                {/* Корректировка обсчёта приёмки этого рейса: менеджер / нач. склада. */}
+                {!outbound && canCorrectReceived(user?.role) && detail!.receipts.length > 0 && (
+                  <>
+                    <div className="sec">Принято рейсом</div>
+                    {detail!.receipts.map((r) => (
+                      <div key={r.line_id} className="group">
+                        <div className="group-head">
+                          <span className="gname">
+                            {r.receipt_number ?? 'Поступление'}
+                            {r.client_name ? ` · ${r.client_name}` : ''}
+                          </span>
+                        </div>
+                        {r.allocations.map((a) => (
+                          <div key={a.line_id} className="docline">
+                            <div className="docline-main">
+                              <div className="tile-title" style={{ fontSize: 14 }}>{lineTitle(a)}</div>
+                              <div className="tile-meta">план рейса {a.qty} шт</div>
+                            </div>
+                            <div className="docline-qty">
+                              <div className="big">принято {a.received_qty ?? 0}</div>
+                            </div>
+                            <button
+                              className="btn ghost sm auto"
+                              style={{ marginLeft: 8 }}
+                              aria-label="Исправить принятое"
+                              onClick={() => setCorrectLine(a)}
+                            >
+                              <Icon name="edit" size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
             )}
 
             {(doc.status === 'draft' || doc.status === 'cancelled') && (
@@ -456,6 +501,103 @@ export function TripDetailScreen({ tripId }: { tripId: string }) {
             )}
           </>
         )}
+      </div>
+
+      {correctLine && (
+        <CorrectTripReceivedSheet
+          tripId={tripId}
+          line={correctLine}
+          onClose={() => setCorrectLine(null)}
+          onDone={() => {
+            setCorrectLine(null)
+            reload()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Шторка корректировки обсчёта приёмки рейса: новое принятое ЭТИМ рейсом + причина.
+// Гейты (не ниже лежащего на складе; излишек поднимает план рейса) — на бэке.
+function CorrectTripReceivedSheet({
+  tripId,
+  line,
+  onClose,
+  onDone,
+}: {
+  tripId: string
+  line: TripReceiptAlloc
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [qty, setQty] = useState(line.received_qty ?? 0)
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const unchanged = qty === (line.received_qty ?? 0)
+
+  async function submit() {
+    if (saving) return
+    if (!reason.trim()) {
+      setError('Укажите причину корректировки')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await correctTripReceived(tripId, line.line_id, { received_qty: qty, reason: reason.trim() })
+      onDone()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось скорректировать приёмку')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  useHardwareBack(() => { if (!saving) onClose() })
+
+  return (
+    <div className="sheet-backdrop" onClick={() => { if (!saving) onClose() }}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" />
+        <h3>Корректировка приёмки</h3>
+        <div className="line-sub" style={{ marginTop: -4 }}>
+          {line.product_name ?? '—'}
+          {line.product_sku ? <> · <span className="mono">{line.product_sku}</span></> : null}
+        </div>
+
+        <div className="summary" style={{ margin: '12px 0' }}>
+          <div className="kv"><span className="k">План рейса</span><span className="v">{line.qty}</span></div>
+          <div className="kv"><span className="k">Принято рейсом</span><span className="v">{line.received_qty ?? '—'}</span></div>
+        </div>
+
+        <div className="flabel">Принято (факт)</div>
+        <input
+          className="input num"
+          type="text"
+          inputMode="numeric"
+          value={qty || ''}
+          onChange={(e) => setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+        />
+
+        <div className="flabel" style={{ marginTop: 10 }}>Причина</div>
+        <TextArea value={reason} onChange={setReason} placeholder="Причина корректировки…" minRows={2} />
+
+        {error && (
+          <div className="alert" style={{ marginTop: 10 }}>
+            <Icon name="alert" size={15} />
+            {error}
+          </div>
+        )}
+
+        <div className="dtf-actions">
+          <button className="btn ghost" disabled={saving} onClick={onClose}>Отмена</button>
+          <button className="btn" disabled={saving || unchanged || !reason.trim()} onClick={() => void submit()}>
+            {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
+          </button>
+        </div>
       </div>
     </div>
   )

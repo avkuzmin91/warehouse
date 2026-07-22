@@ -8,7 +8,9 @@ import {
   shipmentPriorityLabel,
   shipmentPriorityTone,
   updateShipmentPriority,
+  SHIPMENT_REPACK_KIND_LABELS,
   SHIPMENT_STATUS_LABELS,
+  type ReturnToPackingPayload,
   type ShipmentDetail,
   type ShipmentStatus,
 } from '../../api/shipmentsApi'
@@ -17,6 +19,7 @@ import { AppBar } from '../../components/AppBar'
 import { ConfirmAction } from '../../components/ConfirmAction'
 import { LineFiles } from '../../components/LineFiles'
 import { PrioritySheet } from '../../components/PrioritySheet'
+import { ReturnToPackingSheet } from '../../components/ReturnToPackingSheet'
 import { Icon } from '../../components/Icon'
 import { canCreateDocuments } from '../../utils/access'
 import { balanceKey } from '../../utils/balanceKey'
@@ -45,14 +48,11 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
   const [error, setError] = useState('')
   // Остаток «склад»/«в пути» под строкой — только в черновике (пока планируем).
   const [plannable, setPlannable] = useState<PlannableItem[]>([])
-  const [confirmAct, setConfirmAct] = useState<'' | 'cancel' | 'return'>('')
+  const [confirmAct, setConfirmAct] = useState<'' | 'cancel'>('')
   const [priorityOpen, setPriorityOpen] = useState(false)
+  const [returnOpen, setReturnOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
-  // Режим частичного (force) возврата: активируется, когда обычный возврат упёрся в уже
-  // отгруженный товар — тогда предлагаем вернуть только оставшийся остаток.
-  const [returnForce, setReturnForce] = useState(false)
-  const [returnForceMsg, setReturnForceMsg] = useState('')
 
   const load = useCallback((signal?: AbortSignal) => {
     setLoading(true)
@@ -94,30 +94,13 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
     }
   }
 
-  // Возврат «на упаковку» с двухшаговым частичным возвратом: если сервер отклонил из-за
-  // уже отгруженного товара, не гасим подтверждение, а переключаем его в force-режим.
-  async function handleReturn(force: boolean) {
-    if (!doc || saving) return
-    setSaving(true)
-    setActionErr('')
-    try {
-      await returnShipmentToPacking(doc.id, force)
-      setConfirmAct('')
-      setReturnForce(false)
-      load()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Не удалось выполнить действие'
-      if (!force && msg.includes('уже отгружена или закреплена за рейсом')) {
-        setReturnForceMsg(msg)
-        setReturnForce(true)
-      } else {
-        setActionErr(msg)
-        setConfirmAct('')
-        setReturnForce(false)
-      }
-    } finally {
-      setSaving(false)
-    }
+  // Возврат «на упаковку»: режим (доработка / переупаковка без оплаты / за счёт
+  // клиента) и force-ветку частичного возврата ведёт сама шторка ReturnToPackingSheet.
+  async function handleReturn(payload: ReturnToPackingPayload) {
+    if (!doc) return
+    await returnShipmentToPacking(doc.id, payload)
+    setReturnOpen(false)
+    load()
   }
 
   const tone = doc ? (STATUS_TONE[doc.status] ?? '') : ''
@@ -145,6 +128,14 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
               </div>
               <div className="kv"><span className="k">Клиент</span><span className="v">{doc.client_name ?? '—'}</span></div>
               {doc.cargo_type === 'defect' && <div className="kv"><span className="k">Тип</span><span className="v">Брак</span></div>}
+              {doc.repack_kind && (
+                <div className="kv"><span className="k">Переупаковка</span>
+                  <span className="v">
+                    <span className="badge info"><span className="dot" />{SHIPMENT_REPACK_KIND_LABELS[doc.repack_kind]}</span>
+                    {doc.repack_reason ? ` ${doc.repack_reason}` : ''}
+                  </span>
+                </div>
+              )}
               <div className="kv"><span className="k">Приоритет</span>
                 <span className="v" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                   {priorityTone
@@ -199,21 +190,9 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
                   <div className="alert"><Icon name="alert" size={15} />{actionErr}</div>
                 )}
                 {returnable && (
-                  <ConfirmAction
-                    danger={returnForce}
-                    label={<><Icon name="refresh" size={16} /> Вернуть на упаковку</>}
-                    prompt={returnForce
-                      ? `${returnForceMsg} Часть уже отгружена и не вернётся на стол — вернуть только остаток?`
-                      : doc.status === 'packed'
-                        ? 'Раскладка по местам откатится, задача вернётся на упаковку. Продолжить?'
-                        : 'Задача вернётся на упаковку. Продолжить?'}
-                    confirmLabel={returnForce ? 'Да, вернуть остаток' : 'Да, вернуть'}
-                    saving={saving}
-                    open={confirmAct === 'return'}
-                    onOpen={() => setConfirmAct('return')}
-                    onClose={() => { setConfirmAct(''); setReturnForce(false) }}
-                    onConfirm={() => void handleReturn(returnForce)}
-                  />
+                  <button className="btn ghost" disabled={saving} onClick={() => setReturnOpen(true)}>
+                    <Icon name="refresh" size={16} /> Вернуть на упаковку
+                  </button>
                 )}
                 {cancellable && (
                   <ConfirmAction
@@ -233,6 +212,15 @@ export function PackingDetailScreen({ docId }: { docId: string }) {
           </>
         )}
       </div>
+
+      {returnOpen && doc && (
+        <ReturnToPackingSheet
+          docNumber={doc.doc_number}
+          isPacked={doc.status === 'packed'}
+          onClose={() => setReturnOpen(false)}
+          onSubmit={handleReturn}
+        />
+      )}
 
       {priorityOpen && doc && (
         <PrioritySheet

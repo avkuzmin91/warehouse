@@ -48,6 +48,16 @@ export type ShipmentLine = {
   files: ShipmentLineFile[]
 }
 
+// Переупаковка (задача была поставлена с ошибкой, товар пакуется заново):
+// free — за наш счёт (объём в производительности виден, деньги 0),
+// paid — за счёт клиента (при завершении задачи автосоздаётся запись «Доп. работы»).
+export type ShipmentRepackKind = 'free' | 'paid'
+
+export const SHIPMENT_REPACK_KIND_LABELS: Record<ShipmentRepackKind, string> = {
+  free: 'Переупаковка без оплаты',
+  paid: 'Переупаковка за счёт клиента',
+}
+
 export type ShipmentDetail = {
   id: string
   doc_number: string
@@ -61,6 +71,10 @@ export type ShipmentDetail = {
   comment: string | null
   status: ShipmentStatus
   status_label: string
+  // Переупаковка: kind остаётся после завершения (бейдж), repack_active — пока пакуют заново.
+  repack_kind: ShipmentRepackKind | null
+  repack_reason: string | null
+  repack_active: boolean
   lines: ShipmentLine[]
 }
 
@@ -223,9 +237,23 @@ export function cancelShipment(id: string) {
 // «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
 // force=true — частичный возврат: уже отгруженное с места остаётся вне задачи,
 // на упаковку возвращается только физически доступный остаток.
-export function returnShipmentToPacking(id: string, force = false) {
-  const q = force ? '?force=true' : ''
-  return request<{ message: string }>(`/shipments/${id}/return-to-packing${q}`, { method: 'POST' })
+// mode: rework — обычная доработка; repack_free/repack_paid — переупаковка (reason
+// обязателен; для paid — unit_price_kop кастомная цена за единицу либо null =
+// стандартный тариф, extra_amount_kop/extra_comment — работы сверх тарифа).
+export type ReturnToPackingPayload = {
+  mode?: 'rework' | 'repack_free' | 'repack_paid'
+  reason?: string
+  unit_price_kop?: number | null
+  extra_amount_kop?: number | null
+  extra_comment?: string | null
+  force?: boolean
+}
+
+export function returnShipmentToPacking(id: string, payload: ReturnToPackingPayload = {}) {
+  return request<{ message: string }>(`/shipments/${id}/return-to-packing`, {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'rework', ...payload }),
+  })
 }
 
 // Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.
@@ -291,6 +319,7 @@ export type ShipmentPackingEntry = {
   defect: number
   created_at: string
   created_by_email: string | null
+  repack_kind?: ShipmentRepackKind | null
   reversed: boolean
 }
 

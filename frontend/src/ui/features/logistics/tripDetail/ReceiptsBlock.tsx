@@ -30,7 +30,7 @@ export type ReceiptLink = {
 }
 
 /** Блок «Поступления в рейсе» (или «В машине»): ReceiptCard-список + привязка через Drawer. */
-export function ReceiptsBlock({ title = 'Поступления в рейсе', right, receipts, enrich, onOpen, link, footerNote, expandable, resetKey }: {
+export function ReceiptsBlock({ title = 'Поступления в рейсе', right, receipts, enrich, onOpen, link, footerNote, expandable, resetKey, onCorrectReceive }: {
   title?: string
   right?: ReactNode
   receipts: TripReceiptItem[]
@@ -42,6 +42,8 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
   expandable?: boolean
   /** Смена значения (id рейса) сбрасывает набор раскрытых строк. */
   resetKey?: string
+  /** Корректировка обсчёта приёмки рейса (разгруженный inbound, менеджер/нач. склада). */
+  onCorrectReceive?: () => void
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [open, setOpen] = useState<Set<string>>(() => new Set())
@@ -73,6 +75,11 @@ export function ReceiptsBlock({ title = 'Поступления в рейсе', 
           <button type="button" className="btn ghost sm" onClick={toggleAll}>
             <Icon name={allOpen ? 'chevUp' : 'chevDown'} size={13} />
             {allOpen ? 'Свернуть все' : 'Развернуть все'}
+          </button>
+        )}
+        {onCorrectReceive && receipts.length > 0 && (
+          <button type="button" className="btn ghost sm" onClick={onCorrectReceive}>
+            <Icon name="edit" size={13} />Исправить приёмку
           </button>
         )}
       </span>

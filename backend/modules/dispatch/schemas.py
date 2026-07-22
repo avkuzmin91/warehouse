@@ -80,6 +80,10 @@ class DispatchFinishPreparationPayload(BaseModel):
     lines: list[DispatchPrepareLine] = []
 
 
+class DispatchReturnToDraftPayload(BaseModel):
+    reason: str | None = None
+
+
 class DispatchLineFile(BaseModel):
     id:         str
     filename:   str

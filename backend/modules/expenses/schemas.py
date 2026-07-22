@@ -220,6 +220,56 @@ class ExpenseAnalyticsResponse(BaseModel):
     by_status:      list[ExpenseAnalyticsStatus]
 
 
+class PayableDayPoint(BaseModel):
+    date:            str
+    accrued_kop:     int
+    paid_kop:        int
+    outstanding_kop: int      # долг на конец дня (накопительно)
+
+
+class PayableAgingBucket(BaseModel):
+    key:        str
+    label:      str
+    count:      int
+    amount_kop: int
+
+
+class PayableKindRow(BaseModel):
+    kind:        str
+    kind_label:  str
+    accrued_kop: int
+    paid_kop:    int
+    debt_kop:    int
+
+
+class PayableCounterpartyRow(BaseModel):
+    key:         str          # carrier_id либо текст поставщика
+    name:        str
+    accrued_kop: int
+    paid_kop:    int
+    debt_kop:    int
+    oldest_days: int          # возраст самого старого непогашенного обязательства
+    debt_count:  int
+
+
+class PayablesAnalyticsResponse(BaseModel):
+    date_from:        str
+    date_to:          str
+    accrued_kop:      int
+    accrued_count:    int
+    paid_kop:         int
+    payment_count:    int
+    opening_debt_kop: int
+    debt_kop:         int
+    debt_count:       int
+    avg_days_to_pay:  float
+    series:           list[PayableDayPoint]
+    aging:            list[PayableAgingBucket]
+    by_kind:          list[PayableKindRow]
+    counterparties:   list[PayableCounterpartyRow]
+    counterparties_total: int
+
+
 class MessageResponse(BaseModel):
     message: str
 

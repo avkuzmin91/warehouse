@@ -662,6 +662,7 @@ def insert_inventory_move(
     reverses_id: str | None = None, receipt_line_id: str | None = None,
     reason: str | None = None, trip_id: str | None = None,
     dispatch_line_id: str | None = None,
+    repack_kind: str | None = None, repack_price_kop: int | None = None,
 ) -> None:
     """Append-only запись в единый журнал движений. Без commit — коммитит вызывающий.
 
@@ -671,7 +672,8 @@ def insert_inventory_move(
     брака), смену качества, списание при отправке рейса (…→shipped) и ручное
     списание (…→written_off).
     packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки;
-    receipt_line_id — только для прихода приёмки; reason — только для списания.
+    receipt_line_id — только для прихода приёмки; reason — только для списания;
+    repack_kind/repack_price_kop — только для pack-записей переупаковки.
     """
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -681,13 +683,15 @@ def insert_inventory_move(
            (id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
             client_id,client_name,from_op,to_op,from_quality,to_quality,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
-            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id,dispatch_line_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id,dispatch_line_id,
+            repack_kind,repack_price_kop)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_op, to_op, from_quality, to_quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
-         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id, dispatch_line_id),
+         packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id, dispatch_line_id,
+         repack_kind, repack_price_kop),
     )
 
 

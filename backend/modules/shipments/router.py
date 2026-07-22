@@ -26,6 +26,8 @@ from config import (
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_OP_REJECT,
     SHIPMENT_PRIORITY_LABELS,
+    SHIPMENT_REPACK_FREE,
+    SHIPMENT_REPACK_PAID,
     SHIPMENT_REVERT_TRANSITIONS,
     SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
@@ -75,6 +77,7 @@ from modules.shipments.schemas import (
     ShipmentPriorityUpdate,
     ShipmentRejectPayload,
     ShipmentReturnFromPackingPayload,
+    ShipmentReturnToPackingPayload,
 )
 from modules.shipments.service import (
     _check_lines_covered_by_stock,
@@ -99,6 +102,7 @@ from modules.shipments.service import (
     return_packing_pool_to_storage,
     return_to_packing,
     reverse_packing_entry,
+    start_repack,
 )
 from modules.products.service import assign_product_sku_if_missing
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
@@ -738,6 +742,18 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         comment=row["comment"],
         status=str(row["status"]),
         status_label=SHIPMENT_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
+        repack_kind=row.get("repack_kind"),
+        repack_reason=row.get("repack_reason"),
+        repack_active=bool(int(row.get("repack_active") or 0)),
+        repack_price_kop=(
+            int(row["repack_price_kop"])
+            if show_costs and row.get("repack_price_kop") is not None else None
+        ),
+        repack_extra_amount_kop=(
+            int(row["repack_extra_amount_kop"])
+            if show_costs and row.get("repack_extra_amount_kop") is not None else None
+        ),
+        repack_extra_comment=row.get("repack_extra_comment") if show_costs else None,
         created_at=str(row["created_at"]),
         created_by=row["created_by"],
         created_by_name=row["created_by_name"],
@@ -1268,10 +1284,30 @@ def reject_shipment(
 
 
 @router.post("/shipments/{doc_id}/return-to-packing")
-def return_shipment_to_packing(doc_id: str, force: bool = False, user=Depends(_get_manager)):
+def return_shipment_to_packing(
+    doc_id: str,
+    body: ShipmentReturnToPackingPayload | None = None,
+    force: bool = False,
+    user=Depends(_get_manager),
+):
     uid = str(user["id"])
+    payload = body or ShipmentReturnToPackingPayload()
+    mode = str(payload.mode or "rework")
     with get_connection() as conn:
-        next_status = return_to_packing(conn, doc_id, uid, force=force)
+        if mode == "rework":
+            next_status = return_to_packing(conn, doc_id, uid, force=payload.force or force)
+        elif mode in ("repack_free", "repack_paid"):
+            next_status = start_repack(
+                conn, doc_id, uid,
+                kind=SHIPMENT_REPACK_FREE if mode == "repack_free" else SHIPMENT_REPACK_PAID,
+                reason=payload.reason or "",
+                unit_price_kop=payload.unit_price_kop,
+                extra_amount_kop=payload.extra_amount_kop,
+                extra_comment=payload.extra_comment,
+                force=payload.force or force,
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Неизвестный режим возврата на упаковку")
     return {"message": next_status}
 
 

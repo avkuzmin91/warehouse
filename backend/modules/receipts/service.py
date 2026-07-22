@@ -8,13 +8,11 @@ from fastapi import HTTPException
 from config import (
     INV_OP_INTAKE,
     INV_OP_STORAGE,
-    INV_Q_GOOD,
     INVOICE_STATUS_CANCELLED,
     INVOICE_STATUS_DRAFT,
     RECEIPT_OP_ARRIVAL_ACCEPT,
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_PLAN_FIX,
-    RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_ON_INTAKE,
@@ -668,11 +666,10 @@ def release_shortfall_for_redelivery(connection, doc_id: str, uid: str) -> int:
 
     Зеркальная close-short ветка той же развилки. Когда рейсы поступления приехали
     короче плана, но недостающее довезут новым рейсом, аллокации разгруженных рейсов
-    ужимаются до фактически принятого по строке. За базу берём принятое рейсом
-    (intake→storage по штампу trip_id+receipt_line_id), но итог сводим к accepted_qty
-    строки — корректировка приёмки менеджером (correct_received) меняет сток без штампа
-    trip_id, поэтому по одному штампу её не видно: реконсилим разницу по аллокациям,
-    иначе освободили бы недовоз «до пересчёта». За счёт этого receipt_alloc_remaining
+    ужимаются до фактически принятого по строке. За базу берём привезённое рейсом
+    (intake→storage по штампу trip_id+receipt_line_id, брутто), а итог сводим к
+    accepted_qty строки — так учитываются и корректировки приёмки (штампованные
+    сторно рейса), и легаси-корректировки без штампа. За счёт этого receipt_alloc_remaining
     снова > 0 — план перестаёт быть разложенным на 100%, receipt_shortage_final гаснет,
     и освобождённый остаток можно разложить на новый рейс (link_receipts). Сток не
     трогаем — принятое уже лежит на остатках. Возвращает суммарно освобождённое кол-во.
@@ -712,7 +709,8 @@ def release_shortfall_for_redelivery(connection, doc_id: str, uid: str) -> int:
         # База кредита рейсу — привезённое им (delivered), ограниченное аллокацией.
         targets = {str(a["alloc_id"]): min(int(a["delivered"] or 0), int(a["alloc_qty"] or 0))
                    for a in allocs}
-        # Корректировка приёмки не штампована trip_id — сводим суммарный кредит к accepted.
+        # Сводим суммарный кредит к accepted: delivered — брутто, минусы корректировок
+        # (и легаси-правки без штампа) видны только в итоге строки.
         diff = accepted - sum(targets.values())
         if diff < 0:
             need = -diff
@@ -813,107 +811,6 @@ def recompute_trip_receipt_status(connection, doc_id: str, user_id: str, *, note
             now, user_id,
         ),
     )
-
-
-def correct_received(
-    connection, doc_id: str, line_id: str, *,
-    new_accepted: int, reason: str, uid: str,
-) -> dict:
-    """Пост-фактум корректировка обсчёта приёмщика по строке принятого поступления.
-
-    Правит не голое число, а дельту: синхронно меняет accepted_qty И сток в журнале
-    (intake→storage на +дельту / storage→intake на −дельту), пишет receiving_correction
-    и пересчитывает статус. Гейты: вверх — не выше привезённого рейсами; вниз — не ниже
-    того, что ещё лежит в зоне (иначе сначала реверс downstream). Без commit.
-    """
-    from modules.balances.service import insert_inventory_move, net_storage_good_in_zone
-
-    doc = connection.execute(
-        "SELECT d.status, d.client_id, cl.name AS client_name FROM receipt_docs d "
-        "LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.id = ? AND d.is_deleted = 0",
-        (doc_id,),
-    ).fetchone()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Документ не найден")
-    if str(doc["status"]) not in (RECEIPT_STATUS_PARTIALLY_RECEIVED, RECEIPT_STATUS_DONE):
-        raise HTTPException(
-            status_code=400,
-            detail="Корректировать принятое можно только у принятого поступления (частично принято / завершён)",
-        )
-    line = connection.execute(
-        "SELECT * FROM receipt_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
-        (line_id, doc_id),
-    ).fetchone()
-    if not line:
-        raise HTTPException(status_code=404, detail="Строка не найдена")
-    if new_accepted < 0:
-        raise HTTPException(status_code=400, detail="Количество не может быть отрицательным")
-    reason = (reason or "").strip()
-    if not reason:
-        raise HTTPException(status_code=400, detail="Укажите причину корректировки")
-
-    attrs = " / ".join(x for x in [line["color_name"], line["size_name"]] if x)
-    label = f"{line['product_sku']}" + (f" ({attrs})" if attrs else "")
-
-    current = int(line["accepted_qty"] or 0)
-    delta = new_accepted - current
-    if delta == 0:
-        return {"changed": False, "accepted_qty": current}
-
-    arrived = arrived_qty_by_line(connection, doc_id).get(line_id, int(line["planned_qty"] or 0))
-    if new_accepted > arrived:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Принято не может превышать привезённое рейсами — не больше {arrived} шт. ({label})",
-        )
-
-    zone_id = line["storage_zone_id"]
-    zone_name = line["storage_zone_name"]
-    if not str(zone_id or "").strip():
-        raise HTTPException(status_code=400, detail=f"У строки не задано место хранения ({label})")
-
-    move = dict(
-        product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-        color_id=line["color_id"], color_name=line["color_name"],
-        size_id=line["size_id"], size_name=line["size_name"],
-        client_id=doc["client_id"], client_name=doc["client_name"],
-        from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-        from_zone_id=zone_id, from_zone_name=zone_name, to_zone_id=zone_id, to_zone_name=zone_name,
-        user_id=uid, receipt_line_id=line_id,
-    )
-    if delta < 0:
-        need = -delta
-        available = net_storage_good_in_zone(
-            connection, product_id=str(line["product_id"]), client_id=doc["client_id"],
-            color_id=line["color_id"], size_id=line["size_id"], zone_id=zone_id,
-        )
-        if available < need:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Нельзя уменьшить на {need} шт.: на хранении в «{zone_name or '—'}» только {available} шт. "
-                    f"(остальное уже отгружено или перемещено) — сначала отмените отгрузку/перемещение ({label})"
-                ),
-            )
-        insert_inventory_move(
-            connection, from_op=INV_OP_STORAGE, to_op=INV_OP_INTAKE, qty=need,
-            comment=f"Корректировка приёмки: −{need} шт. ({reason})", **move,
-        )
-    else:
-        insert_inventory_move(
-            connection, from_op=INV_OP_INTAKE, to_op=INV_OP_STORAGE, qty=delta,
-            comment=f"Корректировка приёмки: +{delta} шт. ({reason})", **move,
-        )
-
-    now = _now()
-    connection.execute("UPDATE receipt_lines SET accepted_qty = ? WHERE id = ?", (new_accepted, line_id))
-    connection.execute(
-        "INSERT INTO receipt_ops (id,doc_id,line_id,op_type,qty,comment,created_at,created_by) VALUES (?,?,?,?,?,?,?,?)",
-        (str(uuid4()), doc_id, line_id, RECEIPT_OP_RECEIVING_CORRECTION, new_accepted,
-         f"Корректировка принятого: {current} → {new_accepted} шт. ({reason}) ({label})", now, uid),
-    )
-    recompute_trip_receipt_status(connection, doc_id, uid, note="корректировка приёмки")
-    return {"changed": True, "delta": delta, "accepted_qty": new_accepted}
 
 
 def advance_receipt(connection, doc_id: str, user_id: str) -> str:

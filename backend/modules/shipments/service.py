@@ -6,6 +6,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from config import (
+    EXTRA_INCOME_OP_CREATE,
+    EXTRA_INCOME_REPACK_CATEGORY_NAME,
     INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -19,7 +21,12 @@ from config import (
     SHIPMENT_OP_PACK_CORRECTION,
     SHIPMENT_OP_PACK_DATE_MOVE,
     SHIPMENT_OP_RELOCATE,
+    SHIPMENT_OP_REPACK_CHARGE,
+    SHIPMENT_OP_REPACK_START,
     SHIPMENT_OP_RETURN_TO_PACKING,
+    SHIPMENT_REPACK_FREE,
+    SHIPMENT_REPACK_KINDS,
+    SHIPMENT_REPACK_PAID,
     SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
@@ -450,6 +457,7 @@ def close_drained_packing_tasks(connection, shipment_line_ids, user_id: str) -> 
             (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
              "Упаковано: товар уехал рейсом из упаковки (задача закрыта автоматически)", now, user_id),
         )
+        _finalize_repack(connection, doc_id, user_id)
         closed += 1
     return closed
 
@@ -613,12 +621,28 @@ def record_packing(
     packed_date = _validate_packed_date(packed_date)
 
     doc_row = connection.execute(
-        "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        "SELECT status, client_id, repack_active, repack_kind, repack_price_kop "
+        "FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
     ).fetchone()
     if not doc_row:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if str(doc_row["status"]) != SHIPMENT_STATUS_ON_PACKING:
         raise HTTPException(status_code=400, detail="Упаковку можно вносить только в статусе «На упаковке»")
+
+    # Задача на переупаковке: новые pack-записи штампуются её видом — free не попадает
+    # в деньги производительности, paid тарифицируется клиенту при завершении задачи.
+    repack_kind = (
+        str(doc_row["repack_kind"])
+        if int(doc_row["repack_active"] or 0) and doc_row["repack_kind"] else None
+    )
+    repack_price_kop = (
+        int(doc_row["repack_price_kop"])
+        if repack_kind == SHIPMENT_REPACK_PAID and doc_row["repack_price_kop"] is not None else None
+    )
+    repack_suffix = {
+        SHIPMENT_REPACK_FREE: " (переупаковка без оплаты)",
+        SHIPMENT_REPACK_PAID: " (переупаковка за счёт клиента)",
+    }.get(repack_kind or "", "")
 
     line = connection.execute(
         "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name, qty "
@@ -679,11 +703,12 @@ def record_packing(
                 qty=take, user_id=user_id, shipment_line_id=line_id,
                 comment=f"Упаковка ({kind_ru}): +{take} шт.",
                 packed_date=packed_date, pack_entry_id=pack_entry_id,
+                repack_kind=repack_kind, repack_price_kop=repack_price_kop,
             )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
             (str(uuid4()), doc_id, SHIPMENT_OP_PACK,
-             f"Упаковка {kind_ru} ({packed_date}): +{delta} шт. — {label}", _now(), user_id),
+             f"Упаковка {kind_ru} ({packed_date}): +{delta} шт. — {label}{repack_suffix}", _now(), user_id),
         )
     return line_packed_breakdown(connection, line_id)
 
@@ -700,6 +725,7 @@ def list_packing_entries(connection, line_id: str) -> list[dict]:
               MIN(zr.created_at) AS created_at,
               MIN(zr.created_by) AS created_by,
               MIN(COALESCE(NULLIF(u.display_name, ''), u.email)) AS created_by_email,
+              MIN(zr.repack_kind) AS repack_kind,
               COALESCE(SUM(CASE WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' THEN zr.qty ELSE 0 END), 0) AS good,
               COALESCE(SUM(CASE WHEN zr.to_quality='{INV_Q_DEFECT}'  THEN zr.qty ELSE 0 END), 0) AS defect
            FROM zone_relocations zr
@@ -724,6 +750,7 @@ def list_packing_entries(connection, line_id: str) -> list[dict]:
             "created_at": str(r["created_at"]),
             "created_by": r["created_by"],
             "created_by_email": r["created_by_email"],
+            "repack_kind": r["repack_kind"],
             "reversed": str(r["id"]) in reversed_ids,
         }
         for r in rows
@@ -763,18 +790,21 @@ def packing_productivity(
     where = " AND ".join(conds)
 
     # client_name в QC-движениях не заполняется (record_packing пишет None) — имя из справочника.
+    # repack_kind/repack_price_kop в группировке: объём переупаковки — отдельной строкой
+    # (free — осознанный 0 ₽, paid — тарифицируется кастомной ценой либо тарифом).
     rows = connection.execute(
         f"""SELECT zr.packed_date, zr.client_id,
                MIN(cl.name) AS client_name,
                zr.product_id,
                COALESCE(NULLIF(TRIM(MIN(p.sku)), ''), MIN(zr.product_sku)) AS product_sku,
                MIN(zr.product_name) AS product_name,
+               zr.repack_kind, zr.repack_price_kop,
                {_PACKED_NET_SQL.format(p='zr.')}
            FROM zone_relocations zr
            LEFT JOIN products p ON p.id = zr.product_id
            LEFT JOIN clients cl ON cl.id = zr.client_id
            WHERE {where}
-           GROUP BY zr.packed_date, zr.client_id, zr.product_id
+           GROUP BY zr.packed_date, zr.client_id, zr.product_id, zr.repack_kind, zr.repack_price_kop
            ORDER BY zr.packed_date DESC, MIN(cl.name), MIN(zr.product_name)""",
         params,
     ).fetchall()
@@ -810,11 +840,17 @@ def packing_productivity(
         from modules.pricing.service import load_histories
         histories = load_histories(connection, [str(r["product_id"]) for r in rows])
 
-    def _priced(product_id, cid, quality, qty, day_iso):
+    def _priced(product_id, cid, quality, qty, day_iso, repack_kind=None, repack_price=None):
         """(earn_kop, price_missing) по одной оси качества. price_missing — есть
-        штуки, но тариф упаковки на эту дату не заведён (менеджер видит «не задана»)."""
+        штуки, но тариф упаковки на эту дату не заведён (менеджер видит «не задана»).
+        Переупаковка: free — осознанный 0 ₽ без price_missing (это не дыра в тарифах);
+        paid с кастомной ценой — она вместо тарифа, paid без цены — стандартный тариф."""
         if not with_earnings or not cid or qty <= 0:
             return 0, False
+        if repack_kind == SHIPMENT_REPACK_FREE:
+            return 0, False
+        if repack_kind == SHIPMENT_REPACK_PAID and repack_price is not None:
+            return repack_price * qty, False
         from modules.pricing.service import price_on
         price = price_on(histories.get((str(product_id), str(cid), quality)), day_iso)
         if price is None:
@@ -830,8 +866,10 @@ def packing_productivity(
             continue
         day_key = str(r["packed_date"])
         cid = r["client_id"]
-        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good, day_key)
-        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect, day_key)
+        repack_kind = str(r["repack_kind"]) if r["repack_kind"] else None
+        repack_price = int(r["repack_price_kop"]) if r["repack_price_kop"] is not None else None
+        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good, day_key, repack_kind, repack_price)
+        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect, day_key, repack_kind, repack_price)
         day = by_day.get(day_key)
         if day is None:
             day = {"packed_date": day_key, "good": 0, "defect": 0, "total": 0,
@@ -848,6 +886,7 @@ def packing_productivity(
             "good_earn_kop": good_earn, "defect_earn_kop": defect_earn,
             "earn_kop": good_earn + defect_earn,
             "price_missing": good_missing or defect_missing,
+            "repack_kind": repack_kind,
             "doc_ids": doc_ids_by_row.get((day_key, cid, str(r["product_id"])), []),
         })
         day["good"] += good
@@ -895,6 +934,7 @@ def packing_day_detail(
                zr.product_id,
                COALESCE(NULLIF(TRIM(MIN(p.sku)), ''), MIN(zr.product_sku)) AS product_sku,
                MIN(zr.product_name) AS product_name,
+               zr.repack_kind, zr.repack_price_kop,
                {_PACKED_NET_SQL.format(p='zr.')}
            FROM zone_relocations zr
            JOIN shipment_lines l ON l.id = zr.shipment_line_id
@@ -902,7 +942,7 @@ def packing_day_detail(
            LEFT JOIN products p ON p.id = zr.product_id
            LEFT JOIN clients cl ON cl.id = zr.client_id
            WHERE {where}
-           GROUP BY l.doc_id, zr.client_id, zr.product_id
+           GROUP BY l.doc_id, zr.client_id, zr.product_id, zr.repack_kind, zr.repack_price_kop
            ORDER BY MIN(d.doc_number), MIN(zr.product_name)""",
         params,
     ).fetchall()
@@ -912,9 +952,13 @@ def packing_day_detail(
         from modules.pricing.service import load_histories
         histories = load_histories(connection, [str(r["product_id"]) for r in rows])
 
-    def _priced(product_id, cid, quality, qty) -> tuple[int, bool]:
+    def _priced(product_id, cid, quality, qty, repack_kind=None, repack_price=None) -> tuple[int, bool]:
         if not with_earnings or not cid or qty <= 0:
             return 0, False
+        if repack_kind == SHIPMENT_REPACK_FREE:
+            return 0, False
+        if repack_kind == SHIPMENT_REPACK_PAID and repack_price is not None:
+            return repack_price * qty, False
         from modules.pricing.service import price_on
         price = price_on(histories.get((str(product_id), str(cid), quality)), date)
         if price is None:
@@ -929,8 +973,10 @@ def packing_day_detail(
             continue
         doc_id = str(r["doc_id"])
         cid = r["client_id"]
-        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good)
-        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect)
+        repack_kind = str(r["repack_kind"]) if r["repack_kind"] else None
+        repack_price = int(r["repack_price_kop"]) if r["repack_price_kop"] is not None else None
+        good_earn, good_missing = _priced(r["product_id"], cid, INV_Q_GOOD, good, repack_kind, repack_price)
+        defect_earn, defect_missing = _priced(r["product_id"], cid, INV_Q_DEFECT, defect, repack_kind, repack_price)
         earn = good_earn + defect_earn
         price_missing = good_missing or defect_missing
         doc = by_doc.get(doc_id)
@@ -948,6 +994,7 @@ def packing_day_detail(
             "product_name": r["product_name"],
             "good": good, "defect": defect, "total": good + defect,
             "earn_kop": earn, "price_missing": price_missing,
+            "repack_kind": repack_kind,
         })
         doc["good"] += good
         doc["defect"] += defect
@@ -1089,7 +1136,7 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
     from modules.balances.service import insert_inventory_move
 
     doc_row = connection.execute(
-        "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        "SELECT status, repack_active FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
     ).fetchone()
     if not doc_row:
         raise HTTPException(status_code=404, detail="Документ не найден")
@@ -1111,6 +1158,14 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
     if not rows:
         raise HTTPException(status_code=404, detail="Запись упаковки не найдена")
 
+    # На переупаковке записи первого прохода неприкосновенны: они остаются оплаченным
+    # фактом, а их товар уже возвращён в пул стартом переупаковки — сторно задвоило бы пул.
+    if int(doc_row["repack_active"] or 0) and any(r["repack_kind"] is None for r in rows):
+        raise HTTPException(
+            status_code=400,
+            detail="Задача на переупаковке: записи первой упаковки остаются оплаченными, отменять можно только записи переупаковки",
+        )
+
     for r in rows:
         kind_ru = "брак" if str(r["to_quality"]) == INV_Q_DEFECT else "годный"
         label = r["product_sku"] or r["product_name"]
@@ -1130,6 +1185,8 @@ def reverse_packing_entry(connection, doc_id: str, line_id: str, entry_id: str, 
             qty=qty, user_id=user_id, shipment_line_id=line_id,
             comment="Отмена записи упаковки",
             packed_date=r["packed_date"], pack_entry_id=str(uuid4()), reverses_id=entry_id,
+            repack_kind=r["repack_kind"],
+            repack_price_kop=int(r["repack_price_kop"]) if r["repack_price_kop"] is not None else None,
         )
         connection.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
@@ -1256,6 +1313,7 @@ def finish_relocation(connection, doc_id: str, line_inputs, user_id: str) -> str
         (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
          f"Разложено по местам: {total_moved} шт. → Упаковано", now, user_id),
     )
+    _finalize_repack(connection, doc_id, user_id)
     connection.commit()
     return SHIPMENT_STATUS_PACKED
 
@@ -1751,6 +1809,290 @@ def return_to_packing(connection, doc_id: str, user_id: str, force: bool = False
     )
     connection.commit()
     return SHIPMENT_STATUS_ON_PACKING
+
+
+def _return_packed_good_to_pool(connection, doc_id: str, client_id, user_id: str) -> int:
+    """Переупаковка: упакованный годный со стола («Упаковано») возвращается в пул упаковки.
+
+    Пишет движение packed/good → packing/good БЕЗ pack_entry_id: факт упаковки документа
+    обнуляется (кладовщик пакует заново, гейт плана пропустит), а pack-записи первого
+    прохода не трогаются — производительность и заработок за прошлые дни сохраняются.
+    Брак в пул не возвращается: он уже выявлен и переупаковке не подлежит. Без commit.
+    """
+    from modules.balances.service import get_packing_zone, insert_inventory_move
+
+    packing_id, packing_name = get_packing_zone(connection)
+    lines = connection.execute(
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchall()
+
+    total = 0
+    for line in lines:
+        line_id = str(line["id"])
+        pending = line_packed_pending(connection, line_id)["good"]
+        if pending <= 0:
+            continue
+        label = line["product_sku"] or line["product_name"]
+        sources = line_bucket_zone_sources(
+            connection, line_id, op=INV_OP_PACKED, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
+        )
+        for zone_id, zone_name, take in _consume_zone_sources(
+            sources, pending, fallback=(packing_id, packing_name)
+        ):
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=None,
+                from_op=INV_OP_PACKED, to_op=INV_OP_PACKING,
+                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                from_zone_id=zone_id, from_zone_name=zone_name,
+                to_zone_id=packing_id, to_zone_name=packing_name,
+                qty=take, user_id=user_id, shipment_line_id=line_id,
+                comment=f"Переупаковка: возврат в пул упаковки {take} шт. — {label}",
+            )
+            total += take
+    return total
+
+
+def start_repack(
+    connection, doc_id: str, user_id: str, *,
+    kind: str, reason: str,
+    unit_price_kop: int | None = None,
+    extra_amount_kop: int | None = None,
+    extra_comment: str | None = None,
+    force: bool = False,
+) -> str:
+    """Менеджерский запуск переупаковки (задача была поставлена с ошибкой): → on_packing.
+
+    Отличие от return_to_packing: упакованный годный возвращается в пул упаковки, и
+    кладовщик пакует заново, при этом факт первого прохода остаётся оплаченным. Новые
+    pack-записи штампуются видом переупаковки (см. record_packing):
+      free — за наш счёт: объём виден в производительности, деньги 0;
+      paid — за счёт клиента: при выходе задачи в «Упаковано» автоматически создаётся
+             запись «Доп. работы» (кастомная цена за единицу либо стандартный тариф
+             упаковки) плюс работы сверх тарифа (unit_price_kop/extra_*).
+    """
+    if kind not in SHIPMENT_REPACK_KINDS:
+        raise HTTPException(status_code=400, detail="Неизвестный режим переупаковки")
+    reason = str(reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Укажите причину переупаковки")
+
+    doc = connection.execute(
+        "SELECT status, cargo_type, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if normalize_cargo_type(doc["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
+        raise HTTPException(status_code=400, detail="Брак-отгрузка минует упаковку — переупаковка недоступна")
+    status = str(doc["status"])
+    if status not in (SHIPMENT_STATUS_RELOCATING, SHIPMENT_STATUS_PACKED):
+        raise HTTPException(status_code=400, detail="Переупаковку можно запустить только из «Перемещение» или «Упаковано»")
+
+    if kind == SHIPMENT_REPACK_PAID:
+        unit_price_kop = int(unit_price_kop) if unit_price_kop is not None else None
+        if unit_price_kop is not None and unit_price_kop < 0:
+            raise HTTPException(status_code=400, detail="Цена за единицу не может быть отрицательной")
+        extra_amount_kop = int(extra_amount_kop or 0)
+        if extra_amount_kop < 0:
+            raise HTTPException(status_code=400, detail="Сумма доп. работ не может быть отрицательной")
+        extra_comment = str(extra_comment or "").strip() or None
+        if extra_amount_kop > 0 and not extra_comment:
+            raise HTTPException(status_code=400, detail="Опишите, за что доп. работы (например: удаление старой упаковки)")
+    else:
+        unit_price_kop = None
+        extra_amount_kop = 0
+        extra_comment = None
+
+    # Откат раскладки идемпотентен по нетто журнала: из «Упаковано» вернёт разложенное,
+    # из «Перемещение» вернёт частичные размещения (place-packed), если они были.
+    returned, skipped = _undo_relocation_to_packing(
+        connection, doc_id, doc["client_id"], user_id, allow_partial=force
+    )
+    pooled = _return_packed_good_to_pool(connection, doc_id, doc["client_id"], user_id)
+
+    now = _now()
+    connection.execute(
+        """UPDATE shipment_docs SET
+             status = ?, actual_ship_date = NULL,
+             repack_kind = ?, repack_reason = ?, repack_active = 1, repack_started_at = ?,
+             repack_price_kop = ?, repack_extra_amount_kop = ?, repack_extra_comment = ?,
+             updated_at = ?
+           WHERE id = ?""",
+        (SHIPMENT_STATUS_ON_PACKING, kind, reason, now,
+         unit_price_kop, extra_amount_kop or None, extra_comment, now, doc_id),
+    )
+
+    from modules.expenses.service import format_kopecks
+
+    kind_ru = "без оплаты" if kind == SHIPMENT_REPACK_FREE else "за счёт клиента"
+    bits = [f"Переупаковка {kind_ru}: {reason}."]
+    if pooled:
+        bits.append(f"Возвращено в пул упаковки: {pooled} шт.")
+    if skipped:
+        bits.append(f"{skipped} шт. уже отгружено — остались вне задачи.")
+    if kind == SHIPMENT_REPACK_PAID:
+        bits.append(
+            f"Тариф: {format_kopecks(unit_price_kop)}/шт." if unit_price_kop is not None
+            else "Тариф: стандартный тариф упаковки."
+        )
+        if extra_amount_kop:
+            bits.append(f"Доп. работы: {format_kopecks(extra_amount_kop)} ({extra_comment}).")
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_REPACK_START, " ".join(bits), now, user_id),
+    )
+    connection.commit()
+    return SHIPMENT_STATUS_ON_PACKING
+
+
+def _repack_category_id(connection, user_id: str) -> str:
+    """Id вида работ «Переупаковка» в справочнике доп. работ (find-or-create)."""
+    row = connection.execute(
+        "SELECT id FROM extra_income_categories "
+        "WHERE LOWER(TRIM(name)) = LOWER(?) AND COALESCE(is_deleted, 0) = 0",
+        (EXTRA_INCOME_REPACK_CATEGORY_NAME,),
+    ).fetchone()
+    if row:
+        return str(row["id"])
+    new_id = str(uuid4())
+    max_row = connection.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) AS m FROM extra_income_categories"
+    ).fetchone()
+    connection.execute(
+        "INSERT INTO extra_income_categories (id,name,sort_order,created_at,created_by) VALUES (?,?,?,?,?)",
+        (new_id, EXTRA_INCOME_REPACK_CATEGORY_NAME, int(max_row["m"]) + 1, _now(), user_id),
+    )
+    return new_id
+
+
+def _finalize_repack(connection, doc_id: str, user_id: str) -> None:
+    """Завершение переупаковки при выходе задачи в «Упаковано». Без commit.
+
+    Снимает режим переупаковки. Для paid — автоматически создаёт запись «Доп. работы»
+    (попадает в счёт привязкой и в P&L источником extra): Σ по pack-записям текущего
+    цикла переупаковки × (кастомная цена за единицу | стандартный тариф упаковки на
+    дату упаковки) + работы сверх тарифа. Если тариф не заведён — сумма по таким
+    позициям 0 с предупреждением в журнале, финансист правит запись руками.
+    """
+    doc = connection.execute(
+        "SELECT * FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchone()
+    if not doc or not int(doc["repack_active"] or 0):
+        return
+    now = _now()
+    kind = str(doc["repack_kind"] or "")
+    started_at = str(doc["repack_started_at"] or "")
+    connection.execute(
+        "UPDATE shipment_docs SET repack_active = 0, updated_at = ? WHERE id = ?", (now, doc_id)
+    )
+
+    # Объём текущего цикла: нетто по помеченным pack-записям, созданным после старта
+    # (сторно наследует маркер и дату — вычитается автоматически).
+    rows = connection.execute(
+        f"""SELECT zr.product_id,
+               COALESCE(NULLIF(TRIM(MIN(p.sku)), ''), MIN(zr.product_sku), MIN(zr.product_name)) AS label,
+               zr.packed_date,
+               {_PACKED_NET_SQL.format(p='zr.')}
+           FROM zone_relocations zr
+           JOIN shipment_lines l ON l.id = zr.shipment_line_id
+           LEFT JOIN products p ON p.id = zr.product_id
+           WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0
+             AND zr.pack_entry_id IS NOT NULL AND zr.repack_kind = ? AND zr.created_at >= ?
+           GROUP BY zr.product_id, zr.packed_date""",
+        (doc_id, kind, started_at),
+    ).fetchall()
+    qty_total = sum(int(r["good"] or 0) + int(r["defect"] or 0) for r in rows)
+
+    if kind != SHIPMENT_REPACK_PAID:
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_REPACK_CHARGE,
+             f"Переупаковка завершена (без оплаты): {qty_total} шт. — клиенту не выставляется", now, user_id),
+        )
+        return
+
+    from modules.expenses.service import format_kopecks
+    from modules.extra_income.service import journal as extra_income_journal
+
+    unit_price = int(doc["repack_price_kop"]) if doc["repack_price_kop"] is not None else None
+    extra_amount = int(doc["repack_extra_amount_kop"] or 0)
+    extra_comment = str(doc["repack_extra_comment"] or "").strip() or None
+
+    tariff_amount = 0
+    missing: list[str] = []
+    if unit_price is not None:
+        tariff_amount = qty_total * unit_price
+    else:
+        from modules.pricing.service import load_histories, price_on
+        client_id = str(doc["client_id"]) if doc["client_id"] else None
+        histories = load_histories(connection, [str(r["product_id"]) for r in rows])
+        for r in rows:
+            for quality, qty in ((INV_Q_GOOD, int(r["good"] or 0)), (INV_Q_DEFECT, int(r["defect"] or 0))):
+                if qty <= 0 or not client_id:
+                    continue
+                price = price_on(histories.get((str(r["product_id"]), client_id, quality)), str(r["packed_date"]))
+                if price is None:
+                    if str(r["label"]) not in missing:
+                        missing.append(str(r["label"]))
+                else:
+                    tariff_amount += price * qty
+    total_amount = tariff_amount + extra_amount
+
+    if qty_total <= 0 and total_amount <= 0:
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_REPACK_CHARGE,
+             "Переупаковка завершена: повторной упаковки не было, доп. работа не создана", now, user_id),
+        )
+        return
+    if not doc["client_id"]:
+        connection.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_REPACK_CHARGE,
+             "Переупаковка завершена, но в задаче не указан клиент — создайте доп. работу вручную", now, user_id),
+        )
+        return
+
+    from modules.timesheet.service import business_today
+
+    entry_id = str(uuid4())
+    comment_bits = [f"Переупаковка по вине клиента, задача {doc['doc_number']}: {doc['repack_reason']}"]
+    comment_bits.append(
+        f"Тариф: {qty_total} шт. × {format_kopecks(unit_price)}" if unit_price is not None
+        else "По стандартному тарифу упаковки"
+    )
+    if extra_amount:
+        comment_bits.append(f"Доп. работы: {format_kopecks(extra_amount)}" + (f" — {extra_comment}" if extra_comment else ""))
+    if missing:
+        comment_bits.append("Тариф не заведён: " + ", ".join(missing) + " — сумма по ним не учтена, проверьте")
+    connection.execute(
+        """INSERT INTO extra_income_entries
+           (id,entry_date,client_id,category_id,qty,amount_kop,comment,created_at,created_by)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (entry_id, business_today().isoformat(), str(doc["client_id"]),
+         _repack_category_id(connection, user_id), qty_total or None, total_amount,
+         ". ".join(comment_bits), now, user_id),
+    )
+    extra_income_journal(
+        connection, entry_id, EXTRA_INCOME_OP_CREATE,
+        f"Заведено автоматически: переупаковка по задаче {doc['doc_number']} · {format_kopecks(total_amount)}",
+        user_id,
+    )
+    connection.execute(
+        "UPDATE shipment_docs SET repack_charge_entry_id = ?, updated_at = ? WHERE id = ?",
+        (entry_id, now, doc_id),
+    )
+    op_comment = f"Переупаковка выставлена клиенту: {qty_total} шт. · {format_kopecks(total_amount)} (доп. работа создана)"
+    if missing:
+        op_comment += ". Тариф упаковки не заведён: " + ", ".join(missing) + " — проверьте сумму доп. работы"
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_REPACK_CHARGE, op_comment, now, user_id),
+    )
 
 
 def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> str:

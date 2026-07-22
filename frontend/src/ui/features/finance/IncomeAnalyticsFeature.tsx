@@ -17,6 +17,7 @@ import { PnlDayDrawer } from './pnl/PnlDayDrawer'
 
 const PRESETS = [7, 14, 30] as const
 const DEFAULT_PERIOD = 30
+const CLIENTS_PREVIEW = 12
 
 // Цвета источников дохода закреплены по смыслу (те же, что в отчёте «Доходы и расходы»):
 // упаковка зелёная, логистика синяя, палеты янтарные.
@@ -266,6 +267,8 @@ function AnalyticsBody({
 
   const byClient = data.by_client
   const clientMax = Math.max(1, ...byClient.map((c) => c.amount))
+  const [allClients, setAllClients] = useState(false)
+  const shownClients = allClients ? byClient : byClient.slice(0, CLIENTS_PREVIEW)
 
   const tip = hoverDay == null ? null : (() => {
     const segs = renderSrc.map((s) => ({ name: s.name, color: sourceColor(s.key), v: s.series[hoverDay] ?? 0 }))
@@ -442,7 +445,7 @@ function AnalyticsBody({
           <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {byClient.length === 0 ? (
               <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>Нет данных</div>
-            ) : byClient.slice(0, 12).map((c, i) => {
+            ) : shownClients.map((c, i) => {
               const pct = Math.round((c.amount / clientMax) * 100)
               const share = data.total_amount > 0 ? Math.round((c.amount / data.total_amount) * 100) : 0
               const color = catColor(i)
@@ -462,8 +465,10 @@ function AnalyticsBody({
                 </div>
               )
             })}
-            {byClient.length > 12 && (
-              <div style={{ fontSize: 11.5, color: 'var(--c-text-faint)', textAlign: 'center' }}>…и ещё {byClient.length - 12} клиентов</div>
+            {byClient.length > CLIENTS_PREVIEW && (
+              <button type="button" className="an-more" onClick={() => setAllClients((v) => !v)}>
+                {allClients ? 'Свернуть' : `…и ещё ${byClient.length - CLIENTS_PREVIEW} клиентов`}
+              </button>
             )}
           </div>
         </div>

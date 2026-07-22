@@ -725,11 +725,11 @@ def test_expect_redelivery_accounts_for_received_correction(admin_client, client
     # Рейс привёз/принял 8 из плана 10, затем менеджер пересчитал приёмку вниз до 6.
     # «Ожидается довоз» должен учесть пересчёт: освободить 4 (10−6), а не 2 (10−8) «до
     # пересчёта». Иначе на новый рейс разложится только 2 и поступление не закроется.
-    doc_id, line_id, pid, cid, zone_id = _received_line(admin_client, client_id, planned=10, accepted=8)
+    doc_id, line_id, pid, cid, zone_id, t1 = _received_line(admin_client, client_id, planned=10, accepted=8)
     rec = admin_client.get(f"/receipts/{doc_id}").json()
     assert rec["doc"]["status"] == "partially_received"
 
-    down = _correct(admin_client, doc_id, line_id, 6)
+    down = _correct(admin_client, t1, line_id, 6)
     assert down.status_code == 200, down.text
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
 
@@ -781,9 +781,20 @@ def test_expect_redelivery_gated_like_close_short(admin_client, client_id):
     assert rejected.status_code == 400, rejected.text
 
 
-def _correct(client, doc_id: str, line_id: str, qty: int, reason: str = "пересчёт"):
-    return client.post(f"/receipts/{doc_id}/lines/{line_id}/correct-received",
-                       json={"accepted_qty": qty, "reason": reason})
+def _correct(client, trip_id: str, line_id: str, qty: int, reason: str = "пересчёт"):
+    """Корректировка обсчёта приёмки живёт в рейсе: правится принятое ЭТИМ рейсом."""
+    return client.post(f"/trips/{trip_id}/receipt-lines/{line_id}/correct-received",
+                       json={"received_qty": qty, "reason": reason})
+
+
+def _trip_received_qty(admin_client, trip_id: str, line_id: str) -> int:
+    """«Принято этим рейсом» из карточки рейса (нетто журнала по trip_id)."""
+    trip = admin_client.get(f"/trips/{trip_id}").json()
+    for r in trip["receipts"]:
+        for a in r["allocations"]:
+            if a["line_id"] == line_id:
+                return a["received_qty"]
+    raise AssertionError("строка не найдена в рейсе")
 
 
 def _received_line(admin_client, client_id, *, planned=10, accepted=8):
@@ -796,57 +807,216 @@ def _received_line(admin_client, client_id, *, planned=10, accepted=8):
     admin_client.post(f"/trips/{t1}/handoff")
     admin_client.post(f"/trips/{t1}/arrival", json={})
     assert _unload_with_receive(admin_client, t1, [{"line_id": line_id, "accepted_qty": accepted}]).status_code == 200
-    return doc_id, line_id, pid, cid, zone_id
+    return doc_id, line_id, pid, cid, zone_id, t1
 
 
 def test_correct_received_increase_then_decrease(admin_client, client_id):
     # Приёмщик обсчитался: принял 8 из привезённых 10. Менеджер правит вверх до 10
     # (сток растёт, статус done), затем вниз до 9 (сток уменьшается, снова частично).
-    doc_id, line_id, pid, cid, zone_id = _received_line(admin_client, client_id, planned=10, accepted=8)
+    # Карточка рейса показывает исправленное «принято» — движения штампуются trip_id.
+    doc_id, line_id, pid, cid, zone_id, t1 = _received_line(admin_client, client_id, planned=10, accepted=8)
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 8
 
-    up = _correct(admin_client, doc_id, line_id, 10)
+    up = _correct(admin_client, t1, line_id, 10)
     assert up.status_code == 200, up.text
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 10
     rec = admin_client.get(f"/receipts/{doc_id}").json()
     assert rec["doc"]["status"] == "done"
     assert rec["lines"][0]["accepted_qty"] == 10
+    assert _trip_received_qty(admin_client, t1, line_id) == 10
 
-    down = _correct(admin_client, doc_id, line_id, 9)
+    down = _correct(admin_client, t1, line_id, 9)
     assert down.status_code == 200, down.text
     assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 9
     rec = admin_client.get(f"/receipts/{doc_id}").json()
     assert rec["doc"]["status"] == "partially_received"
     assert rec["lines"][0]["accepted_qty"] == 9
+    assert _trip_received_qty(admin_client, t1, line_id) == 9
 
 
-def test_correct_received_cannot_exceed_arrived(admin_client, client_id):
-    doc_id, line_id, _pid, _cid, _zone = _received_line(admin_client, client_id, planned=10, accepted=8)
-    bad = _correct(admin_client, doc_id, line_id, 11)
-    assert bad.status_code == 400, bad.text
-    assert "не больше 10" in bad.json()["detail"]
+def test_correct_received_surplus_raises_alloc(admin_client, client_id):
+    # Пересчёт вскрыл, что привезли больше плана рейса, — как излишек при разгрузке:
+    # аллокация рейса поднимается до факта, «привезено» считается от факта.
+    doc_id, line_id, pid, cid, zone_id, t1 = _received_line(admin_client, client_id, planned=10, accepted=8)
+    up = _correct(admin_client, t1, line_id, 11)
+    assert up.status_code == 200, up.text
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 11
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 11
+    assert _trip_received_qty(admin_client, t1, line_id) == 11
 
 
 def test_correct_received_blocked_when_stock_consumed(admin_client, client_id):
     # После приёмки товар списали со склада — уменьшать принятое некуда: гейт блокирует.
-    doc_id, line_id, pid, cid, zone_id = _received_line(admin_client, client_id, planned=10, accepted=10)
+    doc_id, line_id, pid, cid, zone_id, t1 = _received_line(admin_client, client_id, planned=10, accepted=10)
     wo = admin_client.post("/balances/write-offs", json={
         "product_id": pid, "color_id": cid, "size_id": None, "client_id": client_id,
         "zone_id": zone_id, "quality": "good", "qty": 10, "reason": "damage",
     })
     assert wo.status_code == 200, wo.text
-    bad = _correct(admin_client, doc_id, line_id, 6)
+    bad = _correct(admin_client, t1, line_id, 6)
     assert bad.status_code == 400, bad.text
     assert "Нельзя уменьшить" in bad.json()["detail"]
 
 
+def _correct_placed(client, trip_id: str, line_id: str, qty: int, placements: list[dict],
+                    reason: str = "пересчёт"):
+    return client.post(f"/trips/{trip_id}/receipt-lines/{line_id}/correct-received",
+                       json={"received_qty": qty, "reason": reason, "placements": placements})
+
+
+def _received_line_in_cells(admin_client, client_id, *, planned: int, cells: list[tuple]):
+    """Поступление, принятое рейсом с раскладкой по нескольким ячейкам."""
+    doc_id, line_id, pid, cid, _zone = _planned_receipt_with_line(admin_client, client_id, planned=planned)
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": planned}]}],
+    })
+    admin_client.post(f"/trips/{t1}/handoff")
+    admin_client.post(f"/trips/{t1}/arrival", json={})
+    r = admin_client.post(f"/trips/{t1}/unload", json={
+        "load_factor": "full",
+        "receipt_lines": [{
+            "line_id": line_id,
+            "accepted_qty": sum(q for _zid, _zn, q in cells),
+            "placements": [
+                {"storage_zone_id": zid, "storage_zone_name": zname, "qty": q}
+                for zid, zname, q in cells
+            ],
+        }],
+    })
+    assert r.status_code == 200, r.text
+    return doc_id, line_id, pid, cid, t1
+
+
+def test_correct_received_decrease_spreads_across_cells(admin_client, client_id):
+    # Прод-кейс: приёмка разложена по двум ячейкам, менеджер уменьшает сильнее, чем
+    # лежит в зоне строки (первой ячейке), — снимается с фактических мест раскладки.
+    doc_id, line_id, pid, cid, t1 = _received_line_in_cells(
+        admin_client, client_id, planned=10,
+        cells=[("cell-a", "Ячейка А", 3), ("cell-b", "Ячейка Б", 7)])
+
+    down = _correct(admin_client, t1, line_id, 5)
+    assert down.status_code == 200, down.text
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-a") == 0
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-b") == 5
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "partially_received"
+    assert rec["lines"][0]["accepted_qty"] == 5
+    # Зона строки переехала на ячейку, где остался товар.
+    assert rec["lines"][0]["storage_zone_id"] == "cell-b"
+    assert rec["lines"][0]["placements"] == [
+        {"storage_zone_id": "cell-b", "storage_zone_name": "Ячейка Б", "qty": 5},
+    ]
+    # Карточка рейса показывает исправленное «принято» и раскладку.
+    assert _trip_received_qty(admin_client, t1, line_id) == 5
+
+
+def test_correct_received_with_placements(admin_client, client_id):
+    # Полная новая раскладка из шторки: ячейку обнулили, часть переложили в новую.
+    doc_id, line_id, pid, cid, t1 = _received_line_in_cells(
+        admin_client, client_id, planned=10,
+        cells=[("cell-a", "Ячейка А", 4), ("cell-b", "Ячейка Б", 6)])
+
+    r = _correct_placed(admin_client, t1, line_id, 8, [
+        {"storage_zone_id": "cell-a", "storage_zone_name": "Ячейка А", "qty": 0},
+        {"storage_zone_id": "cell-b", "storage_zone_name": "Ячейка Б", "qty": 6},
+        {"storage_zone_id": "cell-c", "storage_zone_name": "Ячейка В", "qty": 2},
+    ])
+    assert r.status_code == 200, r.text
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-a") == 0
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-b") == 6
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-c") == 2
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "partially_received"
+    assert rec["lines"][0]["accepted_qty"] == 8
+    assert _trip_received_qty(admin_client, t1, line_id) == 8
+
+    # Ячейка журнала, не попавшая в новую раскладку, обнуляется.
+    r2 = _correct_placed(admin_client, t1, line_id, 8, [
+        {"storage_zone_id": "cell-b", "storage_zone_name": "Ячейка Б", "qty": 8},
+    ])
+    assert r2.status_code == 200, r2.text
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-b") == 8
+    assert _storage_good_in_zone(client_id, pid, cid, "cell-c") == 0
+
+
+def test_correct_received_placements_gates(admin_client, client_id):
+    doc_id, line_id, pid, cid, t1 = _received_line_in_cells(
+        admin_client, client_id, planned=10,
+        cells=[("cell-a", "Ячейка А", 4), ("cell-b", "Ячейка Б", 6)])
+
+    # Сумма раскладки не сходится с принятым.
+    bad = _correct_placed(admin_client, t1, line_id, 8, [
+        {"storage_zone_id": "cell-a", "storage_zone_name": "Ячейка А", "qty": 4},
+        {"storage_zone_id": "cell-b", "storage_zone_name": "Ячейка Б", "qty": 6},
+    ])
+    assert bad.status_code == 400, bad.text
+    assert "не сходится" in bad.json()["detail"]
+
+    # Из ячейки, где товар уже списан, снять нельзя.
+    wo = admin_client.post("/balances/write-offs", json={
+        "product_id": pid, "color_id": cid, "size_id": None, "client_id": client_id,
+        "zone_id": "cell-a", "quality": "good", "qty": 4, "reason": "damage",
+    })
+    assert wo.status_code == 200, wo.text
+    blocked = _correct_placed(admin_client, t1, line_id, 6, [
+        {"storage_zone_id": "cell-a", "storage_zone_name": "Ячейка А", "qty": 0},
+        {"storage_zone_id": "cell-b", "storage_zone_name": "Ячейка Б", "qty": 6},
+    ])
+    assert blocked.status_code == 400, blocked.text
+    assert "Нельзя уменьшить" in blocked.json()["detail"]
+
+
+def test_correct_received_only_for_unloaded_trip(admin_client, client_id):
+    # Корректировка правит цифру конкретного рейса, поэтому доступна только когда ЕГО
+    # разгрузка завершена. Рейс в пути корректировать нельзя; разгруженный — можно,
+    # даже пока второй рейс поступления ещё едет (его цифры это не трогает).
+    doc_id, line_id, pid, cid, zone_id = _planned_receipt_with_line(admin_client, client_id, planned=10)
+    t1 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t1}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 6}]}],
+    })
+    t2 = _bare_inbound_trip(admin_client)
+    admin_client.post(f"/trips/{t2}/receipts", json={
+        "items": [{"receipt_doc_id": doc_id, "allocations": [{"line_id": line_id, "qty": 4}]}],
+    })
+    admin_client.post(f"/trips/{t1}/handoff")
+    admin_client.post(f"/trips/{t1}/arrival", json={})
+    assert _unload_with_receive(admin_client, t1, [{"line_id": line_id, "accepted_qty": 5}]).status_code == 200
+
+    # Второй рейс ещё не разгружен — его приёмку корректировать рано.
+    blocked = _correct(admin_client, t2, line_id, 4)
+    assert blocked.status_code == 400, blocked.text
+    assert "разгрузка ещё не завершена" in blocked.json()["detail"]
+
+    # Разгруженный первый — можно прямо сейчас: 5 → 6.
+    ok = _correct(admin_client, t1, line_id, 6)
+    assert ok.status_code == 200, ok.text
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 6
+
+    # После разгрузки второго корректируется и он.
+    admin_client.post(f"/trips/{t2}/handoff")
+    admin_client.post(f"/trips/{t2}/arrival", json={})
+    assert _unload_with_receive(admin_client, t2, [{"line_id": line_id, "accepted_qty": 4}]).status_code == 200
+    rec = admin_client.get(f"/receipts/{doc_id}").json()
+    assert rec["doc"]["status"] == "done"
+    assert rec["lines"][0]["accepted_qty"] == 10
+    ok2 = _correct(admin_client, t2, line_id, 3)
+    assert ok2.status_code == 200, ok2.text
+    assert _storage_good_in_zone(client_id, pid, cid, zone_id) == 9
+    assert _trip_received_qty(admin_client, t1, line_id) == 6
+    assert _trip_received_qty(admin_client, t2, line_id) == 3
+
+
 def test_correct_received_permission(admin_client, warehouse_client, warehouse_head_client, client_id):
-    doc_id, line_id, _pid, _cid, _zone = _received_line(admin_client, client_id, planned=10, accepted=8)
+    _doc_id, line_id, _pid, _cid, _zone, t1 = _received_line(admin_client, client_id, planned=10, accepted=8)
     # Кладовщик такую правку не делает.
-    denied = _correct(warehouse_client, doc_id, line_id, 9)
+    denied = _correct(warehouse_client, t1, line_id, 9)
     assert denied.status_code == 403, denied.text
     # Начальник склада — вправе.
-    ok = _correct(warehouse_head_client, doc_id, line_id, 9)
+    ok = _correct(warehouse_head_client, t1, line_id, 9)
     assert ok.status_code == 200, ok.text
 
 

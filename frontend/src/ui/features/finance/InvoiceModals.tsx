@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  addInvoiceDiscount,
   addInvoicePayment,
   attachInvoiceExtraIncome,
   attachInvoiceReceipts,
@@ -263,6 +264,71 @@ export function AmountModal({ invoice, onClose, onDone }: { invoice: InvoiceDeta
         </FieldRow>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
           <Icon name="paperclip" size={12} />После корректировки приложите обновлённый расчёт и отправьте счёт клиенту.
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Скидка клиенту ───────────────────────────────────────────────────────────
+export function DiscountModal({ invoice, onClose, onDone }: { invoice: InvoiceDetail; onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [showErrors, setShowErrors] = useState(false)
+
+  const kopecks = parseRublesToKopecks(amount)
+  const remaining = Math.max(0, invoice.total_amount - invoice.paid_amount)
+  const over = kopecks != null && kopecks > remaining
+  const afterTotal = kopecks != null && !over ? invoice.total_amount - kopecks : null
+  const amountInvalid = (showErrors && (kopecks == null || kopecks <= 0)) || over
+  const reasonInvalid = showErrors && !reason.trim()
+
+  function submit() {
+    if (kopecks == null || kopecks <= 0) { setShowErrors(true); toast('Укажите сумму скидки', 'error'); return }
+    if (over) { toast(`Скидка превышает остаток к оплате (${formatMoneyKopecks(remaining)})`, 'error'); return }
+    if (!reason.trim()) { setShowErrors(true); toast('Укажите, за что предоставлена скидка', 'error'); return }
+    setBusy(true)
+    addInvoiceDiscount(invoice.id, { amount_kop: kopecks, reason: reason.trim() })
+      .then(() => { toast('Скидка добавлена', 'success'); onDone() })
+      .catch((e) => toast(e.message, 'error'))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Modal
+      open onClose={onClose} title="Скидка клиенту" width={440}
+      subtitle={`Счёт ${invoice.doc_number} · сумма ${formatMoneyKopecks(invoice.total_amount)}`}
+      footer={<>
+        <button className="btn ghost" onClick={onClose}>Отмена</button>
+        <button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Добавить скидку</button>
+      </>}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <FieldRow label="Сумма скидки, ₽" required>
+          <input
+            className="input" inputMode="decimal" autoFocus placeholder="например, 5000" value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            style={amountInvalid ? { borderColor: 'var(--c-danger)', background: 'var(--c-danger-bg)' } : undefined}
+          />
+          <div style={{ fontSize: 11.5, color: (amount && kopecks == null) || amountInvalid ? 'var(--c-danger)' : 'var(--c-text-subtle)', marginTop: 4 }}>
+            {amount && kopecks == null ? 'Введите число'
+              : over ? `Больше остатка к оплате (${formatMoneyKopecks(remaining)})`
+              : (showErrors && (kopecks == null || kopecks <= 0)) ? 'Укажите сумму скидки'
+              : afterTotal != null ? `Сумма счёта станет ${formatMoneyKopecks(afterTotal)}`
+              : ' '}
+          </div>
+        </FieldRow>
+        <FieldRow label="За что скидка" required>
+          <textarea
+            className="input" rows={2} style={{ resize: 'vertical', ...(reasonInvalid ? { borderColor: 'var(--c-danger)', background: 'var(--c-danger-bg)' } : null) }}
+            placeholder="Например: компенсация за пересорт при упаковке" value={reason} onChange={(e) => setReason(e.target.value)}
+          />
+          {reasonInvalid && <div style={{ fontSize: 11.5, color: 'var(--c-danger)', marginTop: 4 }}>Укажите, за что предоставлена скидка.</div>}
+        </FieldRow>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+          <Icon name="coins" size={12} />Скидка уменьшит сумму счёта и автоматически попадёт в «Расходы» и аналитику.
         </div>
       </div>
     </Modal>

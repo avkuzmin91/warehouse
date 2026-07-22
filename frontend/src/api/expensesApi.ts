@@ -6,7 +6,7 @@ export type ExpenseDictKind = 'categories' | 'payment-sources'
 
 export type ExpenseDictItem = { id: string; name: string }
 
-export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring'
+export type ExpenseKind = 'manual' | 'logistics' | 'rent' | 'salary' | 'recurring' | 'discount'
 export type ExpensePaymentStatus = 'awaiting' | 'partially_paid' | 'paid' | 'cancelled'
 // Подтип ЗП (производный от source_kind): оклад vs табель — разносим на витринах, чтобы не смешивались.
 export type SalarySubtype = 'fixed' | 'timesheet'
@@ -129,6 +129,58 @@ export type ExpenseAnalytics = {
 
 export type ExpenseAnalyticsParams = { date_from: string; date_to: string; kinds?: string }
 
+export type PayableDayPoint = {
+  date: string
+  accrued_kop: number
+  paid_kop: number
+  outstanding_kop: number
+}
+
+export type PayableAgingBucket = { key: string; label: string; count: number; amount_kop: number }
+
+export type PayableKindRow = {
+  kind: ExpenseKind
+  kind_label: string
+  accrued_kop: number
+  paid_kop: number
+  debt_kop: number
+}
+
+export type PayableCounterpartyRow = {
+  key: string
+  name: string
+  accrued_kop: number
+  paid_kop: number
+  debt_kop: number
+  oldest_days: number
+  debt_count: number
+}
+
+export type PayablesAnalytics = {
+  date_from: string
+  date_to: string
+  accrued_kop: number
+  accrued_count: number
+  paid_kop: number
+  payment_count: number
+  opening_debt_kop: number
+  debt_kop: number
+  debt_count: number
+  avg_days_to_pay: number
+  series: PayableDayPoint[]
+  aging: PayableAgingBucket[]
+  by_kind: PayableKindRow[]
+  counterparties: PayableCounterpartyRow[]
+  counterparties_total: number
+}
+
+export type PayablesAnalyticsParams = {
+  date_from: string
+  date_to: string
+  kinds?: string
+  carrier_id?: string
+}
+
 export type ExpensePayload = {
   spent_on: string
   category_id?: string | null
@@ -224,6 +276,15 @@ export function getExpenseAnalytics(params: ExpenseAnalyticsParams, signal?: Abo
   sp.set('date_to', params.date_to)
   if (params.kinds) sp.set('kinds', params.kinds)
   return request<ExpenseAnalytics>(`/expenses/analytics?${sp.toString()}`, { signal })
+}
+
+export function getPayablesAnalytics(params: PayablesAnalyticsParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.kinds) sp.set('kinds', params.kinds)
+  if (params.carrier_id) sp.set('carrier_id', params.carrier_id)
+  return request<PayablesAnalytics>(`/expenses/payables?${sp.toString()}`, { signal })
 }
 
 export function getExpense(expenseId: string, signal?: AbortSignal) {
@@ -339,6 +400,7 @@ export const EXPENSE_KIND_LABELS: Record<ExpenseKind, string> = {
   rent: 'Аренда',
   salary: 'Зарплата',
   recurring: 'Регулярный',
+  discount: 'Скидка клиенту',
 }
 
 export const SALARY_SUBTYPE_LABELS: Record<SalarySubtype, string> = {

@@ -61,12 +61,15 @@ from modules.logistics.schemas import (
     TripListResponse,
     TripOpResponse,
     TripReceiptAllocItem,
+    TripReceiptCell,
     TripReceiptItem,
+    TripReceivedCorrection,
     TripUnloadPayload,
 )
 from modules.logistics.service import (
     assert_dispatches_ready_for_load,
     cascade_dispatches_to_shipped,
+    correct_trip_received,
     link_dispatches,
     link_receipts,
     list_trips_aggregated,
@@ -84,7 +87,7 @@ from modules.expenses.service import (
     reverse_trip_logistics_expense,
     upsert_trip_logistics_expense,
 )
-from security import can_view_costs, ensure_cost_access, is_admin
+from security import can_view_costs, ensure_cost_access, ensure_received_correction_access, is_admin
 from utils import now_iso as _now
 
 router = APIRouter(tags=["logistics"])
@@ -305,6 +308,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
         alloc_rows = []
         recv_alloc_rows = []
         recv_by_line: dict[str, int] = {}
+        recv_cells_by_line: dict[str, list[dict]] = {}
         if is_outbound:
             dispatch_rows = conn.execute(
                 """
@@ -362,20 +366,31 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 """,
                 (trip_id,),
             ).fetchall()
-            # Принято кладовщиком фактически в этом рейсе = нетто журнала по строке:
-            # приход приёмки (intake→storage) минус сторно при отмене рейса (storage→intake).
+            # Принято кладовщиком фактически в этом рейсе = нетто журнала по строке
+            # и ячейке: приход приёмки (intake→storage) минус реверсы (storage→intake —
+            # сторно отмены рейса и корректировки приёмки).
             recv_net_rows = conn.execute(
                 """
                 SELECT receipt_line_id,
+                       CASE WHEN from_op = ? THEN to_zone_id   ELSE from_zone_id   END AS zone_id,
+                       CASE WHEN from_op = ? THEN to_zone_name ELSE from_zone_name END AS zone_name,
                        COALESCE(SUM(CASE WHEN from_op = ? AND to_op = ? THEN qty ELSE 0 END), 0)
                      - COALESCE(SUM(CASE WHEN from_op = ? AND to_op = ? THEN qty ELSE 0 END), 0) AS net
                 FROM zone_relocations
                 WHERE trip_id = ? AND receipt_line_id IS NOT NULL
-                GROUP BY receipt_line_id
+                GROUP BY receipt_line_id, zone_id, zone_name
                 """,
-                (INV_OP_INTAKE, INV_OP_STORAGE, INV_OP_STORAGE, INV_OP_INTAKE, trip_id),
+                (INV_OP_INTAKE, INV_OP_INTAKE,
+                 INV_OP_INTAKE, INV_OP_STORAGE, INV_OP_STORAGE, INV_OP_INTAKE, trip_id),
             ).fetchall()
-            recv_by_line = {str(r["receipt_line_id"]): int(r["net"] or 0) for r in recv_net_rows}
+            for r in recv_net_rows:
+                lid = str(r["receipt_line_id"])
+                net = int(r["net"] or 0)
+                recv_by_line[lid] = recv_by_line.get(lid, 0) + net
+                if net > 0:
+                    recv_cells_by_line.setdefault(lid, []).append(
+                        {"zone_id": r["zone_id"], "zone_name": r["zone_name"], "qty": net}
+                    )
         ops_rows = conn.execute(
             "SELECT o.*, COALESCE(NULLIF(u.display_name, ''), u.email) AS user_email FROM trip_ops o "
             "LEFT JOIN users u ON u.id = o.created_by WHERE o.trip_id = ? ORDER BY o.created_at DESC",
@@ -395,6 +410,12 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 planned_qty=int(a["planned_qty"] or 0),
                 accepted_qty=int(a["accepted_qty"] or 0),
                 received_qty=recv_by_line.get(str(a["receipt_line_id"]), 0),
+                placements=[
+                    TripReceiptCell(
+                        storage_zone_id=c["zone_id"], storage_zone_name=c["zone_name"], qty=int(c["qty"]),
+                    )
+                    for c in recv_cells_by_line.get(str(a["receipt_line_id"]), [])
+                ],
                 storage_zone_id=a["storage_zone_id"],
                 storage_zone_name=a["storage_zone_name"],
             )
@@ -801,6 +822,30 @@ def trip_unload(
             sync_actual_arrival(conn, trip_id, doc_row["arrived_at"])
         conn.commit()
     return {"message": TRIP_STATUS_COSTING}
+
+
+@router.post("/trips/{trip_id}/receipt-lines/{line_id}/correct-received")
+def correct_trip_received_line(
+    trip_id: str, line_id: str, payload: TripReceivedCorrection, user=Depends(get_current_manager),
+):
+    """Корректировка обсчёта приёмки рейса по строке (менеджер / начальник склада).
+
+    Правит принятое ЭТИМ рейсом вместе со стоком, журналом и раскладкой по ячейкам —
+    гейты и движения в service.correct_trip_received.
+    """
+    ensure_received_correction_access(user)
+    uid = str(user["id"])
+    with get_connection() as conn:
+        result = correct_trip_received(
+            conn, trip_id, line_id,
+            new_received=payload.received_qty, reason=payload.reason, uid=uid,
+            placements=(
+                [p.model_dump() for p in payload.placements]
+                if payload.placements is not None else None
+            ),
+        )
+        conn.commit()
+    return {"message": "ok", **result}
 
 
 @router.post("/trips/{trip_id}/cost")

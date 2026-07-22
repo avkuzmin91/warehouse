@@ -4,21 +4,17 @@ import { useAuth } from '../../auth/AuthContext'
 import {
   cancelReceipt,
   closeReceiptShort,
-  correctReceivedQty,
   expectRedelivery,
   getReceiptDetail,
   RECEIPT_STATUS_LABELS,
   receiptStatusTone,
   type ReceiptDetailFull,
-  type ReceiptLine,
 } from '../../api/receiptsApi'
 import { AppBar } from '../../components/AppBar'
 import { ConfirmAction } from '../../components/ConfirmAction'
 import { Icon } from '../../components/Icon'
-import { TextArea } from '../../components/TextArea'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
-import { useHardwareBack } from '../../nav/backHandlers'
-import { canCorrectReceived, canCreateDocuments } from '../../utils/access'
+import { canCreateDocuments } from '../../utils/access'
 import { fmtDate, fmtDateTime } from '../../utils/format'
 
 export function ReceiptDetailScreen({ docId }: { docId: string }) {
@@ -28,7 +24,6 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
   const [detail, setDetail] = useState<ReceiptDetailFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [correctLine, setCorrectLine] = useState<ReceiptLine | null>(null)
   const [confirmAct, setConfirmAct] = useState<'' | 'cancel' | 'closeShort' | 'redelivery'>('')
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
@@ -65,9 +60,6 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
 
   const doc = detail?.doc
   const tone = doc ? receiptStatusTone(doc.status) : ''
-  // Корректировка обсчёта возможна только у принятого поступления (гейт бэка).
-  const canCorrect =
-    canCorrectReceived(user?.role) && (doc?.status === 'partially_received' || doc?.status === 'done')
 
   return (
     <div className="screen">
@@ -112,16 +104,6 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
                     <div className="big">план {l.planned_qty}</div>
                     {l.accepted_qty != null && <div className="small">принято {l.accepted_qty}</div>}
                   </div>
-                  {canCorrect && (
-                    <button
-                      className="btn ghost sm auto"
-                      style={{ marginLeft: 8 }}
-                      aria-label="Исправить принятое"
-                      onClick={() => setCorrectLine(l)}
-                    >
-                      <Icon name="edit" size={14} />
-                    </button>
-                  )}
                 </div>
               ))}
             </div>
@@ -187,102 +169,6 @@ export function ReceiptDetailScreen({ docId }: { docId: string }) {
         )}
       </div>
 
-      {correctLine && (
-        <CorrectReceivedSheet
-          docId={docId}
-          line={correctLine}
-          onClose={() => setCorrectLine(null)}
-          onDone={() => {
-            setCorrectLine(null)
-            load()
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-// Шторка корректировки обсчёта: новое принятое + обязательная причина. Гейты по
-// количеству (не выше привезённого, не ниже лежащего в зоне) — на бэке.
-function CorrectReceivedSheet({
-  docId,
-  line,
-  onClose,
-  onDone,
-}: {
-  docId: string
-  line: ReceiptLine
-  onClose: () => void
-  onDone: () => void
-}) {
-  const [qty, setQty] = useState(line.accepted_qty ?? 0)
-  const [reason, setReason] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  const unchanged = qty === (line.accepted_qty ?? 0)
-
-  async function submit() {
-    if (saving) return
-    if (!reason.trim()) {
-      setError('Укажите причину корректировки')
-      return
-    }
-    setSaving(true)
-    setError('')
-    try {
-      await correctReceivedQty(docId, line.id, { accepted_qty: qty, reason: reason.trim() })
-      onDone()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось скорректировать приёмку')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  useHardwareBack(() => { if (!saving) onClose() })
-
-  return (
-    <div className="sheet-backdrop" onClick={() => { if (!saving) onClose() }}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-grip" />
-        <h3>Корректировка приёмки</h3>
-        <div className="line-sub" style={{ marginTop: -4 }}>
-          {line.product_name ?? '—'}
-          {line.product_sku ? <> · <span className="mono">{line.product_sku}</span></> : null}
-        </div>
-
-        <div className="summary" style={{ margin: '12px 0' }}>
-          <div className="kv"><span className="k">План</span><span className="v">{line.planned_qty}</span></div>
-          <div className="kv"><span className="k">Принято сейчас</span><span className="v">{line.accepted_qty ?? '—'}</span></div>
-        </div>
-
-        <div className="flabel">Принято (факт)</div>
-        <input
-          className="input num"
-          type="text"
-          inputMode="numeric"
-          value={qty || ''}
-          onChange={(e) => setQty(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
-        />
-
-        <div className="flabel" style={{ marginTop: 10 }}>Причина</div>
-        <TextArea value={reason} onChange={setReason} placeholder="Причина корректировки…" minRows={2} />
-
-        {error && (
-          <div className="alert" style={{ marginTop: 10 }}>
-            <Icon name="alert" size={15} />
-            {error}
-          </div>
-        )}
-
-        <div className="dtf-actions">
-          <button className="btn ghost" disabled={saving} onClick={onClose}>Отмена</button>
-          <button className="btn" disabled={saving || unchanged || !reason.trim()} onClick={() => void submit()}>
-            {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

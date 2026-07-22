@@ -33,6 +33,8 @@ class ShipmentPackingEntry(BaseModel):
     created_at:       str
     created_by:       str | None = None
     created_by_email: str | None = None
+    # 'free' | 'paid' — запись сделана в режиме переупаковки; None — обычная упаковка.
+    repack_kind:      str | None = None
     reversed:         bool = False
 
 
@@ -57,6 +59,7 @@ class ShipmentPackingProductivityRow(BaseModel):
     defect_earn_kop: int = 0
     earn_kop:        int = 0
     price_missing:   bool = False
+    repack_kind:     str | None = None
     doc_ids:         list[str] = []
 
 
@@ -109,6 +112,7 @@ class PackingDayLine(BaseModel):
     total:         int
     earn_kop:      int = 0
     price_missing: bool = False
+    repack_kind:   str | None = None
 
 
 class PackingDayDoc(BaseModel):
@@ -228,6 +232,21 @@ class ShipmentPriorityUpdate(BaseModel):
 class ShipmentRejectPayload(BaseModel):
     # Причина отклонения задачи начальником склада (фиксируется в журнале).
     reason: str = Field(min_length=1)
+
+
+class ShipmentReturnToPackingPayload(BaseModel):
+    # rework — обычная доработка (текущее поведение return_to_packing);
+    # repack_free — переупаковка за наш счёт; repack_paid — за счёт клиента.
+    mode:   str = "rework"
+    # Причина переупаковки — обязательна для repack_* (валидируется в service).
+    reason: str | None = None
+    # Только repack_paid: цена переупаковки за единицу в копейках
+    # (None — стандартный тариф упаковки) + работы сверх тарифа.
+    unit_price_kop:   int | None = Field(default=None, ge=0)
+    extra_amount_kop: int | None = Field(default=None, ge=0)
+    extra_comment:    str | None = None
+    # Осознанный частичный возврат, когда часть товара уже уехала рейсом.
+    force:  bool = False
 
 
 class ShipmentLineFile(BaseModel):
@@ -357,6 +376,15 @@ class ShipmentDetailResponse(BaseModel):
     comment:      str | None
     status:       str
     status_label: str
+    # Переупаковка (задача была поставлена с ошибкой): kind 'free'|'paid' остаётся
+    # после завершения (бейдж «была переупакована»), active=true — пока пакуют заново.
+    # Денежные поля (цена/доп. работы) отдаются только ролям, видящим стоимости.
+    repack_kind:   str | None = None
+    repack_reason: str | None = None
+    repack_active: bool = False
+    repack_price_kop:        int | None = None
+    repack_extra_amount_kop: int | None = None
+    repack_extra_comment:    str | None = None
     created_at:   str
     created_by:   str | None
     created_by_name: str | None = None

@@ -68,7 +68,7 @@ export function InvoicesListFeature() {
     [page, search, clientId, statusParam, overdueParam],
   )
 
-  const { data: alerts } = useApi((signal) => getInvoiceAlerts(signal), [])
+  const { data: alerts } = useApi((signal) => getInvoiceAlerts(clientId || undefined, signal), [clientId])
 
   const items = data?.items ?? []
   const total = data?.total ?? 0

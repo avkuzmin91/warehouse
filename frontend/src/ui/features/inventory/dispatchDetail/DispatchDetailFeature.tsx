@@ -5,6 +5,7 @@ import {
   getDispatch,
   advanceDispatch,
   cancelDispatch,
+  returnDispatchToDraft,
   updateDispatch,
   addDispatchLine,
   updateDispatchLine,
@@ -151,6 +152,19 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     await act(() => cancelDispatch(docId), '/inventory/dispatches')
   }
 
+  async function handleReturnToDraft() {
+    if (!doc) return
+    const ok = await confirm({
+      title: 'Вернуть на корректировку?',
+      body: doc.status === 'awaiting_trip'
+        ? `Отгрузка ${doc.doc_number} вернётся в черновик, подготовка будет отменена: товар журнально вернётся на исходные места. Состав, файлы и палеты сохранятся.`
+        : `Отгрузка ${doc.doc_number} вернётся в черновик для правки состава. Задача у склада будет снята.`,
+      confirmLabel: 'Вернуть в черновик',
+    })
+    if (!ok) return
+    await act(() => returnDispatchToDraft(docId))
+  }
+
   async function handleAddLine(item: PlannableItem, qty: number) {
     await act(async () => {
       await addDispatchLine(docId, {
@@ -285,6 +299,11 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         <Icon name="layers" size={14} />Журнал
         {doc.ops.length > 0 && <span style={{ marginLeft: 4, opacity: 0.6 }}>({doc.ops.length})</span>}
       </button>
+      {canEditPlanning && (isAwaitingPacking || isPreparing || isAwaiting) && (
+        <button className="btn ghost" disabled={acting} onClick={() => void handleReturnToDraft()}>
+          <Icon name="arrowLeft" size={14} />Вернуть на корректировку
+        </button>
+      )}
       {canEditPlanning && (isDraft || isAwaitingPacking || isPreparing || isAwaiting) && (
         <button className="btn ghost danger" disabled={acting} onClick={handleCancel}>
           <Icon name="x" size={14} />Аннулировать
