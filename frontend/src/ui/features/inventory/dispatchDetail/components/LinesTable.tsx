@@ -102,8 +102,9 @@ export function LinesTable({ lines, onSavePallets, onSaveBoxes }: Props) {
 }
 
 /** Компактный редактор одной единицы упаковки (палеты ИЛИ короба) в ячейке «Упаковка».
- *  Кнопка сохранения появляется только при изменении значения. */
-function PackUnitEditor({ label, value, onSave }: {
+ *  Кнопка сохранения появляется только при изменении значения. Без onSave — read-only.
+ *  Используется также в PreparePanel (упаковка видна кладовщику на подготовке). */
+export function PackUnitEditor({ label, value, onSave }: {
   label: string
   value: number | null
   onSave?: (v: number | null) => Promise<boolean>

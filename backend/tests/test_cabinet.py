@@ -24,6 +24,7 @@ from tests.conftest import (  # noqa: F401
 CABINET_GET_PATHS = [
     "/cabinet/summary",
     "/cabinet/balances",
+    "/cabinet/balances/export",
     "/cabinet/balances/summary",
     "/cabinet/write-offs",
     "/cabinet/receipts",
@@ -340,6 +341,36 @@ def test_cabinet_profile(cabinet_client, own_client_id):
         with get_connection() as conn:
             conn.execute("DELETE FROM client_stores WHERE id = ?", (store_id,))
             conn.commit()
+
+
+def test_cabinet_balances_export(admin_client, cabinet_client, own_client_id, foreign_client_id):
+    """Экспорт остатков в xlsx: формат клиента, изоляция по client_id."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    own_doc = _create_receipt(admin_client, own_client_id, advance=True)
+    _accept_receipt(admin_client, own_doc)
+    foreign_doc = _create_receipt(admin_client, foreign_client_id, advance=True)
+    _accept_receipt(admin_client, foreign_doc)
+
+    r = cabinet_client.get("/cabinet/balances/export")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert "Content-Disposition" in r.headers
+    assert "filename*=UTF-8''" in r.headers["content-disposition"]
+
+    ws = load_workbook(BytesIO(r.content)).active
+    rows = list(ws.iter_rows(values_only=True))
+    assert rows[0] == ("Наименование", "Артикул", "На хранении", "Готов к отгрузке", "Брак")
+    assert len(rows) == 2, "в файле должна быть ровно одна позиция (только свой клиент)"
+    name, _sku, storage, ready, defect = rows[1]
+    assert "Тестовый товар" in name and "Красный" in name
+    assert (storage, ready, defect) == (5, 0, 0)
+
+    r = cabinet_client.get("/cabinet/balances/export", params={"search": "нет-такого-товара"})
+    assert r.status_code == 200
+    ws = load_workbook(BytesIO(r.content)).active
+    assert ws.max_row == 1, "по фильтру без совпадений — только заголовок"
 
 
 def test_cabinet_write_offs_isolation(cabinet_client, own_client_id, foreign_client_id):

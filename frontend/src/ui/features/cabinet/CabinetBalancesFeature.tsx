@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getCabinetBalances, getCabinetBalancesSummary, getCabinetWriteOffs } from '../../../api/cabinetApi'
+import { exportCabinetBalancesXlsx, getCabinetBalances, getCabinetBalancesSummary, getCabinetWriteOffs } from '../../../api/cabinetApi'
 import { INV_OP_LABELS, INV_QUALITY_LABELS, WRITEOFF_REASON_LABELS } from '../../../api/balancesApi'
 import type { InvQuality, WriteOffReason } from '../../../api/balancesApi'
 import { useApi } from '../../../hooks/useApi'
@@ -16,6 +16,7 @@ import { Icon } from '../../primitives/Icon'
 import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { BucketCell } from '../shared/BucketCell'
+import { useToast } from '../../feedback/Toast'
 
 const PAGE_SIZE = 50
 const WRITEOFFS_LIMIT = 20
@@ -61,6 +62,32 @@ export function CabinetBalancesFeature() {
   const writeOffs = writeOffsRes.data?.items ?? []
 
   const items = data?.items ?? []
+
+  const toast = useToast()
+  const [exporting, setExporting] = useState(false)
+  const handleExport = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportCabinetBalancesXlsx({
+        search: search.trim() || undefined,
+        only_positive: onlyPositive ? undefined : false,
+        has_defect: hasDefect || undefined,
+      })
+      const clientName = items[0]?.client_name?.trim() ?? ''
+      const dateStr = new Date().toLocaleDateString('ru-RU', { timeZone: MOSCOW_TZ })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${clientName ? `${clientName} ` : ''}Остатки на ${dateStr}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось выгрузить файл', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
   const summary = summaryRes.data
   const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
   const defectQty = summary
@@ -71,6 +98,12 @@ export function CabinetBalancesFeature() {
     <ListPage
       title="Остатки"
       subtitle={loading ? 'Загрузка…' : `${data?.total ?? 0} позиций`}
+      actions={
+        <button className="btn ghost sm" onClick={handleExport} disabled={exporting || loading || items.length === 0}>
+          <Icon name="download" size={14} />
+          {exporting ? 'Выгрузка…' : 'Выгрузить в Excel'}
+        </button>
+      }
       filters={
         <FiltersBar>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>

@@ -179,6 +179,22 @@ export function updateDispatchLine(docId: string, lineId: string, body: Dispatch
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
+/** Правка числа палет по строке на любом статусе отгрузки (кроме аннулированной). */
+export function updateDispatchLinePallets(docId: string, lineId: string, palletsQty: number | null): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/pallets`, {
+    method: 'PATCH',
+    body: JSON.stringify({ pallets_qty: palletsQty }),
+  })
+}
+
+/** Правка числа коробов по строке на любом статусе отгрузки (кроме аннулированной). */
+export function updateDispatchLineBoxes(docId: string, lineId: string, boxesQty: number | null): Promise<{ message: string }> {
+  return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}/boxes`, {
+    method: 'PATCH',
+    body: JSON.stringify({ boxes_qty: boxesQty }),
+  })
+}
+
 export function deleteDispatchLine(docId: string, lineId: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/dispatches/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
