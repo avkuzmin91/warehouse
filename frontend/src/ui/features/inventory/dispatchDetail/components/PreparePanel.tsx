@@ -10,6 +10,7 @@ import { Badge } from '../../../../primitives/Badge'
 import { Panel } from '../../../shared/process/processUI'
 import { RoleChip } from '../../../shared/process/RoleChip'
 import { LineIdentityCell } from '../../shared/LineIdentityCell'
+import { PackUnitEditor } from './LinesTable'
 import { DispatchLineFiles, dispatchFileGlyph, DISPATCH_FILE_ACCEPT } from './DispatchLineFiles'
 import { LineFilesCell } from '../../shipmentDetail/components/LineFilesCell'
 import { FilePreviewModal } from '../../shipmentDetail/components/FilePreviewModal'
@@ -30,10 +31,14 @@ type Props = {
   onUpdateLine: (lineId: string, body: { site_url?: string | null }) => Promise<boolean>
   onUploadFile: (lineId: string, file: File) => Promise<boolean>
   onDeleteFile: (lineId: string, fileId: string) => Promise<boolean>
+  /** Когда задан — менеджер правит палеты по строке прямо на подготовке. */
+  onSavePallets?: (lineId: string, pallets: number | null) => Promise<boolean>
+  /** Когда задан — менеджер правит короба по строке прямо на подготовке. */
+  onSaveBoxes?: (lineId: string, boxes: number | null) => Promise<boolean>
   onDone: () => Promise<void> | void
 }
 
-export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUploadFile, onDeleteFile, onDone }: Props) {
+export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUploadFile, onDeleteFile, onSavePallets, onSaveBoxes, onDone }: Props) {
   const toast = useToast()
   const isDefect = doc.cargo_type === 'defect'
   // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready,
@@ -211,6 +216,8 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
   const noun = isDefect ? 'брак' : 'товар'
 
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
+  const boxesTotal = lines.reduce((s, l) => s + (l.boxes_qty ?? 0), 0)
+  const palletsTotal = lines.reduce((s, l) => s + (l.pallets_qty ?? 0), 0)
   const pickedTotal = lines.reduce((s, l) => s + pickedRows(allocs[l.id] ?? []), 0)
   const remainingTotal = Math.max(0, planTotal - pickedTotal)
   const doneCount = lines.filter((l) => pickedRows(allocs[l.id] ?? []) >= l.qty).length
@@ -317,7 +324,13 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
       <Panel
         icon="boxes"
         title="Строки отгрузки"
-        right={<span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>{lines.length} строки · план <b className="mono" style={{ color: 'var(--c-text)' }}>{planTotal}</b> шт</span>}
+        right={
+          <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>
+            {lines.length} строки · план <b className="mono" style={{ color: 'var(--c-text)' }}>{planTotal}</b> шт
+            {' · '}<b className="mono" style={{ color: 'var(--c-text)' }}>{boxesTotal}</b> кор
+            {' · '}<b className="mono" style={{ color: 'var(--c-text)' }}>{palletsTotal}</b> пал
+          </span>
+        }
         bodyPad={false}
       >
         {lines.length === 0 ? (
@@ -360,6 +373,15 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
 
                   <div className="prog" style={{ marginTop: 10 }}>
                     <div className={`prog-fill ${done ? 'ok' : ''}`} style={{ width: `${pct}%` }} />
+                  </div>
+
+                  {/* Упаковка, указанная менеджером: кладовщик собирает по ней; менеджер может поправить. */}
+                  <div style={{ marginTop: 11, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-text-subtle)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                      Упаковка
+                    </span>
+                    <PackUnitEditor label="Короба" value={line.boxes_qty} onSave={onSaveBoxes ? (v) => onSaveBoxes(line.id, v) : undefined} />
+                    <PackUnitEditor label="Палеты" value={line.pallets_qty} onSave={onSavePallets ? (v) => onSavePallets(line.id, v) : undefined} />
                   </div>
 
                   {canEditDocs ? (

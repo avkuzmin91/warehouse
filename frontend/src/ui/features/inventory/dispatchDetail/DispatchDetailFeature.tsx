@@ -385,6 +385,8 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
           onUpdateLine={handleUpdateLine}
           onUploadFile={handleUploadLineFile}
           onDeleteFile={handleDeleteLineFile}
+          onSavePallets={canEditPallets ? handleUpdatePallets : undefined}
+          onSaveBoxes={canEditPallets ? handleUpdateBoxes : undefined}
           onDone={load}
         />
       ) : (isPreparing || isAwaiting || isPartially) ? (

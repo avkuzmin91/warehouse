@@ -181,6 +181,8 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
   const noun = isDefect ? 'брак' : 'товар'
   const planTotal = doc?.lines.reduce((s, l) => s + l.qty, 0) ?? 0
   const pickedTotal = doc?.lines.reduce((s, l) => s + pickedRows(rows[l.id] ?? []), 0) ?? 0
+  const boxesTotal = doc?.lines.reduce((s, l) => s + (l.boxes_qty ?? 0), 0) ?? 0
+  const palletsTotal = doc?.lines.reduce((s, l) => s + (l.pallets_qty ?? 0), 0) ?? 0
 
   return (
     <div className="screen">
@@ -214,6 +216,12 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
                 <span className="k">Дата отгрузки</span>
                 <span className="v">{fmtDate(doc.ship_date)}</span>
               </div>
+              {(boxesTotal > 0 || palletsTotal > 0) && (
+                <div className="kv">
+                  <span className="k">Упаковка</span>
+                  <span className="v">{boxesTotal} кор · {palletsTotal} пал</span>
+                </div>
+              )}
               {doc.trips.length > 0 && (
                 <div className="kv">
                   <span className="k">Рейсы</span>
@@ -247,6 +255,11 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
                         <span className="mono">{l.product_sku}</span>
                         {l.store_name ? ` · ${l.store_name}` : ''}
                       </div>
+                      {(l.boxes_qty != null || l.pallets_qty != null) && (
+                        <div className="line-sub" style={{ marginTop: 4 }}>
+                          Упаковка: {l.boxes_qty ?? '—'} кор · {l.pallets_qty ?? '—'} пал
+                        </div>
+                      )}
                       {l.site_url && (
                         <div className="line-sub" style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           <a href={l.site_url} target="_blank" rel="noreferrer">{l.site_url}</a>

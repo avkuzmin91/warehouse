@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 from fastapi import HTTPException, status
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from config import (
     CABINET_DISPATCH_OPS_VISIBLE,
@@ -24,6 +28,8 @@ from config import (
     TRIP_STATUS_CANCELLED,
 )
 from dbconn import ci_like_substring_param
+from modules.balances.service import get_balances
+from modules.timesheet.service import business_today
 from modules.cabinet.schemas import (
     CabinetBalanceTotals,
     CabinetEventItem,
@@ -901,3 +907,78 @@ def get_cabinet_profile(connection, *, client_id: str) -> CabinetProfileResponse
             for r in stores_rows
         ],
     )
+
+
+# Экспорт остатков — формат согласован с клиентом (образец «Pack Men Остатки на дата»):
+# «На хранении» = всё годное вне «Готов к отгрузке» (хранение + упаковка + упаковано),
+# «Брак» = брак по всем зонам; сумма трёх колонок = весь остаток позиции.
+BALANCES_EXPORT_LIMIT = 100_000
+
+
+def build_cabinet_balances_xlsx(
+    connection,
+    *,
+    client_id: str,
+    search: str | None,
+    only_positive: bool,
+    has_defect: bool,
+) -> tuple[bytes, str]:
+    """Возвращает (содержимое xlsx, имя файла «<Клиент> Остатки на ДД.ММ.ГГГГ.xlsx»)."""
+    result = get_balances(
+        connection,
+        page=1,
+        limit=BALANCES_EXPORT_LIMIT,
+        client_id=client_id,
+        search=search,
+        only_positive=only_positive,
+        has_defect=has_defect,
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Остатки"
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", start_color="305496")
+    thin = Side(style="thin", color="B7C1D1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+
+    headers = ["Наименование", "Артикул", "На хранении", "Готов к отгрузке", "Брак"]
+    for col, title in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+        cell.alignment = center
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A2"
+
+    widths = {"A": 45, "B": 20, "C": 14, "D": 16, "E": 12}
+    for letter, width in widths.items():
+        ws.column_dimensions[letter].width = width
+
+    for row_idx, item in enumerate(result.items, start=2):
+        name = ", ".join(p for p in (item.product_name, item.color_name, item.size_name) if p)
+        in_storage = item.storage_good + item.packing_good + item.packed_good
+        defect = item.storage_defect + item.packing_defect + item.packed_defect + item.ready_defect
+        values = [name, item.product_sku, in_storage, item.ready_good, defect]
+        for col, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell.border = border
+            if col >= 3:
+                cell.number_format = "#,##0"
+
+    if result.items:
+        ws.auto_filter.ref = f"A1:E{len(result.items) + 1}"
+
+    client_row = connection.execute(
+        "SELECT name FROM clients WHERE id = ?", (client_id,)
+    ).fetchone()
+    client_name = str(client_row["name"]).strip() if client_row and client_row["name"] else ""
+    date_str = business_today().strftime("%d.%m.%Y")
+    filename = f"{client_name + ' ' if client_name else ''}Остатки на {date_str}.xlsx"
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), filename

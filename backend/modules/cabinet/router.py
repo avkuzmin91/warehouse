@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 
 from config import (
     CABINET_DISPATCH_VISIBLE_STATUSES,
@@ -30,6 +33,7 @@ from .schemas import (
     CabinetWriteOffsResponse,
 )
 from .service import (
+    build_cabinet_balances_xlsx,
     cabinet_packing_report,
     cabinet_summary,
     get_cabinet_product,
@@ -103,6 +107,30 @@ def list_client_balances(
             only_positive=only_positive,
             has_defect=has_defect,
         )
+
+
+@router.get("/cabinet/balances/export")
+def export_client_balances(
+    search: str | None = Query(None),
+    only_positive: bool = Query(True),
+    has_defect: bool = Query(False),
+    client_id: str = Depends(_get_current_client_id),
+):
+    with get_connection() as conn:
+        content, filename = build_cabinet_balances_xlsx(
+            conn,
+            client_id=client_id,
+            search=search,
+            only_positive=only_positive,
+            has_defect=has_defect,
+        )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"balances.xlsx\"; filename*=UTF-8''{quote(filename)}",
+        },
+    )
 
 
 @router.get("/cabinet/balances/summary", response_model=BalanceSummaryResponse)

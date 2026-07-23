@@ -9,9 +9,12 @@ import {
   getDispatch,
   getDispatchReservations,
   updateDispatchPriority,
+  updateDispatchLineBoxes,
+  updateDispatchLinePallets,
   DISPATCH_STATUS_LABELS,
   dispatchStatusTone,
   type DispatchDetail,
+  type DispatchLine,
   type DispatchStatus,
 } from '../../api/dispatchApi'
 import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
@@ -19,6 +22,7 @@ import { AppBar } from '../../components/AppBar'
 import { ConfirmAction } from '../../components/ConfirmAction'
 import { LineFiles } from '../../components/LineFiles'
 import { PrioritySheet } from '../../components/PrioritySheet'
+import { PackQtySheet } from './PackQtySheet'
 import { Icon } from '../../components/Icon'
 import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { canCreateDocuments } from '../../utils/access'
@@ -45,6 +49,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [confirmReturn, setConfirmReturn] = useState(false)
   const [priorityOpen, setPriorityOpen] = useState(false)
+  const [packLine, setPackLine] = useState<DispatchLine | null>(null)
   const [saving, setSaving] = useState(false)
   const [actionErr, setActionErr] = useState('')
 
@@ -103,6 +108,8 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const cancellable = doc ? CANCELLABLE.has(doc.status) : false
   const returnable = doc ? RETURNABLE.has(doc.status) : false
   const priorityEditable = doc ? !PRIORITY_FINAL.has(doc.status) : false
+  // Короба/палеты менеджер правит на любом статусе, кроме аннулированной (зеркало веба).
+  const packEditable = canEdit && !!doc && doc.status !== 'cancelled'
   const priorityTone = doc ? dispatchPriorityTone(doc.priority_rank) : ''
 
   return (
@@ -150,6 +157,16 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                   <div className="docline-main">
                     <div className="tile-title" style={{ fontSize: 14 }}>{l.product_name}</div>
                     <div className="tile-meta">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}{l.store_name ? ` · ${l.store_name}` : ''}</div>
+                    {(packEditable || l.boxes_qty != null || l.pallets_qty != null) && (
+                      <div className="tile-meta" style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>Упаковка: {l.boxes_qty ?? '—'} кор · {l.pallets_qty ?? '—'} пал</span>
+                        {packEditable && (
+                          <button className="btn ghost sm auto" aria-label="Изменить упаковку" onClick={() => setPackLine(l)}>
+                            <Icon name="edit" size={12} />
+                          </button>
+                        )}
+                      </div>
+                    )}
                     {showAvail && (
                       <div className="stock-row">
                         {lineStockChips(plannableByKey.get(balanceKey(l)), { source: 'dispatch', cargoType: doc.cargo_type, reserved: reservedMap[balanceKey(l)] ?? 0 }).map((c) => (
@@ -179,11 +196,12 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               </button>
             )}
 
+            {actionErr && (
+              <div className="alert" style={{ marginTop: 16 }}><Icon name="alert" size={15} />{actionErr}</div>
+            )}
+
             {canEdit && (cancellable || returnable) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
-                {actionErr && (
-                  <div className="alert"><Icon name="alert" size={15} />{actionErr}</div>
-                )}
                 {returnable && (
                   <ConfirmAction
                     label={<><Icon name="arrowLeft" size={16} /> Вернуть на корректировку</>}
@@ -229,6 +247,27 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
           </>
         )}
       </div>
+
+      {packLine && doc && (
+        <PackQtySheet
+          productName={packLine.product_name}
+          boxesQty={packLine.boxes_qty}
+          palletsQty={packLine.pallets_qty}
+          onClose={() => setPackLine(null)}
+          onSave={async (patch) => {
+            try {
+              if (patch.boxes_qty !== packLine.boxes_qty) await updateDispatchLineBoxes(doc.id, packLine.id, patch.boxes_qty)
+              if (patch.pallets_qty !== packLine.pallets_qty) await updateDispatchLinePallets(doc.id, packLine.id, patch.pallets_qty)
+              setPackLine(null)
+              load()
+              return true
+            } catch (err) {
+              setActionErr(err instanceof Error ? err.message : 'Не удалось сохранить упаковку')
+              return false
+            }
+          }}
+        />
+      )}
 
       {priorityOpen && doc && (
         <PrioritySheet
