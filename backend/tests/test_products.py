@@ -698,3 +698,164 @@ def test_product_boxes_per_pallet_roundtrip(admin_client):
             conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
             conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
             conn.commit()
+
+
+def test_variant_change_identity_moves_stock_and_history(admin_client):
+    """Смена цвета варианта с поступлениями: обычный PATCH — 409, change-identity
+    переносит журнал/строки на новый ключ, остатки и карточка сходятся."""
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-ident-{suffix}"
+    client_id = f"client-ident-{suffix}"
+    product_id = f"product-ident-{suffix}"
+    red_id = f"color-red-{suffix}"
+    yellow_id = f"color-yel-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 1, 0, 0, NOW())
+            """,
+            (type_id, f"Type Ident {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client Ident {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (red_id, f"Red{suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (yellow_id, f"Yellow{suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_id, f"Ident Product {suffix}", type_id, client_id, f"IDNT-{suffix}"),
+        )
+        conn.commit()
+
+    def _variant_payload(color_id: str, variant_id: str | None = None) -> dict:
+        return {
+            "id": variant_id,
+            "sku": "",
+            "color_id": color_id,
+            "dimension": {"length": 1, "width": 1, "height": 1},
+            "size_id": None,
+            "images": [],
+            "is_active": True,
+        }
+
+    try:
+        r = admin_client.patch(
+            f"/products/{product_id}/variants", json={"variants": [_variant_payload(red_id)]}
+        )
+        assert r.status_code == 200, r.text
+        variant = admin_client.get(f"/products/{product_id}/variants").json()[0]
+        variant_id = variant["id"]
+        old_sku = variant["sku"]
+
+        # Принятое поступление + приход в журнале — вариант «с историей».
+        doc_id = str(uuid.uuid4())
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO receipt_docs
+                   (id, doc_number, client_id, status, is_deleted, created_at, created_by)
+                   VALUES (?, ?, ?, 'done', 0, NOW(), 'test')""",
+                (doc_id, f"WH-T-{suffix}", client_id),
+            )
+            conn.execute(
+                """INSERT INTO receipt_lines
+                   (id, doc_id, product_id, product_name, product_sku,
+                    color_id, color_name, planned_qty, accepted_qty, is_deleted, created_at)
+                   VALUES (?, ?, ?, 'Ident Product', ?, ?, 'Red', 10, 10, 0, NOW())""",
+                (str(uuid.uuid4()), doc_id, product_id, old_sku, red_id),
+            )
+            conn.execute(
+                """INSERT INTO zone_relocations
+                   (id, product_id, product_name, product_sku, color_id, color_name,
+                    client_id, from_op, to_op, from_quality, to_quality, qty, created_at)
+                   VALUES (?, ?, 'Ident Product', ?, ?, 'Red', ?, 'intake', 'storage', 'good', 'good', 10, NOW())""",
+                (str(uuid.uuid4()), product_id, old_sku, red_id, client_id),
+            )
+            conn.commit()
+
+        # Обычный PATCH менять цвет по-прежнему отказывается.
+        blocked = admin_client.patch(
+            f"/products/{product_id}/variants",
+            json={"variants": [_variant_payload(yellow_id, variant_id)]},
+        )
+        assert blocked.status_code == 409, blocked.text
+
+        # Смена без изменений — 400.
+        same = admin_client.post(
+            f"/products/{product_id}/variants/{variant_id}/change-identity",
+            json={"color_id": red_id},
+        )
+        assert same.status_code == 400, same.text
+
+        moved = admin_client.post(
+            f"/products/{product_id}/variants/{variant_id}/change-identity",
+            json={"color_id": yellow_id},
+        )
+        assert moved.status_code == 200, moved.text
+
+        # Вариант: новый цвет, пересозданный SKU; остаток карточки сошёлся по новому ключу.
+        fresh = admin_client.get(f"/products/{product_id}/variants").json()[0]
+        assert fresh["color_id"] == yellow_id
+        assert fresh["sku"] != old_sku
+        assert fresh["stock"] == 10
+        assert fresh["has_receipts"] is True
+
+        # Остатки: позиция уехала на новый цвет целиком.
+        balances = admin_client.get(f"/balances?client_id={client_id}").json()["items"]
+        mine = [i for i in balances if i["product_id"] == product_id]
+        assert len(mine) == 1, mine
+        assert mine[0]["color_id"] == yellow_id
+        assert mine[0]["storage_good"] == 10
+
+        with get_connection() as conn:
+            rl = conn.execute(
+                "SELECT color_id FROM receipt_lines WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+            assert rl["color_id"] == yellow_id
+            audit = conn.execute(
+                "SELECT * FROM variant_identity_changes WHERE variant_id = ?", (variant_id,)
+            ).fetchone()
+            assert audit is not None
+            assert audit["old_color_id"] == red_id and audit["new_color_id"] == yellow_id
+            assert int(audit["journal_rows"]) == 1 and int(audit["receipt_rows"]) == 1
+
+        # Занятое сочетание цвета — 400 (второй вариант red → yellow не пройдёт).
+        r2 = admin_client.patch(
+            f"/products/{product_id}/variants",
+            json={"variants": [_variant_payload(yellow_id, variant_id), _variant_payload(red_id)]},
+        )
+        assert r2.status_code == 200, r2.text
+        second_id = next(
+            v["id"] for v in admin_client.get(f"/products/{product_id}/variants").json()
+            if v["id"] != variant_id
+        )
+        clash = admin_client.post(
+            f"/products/{product_id}/variants/{second_id}/change-identity",
+            json={"color_id": yellow_id},
+        )
+        assert clash.status_code == 400, clash.text
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM variant_identity_changes WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM receipt_lines WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM receipt_docs WHERE client_id = ?", (client_id,))
+            conn.execute("DELETE FROM product_variants WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            conn.execute("DELETE FROM colors WHERE id IN (?, ?)", (red_id, yellow_id))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()

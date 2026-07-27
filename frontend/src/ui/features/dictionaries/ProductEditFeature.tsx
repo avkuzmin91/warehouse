@@ -5,6 +5,7 @@ import {
   updateProduct,
   getProductVariants,
   patchProductVariants,
+  changeVariantIdentity,
   deleteProductVariant,
   addVariantBarcode,
   deleteVariantBarcode,
@@ -110,7 +111,7 @@ export function ProductEditFeature({ id }: { id: string }) {
     [clientLookups],
   )
   const [rows, setRows] = useState<ProductVariantWriteItem[]>([])
-  const [variantMeta, setVariantMeta] = useState<Map<string, { hasReceipts: boolean; sku: string }>>(new Map())
+  const [variantMeta, setVariantMeta] = useState<Map<string, { hasReceipts: boolean; sku: string; colorId: string | null; sizeId: string | null }>>(new Map())
   const [barcodesByVariant, setBarcodesByVariant] = useState<Map<string, VariantBarcodeItem[]>>(new Map())
   const [varLoading, setVarLoading] = useState(false)
   const [varError, setVarError] = useState('')
@@ -166,7 +167,7 @@ export function ProductEditFeature({ id }: { id: string }) {
           is_active: v.is_active,
         })),
       )
-      setVariantMeta(new Map(items.map((v) => [v.id, { hasReceipts: v.has_receipts ?? false, sku: v.sku }])))
+      setVariantMeta(new Map(items.map((v) => [v.id, { hasReceipts: v.has_receipts ?? false, sku: v.sku, colorId: v.color_id ?? null, sizeId: v.size_id ?? null }])))
       setBarcodesByVariant(new Map(items.map((v) => [v.id, v.barcodes])))
     } catch (e: unknown) {
       setVarError(e instanceof Error ? e.message : 'Ошибка загрузки вариантов')
@@ -306,7 +307,7 @@ export function ProductEditFeature({ id }: { id: string }) {
     })
   }
 
-  async function saveVariantsPart() {
+  async function saveVariantsPart(identityChangedIds: Set<string>) {
     if (!id) throw new Error('Товар не найден')
     const requiresSz = product?.requires_size ?? false
     const requiresClr = product?.requires_color ?? false
@@ -325,17 +326,58 @@ export function ProductEditFeature({ id }: { id: string }) {
       if (dimMismatch) throw new Error('У техники все варианты должны иметь одинаковые габариты')
     }
 
-    await patchProductVariants(id, rows)
+    // У вариантов, прошедших смену цвета/размера, SKU уже пересоздан на сервере —
+    // старый снимок из строки затёр бы его обратно, поэтому шлём пустой (сервер сгенерирует тот же).
+    const payloadRows = rows.map((r) => (r.id && identityChangedIds.has(r.id) ? { ...r, sku: '' } : r))
+    await patchProductVariants(id, payloadRows)
+  }
+
+  // Смена цвета/размера у варианта с поступлениями — отдельная операция с переносом
+  // остатков и истории на новый ключ (обычный PATCH такие правки отклоняет).
+  function collectIdentityChanges() {
+    const requiresSz = product?.requires_size ?? false
+    return rows.flatMap((r) => {
+      if (!r.id) return []
+      const meta = variantMeta.get(r.id)
+      if (!meta?.hasReceipts) return []
+      const newColor = r.color_id || null
+      const newSize = requiresSz ? (r.size_id || null) : null
+      const oldColor = meta.colorId ?? null
+      const oldSize = requiresSz ? (meta.sizeId ?? null) : null
+      if (newColor === oldColor && newSize === oldSize) return []
+      return [{ variantId: r.id, sku: meta.sku, oldColor, oldSize, newColor, newSize, requiresSz }]
+    })
   }
 
   async function handleSaveAll() {
     if (!id) return
     setNameTouched(true)
     setVarError('')
+    const identityChanges = collectIdentityChanges()
+    if (identityChanges.length > 0) {
+      const colorName = (cid: string | null) => colors.find((c) => c.id === cid)?.name ?? 'без цвета'
+      const sizeName = (sid: string | null) => sizes.find((s) => s.id === sid)?.name ?? 'без размера'
+      const list = identityChanges
+        .map((ch) => {
+          const from = [colorName(ch.oldColor), ch.requiresSz ? sizeName(ch.oldSize) : null].filter(Boolean).join(' / ')
+          const to = [colorName(ch.newColor), ch.requiresSz ? sizeName(ch.newSize) : null].filter(Boolean).join(' / ')
+          return `${ch.sku || 'вариант'}: ${from} → ${to}`
+        })
+        .join('; ')
+      const ok = await confirm({
+        title: 'Перенести остатки на новый цвет/размер?',
+        body: `По этим вариантам есть поступления — остатки и история движений будут перенесены, SKU варианта будет пересоздан. ${list}.`,
+        confirmLabel: 'Перенести и сохранить',
+      })
+      if (!ok) return
+    }
     setSaving(true)
     try {
       await saveProductPart()
-      await saveVariantsPart()
+      for (const ch of identityChanges) {
+        await changeVariantIdentity(id, ch.variantId, { color_id: ch.newColor, size_id: ch.newSize })
+      }
+      await saveVariantsPart(new Set(identityChanges.map((ch) => ch.variantId)))
       const fresh = await getProduct(id)
       setProduct(fresh)
       setSkuBase(fresh.sku_base)
@@ -656,12 +698,12 @@ export function ProductEditFeature({ id }: { id: string }) {
                             onChange={(v) => setRow(i, { color_id: v })}
                             options={colors.map((c) => ({ value: c.id, label: c.name }))}
                             placeholder="Цвет…"
-                            disabled={busy || locked}
+                            disabled={busy}
                           />
                           {locked && (
-                            <Tooltip content="Цвет нельзя изменить: по этому варианту есть поступления">
+                            <Tooltip content="По варианту есть поступления: при смене цвета остатки и история будут перенесены на новый цвет">
                               <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
-                                <Icon name="lock" size={13} />
+                                <Icon name="refresh" size={13} />
                               </span>
                             </Tooltip>
                           )}
@@ -675,12 +717,12 @@ export function ProductEditFeature({ id }: { id: string }) {
                               onChange={(v) => setRow(i, { size_id: v || null })}
                               options={sizes.map((s) => ({ value: s.id, label: s.name }))}
                               placeholder="Размер…"
-                              disabled={busy || locked}
+                              disabled={busy}
                             />
                             {locked && (
-                              <Tooltip content="Размер нельзя изменить: по этому варианту есть поступления">
+                              <Tooltip content="По варианту есть поступления: при смене размера остатки и история будут перенесены на новый размер">
                                 <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
-                                  <Icon name="lock" size={13} />
+                                  <Icon name="refresh" size={13} />
                                 </span>
                               </Tooltip>
                             )}
