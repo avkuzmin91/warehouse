@@ -358,6 +358,14 @@ export function updateShipmentLine(docId: string, lineId: string, line: Shipment
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(line) })
 }
 
+export function updateShipmentLineStore(docId: string, lineId: string, storeId: string | null) {
+  // Узкая корректировка магазина: в отличие от общего line-PATCH разрешена и в «На упаковке».
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/store`, {
+    method: 'PATCH',
+    body: JSON.stringify({ store_id: storeId }),
+  })
+}
+
 export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }

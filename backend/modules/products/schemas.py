@@ -125,6 +125,12 @@ class ProductVariantsPatchRequest(BaseModel):
     variants: list[ProductVariantWriteItem]
 
 
+class VariantIdentityChangeRequest(BaseModel):
+    color_id: str | None = None
+    size_id: str | None = None
+    sku: str | None = None
+
+
 class ProductVariantFindItem(BaseModel):
     variant_id: str
     product_id: str

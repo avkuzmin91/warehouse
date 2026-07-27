@@ -381,8 +381,12 @@ def week_stats(
         int(p["amount_kopecks"]) for p in (payments or [])
         if str(p["kind"]) == PAYROLL_KIND_ADVANCE
     )
+    settlements = sum(
+        int(p["amount_kopecks"]) for p in (payments or [])
+        if str(p["kind"]) == PAYROLL_KIND_SETTLEMENT
+    )
     settled = any(str(p["kind"]) == PAYROLL_KIND_SETTLEMENT for p in (payments or []))
-    to_pay = max(0, earned - advances)
+    to_pay = max(0, earned - advances - settlements)
     return {
         "hours": round(hours, 1),
         "earned": earned,
@@ -390,6 +394,7 @@ def week_stats(
         "absent": absent,
         "noplan": noplan,
         "advances": advances,
+        "settlements": settlements,
         "to_pay": to_pay,
         "overpaid": max(0, advances - earned),
         "settled": settled,
@@ -674,6 +679,9 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
 # ── Пятничный расчёт ──────────────────────────────────────────────────────────
 
 def build_payroll(connection, sat: date) -> dict:
+    """Строки — только сотрудники с часами за неделю; без часов остаются лишь те,
+    по кому было движение денег (аванс/расчёт) — их прятать нельзя, суммы разойдутся.
+    «Осталось выдать» (to_pay) = заработано − авансы − проведённые расчёты."""
     days = week_days(sat)
     fri = days[-1]
     today_iso = business_today().isoformat()
@@ -686,17 +694,22 @@ def build_payroll(connection, sat: date) -> dict:
 
     rows: list[dict] = []
     t_earned = t_adv = t_pay = 0
+    with_hours = 0
     left = 0
     for e in employees:
         s = week_stats(
             e["id"], days, entries, rates.get(e["id"]), today_iso, payments.get(e["id"])
         )
+        if s["hours"] <= 0 and s["advances"] <= 0 and not s["settled"]:
+            continue
         cur = current_rate(rates.get(e["id"]))
         t_earned += s["earned"]
         t_adv += s["advances"]
         t_pay += s["to_pay"]
-        if not s["settled"]:
-            left += 1
+        if s["hours"] > 0:
+            with_hours += 1
+            if not s["settled"]:
+                left += 1
         rows.append({
             "employee_id": e["id"],
             "full_name": e["full_name"],
@@ -720,7 +733,7 @@ def build_payroll(connection, sat: date) -> dict:
             "earned": t_earned,
             "advances": t_adv,
             "to_pay": t_pay,
-            "employees": len(employees),
+            "employees": with_hours,
             "left": left,
         },
     }

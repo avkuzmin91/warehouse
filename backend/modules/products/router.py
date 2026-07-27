@@ -40,6 +40,7 @@ from .schemas import (
     ProductCreateMeta,
     VariantBarcodeAdd,
     VariantBarcodeItem,
+    VariantIdentityChangeRequest,
 )
 from .service import (
     _assign_variant_skus_from_base,
@@ -65,6 +66,7 @@ from .service import (
     _soft_delete_variants_for_product,
     _sync_product_variants_from_request,
     _product_type_flags,
+    change_variant_identity,
 )
 
 router = APIRouter(tags=["products"])
@@ -613,6 +615,27 @@ def patch_product_variants(item_id: str, payload: ProductVariantsPatchRequest, a
             connection.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят") from exc
     return MessageResponse(message="Варианты сохранены")
+
+
+@router.post("/products/{item_id}/variants/{variant_id}/change-identity", response_model=MessageResponse)
+def change_product_variant_identity(
+    item_id: str,
+    variant_id: str,
+    payload: VariantIdentityChangeRequest,
+    admin=Depends(get_current_admin),
+):
+    with get_connection() as connection:
+        result = change_variant_identity(
+            connection,
+            item_id,
+            variant_id,
+            color_id=payload.color_id,
+            size_id=payload.size_id,
+            sku=payload.sku,
+            admin_id=str(admin["id"]),
+        )
+        connection.commit()
+    return result
 
 
 def _apply_product_variant_deleted_flag(item_id: str, variant_id: str, admin_id: str, *, is_deleted: bool) -> MessageResponse:

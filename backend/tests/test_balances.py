@@ -1106,3 +1106,54 @@ def test_balances_zone_pagination_by_location(admin_client, client_id, product_i
             conn.execute("DELETE FROM unloading_zones WHERE room = ?", (room.upper(),))
             conn.commit()
         _cleanup_test_docs(client_id)
+
+
+def test_balances_and_plannable_show_live_dictionary_names(admin_client, client_id, product_ids):
+    """Переименование товара/цвета в справочнике сразу видно в остатках и подборе.
+
+    Снимки имён в журнале остаются как были — живое имя приходит джойном
+    справочника, снимок — только фолбэк для удалённых записей."""
+    pid, color_id, _size_id = product_ids
+    new_name = f"Живое имя {pid[:8]}"
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, 'Старый цвет', 1, 0, NOW())",
+            (color_id,),
+        )
+        _seed_received(conn, client_id, product_ids, 5)
+        conn.commit()
+
+    try:
+        with get_connection() as conn:
+            conn.execute("UPDATE products SET name = ? WHERE id = ?", (new_name, pid))
+            conn.execute("UPDATE colors SET name = 'Новый цвет' WHERE id = ?", (color_id,))
+            conn.commit()
+
+        r = admin_client.get(f"/balances?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        item = next(i for i in r.json()["items"] if i["product_id"] == pid)
+        assert item["product_name"] == new_name
+        assert item["color_name"] == "Новый цвет"
+
+        p = admin_client.get(f"/balances/plannable?client_id={client_id}")
+        assert p.status_code == 200, p.text
+        pit = next(i for i in p.json()["items"] if i["product_id"] == pid)
+        assert pit["product_name"] == new_name
+        assert pit["color_name"] == "Новый цвет"
+        assert pit["storage_good"] == 5
+
+        z = admin_client.get(f"/balances/zones?client_id={client_id}")
+        assert z.status_code == 200, z.text
+        zit = next(i for i in z.json()["items"] if i["product_id"] == pid)
+        assert zit["product_name"] == new_name
+        assert zit["color_name"] == "Новый цвет"
+
+        # Поиск находит позицию и по новому имени из справочника.
+        s = admin_client.get(f"/balances?client_id={client_id}&search={new_name}")
+        assert any(i["product_id"] == pid for i in s.json()["items"])
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
+            conn.commit()
+        _cleanup_test_docs(client_id)

@@ -35,7 +35,6 @@ from config import (
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_TERMINAL_STATUSES,
     SHIPMENT_STATUSES_ALL,
     UPLOADS_DIR,
@@ -61,6 +60,7 @@ from modules.shipments.schemas import (
     ShipmentLineItem,
     ShipmentLinePackPayload,
     ShipmentLinePlacement,
+    ShipmentLineStoreUpdate,
     ShipmentLinesListItem,
     ShipmentLinesResponse,
     ShipmentListItem,
@@ -80,6 +80,7 @@ from modules.shipments.schemas import (
     ShipmentReturnToPackingPayload,
 )
 from modules.shipments.service import (
+    _check_duplicate_lines,
     _check_lines_covered_by_stock,
     _doc_packed_qty,
     advance_shipment,
@@ -105,6 +106,7 @@ from modules.shipments.service import (
     start_repack,
 )
 from modules.products.service import assign_product_sku_if_missing
+from modules.push.service import notify_packing_correction
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
 router = APIRouter(tags=["shipments"])
@@ -805,12 +807,15 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
     fields = body.model_dump(exclude_unset=True)
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT status, actual_ship_date, priority_rank, client_id, comment FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT doc_number, status, actual_ship_date, priority_rank, client_id, comment, ship_date FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
         status = str(row["status"])
-        if status not in SHIPMENT_EDITABLE_LINE_STATUSES:
+        # «На упаковке» задача уже в работе у склада: менеджер может скорректировать
+        # только ТЗ и плановую дату — состав и реквизиты фиксированы.
+        on_packing_correction = status == SHIPMENT_STATUS_ON_PACKING
+        if status not in SHIPMENT_EDITABLE_LINE_STATUSES and not on_packing_correction:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
         # Планирование (состав, реквизиты) ведёт менеджерский состав. Начальник склада
         # на шаге приёмки задачи («Ожидает принятия») может поправить только ТЗ.
@@ -821,6 +826,11 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                     raise HTTPException(status_code=403, detail="Начальник склада может править только техническое задание")
             else:
                 ensure_shipment_planning_access(user)
+        if on_packing_correction and set(fields) - {"comment", "ship_date"}:
+            raise HTTPException(
+                status_code=400,
+                detail="На упаковке можно корректировать только техническое задание и дату упаковки (план)",
+            )
         if "logistics_cost" in fields:
             ensure_cost_access(user)
         if "priority_rank" in fields:
@@ -847,6 +857,8 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                 "UPDATE shipment_lines SET store_id = NULL, store_name = NULL WHERE doc_id = ? AND is_deleted = 0",
                 (doc_id,),
             )
+        # Что изменилось на корректировке «На упаковке» — для пуша команде упаковки.
+        correction_events: list[str] = []
         if "actual_ship_date" in fields:
             old_val = row["actual_ship_date"]
             new_val = fields["actual_ship_date"]
@@ -856,11 +868,24 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                     (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
                      f"Дата отгрузки (факт): {_fmt_date(old_val)} → {_fmt_date(new_val)}", now, uid),
                 )
+        if "ship_date" in fields:
+            old_val = row["ship_date"]
+            new_val = fields["ship_date"]
+            if (str(old_val).strip() if old_val is not None else "") != (new_val or ""):
+                date_comment = f"Дата упаковки (план): {_fmt_date(old_val)} → {_fmt_date(new_val)}"
+                conn.execute(
+                    "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                    (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, date_comment, now, uid),
+                )
+                if on_packing_correction:
+                    correction_events.append(date_comment)
         if "comment" in fields and (str(row["comment"] or "").strip()) != (fields["comment"] or ""):
             conn.execute(
                 "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
                 (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, "Техническое задание обновлено", now, uid),
             )
+            if on_packing_correction:
+                correction_events.append("Обновлено техническое задание")
         if "priority_rank" in fields:
             old_rank = int(row["priority_rank"]) if row.get("priority_rank") is not None else None
             new_rank = fields["priority_rank"]
@@ -871,6 +896,10 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
                      f"Приоритет отгрузки: {_priority_label(old_rank)} → {_priority_label(new_rank)}", now, uid),
                 )
         conn.commit()
+        if correction_events:
+            notify_packing_correction(
+                conn, doc_id=doc_id, doc_number=str(row["doc_number"]), body="; ".join(correction_events),
+            )
     return {"message": "ok"}
 
 
@@ -919,8 +948,8 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) == SHIPMENT_STATUS_SHIPPED:
-            raise HTTPException(status_code=400, detail="Состав отгрузки нельзя менять после отправки")
+        if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
+            raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
         store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
         product_sku = assign_product_sku_if_missing(
             conn,
@@ -942,6 +971,53 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
         if str(row["status"]) == SHIPMENT_STATUS_PACKING:
             _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
         conn.commit()
+    return {"message": "ok"}
+
+
+@router.patch("/shipments/{doc_id}/lines/{line_id}/store")
+def update_shipment_line_store(doc_id: str, line_id: str, body: ShipmentLineStoreUpdate, user=Depends(_get_manager)):
+    """Узкая корректировка магазина строки: в отличие от общего line-PATCH разрешена
+    и в «На упаковке» — план и товар при этом не трогаются, изменение журналируется."""
+    ensure_shipment_planning_access(user)
+    now = _now()
+    uid = str(user["id"])
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT doc_number, status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        status = str(row["status"])
+        if status not in SHIPMENT_EDITABLE_LINE_STATUSES and status != SHIPMENT_STATUS_ON_PACKING:
+            raise HTTPException(status_code=400, detail="Магазин можно менять только до завершения упаковки")
+        line = conn.execute(
+            "SELECT product_name, color_name, size_name, store_id, store_name FROM shipment_lines "
+            "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
+        if (line["store_id"] or None) == store_id:
+            return {"message": "ok"}
+        conn.execute(
+            "UPDATE shipment_lines SET store_id = ?, store_name = ? WHERE id = ? AND doc_id = ?",
+            (store_id, store_name, line_id, doc_id),
+        )
+        _check_duplicate_lines(conn, doc_id)
+        variant = " · ".join(v for v in (line["color_name"], line["size_name"]) if v)
+        label = f"«{line['product_name']}»" + (f" ({variant})" if variant else "")
+        op_comment = (
+            f"Магазин по {label}: "
+            f"{line['store_name'] or 'без магазина'} → {store_name or 'без магазина'}"
+        )
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, op_comment, now, uid),
+        )
+        conn.commit()
+        if status == SHIPMENT_STATUS_ON_PACKING:
+            notify_packing_correction(conn, doc_id=doc_id, doc_number=str(row["doc_number"]), body=op_comment)
     return {"message": "ok"}
 
 

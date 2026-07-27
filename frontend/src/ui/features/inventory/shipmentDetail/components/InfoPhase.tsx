@@ -13,6 +13,8 @@ export type InfoPhaseProps = {
   isDefectCargo: boolean
   canEditInfo: boolean
   canEditTechTaskOnly: boolean
+  // «На упаковке» менеджер корректирует только ТЗ и дату (план) — реквизиты read-only.
+  canCorrectOnPacking?: boolean
   canEditActualShipDate: boolean
   saved: boolean
   shipDate: string
@@ -24,25 +26,27 @@ export type InfoPhaseProps = {
 }
 
 export function InfoPhase({
-  doc, isDraft, isDefectCargo, canEditInfo, canEditTechTaskOnly, canEditActualShipDate,
-  saved, shipDate, actualShipDate, comment, onShipDate, onActualShipDate, onComment,
+  doc, isDraft, isDefectCargo, canEditInfo, canEditTechTaskOnly, canCorrectOnPacking,
+  canEditActualShipDate, saved, shipDate, actualShipDate, comment, onShipDate, onActualShipDate, onComment,
 }: InfoPhaseProps) {
+  const editable = canEditInfo || canCorrectOnPacking
   return (
     <PhaseBlock
       icon="file"
       title="Основная информация"
       role="manager"
       state={isDraft ? 'active' : 'done'}
-      hint={canEditInfo ? 'План можно править до передачи на упаковку'
+      hint={canCorrectOnPacking ? 'Корректировка: ТЗ и дату (план) можно изменить — фиксируется в журнале'
+        : canEditInfo ? 'План можно править до передачи на упаковку'
         : canEditTechTaskOnly ? 'Можно поправить техническое задание перед принятием задачи'
         : undefined}
-      right={(canEditInfo || canEditTechTaskOnly) && saved ? (
+      right={(editable || canEditTechTaskOnly) && saved ? (
         <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Icon name="check" size={12} />Сохранено
         </span>
       ) : undefined}
     >
-      {canEditInfo ? (
+      {editable ? (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Клиент" style={{ marginBottom: 0 }}>

@@ -110,6 +110,42 @@ def _send_push(tokens: list[str], *, title: str, body: str, data: dict[str, str]
     return invalid
 
 
+def notify_packing_correction(connection, *, doc_id: str, doc_number: str, body: str) -> int:
+    """Прямой пуш команде упаковки: менеджер скорректировал задачу, которая уже в работе.
+
+    Аудитория — та же, что у задачи «Упаковать» (ROLE_SHIFT): начальник смены,
+    начальник склада, админ. Вызывается после commit основной операции; любая
+    ошибка отправки глотается — пуш не должен ломать корректировку.
+    """
+    try:
+        audience = TASK_ROLE_AUDIENCE[ROLE_SHIFT]
+        placeholders = ",".join("?" * len(audience))
+        rows = connection.execute(
+            f"SELECT pt.token FROM push_tokens pt "
+            f"JOIN users u ON u.id = pt.user_id "
+            f"WHERE COALESCE(u.is_deleted, 0) = 0 AND u.role IN ({placeholders})",
+            tuple(audience),
+        ).fetchall()
+        tokens = [str(r["token"]) for r in rows]
+        if not tokens or not _ensure_fcm():
+            return 0
+        data = {
+            "kind": "shipment_pack",
+            "doc_type": "shipment",
+            "doc_id": doc_id,
+            "doc_number": doc_number,
+        }
+        invalid = _send_push(tokens, title=f"Задача {doc_number} изменена", body=body, data=data)
+        for token in invalid:
+            remove_push_token(connection, token=token)
+        if invalid:
+            connection.commit()
+        return len(tokens) - len(invalid)
+    except Exception:
+        log.exception("Не удалось отправить пуш о корректировке задачи упаковки")
+        return 0
+
+
 # ── Дифф задач ────────────────────────────────────────────────────────────────
 
 def notify_new_tasks(connection) -> int:

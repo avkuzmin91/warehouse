@@ -467,3 +467,133 @@ def test_warehouse_cannot_edit_shipment_plan_or_composition(admin_client, wareho
 
     line_delete = warehouse_client.delete(f"/shipments/{doc_id}/lines/{line_id}")
     assert line_delete.status_code == 403
+
+
+# ── Корректировка «На упаковке»: ТЗ, дата (план), магазины ────────────────────
+
+def _set_doc_status(doc_id: str, status: str) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE shipment_docs SET status = ? WHERE id = ?", (status, doc_id))
+        conn.commit()
+
+
+def _seed_client_store(client_id: str, name: str) -> str:
+    store_id = str(uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO client_stores (id, client_id, name, is_active, is_deleted, created_at) "
+            "VALUES (?, ?, ?, 1, 0, NOW())",
+            (store_id, client_id, name),
+        )
+        conn.commit()
+    return store_id
+
+
+def test_on_packing_correction_allows_tz_and_plan_date(admin_client, client_id):
+    """«На упаковке» менеджер корректирует ТЗ и дату (план); оба изменения — в журнале."""
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id)).json()["message"]
+    _set_doc_status(doc_id, "on_packing")
+
+    r = admin_client.patch(f"/shipments/{doc_id}", json={"comment": "Скорректированное ТЗ", "ship_date": "2026-06-01"})
+    assert r.status_code == 200, r.text
+
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert detail["comment"] == "Скорректированное ТЗ"
+    assert detail["ship_date"] == "2026-06-01"
+    op_comments = [str(o["comment"] or "") for o in detail["ops"]]
+    assert any("Дата упаковки (план): 27.05.2026 → 01.06.2026" in c for c in op_comments)
+    assert any("Техническое задание обновлено" in c for c in op_comments)
+
+
+def test_on_packing_correction_rejects_requisites(admin_client, client_id):
+    """«На упаковке» реквизиты (кроме ТЗ и даты план) заблокированы."""
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id)).json()["message"]
+    _set_doc_status(doc_id, "on_packing")
+
+    r = admin_client.patch(f"/shipments/{doc_id}", json={"destination": "Kazan"})
+    assert r.status_code == 400, r.text
+    assert "На упаковке" in r.json()["detail"]
+
+
+def test_on_packing_correction_forbidden_for_warehouse_head(admin_client, warehouse_head_client, client_id):
+    """Корректировка «На упаковке» — только менеджерский состав (начальнику склада 403)."""
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id)).json()["message"]
+    _set_doc_status(doc_id, "on_packing")
+
+    r = warehouse_head_client.patch(f"/shipments/{doc_id}", json={"comment": "не положено"})
+    assert r.status_code == 403, r.text
+
+
+def test_ship_date_change_journaled_in_draft(admin_client, client_id):
+    """Смена даты упаковки (план) журналируется и вне корректировки — в любом статусе."""
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id)).json()["message"]
+
+    r = admin_client.patch(f"/shipments/{doc_id}", json={"ship_date": "2026-06-15"})
+    assert r.status_code == 200, r.text
+    ops = admin_client.get(f"/shipments/{doc_id}").json()["ops"]
+    assert any("Дата упаковки (план): 27.05.2026 → 15.06.2026" in str(o["comment"] or "") for o in ops)
+
+
+def test_line_store_correction_on_packing(admin_client, client_id):
+    """«На упаковке» магазин строки правится узким эндпоинтом и журналируется."""
+    store_id = _seed_client_store(client_id, "Магазин Б")
+    line = _fake_line()
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line])).json()["message"]
+    line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    _set_doc_status(doc_id, "on_packing")
+
+    r = admin_client.patch(f"/shipments/{doc_id}/lines/{line_id}/store", json={"store_id": store_id})
+    assert r.status_code == 200, r.text
+
+    detail = admin_client.get(f"/shipments/{doc_id}").json()
+    assert detail["lines"][0]["store_id"] == store_id
+    assert detail["lines"][0]["store_name"] == "Магазин Б"
+    assert any(
+        "Магазин по «Fake Product» (Red): без магазина → Магазин Б" in str(o["comment"] or "")
+        for o in detail["ops"]
+    )
+
+
+def test_line_store_correction_rejects_foreign_store(admin_client, client_id):
+    """Магазин другого клиента не принимается."""
+    other_cid = make_client_id()
+    try:
+        foreign_store = _seed_client_store(other_cid, "Чужой магазин")
+        line = _fake_line()
+        doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line])).json()["message"]
+        line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+
+        r = admin_client.patch(f"/shipments/{doc_id}/lines/{line_id}/store", json={"store_id": foreign_store})
+        assert r.status_code == 400, r.text
+        assert "не принадлежит клиенту" in r.json()["detail"]
+    finally:
+        cleanup_client(other_cid)
+
+
+def test_line_store_correction_blocks_duplicates(admin_client, client_id):
+    """Смена магазина не должна создавать дубль товар+зона+магазин."""
+    store_a = _seed_client_store(client_id, "Магазин А")
+    store_b = _seed_client_store(client_id, "Магазин Б")
+    line = _fake_line()
+    payload = _make_shipment_payload(client_id, [
+        {**line, "store_id": store_a},
+        {**line, "store_id": store_b},
+    ])
+    doc_id = admin_client.post("/shipments", json=payload).json()["message"]
+    lines = admin_client.get(f"/shipments/{doc_id}").json()["lines"]
+    line_b = next(l for l in lines if l["store_id"] == store_b)
+
+    r = admin_client.patch(f"/shipments/{doc_id}/lines/{line_b['id']}/store", json={"store_id": store_a})
+    assert r.status_code == 400, r.text
+    assert "добавлен дважды" in r.json()["detail"]
+
+
+def test_line_full_patch_blocked_on_packing(admin_client, client_id):
+    """Общий line-PATCH (план/товар) «На упаковке» закрыт — только узкая смена магазина."""
+    line = _fake_line()
+    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line])).json()["message"]
+    line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
+    _set_doc_status(doc_id, "on_packing")
+
+    r = admin_client.patch(f"/shipments/{doc_id}/lines/{line_id}", json={**line, "qty": 5})
+    assert r.status_code == 400, r.text

@@ -19,6 +19,11 @@ class ShipmentLineIn(BaseModel):
     store_name:        str | None = None
 
 
+class ShipmentLineStoreUpdate(BaseModel):
+    # None / пустая строка — «без магазина».
+    store_id: str | None = None
+
+
 class ShipmentLinePackPayload(BaseModel):
     good_delta:   int = Field(ge=0, default=0)
     defect_delta: int = Field(ge=0, default=0)

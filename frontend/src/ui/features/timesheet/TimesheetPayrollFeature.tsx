@@ -53,7 +53,7 @@ export function TimesheetPayrollFeature() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr) 1fr', gap: 12, marginBottom: 14 }}>
             <BigNum icon="timer" label="Заработано за неделю" value={fmtMoney(data.totals.earned)} sub="по часам × ставка" />
             <BigNum icon="banknote" label="Выдано (авансы)" value={fmtMoney(data.totals.advances)} sub="авансы среди недели" tone="warning" />
-            <BigNum icon="wallet" label="К выдаче в пятницу" value={fmtMoney(data.totals.to_pay)} sub="заработано − авансы" tone="accent" big />
+            <BigNum icon="wallet" label="Осталось выдать" value={fmtMoney(data.totals.to_pay)} sub="заработано − авансы − выплачено" tone="accent" big />
             <BigNum icon="userCheck" label="Осталось рассчитать" value={`${data.totals.left} из ${data.totals.employees}`} sub={`${data.totals.employees - data.totals.left} уже закрыто`} />
           </div>
 
@@ -65,7 +65,7 @@ export function TimesheetPayrollFeature() {
                   <th style={{ width: 90, textAlign: 'right' }}>Часы</th>
                   <th style={{ width: 140, textAlign: 'right' }}>Заработано</th>
                   <th style={{ width: 150, textAlign: 'right' }}>Выдано (авансы)</th>
-                  <th style={{ width: 150, textAlign: 'right', background: 'var(--c-accent-bg)', color: 'var(--c-accent-text)' }}>К выдаче</th>
+                  <th style={{ width: 150, textAlign: 'right', background: 'var(--c-accent-bg)', color: 'var(--c-accent-text)' }}>Осталось выдать</th>
                   <th style={{ width: 130 }}>Статус</th>
                   <th style={{ width: 130, textAlign: 'right', paddingRight: 14 }}>Действие</th>
                 </tr>
