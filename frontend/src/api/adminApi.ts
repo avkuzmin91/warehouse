@@ -364,6 +364,17 @@ export function patchProductVariants(productId: string, variants: ProductVariant
   })
 }
 
+export function changeVariantIdentity(
+  productId: string,
+  variantId: string,
+  payload: { color_id?: string | null; size_id?: string | null; sku?: string | null },
+) {
+  return request<{ message: string }>(`/products/${productId}/variants/${variantId}/change-identity`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function deleteProductVariant(productId: string, variantId: string) {
   return request<{ message: string }>(`/products/${productId}/variants/${variantId}`, {
     method: 'PATCH',

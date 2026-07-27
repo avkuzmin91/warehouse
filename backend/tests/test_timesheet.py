@@ -404,12 +404,31 @@ def test_advance_reduces_to_pay_then_settle(manager_client, employee):
     assert row["advances"] == 100000
     assert row["to_pay"] == 285000
 
-    # Рассчитать всех → строка закрыта
+    # Рассчитать всех → строка закрыта, «осталось выдать» обнулилось
     assert manager_client.post("/timesheet/payroll/settle-all",
                                json={"week": WEEK}).status_code == 200
     row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
                if x["employee_id"] == employee)
     assert row["settled"] is True
+    assert row["to_pay"] == 0     # 385000 − 100000 аванс − 285000 расчёт
+
+
+def test_payroll_hides_zero_hour_rows_but_keeps_money(manager_client, employee):
+    # Без часов и без движения денег за неделю сотрудника в расчёте нет.
+    pids = {x["employee_id"] for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]}
+    assert employee not in pids
+
+    # Аванс без часов — строка возвращается (выданные деньги прятать нельзя),
+    # но в «осталось рассчитать» такой сотрудник не считается.
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 50000, "kind": "advance",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+    row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert row["hours"] == 0.0
+    assert row["overpaid"] == 50000
+    assert row["to_pay"] == 0
 
 
 def test_payroll_payment_mirrors_to_expense_ledger(manager_client, employee):
@@ -666,10 +685,11 @@ def test_manager_sees_all_with_money(manager_client, team):
     assert body["with_money"] is True                    # деньги видит
     ids = {r["employee_id"] for r in body["rows"]}
     assert {team["a"], team["b"], team["c"]} <= ids
-    # Пятничный расчёт тоже охватывает всех.
+    # Пятничный расчёт показывает только сотрудников с часами (или движением денег)
+    # за неделю — у команды часов нет, в расчёте её не должно быть.
     pr = manager_client.get(f"/timesheet/payroll?week={WEEK}").json()
     pids = {r["employee_id"] for r in pr["rows"]}
-    assert {team["a"], team["b"], team["c"]} <= pids
+    assert not ({team["a"], team["b"], team["c"]} & pids)
 
 
 def test_manager_cannot_see_fixed_salary(admin_client, manager_client):

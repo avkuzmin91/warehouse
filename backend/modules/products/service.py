@@ -710,6 +710,142 @@ def _sync_product_variants_from_request(
             )
 
 
+def change_variant_identity(
+    connection: Any,
+    product_id: str,
+    variant_id: str,
+    *,
+    color_id: str | None,
+    size_id: str | None,
+    sku: str | None,
+    admin_id: str,
+) -> MessageResponse:
+    """Смена цвета/размера варианта с переносом истории на новый ключ.
+
+    Идентичность остатка — тройка (product_id, color_id, size_id), поэтому обычный
+    PATCH вариантов запрещает менять оси при наличии поступлений (иначе журнальный
+    остаток «осиротеет»). Эта операция решает случай «цвет узнали позже»: атомарно
+    пере-ключевывает ВСЕ носители ключа (журнал zone_relocations, строки поступлений,
+    задач упаковки и отгрузок) — остатки, резервы и гейты продолжают сходиться.
+    Снимки имён (color_name и т.п.) в журнале и строках не трогаем: документы
+    показывают то, что было записано на момент операции. След — в append-only
+    variant_identity_changes.
+    """
+    prow = connection.execute(
+        """
+        SELECT p.sku AS sku_base, COALESCE(p.sku_pending, 0) AS sku_pending,
+               p.client_id, COALESCE(pt.requires_size, 0) AS requires_size,
+               COALESCE(p.is_deleted, 0) AS is_deleted
+        FROM products p
+        JOIN product_types pt ON pt.id = p.type_id
+        WHERE p.id = ?
+        """,
+        (product_id,),
+    ).fetchone()
+    if not prow:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    if bool(prow["is_deleted"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Товар удалён. Восстановите его перед изменением вариантов.")
+    requires_size = bool(prow["requires_size"])
+    prod_pending = bool(prow["sku_pending"])
+    client_id = str(prow["client_id"]) if prow["client_id"] else None
+
+    variant = connection.execute(
+        "SELECT id, color_id, size_id, sku FROM product_variants "
+        "WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (variant_id, product_id),
+    ).fetchone()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Вариант не найден")
+
+    new_color = _require_active_color_id(connection, color_id) if color_id and str(color_id).strip() else None
+    eff_size = size_id if requires_size else None
+    if requires_size and (eff_size is None or str(eff_size).strip() == ""):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Для этого типа товара укажите размер варианта")
+    new_size = _require_active_size_id(connection, eff_size) if eff_size else None
+
+    old_color = variant["color_id"]
+    old_size = variant["size_id"]
+    old_sku = str(variant["sku"] or "")
+    if new_color == old_color and new_size == old_size:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Цвет и размер варианта не изменились")
+
+    clash = connection.execute(
+        "SELECT 1 FROM product_variants WHERE product_id = ? AND id != ? "
+        "AND COALESCE(is_deleted, 0) = 0 "
+        "AND color_id IS NOT DISTINCT FROM ? AND size_id IS NOT DISTINCT FROM ?",
+        (product_id, variant_id, new_color, new_size),
+    ).fetchone()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="У товара уже есть вариант с таким сочетанием цвета и размера",
+        )
+
+    if prod_pending:
+        new_sku = ""
+    elif sku and str(sku).strip():
+        new_sku = _normalize_sku(sku)
+        if _variant_sku_in_use(connection, new_sku, variant_id, client_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU варианта уже занят у этого клиента")
+    elif new_color:
+        new_sku = _generate_variant_sku_for_patch(
+            connection, sku_base=str(prow["sku_base"]), color_id=new_color,
+            size_id=new_size, exclude_variant_id=variant_id, client_id=client_id,
+        )
+    else:
+        new_sku = old_sku
+
+    key_where = "product_id = ? AND color_id IS NOT DISTINCT FROM ? AND size_id IS NOT DISTINCT FROM ?"
+    key_params = (product_id, old_color, old_size)
+    moved = {}
+    for name, table in (
+        ("journal_rows", "zone_relocations"),
+        ("receipt_rows", "receipt_lines"),
+        ("shipment_rows", "shipment_lines"),
+        ("dispatch_rows", "dispatch_lines"),
+    ):
+        cur = connection.execute(
+            f"UPDATE {table} SET color_id = ?, size_id = ? WHERE {key_where}",
+            (new_color, new_size, *key_params),
+        )
+        moved[name] = int(cur.rowcount or 0)
+
+    now = _now()
+    connection.execute(
+        "UPDATE product_variants SET color_id = ?, size_id = ?, sku = ?, updated_at = ? "
+        "WHERE id = ? AND product_id = ?",
+        (new_color, new_size, new_sku, now, variant_id, product_id),
+    )
+    connection.execute(
+        "UPDATE products SET updated_at = ?, updated_by_id = ? WHERE id = ?",
+        (now, admin_id, product_id),
+    )
+
+    color_labels, size_labels = _color_size_labels_for_skus(
+        connection,
+        {c for c in (old_color, new_color) if c},
+        {s for s in (old_size, new_size) if s},
+    )
+    connection.execute(
+        """INSERT INTO variant_identity_changes
+           (id, product_id, variant_id,
+            old_color_id, old_color_name, new_color_id, new_color_name,
+            old_size_id, old_size_name, new_size_id, new_size_name,
+            old_sku, new_sku,
+            journal_rows, receipt_rows, shipment_rows, dispatch_rows,
+            created_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (str(uuid4()), product_id, variant_id,
+         old_color, color_labels.get(old_color or ""), new_color, color_labels.get(new_color or ""),
+         old_size, size_labels.get(old_size or ""), new_size, size_labels.get(new_size or ""),
+         old_sku, new_sku,
+         moved["journal_rows"], moved["receipt_rows"], moved["shipment_rows"], moved["dispatch_rows"],
+         now, admin_id),
+    )
+    return MessageResponse(message="Цвет/размер варианта изменены, остатки и история перенесены")
+
+
 def _find_variant_row_for_receipt(
     connection: Any,
     sku_norm: str,

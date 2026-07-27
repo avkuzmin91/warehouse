@@ -9,6 +9,7 @@ import {
   cancelShipment,
   addShipmentLine,
   updateShipmentLine,
+  updateShipmentLineStore,
   updateShipment,
   deleteShipmentLine,
   uploadShipmentLineFile,
@@ -154,13 +155,16 @@ export function ShipmentDetailFeature() {
     try {
       await updateShipment(docId, canEditTechTaskOnly
         ? { comment: infoComment.trim() || null }
-        : {
-            client_id:      infoClientId,
-            client_name:    infoClientName,
-            ship_date:      infoShipDate || null,
-            ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
-            comment:        infoComment.trim() || null,
-          })
+        : canCorrectOnPacking
+          // «На упаковке» бэкенд принимает только ТЗ и дату (план) — реквизиты не шлём.
+          ? { ship_date: infoShipDate || null, comment: infoComment.trim() || null }
+          : {
+              client_id:      infoClientId,
+              client_name:    infoClientName,
+              ship_date:      infoShipDate || null,
+              ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
+              comment:        infoComment.trim() || null,
+            })
       await load()
       setInfoDirty(false)
       setInfoSaved(true)
@@ -192,6 +196,9 @@ export function ShipmentDetailFeature() {
   const canEditInfo = canEditPlanning && editableComposition
   // Начальник склада на приёмке задачи правит ТОЛЬКО ТЗ (и файлы) — состав и реквизиты нет.
   const canEditTechTaskOnly = !canEditInfo && isAssigned && canAcceptPackingTask(user) && user?.role === 'warehouse_head'
+  // «На упаковке» менеджер корректирует ТЗ, дату (план) и магазины строк — состав фиксирован.
+  // Изменения журналируются, команда упаковки получает пуш.
+  const canCorrectOnPacking = canEditPlanning && isOnPacking
   // Приёмка/отклонение задачи (assigned → packing / draft).
   const canAccept = isAssigned && canAcceptPackingTask(user)
   const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
@@ -523,21 +530,26 @@ export function ShipmentDetailFeature() {
     const draft = getDraft(line)
     setSaving((prev) => ({ ...prev, [line.id]: true }))
     try {
-      await updateShipmentLine(docId, line.id, {
-        product_id:        line.product_id,
-        product_name:      line.product_name,
-        product_sku:       line.product_sku,
-        color_id:          line.color_id,
-        color_name:        line.color_name,
-        size_id:           line.size_id,
-        size_name:         line.size_name,
-        qty:               draft.qty,
-        shipped_qty:       line.shipped_qty,
-        storage_zone_id:   line.storage_zone_id ?? null,
-        storage_zone_name: line.storage_zone_name,
-        store_id:          draft.storeId || null,
-        store_name:        draft.storeName,
-      })
+      if (canCorrectOnPacking) {
+        // «На упаковке» строка правится только по магазину — узкий эндпоинт, план не трогаем.
+        await updateShipmentLineStore(docId, line.id, draft.storeId || null)
+      } else {
+        await updateShipmentLine(docId, line.id, {
+          product_id:        line.product_id,
+          product_name:      line.product_name,
+          product_sku:       line.product_sku,
+          color_id:          line.color_id,
+          color_name:        line.color_name,
+          size_id:           line.size_id,
+          size_name:         line.size_name,
+          qty:               draft.qty,
+          shipped_qty:       line.shipped_qty,
+          storage_zone_id:   line.storage_zone_id ?? null,
+          storage_zone_name: line.storage_zone_name,
+          store_id:          draft.storeId || null,
+          store_name:        draft.storeName,
+        })
+      }
       await refreshAfterLineChange()
       return true
     } catch (e) {
@@ -761,6 +773,7 @@ export function ShipmentDetailFeature() {
   const compState: 'active' | 'done' = isDraft ? 'active' : 'done'
   const compHint = isDraft ? 'Товар на остатках и в пути'
     : isPacking ? 'План можно править до передачи на упаковку'
+    : canCorrectOnPacking ? 'Корректировка: можно изменить магазин строки — фиксируется в журнале'
     : undefined
 
   // Упаковано по документу — для гейта аннулирования «На упаковке» (пока ничего не упаковано).
@@ -773,6 +786,7 @@ export function ShipmentDetailFeature() {
     isDefectCargo,
     canEditInfo,
     canEditTechTaskOnly,
+    canCorrectOnPacking,
     canEditActualShipDate,
     saved: infoSaved,
     shipDate: infoShipDate,
@@ -789,6 +803,7 @@ export function ShipmentDetailFeature() {
     state: compState,
     hint: compHint,
     canEditPlan,
+    canEditStore: canEditPlan || canCorrectOnPacking,
     canDelete,
     canAttachFiles,
     acting,
@@ -878,7 +893,7 @@ export function ShipmentDetailFeature() {
                 <Icon name="x" size={14} />Аннулировать
               </button>
             )}
-            {(canEditPlan || canEditTechTaskOnly) && (infoDirty || hasUnsavedLineChanges) && (
+            {(canEditPlan || canEditTechTaskOnly || canCorrectOnPacking) && (infoDirty || hasUnsavedLineChanges) && (
               <button className="btn" disabled={acting || infoSaving} onClick={() => { void handleSaveChanges() }}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>

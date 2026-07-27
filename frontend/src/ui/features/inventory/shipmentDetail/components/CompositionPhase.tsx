@@ -12,6 +12,8 @@ export type CompositionPhaseProps = {
   state: 'active' | 'done'
   hint?: string
   canEditPlan: boolean
+  // Корректировка «На упаковке»: магазин строки правится отдельно от плана.
+  canEditStore?: boolean
   canDelete: boolean
   canAttachFiles: boolean
   acting: boolean
@@ -34,7 +36,7 @@ export type CompositionPhaseProps = {
 }
 
 export function CompositionPhase({
-  lines, clientId, state, hint, canEditPlan, canDelete, canAttachFiles,
+  lines, clientId, state, hint, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onAdd, onPreviewFile, onQty, onStore, onDelete,
   onUploadFile, onReplaceFile, onDeleteFile, onAssignSku, getAvail, availLoading,
@@ -64,6 +66,7 @@ export function CompositionPhase({
           lines={lines}
           showZone={false}
           canEditPlan={canEditPlan}
+          canEditStore={canEditStore}
           canDelete={canDelete}
           canAttachFiles={canAttachFiles}
           acting={acting}

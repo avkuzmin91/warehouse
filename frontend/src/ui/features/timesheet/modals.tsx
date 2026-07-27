@@ -79,7 +79,7 @@ export function AdvanceModal({
         <ReadRow label="Заработано (на сейчас)">{fmtMoney(earned)}</ReadRow>
         <ReadRow label="Уже выдано + этот аванс" tone="danger">−{fmtMoneyShort(newAdv)} ₽</ReadRow>
         <div style={{ height: 1, background: 'var(--c-border)', margin: '6px 0' }} />
-        <ReadRow label="К выдаче в пятницу">{fmtMoney(toPay)}</ReadRow>
+        <ReadRow label="Осталось выдать">{fmtMoney(toPay)}</ReadRow>
       </div>
     </ModalShell>
   )

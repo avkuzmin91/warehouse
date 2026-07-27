@@ -46,6 +46,8 @@ type CompositionTableProps = {
   // Брак-отгрузка: показываем местоположение-источник строки (брак списывается с него).
   showZone?:       boolean
   canEditPlan:     boolean
+  // Магазин строки может быть редактируемым отдельно от плана (корректировка «На упаковке»).
+  canEditStore?:   boolean
   canDelete:       boolean
   canAttachFiles:  boolean
   acting:          boolean
@@ -70,7 +72,7 @@ type CompositionTableProps = {
 
 /** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
 export function CompositionTable({
-  lines, showZone = false, canEditPlan, canDelete, canAttachFiles,
+  lines, showZone = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onAssignSku,
   getAvail, availLoading,
@@ -143,7 +145,7 @@ export function CompositionTable({
                     onStore(line.id, storeId, store?.name ?? null)
                   }}
                   disabled={busy}
-                  readonly={!canEditPlan}
+                  readonly={!(canEditStore ?? canEditPlan)}
                   readonlyLabel={line.store_name}
                 />
               </Td>

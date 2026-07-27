@@ -99,6 +99,9 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
     Якорь позиций журнально-инклюзивный: позиция появляется и из строк поступлений
     (как раньше), и напрямую из журнала (приход без документа — историческое
     заведение остатков). Количества — чистый replay журнала.
+
+    Имена в выдаче — живые из справочников (переименование товара/цвета/размера
+    видно сразу); снимок из журнала — только фолбэк для удалённых записей.
     """
     pos_conds: list[str] = []
     line_params: list = []
@@ -107,8 +110,8 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
         line_params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
-        line_params += [s, s, s]
+        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?))")
+        line_params += [s, s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полный GROUP BY журнала: client_id — ключ группировки и
@@ -167,7 +170,10 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             a.product_id,
             COALESCE(NULLIF(TRIM(prod.sku), ''), a.product_sku) AS product_sku,
             a.client_id, a.color_id, a.size_id,
-            a.product_name, a.client_name, a.color_name, a.size_name,
+            COALESCE(NULLIF(TRIM(prod.name), ''), a.product_name) AS product_name,
+            COALESCE(lcl.name, a.client_name) AS client_name,
+            COALESCE(lco.name, a.color_name)  AS color_name,
+            COALESCE(lsz.name, a.size_name)   AS size_name,
             {bucket_selects},
             a.docs_count
         FROM accepted a
@@ -177,6 +183,9 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
            AND c.color_id   IS NOT DISTINCT FROM a.color_id
            AND c.size_id    IS NOT DISTINCT FROM a.size_id
         LEFT JOIN products prod ON prod.id = a.product_id
+        LEFT JOIN clients  lcl  ON lcl.id = a.client_id
+        LEFT JOIN colors   lco  ON lco.id = a.color_id
+        LEFT JOIN sizes    lsz  ON lsz.id = a.size_id
     """
     return agg_query, line_params
 
@@ -335,8 +344,8 @@ def get_plannable_items(
         params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        conds.append("(fold_ci(p.product_name) LIKE ? OR fold_ci(p.product_sku) LIKE ? OR fold_ci(prod.sku) LIKE ?)")
-        params += [s, s, s]
+        conds.append("(fold_ci(p.product_name) LIKE ? OR fold_ci(p.product_sku) LIKE ? OR fold_ci(prod.sku) LIKE ? OR fold_ci(prod.name) LIKE ?)")
+        params += [s, s, s, s]
     conds.append(
         "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
         else "(p.storage_good > 0 OR p.ready_good > 0 OR p.packed_good > 0 OR p.in_transit > 0)"
@@ -348,11 +357,18 @@ def get_plannable_items(
         SELECT p.*, COALESCE(prod.sku_pending, 0) AS sku_pending,
                prod.items_per_box AS items_per_box,
                prod.boxes_per_pallet AS boxes_per_pallet,
-               COALESCE(NULLIF(TRIM(prod.sku), ''), p.product_sku) AS live_sku
+               COALESCE(NULLIF(TRIM(prod.sku), ''), p.product_sku) AS live_sku,
+               COALESCE(NULLIF(TRIM(prod.name), ''), p.product_name) AS live_name,
+               COALESCE(lcl.name, p.client_name) AS live_client_name,
+               COALESCE(lco.name, p.color_name)  AS live_color_name,
+               COALESCE(lsz.name, p.size_name)   AS live_size_name
         FROM ({query}) p
         LEFT JOIN products prod ON prod.id = p.product_id
+        LEFT JOIN clients  lcl  ON lcl.id = p.client_id
+        LEFT JOIN colors   lco  ON lco.id = p.color_id
+        LEFT JOIN sizes    lsz  ON lsz.id = p.size_id
         {where}
-        ORDER BY p.product_name, p.color_name, p.size_name
+        ORDER BY live_name, live_color_name, live_size_name
         LIMIT ?
         """,
         stock_params + params + [limit],
@@ -361,15 +377,15 @@ def get_plannable_items(
     items = [
         PlannableItem(
             product_id=str(r["product_id"]),
-            product_name=str(r["product_name"]),
+            product_name=str(r["live_name"] or r["product_name"]),
             product_sku=str(r["live_sku"] or r["product_sku"]),
             sku_pending=bool(r["sku_pending"]),
             client_id=r["client_id"],
-            client_name=r["client_name"],
+            client_name=r["live_client_name"],
             color_id=r["color_id"],
-            color_name=r["color_name"],
+            color_name=r["live_color_name"],
             size_id=r["size_id"],
-            size_name=r["size_name"],
+            size_name=r["live_size_name"],
             ready_good=int(r["ready_good"] or 0),
             ready_defect=int(r["ready_defect"] or 0),
             packed_good=0 if is_defect else int(r["packed_good"] or 0),
@@ -454,8 +470,8 @@ def get_balances_by_zone(
         line_params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
-        line_params += [s, s, s]
+        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?))")
+        line_params += [s, s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полные GROUP BY журнала (gain/lose): client_id — ключ
@@ -528,11 +544,17 @@ def get_balances_by_zone(
                pm.product_id,
                COALESCE(NULLIF(TRIM(prod.sku), ''), pm.product_sku) AS product_sku,
                pm.client_id, pm.color_id, pm.size_id,
-               pm.product_name, pm.client_name, pm.color_name, pm.size_name,
+               COALESCE(NULLIF(TRIM(prod.name), ''), pm.product_name) AS product_name,
+               COALESCE(lcl.name, pm.client_name) AS client_name,
+               COALESCE(lco.name, pm.color_name)  AS color_name,
+               COALESCE(lsz.name, pm.size_name)   AS size_name,
                GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}
         LEFT JOIN products prod ON prod.id = x.product_id
+        LEFT JOIN clients  lcl  ON lcl.id = pm.client_id
+        LEFT JOIN colors   lco  ON lco.id = pm.color_id
+        LEFT JOIN sizes    lsz  ON lsz.id = pm.size_id
         LEFT JOIN gain gi ON {_term_join('gi')} AND gi.op = x.op AND gi.quality = x.quality
         LEFT JOIN lose lo ON {_term_join('lo')} AND lo.op = x.op AND lo.quality = x.quality
     """
