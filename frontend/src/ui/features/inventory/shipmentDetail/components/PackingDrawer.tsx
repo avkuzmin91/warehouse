@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { getLinePacking, recordPacking, reversePackingEntry } from '../../../../../api/shipmentsApi'
 import type { ShipmentLine } from '../../../../../api/shipmentsApi'
 import { useApi } from '../../../../../hooks/useApi'
-import { fmtYmdAsDmy, localTodayYmd } from '../../../../../utils/format'
+import { fmtYmdAsDmy } from '../../../../../utils/format'
 import { Drawer } from '../../../../feedback/Drawer'
 import { useToast } from '../../../../feedback/Toast'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
@@ -23,7 +23,7 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
   const [reloadKey, setReloadKey] = useState(0)
   const { data, loading } = useApi((signal) => getLinePacking(docId, line.id, signal), [docId, line.id, reloadKey])
 
-  const [date, setDate] = useState(localTodayYmd())
+  const [date, setDate] = useState('')
   const [good, setGood] = useState(0)
   const [defect, setDefect] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -130,7 +130,7 @@ export function PackingDrawer({ docId, line, onClose, onDone }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 64, fontSize: 12.5, color: 'var(--c-text-subtle)' }}>Дата</span>
           <div style={{ flex: 1 }}>
-            <DatePicker value={date} onChange={setDate} />
+            <DatePicker value={date} onChange={setDate} invalid={showReasons && !date} />
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
