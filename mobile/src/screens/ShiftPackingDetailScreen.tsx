@@ -18,7 +18,7 @@ import { Icon } from '../components/Icon'
 import { Sheet } from '../components/Sheet'
 import { LineFiles } from '../components/LineFiles'
 import { CollapsibleSection } from '../components/CollapsibleSection'
-import { fmtDate, moscowTodayYmd, variantTitle } from '../utils/format'
+import { fmtDate, variantTitle } from '../utils/format'
 
 function lineTitle(l: ShipmentLine): string {
   return variantTitle(l.product_name, [l.color_name, l.size_name])
@@ -311,7 +311,7 @@ function PackLineSheet({
   onClose: () => void
   onDone: () => Promise<void> | void
 }) {
-  const [date, setDate] = useState(moscowTodayYmd())
+  const [date, setDate] = useState('')
   const [goodStr, setGoodStr] = useState('')
   const [defectStr, setDefectStr] = useState('')
   const [saving, setSaving] = useState(false)
