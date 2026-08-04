@@ -102,8 +102,9 @@ export function ReturnToPackingDrawer({ open, docNumber, isPacked, acting, onClo
   }
 
   const radioRow = (checked: boolean, label: string, onPick: () => void) => (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, cursor: 'pointer' }}>
-      <input type="radio" checked={checked} onChange={onPick} />
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, cursor: 'pointer' }}>
+      <span className={`t-radio ${checked ? 'checked' : ''}`} />
+      <input type="radio" checked={checked} onChange={onPick} style={{ display: 'none' }} />
       {label}
     </label>
   )
@@ -142,18 +143,19 @@ export function ReturnToPackingDrawer({ open, docNumber, isPacked, acting, onClo
             <label
               key={m.key}
               style={{
-                display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer',
+                display: 'flex', gap: 11, alignItems: 'flex-start', cursor: 'pointer',
                 padding: '10px 12px', borderRadius: 'var(--r-md)',
-                border: `1px solid ${active ? 'var(--c-accent)' : 'var(--c-border)'}`,
-                background: active ? 'var(--c-accent-bg, var(--c-bg-sunken))' : 'var(--c-bg-elev)',
+                border: `1px solid ${active ? 'var(--c-accent-border)' : 'var(--c-border)'}`,
+                background: active ? 'var(--c-accent-bg)' : 'var(--c-bg-elev)',
               }}
             >
+              <span className={`t-radio ${active ? 'checked' : ''}`} style={{ marginTop: 2 }} />
               <input
                 type="radio"
                 name="return-mode"
                 checked={active}
                 onChange={() => setMode(m.key)}
-                style={{ marginTop: 2 }}
+                style={{ display: 'none' }}
               />
               <span>
                 <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{m.title}</span>

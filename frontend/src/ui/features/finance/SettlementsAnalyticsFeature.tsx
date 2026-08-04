@@ -640,7 +640,7 @@ function PairChart({
 
           {linePoints && (
             <svg className="debt-line" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <polyline points={linePoints} fill="none" stroke={lineColor} strokeWidth={0.6}
+              <polyline points={linePoints} fill="none" stroke={lineColor} strokeWidth={2}
                 vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
             </svg>
           )}
