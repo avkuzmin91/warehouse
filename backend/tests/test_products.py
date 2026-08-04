@@ -859,3 +859,92 @@ def test_variant_change_identity_moves_stock_and_history(admin_client):
             conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
             conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
             conn.commit()
+
+
+def test_product_card_stock_excludes_written_off(admin_client):
+    """Карточка товара считает остаток как модуль остатков: списание
+    (… → written_off) уменьшает остаток наравне с отгрузкой."""
+    suffix = uuid.uuid4().hex[:10]
+    type_id = f"ptype-wo-{suffix}"
+    client_id = f"client-wo-{suffix}"
+    product_id = f"product-wo-{suffix}"
+    color_id = f"color-wo-{suffix}"
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_types
+                (id, name, is_active, requires_color, requires_size, is_deleted, created_at)
+            VALUES (?, ?, 1, 1, 0, 0, NOW())
+            """,
+            (type_id, f"Type WO {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO clients (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (client_id, f"Client WO {suffix}"),
+        )
+        conn.execute(
+            "INSERT INTO colors (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
+            (color_id, f"ColorWO{suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO products
+                (id, name, type_id, client_id, sku, is_active, is_deleted, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NOW())
+            """,
+            (product_id, f"WO Product {suffix}", type_id, client_id, f"WOPR-{suffix}"),
+        )
+        conn.commit()
+
+    def _move(conn, from_op, to_op, from_q, to_q, qty):
+        conn.execute(
+            """INSERT INTO zone_relocations
+               (id, product_id, product_name, product_sku, color_id, color_name,
+                client_id, from_op, to_op, from_quality, to_quality, qty, created_at)
+               VALUES (?, ?, 'WO Product', ?, ?, 'ColorWO', ?, ?, ?, ?, ?, ?, NOW())""",
+            (str(uuid.uuid4()), product_id, f"WOPR-{suffix}", color_id, client_id,
+             from_op, to_op, from_q, to_q, qty),
+        )
+
+    try:
+        r = admin_client.patch(
+            f"/products/{product_id}/variants",
+            json={"variants": [{
+                "id": None, "sku": "", "color_id": color_id,
+                "dimension": {"length": 1, "width": 1, "height": 1},
+                "size_id": None, "images": [], "is_active": True,
+            }]},
+        )
+        assert r.status_code == 200, r.text
+
+        with get_connection() as conn:
+            _move(conn, "intake", "storage", "good", "good", 10)     # приход
+            _move(conn, "storage", "shipped", "good", "good", 2)     # отгрузка
+            _move(conn, "storage", "written_off", "good", "good", 3) # списание годного
+            _move(conn, "storage", "storage", "good", "defect", 2)   # перевод в брак
+            _move(conn, "storage", "written_off", "defect", "defect", 1)  # списание брака
+            conn.commit()
+
+        # Годный: 10 − 2 − 3 − 2 = 3; брак: 2 − 1 = 1.
+        detail = admin_client.get(f"/products/{product_id}").json()
+        assert detail["stock_total"] == 3
+        assert detail["defect_total"] == 1
+
+        listed = admin_client.get(f"/products?client_id={client_id}").json()["items"]
+        assert len(listed) == 1
+        assert listed[0]["stock_total"] == 3
+        assert listed[0]["defect_total"] == 1
+
+        variant = admin_client.get(f"/products/{product_id}/variants").json()[0]
+        assert variant["stock"] == 3
+        assert variant["defect_qty"] == 1
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM product_variants WHERE product_id = ?", (product_id,))
+            conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+            conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+            conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
+            conn.commit()
