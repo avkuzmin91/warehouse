@@ -2,6 +2,7 @@ import { useFilterParam } from '../../hooks/useFilterParams'
 import { ExpensesAnalyticsFeature } from '../features/finance/ExpensesAnalyticsFeature'
 import { IncomeAnalyticsFeature } from '../features/finance/IncomeAnalyticsFeature'
 import { PnlFeature } from '../features/finance/pnl/PnlFeature'
+import { MonthlyPnlFeature } from '../features/finance/MonthlyPnlFeature'
 import { TripProfitabilityFeature } from '../features/finance/TripProfitabilityFeature'
 import { LogisticsAnalyticsFeature } from '../features/finance/LogisticsAnalyticsFeature'
 import { PackingAnalyticsFeature } from '../features/finance/PackingAnalyticsFeature'
@@ -9,6 +10,7 @@ import { SettlementsAnalyticsFeature } from '../features/finance/SettlementsAnal
 
 export function AnalyticsPage() {
   const [tab] = useFilterParam('tab', 'pnl')
+  if (tab === 'monthly') return <MonthlyPnlFeature />
   if (tab === 'settlements') return <SettlementsAnalyticsFeature />
   if (tab === 'income') return <IncomeAnalyticsFeature />
   if (tab === 'expenses') return <ExpensesAnalyticsFeature />

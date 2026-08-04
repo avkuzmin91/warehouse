@@ -1,9 +1,10 @@
 import { useFilterParam } from '../../../hooks/useFilterParams'
 
-export type AnalyticsTab = 'income' | 'expenses' | 'pnl' | 'trips' | 'logistics' | 'packing' | 'settlements'
+export type AnalyticsTab = 'income' | 'expenses' | 'pnl' | 'monthly' | 'trips' | 'logistics' | 'packing' | 'settlements'
 
 const TABS: { id: AnalyticsTab; label: string }[] = [
   { id: 'pnl', label: 'Доходы и расходы' },
+  { id: 'monthly', label: 'Финмодель' },
   { id: 'settlements', label: 'Расчёты' },
   { id: 'income', label: 'Доходы' },
   { id: 'expenses', label: 'Расходы' },

@@ -27,6 +27,34 @@ class PnlResponse(BaseModel):
     expense_categories: list[PnlSeries]
 
 
+class MonthlyPnlSeries(BaseModel):
+    key:    str
+    label:  str
+    kind:   str | None = None
+    amount: int            # копейки за период
+    series: list[int]      # копейки по месяцам months
+
+
+class MonthlyPnlResponse(BaseModel):
+    date_from:              str
+    date_to:                str
+    months:                 list[str]            # 'YYYY-MM' (ось колонок)
+    packed_good:            list[int]            # упаковано годного, шт. по месяцам
+    packed_defect:          list[int]            # упаковано брака, шт. по месяцам
+    packed_total:           list[int]
+    avg_packing_income_kop: list[int | None]     # доход упаковки на 1 шт.; None — не паковали
+    income_total:           int
+    income_series:          list[int]
+    income_sources:         list[MonthlyPnlSeries]
+    expense_total:          int
+    expense_series:         list[int]
+    expense_categories:     list[MonthlyPnlSeries]
+    net_total:              int                  # EBITDA: доход − расход OPEX
+    net_series:             list[int]
+    margin_pct:             float | None = None
+    margin_series:          list[float | None]
+
+
 class IncomeSourceSeries(BaseModel):
     key:    str
     name:   str
