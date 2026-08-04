@@ -102,8 +102,13 @@ def test_create_with_rent_seeds_history(admin_client):  # noqa: F811
 
 
 def test_accrual_uses_effective_rate(admin_client):  # noqa: F811
-    wid = _make_warehouse(admin_client, rent=10000000)
+    # Обе ставки заводим явными датами: создание склада с rent сеет запись на
+    # СЕГОДНЯ, и после 2026-08-01 она перестаёт быть самой ранней — тогда июль
+    # тянул бы назад августовскую ставку, а не базовую.
+    wid = _make_warehouse(admin_client)
     try:
+        admin_client.post(f"/own-warehouses/{wid}/rent-rates",
+                          json={"rent_monthly_kopecks": 10000000, "effective_from": "2026-06-01"})
         # Со 2026-08-01 ставка выросла — августовское начисление берёт новую.
         admin_client.post(f"/own-warehouses/{wid}/rent-rates",
                           json={"rent_monthly_kopecks": 13000000, "effective_from": "2026-08-01"})
