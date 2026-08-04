@@ -26,6 +26,7 @@
   --c-warning: #b76b00;
   --c-warning-bg: #fbf2e2;
   --c-danger: #c2261b;
+  --c-danger-hover: #a11f16;
   --c-danger-bg: #fbeae8;
   --c-info: #1f6fd4;
   --c-info-bg: #e8f0fc;
@@ -310,6 +311,8 @@ a { color: inherit; text-decoration: none; }
 .btn.icon.sm { width: 26px; }
 .btn.danger { color: var(--c-danger); border-color: var(--c-border-strong); }
 .btn.danger:hover { background: var(--c-danger-bg); border-color: #e8b6b1; }
+.btn.primary.danger { background: var(--c-danger); border-color: var(--c-danger); color: white; }
+.btn.primary.danger:hover { background: var(--c-danger-hover); border-color: var(--c-danger-hover); }
 
 /* === Input === */
 .input {
@@ -401,6 +404,20 @@ a { color: inherit; text-decoration: none; }
 .t-checkbox.checked {
   background: var(--c-accent); border-color: var(--c-accent);
   display: flex; align-items: center; justify-content: center; color: white;
+}
+.t-radio {
+  flex-shrink: 0;
+  width: 14px; height: 14px;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 50%; background: white;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.t-radio.checked { border-color: var(--c-accent); }
+.t-radio.checked::after {
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%; background: var(--c-accent);
 }
 
 /* === Expandable receipt row (карточка рейса → раскрытие поступления) === */
@@ -1821,7 +1838,8 @@ a { color: inherit; text-decoration: none; }
 .pair-col { width: 100%; height: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
 .pair-bar { flex: 1 1 0; min-width: 0; border-radius: 3px 3px 0 0; transition: filter 90ms; }
 .bcol:hover .pair-bar { filter: brightness(1.06); }
-.debt-line { position: absolute; left: 56px; right: 0; top: 0; bottom: 0; pointer-events: none; }
+/* svg — replaced-элемент: без явных width/height берёт размер из viewBox, а не из left/right/top/bottom */
+.debt-line { position: absolute; left: 56px; top: 0; width: calc(100% - 56px); height: 100%; overflow: visible; pointer-events: none; }
 
 .bd-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; gap: 8px; }
 .bd-name { font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
