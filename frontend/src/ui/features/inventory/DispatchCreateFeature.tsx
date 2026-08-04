@@ -115,6 +115,9 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   useEffect(() => { createdIdRef.current = null }, [lines, clientId, cargoType, shipDate, logisticsCost, comment])
 
   const isDefectCargo = cargoType === 'defect'
+  const isUnpackedCargo = cargoType === 'good_unpacked'
+  // Брак и годный без упаковки минуют задачу упаковки: источник — «На хранении».
+  const bypassPacking = isDefectCargo || isUnpackedCargo
   const totalQty = lines.reduce((s, l) => s + l.qty, 0)
   const totalPallets = lines.reduce((s, l) => s + (l.pallets ?? 0), 0)
   const allPallets = lines.every((l) => l.pallets != null)
@@ -126,17 +129,17 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
   const needBoxPrice = lines.some((l) => (l.boxes ?? 1) > 0)
   const needPalletPrice = lines.some((l) => (l.pallets ?? 1) > 0)
   // Немедленно свободный остаток (для витрины): годный — «Готов к отгрузке» (ready+packed),
-  // брак — со склада (storage_defect = onHand), минус обещанное другим отгрузкам (резерв).
-  const srcAvail = (l: DraftLine) => Math.max(0, (isDefectCargo ? l.onHand : l.ready) - l.reserved)
+  // брак и годный без упаковки — со склада (onHand), минус обещанное другим отгрузкам (резерв).
+  const srcAvail = (l: DraftLine) => Math.max(0, (bypassPacking ? l.onHand : l.ready) - l.reserved)
   // Что можно передать на подготовку: годный — «Готов к отгрузке» плюс «На упаковке»
   // (`packing`): последнее уйдёт в «Ожидание упаковки» и продолжится автоматически по
-  // готовности (бэк паркует). Брак упаковку минует — только со склада. Товар лишь на
-  // хранении/в пути пакуется отдельной задачей — его сохраняем черновиком.
-  const sendAvail = (l: DraftLine) => isDefectCargo
+  // готовности (бэк паркует). Брак и годный без упаковки минуют упаковку — только со
+  // склада. Товар лишь на хранении/в пути пакуется отдельной задачей — его сохраняем черновиком.
+  const sendAvail = (l: DraftLine) => bypassPacking
     ? Math.max(0, l.onHand - l.reserved)
     : Math.max(0, l.ready + l.packing - l.reserved)
-  const hasOnPacking = lines.some((l) => !isDefectCargo && l.qty > l.ready && l.qty <= l.ready + l.packing)
-  const hasNeedStorage = lines.some((l) => !isDefectCargo && l.qty > l.ready + l.packing && l.qty <= l.ready + l.packing + l.onHand)
+  const hasOnPacking = lines.some((l) => !bypassPacking && l.qty > l.ready && l.qty <= l.ready + l.packing)
+  const hasNeedStorage = lines.some((l) => !bypassPacking && l.qty > l.ready + l.packing && l.qty <= l.ready + l.packing + l.onHand)
   const hasInTransit = lines.some((l) => l.qty > l.ready + l.packing + l.onHand && l.qty <= l.ready + l.packing + l.onHand + l.inTransit)
   const hasOverCap = lines.some((l) => l.qty > l.ready + l.packing + l.onHand + l.inTransit)
   const allSendable = lines.every((l) => l.qty <= sendAvail(l))
@@ -153,7 +156,15 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
     { ok: !hasOverCap, label: 'Количество в пределах остатка и товара в пути', error: 'Уменьшите количество в позициях, где запрошено больше остатка и товара в пути' },
     { ok: allPallets, label: 'Указано количество палет', error: 'Укажите количество палет для каждой позиции (можно 0)' },
     { ok: allBoxes, label: 'Указано количество коробов', error: 'Укажите количество коробов для каждой позиции (можно 0)' },
-    { ok: allSendable, label: isDefectCargo ? 'Брак свободен на складе' : 'Товар готов или на упаковке', error: isDefectCargo ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество' : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик' },
+    {
+      ok: allSendable,
+      label: isDefectCargo ? 'Брак свободен на складе'
+        : isUnpackedCargo ? 'Товар свободен на хранении'
+        : 'Товар готов или на упаковке',
+      error: isDefectCargo ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество'
+        : isUnpackedCargo ? 'Часть товара недоступна на хранении (нет остатка или в резерве у других отгрузок) — уменьшите количество'
+        : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик',
+    },
   ]
   const blockReasons = readyChecks.filter((check) => !check.ok).map((check) => check.error)
 
@@ -264,10 +275,11 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       qty,
       // «Готов к отгрузке» = разложенное ready + упакованное на столе (packed) — оба
       // можно передать в подготовку и отгрузить (совпадает с бэк-гейтом _source_ops).
-      ready:        isDefectCargo ? 0 : b.ready_good + (b.packed_good ?? 0),
+      // Брак и годный без упаковки берут только со склада (onHand).
+      ready:        bypassPacking ? 0 : b.ready_good + (b.packed_good ?? 0),
       onHand:       isDefectCargo ? b.storage_defect : b.storage_good,
-      packing:      isDefectCargo ? 0 : (b.packing_good ?? 0),
-      inTransit:    isDefectCargo ? 0 : b.in_transit,
+      packing:      bypassPacking ? 0 : (b.packing_good ?? 0),
+      inTransit:    bypassPacking ? 0 : b.in_transit,
       reserved:     reservedMap[variantKey(b.product_id, b.color_id, b.size_id)] ?? 0,
       sku_pending:  !!b.sku_pending,
       itemsPerBox:  b.items_per_box,
@@ -407,7 +419,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
       <DispHeader
         status="draft"
         cargoType={cargoType}
-        title={isDefectCargo ? 'Новая отгрузка брака' : 'Новая отгрузка'}
+        title={isDefectCargo ? 'Новая отгрузка брака' : isUnpackedCargo ? 'Новая отгрузка без упаковки' : 'Новая отгрузка'}
         subtitle="номер присвоится при сохранении"
         initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}
@@ -426,7 +438,9 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
             <PrimaryAction
               icon="arrowRight"
               label="Передать на подготовку"
-              hint="готовый товар — в подготовку; на упаковке — в «Ожидание упаковки»"
+              hint={bypassPacking
+                ? 'кладовщик получит задачу подготовить отгрузку со хранения'
+                : 'готовый товар — в подготовку; на упаковке — в «Ожидание упаковки»'}
               disabled={saving}
               onClick={handleSendToAwaiting}
             />
@@ -509,7 +523,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
           )}
 
           <PhaseBlock icon="boxes" title="Состав отгрузки" role="manager" state="active"
-            hint="Товар на остатках и в пути"
+            hint={isUnpackedCargo ? 'Годный товар на хранении' : 'Товар на остатках и в пути'}
             right={
               <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
                 <Icon name="plus" size={12} />Добавить товар
@@ -687,7 +701,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
 
         {/* Right — маршрут + итог + готовность */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <RailPanel status="draft" />
+          <RailPanel status="draft" cargoType={cargoType} />
           <Panel icon="chart" title="Итого">
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="SKU" mono>{lines.length}</ReadRow>

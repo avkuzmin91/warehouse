@@ -9,6 +9,8 @@ from config import (
     DISPATCH_ALLOW_SHIP_FROM_PACKED,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_GOOD_UNPACKED,
+    DISPATCH_CARGO_TYPES,
     DISPATCH_OP_ADVANCE,
     DISPATCH_OP_PREPARE,
     DISPATCH_OP_RETURN,
@@ -48,7 +50,7 @@ def next_doc_number(connection) -> str:
 
 def normalize_cargo_type(raw: str | None) -> str:
     s = str(raw or DISPATCH_CARGO_GOOD).strip().lower()
-    return s if s in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT) else DISPATCH_CARGO_GOOD
+    return s if s in DISPATCH_CARGO_TYPES else DISPATCH_CARGO_GOOD
 
 
 def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:
@@ -134,36 +136,71 @@ def find_duplicate_dispatches(connection, *, client_id, cargo_type, ship_date, l
     return matches
 
 
-def _doc_quality(connection, doc_id: str) -> str:
-    """Качество остатка отгрузки: рейс брака → брак, иначе годный."""
+def _doc_cargo(connection, doc_id: str) -> str:
     row = connection.execute(
         "SELECT cargo_type FROM dispatch_docs WHERE id = ?", (doc_id,)
     ).fetchone()
-    cargo = normalize_cargo_type(row["cargo_type"] if row else None)
+    return normalize_cargo_type(row["cargo_type"] if row else None)
+
+
+def _cargo_quality(cargo: str) -> str:
+    """Качество остатка отгрузки: рейс брака → брак, иначе годный (в т.ч. без упаковки)."""
     return INV_Q_DEFECT if cargo == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
 
 
-def _source_ops(quality: str) -> list[str]:
+def _doc_quality(connection, doc_id: str) -> str:
+    return _cargo_quality(_doc_cargo(connection, doc_id))
+
+
+def _source_ops(cargo: str) -> list[str]:
     """Корзины-источники для ГЕЙТА доступности (можно ли вообще подготовить отгрузку).
 
     Проверяется на шаге «Передать в подготовку»: хватит ли товара там, где он сейчас
     лежит. Годный отгружается из «Готов к отгрузке» (`ready`, разложен по ячейкам) ИЛИ
     прямо из «Упаковано» (`packed`, со стола упаковки — отгрузка из ещё не завершённой
-    задачи упаковки). Брак — «На хранении» (`storage`). Совпадает с корзинами, из
-    которых кладовщик заберёт товар при подготовке (см. `_prep_source_ops`).
+    задачи упаковки). Брак и годный без упаковки — «На хранении» (`storage`): оба минуют
+    задачу упаковки. Совпадает с корзинами, из которых кладовщик заберёт товар при
+    подготовке (см. `_prep_source_ops`).
     """
-    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_PACKED]
+    if cargo in (DISPATCH_CARGO_DEFECT, DISPATCH_CARGO_GOOD_UNPACKED):
+        return [INV_OP_STORAGE]
+    return [INV_OP_READY, INV_OP_PACKED]
 
 
-def _prep_source_ops(quality: str) -> list[str]:
+def _prep_source_ops(cargo: str) -> list[str]:
     """Корзины, ИЗ которых кладовщик забирает товар при подготовке к отгрузке.
 
     Годный берётся из ячеек «Готов к отгрузке» (`ready`) либо прямо из «Упаковано»
-    (`packed`, зона упаковки). Брак — «На хранении» (`storage`). Подготовка переносит
-    выбранное в `ready` в «Зону отгрузки». Порядок задаёт приоритет при выборе корзины
-    источника в конкретной ячейке (сначала ready, затем packed).
+    (`packed`, зона упаковки). Брак и годный без упаковки — «На хранении» (`storage`).
+    Подготовка переносит выбранное в `ready` в «Зону отгрузки». Порядок задаёт приоритет
+    при выборе корзины источника в конкретной ячейке (сначала ready, затем packed).
     """
-    return [INV_OP_STORAGE] if quality == INV_Q_DEFECT else [INV_OP_READY, INV_OP_PACKED]
+    return _source_ops(cargo)
+
+
+def _reserve_specs(cargo: str) -> list[tuple[str, list[str]]]:
+    """Какие отгрузки держат резерв на корзинах-источниках данного типа груза.
+
+    [(cargo_type, statuses)]: спрос (qty − shipped_qty) отгрузок этих типов/статусов
+    вычитается из остатка-источника. Брак и годный без упаковки (источник `storage`):
+    подготовка физически увозит товар в зону отгрузки, резерв держат только ещё не
+    подготовленные (preparing). Годный (источник `ready`+`packed`): остаток лежит там
+    до выезда рейса — резерв держат все фиксации; ПЛЮС отгрузки без упаковки после
+    подготовки (awaiting_trip/partially_shipped): их товар уже лежит как `ready` (good)
+    в зоне отгрузки и не должен предлагаться обычным годным отгрузкам.
+    """
+    if cargo == DISPATCH_CARGO_DEFECT:
+        return [(DISPATCH_CARGO_DEFECT, [DISPATCH_STATUS_PREPARING])]
+    if cargo == DISPATCH_CARGO_GOOD_UNPACKED:
+        return [(DISPATCH_CARGO_GOOD_UNPACKED, [DISPATCH_STATUS_PREPARING])]
+    return [
+        (DISPATCH_CARGO_GOOD, [
+            DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
+        ]),
+        (DISPATCH_CARGO_GOOD_UNPACKED, [
+            DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
+        ]),
+    ]
 
 
 def _packed_lines_for_variant(
@@ -206,30 +243,30 @@ def reserved_by_variant(connection, *, client_id: str | None, cargo_type: str | 
     """Зарезервированный остаток-источник по вариантам у незакрытых отгрузок клиента.
 
     Зеркалит вычет резерва в `ready_available_for_dispatch`: спрос (qty − shipped_qty)
-    отгрузок, которые ещё держат остаток-источник. Годный держат preparing/awaiting_trip/
-    partially_shipped (источник `ready`); брак — только preparing (подготовка уже увезла
-    его из `storage`, повторно вычитать нельзя). Витрина выбора вычитает это из валового
-    «упаковано», чтобы не предлагать к отгрузке уже обещанное другим документам.
+    отгрузок, которые ещё держат остаток-источник корзин ЭТОГО типа груза (какие типы/
+    статусы держат какой источник — см. `_reserve_specs`). Витрина выбора вычитает это
+    из валового остатка, чтобы не предлагать к отгрузке уже обещанное другим документам.
     """
     cargo = normalize_cargo_type(cargo_type)
-    statuses = (
-        [DISPATCH_STATUS_PREPARING] if cargo == DISPATCH_CARGO_DEFECT
-        else [DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED]
-    )
-    status_ph = ",".join("?" for _ in statuses)
+    specs = _reserve_specs(cargo)
+    spec_conds: list[str] = []
+    spec_params: list = []
+    for spec_cargo, statuses in specs:
+        status_ph = ",".join("?" for _ in statuses)
+        spec_conds.append(f"(COALESCE(dd.cargo_type, 'good') = ? AND dd.status IN ({status_ph}))")
+        spec_params += [spec_cargo, *statuses]
     rows = connection.execute(
         f"""SELECT dl.product_id, dl.color_id, dl.size_id,
                    COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) AS reserved
             FROM dispatch_lines dl
             JOIN dispatch_docs dd ON dd.id = dl.doc_id
-            WHERE dd.cargo_type = ?
+            WHERE ({' OR '.join(spec_conds)})
               AND dd.client_id IS NOT DISTINCT FROM ?
               AND COALESCE(dl.is_deleted, 0) = 0
               AND COALESCE(dd.is_deleted, 0) = 0
-              AND dd.status IN ({status_ph})
             GROUP BY dl.product_id, dl.color_id, dl.size_id
             HAVING COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) > 0""",
-        [cargo, client_id, *statuses],
+        [*spec_params, client_id],
     ).fetchall()
     return [
         {
@@ -334,7 +371,8 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
 
     Спрос агрегируется по варианту (product/color/size), т.к. позиция может быть в
     нескольких строках (разные магазины), а остаток у неё общий. Источник зависит от
-    груза: годный — `ready` (готов к отгрузке), брак — `storage` (на хранении).
+    груза: годный — `ready` (готов к отгрузке), брак и годный без упаковки — `storage`
+    (на хранении).
     """
     from modules.balances.service import ready_available_for_dispatch
 
@@ -342,14 +380,10 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
         "SELECT client_id FROM dispatch_docs WHERE id = ?", (doc_id,)
     ).fetchone()
     client_id = doc["client_id"] if doc else None
-    quality = _doc_quality(connection, doc_id)
-    source_ops = _source_ops(quality)
-    # Брак подготовка увозит из `storage` в `ready` (остаток физически уходит из
-    # источника), поэтому держат резерв на `storage` только ещё-не-подготовленные
-    # (preparing). Годный остаётся в `ready` до отгрузки — резерв держат все фиксации.
-    reserved_statuses = (
-        [DISPATCH_STATUS_PREPARING] if quality == INV_Q_DEFECT else None
-    )
+    cargo = _doc_cargo(connection, doc_id)
+    quality = _cargo_quality(cargo)
+    source_ops = _source_ops(cargo)
+    reserved_specs = _reserve_specs(cargo)
 
     rows = connection.execute(
         """SELECT product_id, color_id, size_id,
@@ -372,19 +406,21 @@ def check_lines_have_ready(connection, doc_id: str) -> None:
             client_id=client_id,
             quality=quality,
             ops=source_ops,
-            reserved_statuses=reserved_statuses,
+            reserved_specs=reserved_specs,
             exclude_doc_id=doc_id,
         )
         demand = int(r["demand"] or 0)
         if demand > avail:
             label = " · ".join(x for x in [r["product_sku"], r["color_name"], r["size_name"]] if x) or r["product_name"]
-            avail_word = "на хранении" if quality == INV_Q_DEFECT else "доступно"
+            avail_word = "на хранении" if INV_OP_STORAGE in source_ops else "доступно"
             short.append(f"«{label}»: нужно {demand}, {avail_word} {avail}")
     if short:
-        head = (
-            "Недостаточно брака на хранении для отгрузки. " if quality == INV_Q_DEFECT
-            else "Недостаточно готового к отгрузке товара (свободного, не в резерве). "
-        )
+        if cargo == DISPATCH_CARGO_DEFECT:
+            head = "Недостаточно брака на хранении для отгрузки. "
+        elif cargo == DISPATCH_CARGO_GOOD_UNPACKED:
+            head = "Недостаточно свободного товара на хранении для отгрузки без упаковки. "
+        else:
+            head = "Недостаточно готового к отгрузке товара (свободного, не в резерве). "
         raise HTTPException(status_code=400, detail=head + "; ".join(short))
 
 
@@ -470,20 +506,21 @@ def dispatch_alloc_remaining(connection, doc_id: str) -> dict[str, int]:
     рейсы. Ограничивается жадно общим остатком-источником варианта (несколько строк
     одного варианта делят один пул). Для годного источник — `ready` плюс `packed`
     (если разрешён выезд из упаковки, см. DISPATCH_ALLOW_SHIP_FROM_PACKED): упакованный
-    годный считается доступным к рейсу, не дожидаясь раскладки кладовщиком. Брак —
-    только `ready` (как и раньше: его свозит туда подготовка с хранения).
+    годный считается доступным к рейсу, не дожидаясь раскладки кладовщиком. Брак и
+    годный без упаковки — только `ready` (их свозит туда подготовка с хранения).
     """
     from modules.balances.service import ready_zones_for_variant
 
+    cargo = _doc_cargo(connection, doc_id)
     pool_ops = [INV_OP_READY]
-    if DISPATCH_ALLOW_SHIP_FROM_PACKED and _doc_quality(connection, doc_id) == INV_Q_GOOD:
+    if DISPATCH_ALLOW_SHIP_FROM_PACKED and cargo == DISPATCH_CARGO_GOOD:
         pool_ops.append(INV_OP_PACKED)
 
     doc = connection.execute(
         "SELECT client_id FROM dispatch_docs WHERE id = ?", (doc_id,)
     ).fetchone()
     client_id = doc["client_id"] if doc else None
-    quality = _doc_quality(connection, doc_id)
+    quality = _cargo_quality(cargo)
 
     lines = connection.execute(
         "SELECT id, product_id, color_id, size_id, qty, COALESCE(shipped_qty, 0) AS shipped_qty "
@@ -665,8 +702,9 @@ def prepare_to_ready(connection, doc_id: str, line_inputs, user_id: str) -> str:
     if str(doc["status"]) != DISPATCH_STATUS_PREPARING:
         raise HTTPException(status_code=400, detail="Отметить подготовку можно только в статусе «Подготовка отгрузки»")
 
-    quality = _doc_quality(connection, doc_id)
-    source_ops = _prep_source_ops(quality)
+    cargo = normalize_cargo_type(doc["cargo_type"])
+    quality = _cargo_quality(cargo)
+    source_ops = _prep_source_ops(cargo)
     is_defect = quality == INV_Q_DEFECT
     client_id = doc["client_id"]
 
@@ -903,12 +941,18 @@ def consume_stock_for_dispatch(
     cargo_type = normalize_cargo_type(doc_row["cargo_type"] if doc_row else None)
     client_id = doc_row["client_id"] if doc_row else None
     client_name = doc_row["client_name"] if doc_row else None
-    quality = INV_Q_DEFECT if cargo_type == DISPATCH_CARGO_DEFECT else INV_Q_GOOD
-    comment_prefix = "Отгрузка брака" if cargo_type == DISPATCH_CARGO_DEFECT else "Отгрузка"
+    quality = _cargo_quality(cargo_type)
+    if cargo_type == DISPATCH_CARGO_DEFECT:
+        comment_prefix = "Отгрузка брака"
+    elif cargo_type == DISPATCH_CARGO_GOOD_UNPACKED:
+        comment_prefix = "Отгрузка без упаковки"
+    else:
+        comment_prefix = "Отгрузка"
     # Годный может уехать прямо из «Упаковано» (`packed`), не дожидаясь раскладки в зону
     # отгрузки — тогда после `ready` дочерпываем из упаковки с атрибуцией к строкам задачи
-    # упаковки. Брак этим путём не едет (всегда из `ready` после подготовки с хранения).
-    ship_from_packed = DISPATCH_ALLOW_SHIP_FROM_PACKED and quality == INV_Q_GOOD
+    # упаковки. Брак и годный без упаковки этим путём не едут (всегда из `ready` после
+    # подготовки с хранения).
+    ship_from_packed = DISPATCH_ALLOW_SHIP_FROM_PACKED and cargo_type == DISPATCH_CARGO_GOOD
 
     from modules.balances.service import get_packing_zone, ready_zones_for_variant
 
@@ -1054,12 +1098,21 @@ def list_dispatches_aggregated(
     use_priority_order = False
     status_filter_applied = False
 
-    if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
-        conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
-
     if available_for_trip_id and available_for_trip_id.strip():
-        # Кандидаты в рейс: только нужного типа груза, в статусах привязки, ещё не
-        # привязанные к ЭТОМУ рейсу (к другим — могут, отгрузка едет несколькими рейсами).
+        # Кандидаты в рейс: тип груза — по СЕМЕЙСТВУ рейса (годный рейс возит и годный,
+        # и годный без упаковки; рейс брака — только брак), поэтому точечный фильтр
+        # cargo_type здесь игнорируется. Статусы привязки; ещё не привязанные к ЭТОМУ
+        # рейсу (к другим — могут, отгрузка едет несколькими рейсами).
+        trip_row = connection.execute(
+            "SELECT cargo_type FROM trip_docs WHERE id = ?", (available_for_trip_id.strip(),)
+        ).fetchone()
+        trip_cargo = str(trip_row["cargo_type"]) if trip_row and trip_row["cargo_type"] else DISPATCH_CARGO_GOOD
+        family = (
+            [DISPATCH_CARGO_DEFECT] if trip_cargo == DISPATCH_CARGO_DEFECT
+            else [DISPATCH_CARGO_GOOD, DISPATCH_CARGO_GOOD_UNPACKED]
+        )
+        family_ph = ",".join("?" for _ in family)
+        conds.append(f"COALESCE(d.cargo_type, 'good') IN ({family_ph})"); params.extend(family)
         selectable = list(DISPATCH_TRIP_SELECTABLE_STATUSES)
         placeholders = ",".join("?" for _ in selectable)
         conds.append(f"d.status IN ({placeholders})"); params.extend(selectable)
@@ -1070,6 +1123,8 @@ def list_dispatches_aggregated(
         params.append(available_for_trip_id.strip())
         use_priority_order = True
         status_filter_applied = True
+    elif cargo_type in DISPATCH_CARGO_TYPES:
+        conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
 
     if status:
         requested = [s.strip() for s in status.split(",") if s.strip()]

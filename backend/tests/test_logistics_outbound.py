@@ -28,15 +28,19 @@ def client_id():
 
 
 def _seed_ready(client_id: str, *, product_id: str, sku: str, qty: int,
-                quality: str = "good", color_id=None, size_id=None) -> None:
+                quality: str = "good", color_id=None, size_id=None,
+                storage_good: bool = False) -> None:
     """Остаток-источник отгрузки по варианту×клиенту×качеству.
 
     Годный отгружается из `ready` (сеем packing→ready), брак — прямо из `storage`
-    (сеем intake→storage), без раскладки в зону отгрузки.
+    (сеем intake→storage), без раскладки в зону отгрузки. `storage_good=True` —
+    источник «Отгрузки без упаковки»: годный на хранении (intake→storage/good).
     """
     from modules.balances.service import insert_inventory_move
 
-    if quality == "defect":
+    if storage_good:
+        from_op, to_op, to_zone_id, to_zone_name = "intake", "storage", "zone-store-unp", "Хранение годный"
+    elif quality == "defect":
         from_op, to_op, to_zone_id, to_zone_name = "intake", "storage", "zone-store-def", "Хранение брак"
     else:
         from_op, to_op, to_zone_id, to_zone_name = "packing", "ready", "zone-ready", "Готов"
@@ -87,7 +91,12 @@ def _finish_prep(admin_client, doc_id: str, cargo: str = "good"):
     Источник зависит от груза: годный — ячейка готового (`zone-ready`), брак — ячейка
     хранения брака (`zone-store-def`).
     """
-    cell = ("zone-store-def", "Хранение брак") if cargo == "defect" else ("zone-ready", "Готов")
+    if cargo == "defect":
+        cell = ("zone-store-def", "Хранение брак")
+    elif cargo == "good_unpacked":
+        cell = ("zone-store-unp", "Хранение годный")
+    else:
+        cell = ("zone-ready", "Готов")
     lines = admin_client.get(f"/dispatches/{doc_id}").json()["lines"]
     body = {"lines": [
         {"line_id": l["id"], "sources": [{"zone_id": cell[0], "zone_name": cell[1], "qty": l["qty"]}]}
@@ -107,7 +116,8 @@ def _awaiting_dispatch(admin_client, client_id: str, *, qty: int = 10, ready: in
     quality = "defect" if cargo == "defect" else "good"
     pid = str(uuid.uuid4())
     if ready > 0:
-        _seed_ready(client_id, product_id=pid, sku=sku, qty=ready, quality=quality)
+        _seed_ready(client_id, product_id=pid, sku=sku, qty=ready, quality=quality,
+                    storage_good=cargo == "good_unpacked")
     doc_id, line_id, pid = _create_dispatch(admin_client, client_id, qty=qty, cargo=cargo, sku=sku, product_id=pid)
     adv = admin_client.post(f"/dispatches/{doc_id}/advance")
     assert adv.status_code == 200, adv.text
@@ -684,3 +694,58 @@ def test_ship_good_from_packed_closes_packing_task(admin_client, client_id):
     assert _packed_net(client_id, pid) == 0
     # Упаковочная задача закрылась автоматически (relocating → packed).
     assert _shipment_status(sh_doc) == "packed"
+
+
+# --- «Отгрузка без упаковки» (good_unpacked) в рейсах ---
+
+def test_unpacked_full_flow_cascades_to_shipped(admin_client, client_id):
+    """Отгрузка без упаковки едет обычным годным рейсом: привязка, выезд, каскад в shipped."""
+    doc_id, line_id, pid = _awaiting_dispatch(
+        admin_client, client_id, qty=5, cargo="good_unpacked", sku="SKU-UNP",
+    )
+    trip_id = _trip_with_dispatch(admin_client, doc_id, cargo_type="good")
+    _drive_to_costing(admin_client, trip_id)
+
+    ship = admin_client.get(f"/dispatches/{doc_id}").json()
+    assert ship["status"] == "shipped"
+    assert ship["lines"][0]["shipped_qty"] == 5
+    assert _ready_net(client_id, pid) == 0
+
+
+def test_link_unpacked_good_trip_ok_defect_trip_rejected(admin_client, client_id):
+    """Годный рейс возит и упакованное, и без упаковки; рейс брака — только брак."""
+    unp_d, _, _ = _awaiting_dispatch(
+        admin_client, client_id, qty=3, cargo="good_unpacked", sku="SKU-UNP2",
+    )
+    good_trip = _bare_outbound_trip(admin_client, "good")
+    defect_trip = _bare_outbound_trip(admin_client, "defect")
+
+    ok = _link(admin_client, good_trip, unp_d)
+    assert ok.status_code == 200, ok.text
+
+    unp_d2, _, _ = _awaiting_dispatch(
+        admin_client, client_id, qty=3, cargo="good_unpacked", sku="SKU-UNP3",
+    )
+    bad = _link(admin_client, defect_trip, unp_d2)
+    assert bad.status_code == 400, bad.text
+    assert "не подходит" in bad.json()["detail"]
+
+
+def test_candidates_for_good_trip_include_unpacked(admin_client, client_id):
+    """Подбор отгрузок в годный рейс показывает и «без упаковки» (семейство годного),
+    даже если фронт передал точечный фильтр cargo_type=good."""
+    good_d, _, _ = _awaiting_dispatch(admin_client, client_id, qty=2, cargo="good", sku="SKU-CG")
+    unp_d, _, _ = _awaiting_dispatch(
+        admin_client, client_id, qty=2, cargo="good_unpacked", sku="SKU-CU",
+    )
+    defect_d, _, _ = _awaiting_dispatch(admin_client, client_id, qty=2, cargo="defect", sku="SKU-CD")
+
+    trip_id = _bare_outbound_trip(admin_client, "good")
+    res = admin_client.get(
+        f"/dispatches?available_for_trip_id={trip_id}&cargo_type=good&client_id={client_id}&limit=200"
+    )
+    assert res.status_code == 200, res.text
+    ids = {i["id"] for i in res.json()["items"]}
+    assert good_d in ids
+    assert unp_d in ids
+    assert defect_d not in ids

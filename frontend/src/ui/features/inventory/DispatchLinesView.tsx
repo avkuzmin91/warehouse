@@ -102,6 +102,7 @@ export function DispatchLinesView({ search, sku, clientId, status, cargoType, da
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     {it.doc_number}
                     {it.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                    {it.cargo_type === 'good_unpacked' && <Badge>Без упаковки</Badge>}
                   </span>
                 </Td>
                 <Td>{it.client_name ?? '—'}</Td>

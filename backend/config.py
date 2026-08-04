@@ -483,6 +483,13 @@ DISPATCH_TRIP_SELECTABLE_STATUSES: frozenset[str] = frozenset({
 
 DISPATCH_CARGO_GOOD   = "good"
 DISPATCH_CARGO_DEFECT = "defect"
+# Годный без упаковки: возврат товара заказчику со хранения, минуя задачу упаковки.
+# Источник — `storage` (good); подготовка свозит его в зону отгрузки, как у брака.
+DISPATCH_CARGO_GOOD_UNPACKED = "good_unpacked"
+
+DISPATCH_CARGO_TYPES: tuple[str, ...] = (
+    DISPATCH_CARGO_GOOD, DISPATCH_CARGO_GOOD_UNPACKED, DISPATCH_CARGO_DEFECT,
+)
 
 # Можно ли распределять/отгружать ГОДНЫЙ прямо из «Упаковано» (`packed`), не дожидаясь
 # раскладки кладовщиком в зону отгрузки («Готово к рейсу», packed → ready). Сейчас этот

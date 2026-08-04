@@ -10,8 +10,7 @@ from fastapi.responses import Response
 from config import (
     CABINET_DISPATCH_VISIBLE_STATUSES,
     CABINET_RECEIPT_VISIBLE_STATUSES,
-    DISPATCH_CARGO_DEFECT,
-    DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_TYPES,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
@@ -77,7 +76,7 @@ def _validate_cargo_type(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
     s = value.strip()
-    if s not in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+    if s not in DISPATCH_CARGO_TYPES:
         raise HTTPException(status_code=400, detail="Недопустимый тип груза")
     return s
 

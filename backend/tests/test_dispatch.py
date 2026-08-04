@@ -159,10 +159,15 @@ def _storage_defect_net(client_id: str, product_id: str) -> int:
 
 
 def _seed_storage_good(client_id: str, *, product_id: str, sku: str, qty: int,
-                       color_id=None, size_id=None) -> None:
-    """Засеять годный «На хранении» (movement intake → storage/good) по варианту×клиенту."""
+                       color_id=None, size_id=None, zone=None) -> None:
+    """Засеять годный «На хранении» (movement intake → storage/good) по варианту×клиенту.
+
+    `zone` — (id, name) ячейки хранения; None — «Без места» (для тестов подготовки
+    без упаковки нужна конкретная ячейка-источник).
+    """
     from modules.balances.service import insert_inventory_move
 
+    zone_id, zone_name = zone if zone else (None, None)
     with get_connection() as conn:
         insert_inventory_move(
             conn,
@@ -172,7 +177,7 @@ def _seed_storage_good(client_id: str, *, product_id: str, sku: str, qty: int,
             from_op="intake", to_op="storage",
             from_quality="good", to_quality="good",
             from_zone_id=None, from_zone_name=None,
-            to_zone_id=None, to_zone_name=None,
+            to_zone_id=zone_id, to_zone_name=zone_name,
             qty=qty, user_id="test-admin-id",
         )
         conn.commit()
@@ -191,6 +196,18 @@ def _storage_good_net(client_id: str, product_id: str) -> int:
 def _create_defect(admin_client, client_id, product_id, sku, qty) -> str:
     payload = _payload(client_id, product_id, sku, qty)
     payload["cargo_type"] = "defect"
+    r = admin_client.post("/dispatches", json=payload)
+    assert r.status_code == 200, r.text
+    return r.json()["message"]
+
+
+# Ячейка хранения годного — источник подготовки «Отгрузки без упаковки».
+SRC_CELL_STORAGE = ("dsp-cell-storage", "Ячейка Хранение")
+
+
+def _create_unpacked(admin_client, client_id, product_id, sku, qty) -> str:
+    payload = _payload(client_id, product_id, sku, qty)
+    payload["cargo_type"] = "good_unpacked"
     r = admin_client.post("/dispatches", json=payload)
     assert r.status_code == 200, r.text
     return r.json()["message"]
@@ -977,3 +994,112 @@ def test_return_to_draft_blocked_by_active_trip(admin_client, client_id):
     r = admin_client.post(f"/dispatches/{doc_id}/return-to-draft", json={})
     assert r.status_code == 200, r.text
     assert _ready_net(client_id, pid) == 3
+
+
+# --- «Отгрузка без упаковки» (good_unpacked): годный со хранения, минуя упаковку ---
+
+def test_unpacked_advance_blocked_without_storage(admin_client, client_id):
+    """Без годного на хранении отгрузку без упаковки нельзя передать в подготовку —
+    ошибка, а не парковка в «Ожидание упаковки» (упаковка тут не источник)."""
+    pid = _make_product(client_id, sku="DSP-U1")
+    doc_id = _create_unpacked(admin_client, client_id, pid, "DSP-U1", 3)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+    assert "хранени" in r.json()["detail"].lower()
+
+
+def test_unpacked_advance_ignores_ready(admin_client, client_id):
+    """«Готов к отгрузке» (ready) — не источник для отгрузки без упаковки: только storage."""
+    pid = _make_product(client_id, sku="DSP-U2")
+    _seed_ready(client_id, product_id=pid, sku="DSP-U2", qty=5)
+    doc_id = _create_unpacked(admin_client, client_id, pid, "DSP-U2", 5)
+    r = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert r.status_code == 400, r.text
+
+
+def test_unpacked_prepare_moves_storage_to_ready(admin_client, client_id):
+    """Подготовка без упаковки перемещает годный «На хранении» → «Готов к отгрузке»."""
+    pid = _make_product(client_id, sku="DSP-U3")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U3", qty=5, zone=SRC_CELL_STORAGE)
+    doc_id = _create_unpacked(admin_client, client_id, pid, "DSP-U3", 5)
+    adv = admin_client.post(f"/dispatches/{doc_id}/advance")
+    assert adv.status_code == 200, adv.text
+    assert adv.json()["message"] == "preparing"
+    assert _finish_prep(admin_client, doc_id, SRC_CELL_STORAGE).status_code == 200
+    assert _storage_good_net(client_id, pid) == 0
+    assert _ready_net(client_id, pid) == 5
+
+
+def test_unpacked_consume_ships_after_prepare(admin_client, client_id):
+    """Выезд рейса списывает подготовленный товар без упаковки из ready/good → shipped."""
+    from modules.dispatch.service import consume_stock_for_dispatch, dispatch_fully_shipped
+
+    pid = _make_product(client_id, sku="DSP-U4")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U4", qty=4, zone=SRC_CELL_STORAGE)
+    doc_id = _create_unpacked(admin_client, client_id, pid, "DSP-U4", 4)
+    assert admin_client.post(f"/dispatches/{doc_id}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_id, SRC_CELL_STORAGE).status_code == 200
+
+    with get_connection() as conn:
+        consume_stock_for_dispatch(conn, doc_id, "test-admin-id", alloc=None, trip_id="trip-unp")
+        conn.commit()
+        assert dispatch_fully_shipped(conn, doc_id) is True
+
+    assert _ready_net(client_id, pid) == 0
+    line = admin_client.get(f"/dispatches/{doc_id}").json()["lines"][0]
+    assert line["shipped_qty"] == 4
+
+
+def test_unpacked_reservation_blocks_second_dispatch(admin_client, client_id):
+    """Годный на хранении режется уже открытой отгрузкой без упаковки — овербукинга нет."""
+    pid = _make_product(client_id, sku="DSP-U5")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U5", qty=5, zone=SRC_CELL_STORAGE)
+    doc_a = _create_unpacked(admin_client, client_id, pid, "DSP-U5", 5)
+    doc_b = _create_unpacked(admin_client, client_id, pid, "DSP-U5", 5)
+    assert admin_client.post(f"/dispatches/{doc_a}/advance").status_code == 200
+    assert admin_client.post(f"/dispatches/{doc_b}/advance").status_code == 400
+
+
+def test_unpacked_prepared_does_not_reserve_fresh_storage(admin_client, client_id):
+    """Подготовленный товар ушёл со хранения — свежий приход не блокируется резервом."""
+    pid = _make_product(client_id, sku="DSP-U6")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U6", qty=5, zone=SRC_CELL_STORAGE)
+    doc_a = _create_unpacked(admin_client, client_id, pid, "DSP-U6", 5)
+    assert admin_client.post(f"/dispatches/{doc_a}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_a, SRC_CELL_STORAGE).status_code == 200
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U6", qty=5, zone=SRC_CELL_STORAGE)
+    doc_b = _create_unpacked(admin_client, client_id, pid, "DSP-U6", 5)
+    assert admin_client.post(f"/dispatches/{doc_b}/advance").status_code == 200
+
+
+def test_unpacked_prepared_ready_not_available_to_good_dispatch(admin_client, client_id):
+    """После подготовки товар без упаковки лежит как ready/good в зоне отгрузки — обычная
+    годная отгрузка не должна считать его своим свободным остатком (резерв держит
+    awaiting_trip отгрузки без упаковки)."""
+    pid = _make_product(client_id, sku="DSP-U7")
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U7", qty=5, zone=SRC_CELL_STORAGE)
+    doc_u = _create_unpacked(admin_client, client_id, pid, "DSP-U7", 5)
+    assert admin_client.post(f"/dispatches/{doc_u}/advance").status_code == 200
+    assert _finish_prep(admin_client, doc_u, SRC_CELL_STORAGE).status_code == 200
+    assert _ready_net(client_id, pid) == 5
+
+    doc_g = _create(admin_client, client_id, pid, "DSP-U7", 5)
+    r = admin_client.post(f"/dispatches/{doc_g}/advance")
+    assert r.status_code == 200, r.text
+    # ready есть физически, но весь в резерве отгрузки без упаковки → парк в ожидание упаковки
+    assert r.json()["message"] == "awaiting_packing"
+
+
+def test_good_reserve_on_ready_does_not_block_unpacked(admin_client, client_id):
+    """Резерв обычной годной отгрузки держится на ready и не съедает пул хранения."""
+    pid = _make_product(client_id, sku="DSP-U8")
+    _seed_ready(client_id, product_id=pid, sku="DSP-U8", qty=5)
+    _seed_storage_good(client_id, product_id=pid, sku="DSP-U8", qty=5, zone=SRC_CELL_STORAGE)
+    doc_g = _create(admin_client, client_id, pid, "DSP-U8", 5)
+    adv_g = admin_client.post(f"/dispatches/{doc_g}/advance")
+    assert adv_g.status_code == 200 and adv_g.json()["message"] == "preparing"
+
+    doc_u = _create_unpacked(admin_client, client_id, pid, "DSP-U8", 5)
+    adv_u = admin_client.post(f"/dispatches/{doc_u}/advance")
+    assert adv_u.status_code == 200, adv_u.text
+    assert adv_u.json()["message"] == "preparing"

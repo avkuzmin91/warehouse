@@ -11,8 +11,7 @@ from config import (
     CABINET_DISPATCH_VISIBLE_STATUSES,
     CABINET_RECEIPT_OPS_VISIBLE,
     CABINET_RECEIPT_VISIBLE_STATUSES,
-    DISPATCH_CARGO_DEFECT,
-    DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_TYPES,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
@@ -504,7 +503,7 @@ def list_cabinet_shipments(
         cond, status_params = _shipment_status_cond(status)
         conds.append(cond)
         params.extend(status_params)
-    if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+    if cargo_type in DISPATCH_CARGO_TYPES:
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():
@@ -587,7 +586,7 @@ def list_cabinet_shipment_lines(
     cond, status_params = _shipment_status_cond(status)
     conds.append(cond)
     params.extend(status_params)
-    if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+    if cargo_type in DISPATCH_CARGO_TYPES:
         conds.append("COALESCE(d.cargo_type, 'good') = ?")
         params.append(cargo_type)
     if search and search.strip():

@@ -10,7 +10,14 @@ export type DispatchStatus =
   | 'shipped'
   | 'cancelled'
 
-export type DispatchCargoType = 'good' | 'defect'
+export type DispatchCargoType = 'good' | 'good_unpacked' | 'defect'
+
+/** Тип груза отгрузки: годный (через упаковку), годный без упаковки (со хранения), брак. */
+export const DISPATCH_CARGO_LABELS: Record<DispatchCargoType, string> = {
+  good:          'Товар',
+  good_unpacked: 'Без упаковки',
+  defect:        'Брак',
+}
 
 export type DispatchListItem = {
   id: string

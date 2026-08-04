@@ -127,6 +127,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               </div>
               <div className="kv"><span className="k">Клиент</span><span className="v">{doc.client_name ?? '—'}</span></div>
               {doc.cargo_type === 'defect' && <div className="kv"><span className="k">Тип</span><span className="v">Брак</span></div>}
+              {doc.cargo_type === 'good_unpacked' && <div className="kv"><span className="k">Тип</span><span className="v">Без упаковки</span></div>}
               <div className="kv"><span className="k">Приоритет</span>
                 <span className="v" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                   {priorityTone

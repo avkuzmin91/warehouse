@@ -27,6 +27,7 @@ export function DispHeader({ status, cargoType, title, subtitle, initiator, prio
             {DISPATCH_STATUS_LABELS[status]}
           </Badge>
           {cargoType === 'defect' && <Badge tone="warning">Брак</Badge>}
+          {cargoType === 'good_unpacked' && <Badge>Без упаковки</Badge>}
           {priority}
         </>
       }

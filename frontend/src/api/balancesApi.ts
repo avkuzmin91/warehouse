@@ -91,7 +91,7 @@ export type PlannableListResponse = {
 export type PlannableParams = {
   client_id?:  string
   search?:     string
-  cargo_type?: 'good' | 'defect'
+  cargo_type?: 'good' | 'good_unpacked' | 'defect'
   limit?:      number
 }
 

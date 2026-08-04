@@ -39,6 +39,7 @@ const STATUS_OPTIONS = [
 const CARGO_OPTIONS = [
   { value: '', label: 'Любой груз' },
   { value: 'good', label: 'Обычная отгрузка' },
+  { value: 'good_unpacked', label: 'Без упаковки' },
   { value: 'defect', label: 'Возврат брака' },
 ]
 
@@ -224,6 +225,9 @@ export function CabinetShipmentsFeature() {
                         <span className="mono" style={{ fontWeight: 550 }}>{item.doc_number}</span>
                         {item.cargo_type === 'defect' && (
                           <div style={{ marginTop: 3 }}><Badge tone="warning">Возврат брака</Badge></div>
+                        )}
+                        {item.cargo_type === 'good_unpacked' && (
+                          <div style={{ marginTop: 3 }}><Badge>Без упаковки</Badge></div>
                         )}
                       </Td>
                       <Td>{item.store_names.length > 0 ? item.store_names.join(', ') : '—'}</Td>

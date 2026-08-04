@@ -1,7 +1,7 @@
 import {
   DISPATCH_STATUS_LABELS,
 } from '../../../../../api/dispatchApi'
-import type { DispatchOp, DispatchStatus } from '../../../../../api/dispatchApi'
+import type { DispatchCargoType, DispatchOp, DispatchStatus } from '../../../../../api/dispatchApi'
 import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/RoleChip'
 import type { IconName } from '../../../../primitives/Icon'
@@ -20,6 +20,13 @@ const DSP_META: Record<DispatchStatus, { role: ProcessRole | null; icon: IconNam
 
 /** Линейный маршрут DSP для ProcessRail (без отмены). */
 const DSP_STATUS_ORDER: DispatchStatus[] = ['draft', 'awaiting_packing', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped']
+
+// Брак и годный без упаковки минуют упаковку (источник — хранение): шага
+// «Ожидание упаковки» в их маршруте нет.
+const DSP_BYPASS_ORDER: DispatchStatus[] = ['draft', 'preparing', 'awaiting_trip', 'partially_shipped', 'shipped']
+
+// Уточнение подписи «Подготовки» для потоков со хранения.
+const DSP_PREPARING_SUB_BYPASS = 'кладовщик собирает товар со хранения'
 
 /** Роль-владелец текущего шага (для «сейчас у:» в шапке). */
 export function dispatchStatusRole(status: DispatchStatus): ProcessRole | null {
@@ -55,17 +62,22 @@ function fmt(s: string): string {
   return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
-/** Шаги маршрута отгрузки (DSP) для ProcessRail. */
-export function buildDispatchSteps(status: DispatchStatus, ops: DispatchOp[] = []): ProcessStep[] {
+/** Шаги маршрута отгрузки (DSP) для ProcessRail. Маршрут зависит от типа груза:
+ *  брак и годный без упаковки минуют шаг «Ожидание упаковки». */
+export function buildDispatchSteps(
+  status: DispatchStatus, ops: DispatchOp[] = [], cargoType: DispatchCargoType = 'good',
+): ProcessStep[] {
+  const bypassPacking = cargoType !== 'good'
+  const order = bypassPacking ? DSP_BYPASS_ORDER : DSP_STATUS_ORDER
   const isShipped = status === 'shipped'
   const isCancelled = status === 'cancelled'
   // «Частично отгружено» есть в линейном маршруте; для индекса используем его напрямую.
-  const curIdx = DSP_STATUS_ORDER.indexOf(status)
+  const curIdx = order.indexOf(status)
   const ts = getStepTimestamps(ops)
   const reachedIdx = isCancelled
-    ? DSP_STATUS_ORDER.reduce((max, s, i) => (ts[s] != null ? i : max), 0)
+    ? order.reduce((max, s, i) => (ts[s] != null ? i : max), 0)
     : -1
-  return DSP_STATUS_ORDER.map((s, i) => {
+  return order.map((s, i) => {
     const state: ProcessStep['state'] = isShipped
       ? 'done'
       : isCancelled
@@ -79,7 +91,7 @@ export function buildDispatchSteps(status: DispatchStatus, ops: DispatchOp[] = [
       icon: m.icon,
       state,
       time: ts[s] ? fmt(ts[s]!) : null,
-      sub: m.sub,
+      sub: bypassPacking && s === 'preparing' ? DSP_PREPARING_SUB_BYPASS : m.sub,
     }
   })
 }

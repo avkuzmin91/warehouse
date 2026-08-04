@@ -50,7 +50,7 @@ export type PlannableItem = {
   boxes_per_pallet: number | null
 }
 
-export type PlannableParams = { client_id?: string; search?: string; cargo_type?: InvQuality; limit?: number }
+export type PlannableParams = { client_id?: string; search?: string; cargo_type?: 'good' | 'good_unpacked' | 'defect'; limit?: number }
 
 export function getPlannableItems(params: PlannableParams = {}, signal?: AbortSignal): Promise<{ items: PlannableItem[] }> {
   const sp = new URLSearchParams()
