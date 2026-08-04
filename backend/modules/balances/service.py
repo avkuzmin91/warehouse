@@ -259,8 +259,10 @@ def get_plannable_items(
 
     Объединяет журнальный остаток `storage` (good/defect) с заявленным, но ещё не
     приехавшим товаром (`planned − accepted` по поступлениям planned/on_intake).
-    Видимость: для годного груза — есть годный остаток ИЛИ что-то в пути; для брака —
-    есть остаток брака на хранении (брак в пути не считаем — он рождается на складе).
+    Видимость: для годного груза — есть годный остаток в любой корзине (включая `packing`:
+    отгрузка такой позиции паркуется в «Ожидание упаковки» и продолжается по готовности)
+    ИЛИ что-то в пути; для брака — есть остаток брака на хранении (брак в пути не считаем —
+    он рождается на складе).
     """
     is_defect = cargo_type == SHIPMENT_CARGO_DEFECT
 
@@ -348,7 +350,8 @@ def get_plannable_items(
         params += [s, s, s, s]
     conds.append(
         "(p.storage_defect > 0 OR p.ready_defect > 0)" if is_defect
-        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.packed_good > 0 OR p.in_transit > 0)"
+        else "(p.storage_good > 0 OR p.ready_good > 0 OR p.packed_good > 0 "
+             "OR p.packing_good > 0 OR p.in_transit > 0)"
     )
     where = "WHERE " + " AND ".join(conds)
 

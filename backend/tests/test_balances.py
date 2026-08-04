@@ -1157,3 +1157,35 @@ def test_balances_and_plannable_show_live_dictionary_names(admin_client, client_
             conn.execute("DELETE FROM colors WHERE id = ?", (color_id,))
             conn.commit()
         _cleanup_test_docs(client_id)
+
+
+def test_plannable_shows_position_left_only_on_packing(admin_client, client_id, product_ids):
+    """Остаток целиком на упаковке всё равно доступен для подбора отгрузки.
+
+    Отгрузка такой позиции паркуется в «Ожидание упаковки» и продолжается по
+    готовности, поэтому пикер обязан её показывать — иначе документ нельзя собрать."""
+    pid, _color_id, _size_id = product_ids
+    qty = 20
+
+    with get_connection() as conn:
+        _seed_received(conn, client_id, product_ids, qty)
+        _insert_move(
+            conn, client_id, product_ids, qty,
+            from_op="storage", to_op="packing", from_quality="good", to_quality="good",
+        )
+        conn.commit()
+
+    try:
+        p = admin_client.get(f"/balances/plannable?client_id={client_id}")
+        assert p.status_code == 200, p.text
+        matched = [i for i in p.json()["items"] if i["product_id"] == pid]
+        assert matched, "Позиция с остатком только на упаковке пропала из подбора"
+        assert matched[0]["storage_good"] == 0
+        assert matched[0]["packing_good"] == qty
+
+        # Для брака корзина `packing` (годная) источником не является.
+        d = admin_client.get(f"/balances/plannable?client_id={client_id}&cargo_type=defect")
+        assert d.status_code == 200, d.text
+        assert [i for i in d.json()["items"] if i["product_id"] == pid] == []
+    finally:
+        _cleanup_test_docs(client_id)
