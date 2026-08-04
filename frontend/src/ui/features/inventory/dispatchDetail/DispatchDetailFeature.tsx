@@ -337,7 +337,7 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         status={status}
         cargoType={cargoType}
         title={doc.doc_number}
-        subtitle={`${cargoType === 'defect' ? 'Отгрузка брака' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${cargoType === 'defect' ? 'Отгрузка брака' : cargoType === 'good_unpacked' ? 'Отгрузка без упаковки' : 'Отгрузка'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         onBack={goBack}
         priority={

@@ -101,7 +101,8 @@ export function DispatchesListFeature() {
     [statusFilter],
   )
   const cargoParam: DispatchCargoType | undefined =
-    cargoFilter === 'good' || cargoFilter === 'defect' ? cargoFilter : undefined
+    cargoFilter === 'good' || cargoFilter === 'good_unpacked' || cargoFilter === 'defect'
+      ? cargoFilter : undefined
 
   const { data, loading } = useApi(
     (signal) => mode !== 'docs'
@@ -136,6 +137,7 @@ export function DispatchesListFeature() {
             }
             items={[
               { label: 'Отгрузка товара', icon: <Icon name="box" size={14} />, onClick: () => navigate('/inventory/dispatches/new') },
+              { label: 'Отгрузка без упаковки', icon: <Icon name="boxes" size={14} />, onClick: () => navigate('/inventory/dispatches/new?cargo=good_unpacked') },
               { label: 'Отгрузка брака', icon: <Icon name="alert" size={14} />, onClick: () => navigate('/inventory/dispatches/new?cargo=defect') },
             ]}
           />
@@ -198,6 +200,7 @@ export function DispatchesListFeature() {
             options={[
               { value: '', label: 'Все типы' },
               { value: 'good', label: 'Годный' },
+              { value: 'good_unpacked', label: 'Без упаковки' },
               { value: 'defect', label: 'Брак' },
             ]}
             onChange={(v) => setCargoFilter(v)}
@@ -301,6 +304,7 @@ export function DispatchesListFeature() {
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           {item.doc_number}
                           {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                          {item.cargo_type === 'good_unpacked' && <Badge>Без упаковки</Badge>}
                         </span>
                       </Td>
                       <Td>

@@ -73,7 +73,7 @@ export function DispatchListScreen() {
                     </div>
                     <div className="tile-meta">
                       {DISPATCH_STATUS_LABELS[d.status]} · {d.total_qty} шт
-                      {d.cargo_type === 'defect' ? ' · брак' : ''}
+                      {d.cargo_type === 'defect' ? ' · брак' : d.cargo_type === 'good_unpacked' ? ' · без упаковки' : ''}
                       {eta ? ` · ${eta}` : ''}
                     </div>
                   </div>

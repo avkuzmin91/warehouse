@@ -6,7 +6,7 @@ import type { BalanceListResponse, BalanceSummary } from './balancesApi'
 
 export type CabinetReceiptStatus = 'planned' | 'on_intake' | 'partially_received' | 'on_review' | 'done' | 'cancelled'
 export type CabinetShipmentStatus = 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
-export type CabinetCargoType = 'good' | 'defect'
+export type CabinetCargoType = 'good' | 'good_unpacked' | 'defect'
 
 export type CabinetOpItem = {
   op_type: string

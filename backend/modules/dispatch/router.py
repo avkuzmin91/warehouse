@@ -9,8 +9,8 @@ from idempotency import begin_idempotent, finish_idempotent
 from config import (
     DISPATCH_ATTACHMENT_EDITABLE_STATUSES,
     DISPATCH_CANCELLABLE_STATUSES,
-    DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_TYPES,
     DISPATCH_EDITABLE_STATUSES,
     DISPATCH_OP_ADVANCE,
     DISPATCH_OP_CANCEL,
@@ -192,7 +192,7 @@ def dispatches_summary(
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
-        if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+        if cargo_type in DISPATCH_CARGO_TYPES:
             conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
@@ -242,7 +242,7 @@ def list_dispatch_lines(
     with get_connection() as conn:
         conds = ["d.is_deleted = 0", "COALESCE(l.is_deleted, 0) = 0"]
         params: list = []
-        if cargo_type in (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_DEFECT):
+        if cargo_type in DISPATCH_CARGO_TYPES:
             conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
         if status:
             requested = [s.strip() for s in status.split(",") if s.strip()]
@@ -727,8 +727,9 @@ def advance_dispatch(
 
     Если весь товар уже покрыт готовым остатком — сразу в «Подготовку» (кладовщик получает
     задачу). Если годного ещё нет (товар на упаковке) — паркуем в «Ожидание упаковки»: фоновой
-    цикл сам переведёт в подготовку, как только упаковка выдаст остаток. Брак упаковку не ждёт —
-    при нехватке остаётся прежняя ошибка (его свозит подготовка с хранения)."""
+    цикл сам переведёт в подготовку, как только упаковка выдаст остаток. Брак и годный без
+    упаковки очередь упаковки не ждут — при нехватке остаётся ошибка (их свозит подготовка
+    с хранения)."""
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_advance")
@@ -752,12 +753,12 @@ def advance_dispatch(
         check_lines_have_sku(conn, doc_id)
         check_lines_have_pallets(conn, doc_id)
         check_lines_have_boxes(conn, doc_id)
-        is_defect = normalize_cargo_type(row["cargo_type"]) == DISPATCH_CARGO_DEFECT
+        waits_packing = normalize_cargo_type(row["cargo_type"]) == DISPATCH_CARGO_GOOD
         try:
             check_lines_have_ready(conn, doc_id)
             ready = True
         except HTTPException:
-            if is_defect:
+            if not waits_packing:
                 raise
             ready = False
         if ready:

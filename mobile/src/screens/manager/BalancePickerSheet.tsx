@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getPlannableItems, type PlannableItem, type InvQuality } from '../../api/balancesApi'
+import { getPlannableItems, type PlannableItem } from '../../api/balancesApi'
 import { getDispatchReservations, type DispatchCargoType } from '../../api/dispatchApi'
 import { balanceKey } from '../../utils/balanceKey'
 import { lineStockChips } from '../../utils/stockChips'
@@ -28,7 +28,7 @@ export function BalancePickerSheet({
   onClose,
 }: {
   clientId: string
-  cargoType: InvQuality
+  cargoType: DispatchCargoType
   // `dispatch` — для «Отгрузки»: главная цифра — упакованное (ready), склад/в пути добираются.
   source?: 'pack' | 'dispatch'
   existingKeys?: string[]
@@ -49,7 +49,7 @@ export function BalancePickerSheet({
     const ac = new AbortController()
     setLoading(true)
     const reservedP = isDispatch
-      ? getDispatchReservations({ client_id: clientId, cargo_type: cargoType as DispatchCargoType }, ac.signal)
+      ? getDispatchReservations({ client_id: clientId, cargo_type: cargoType }, ac.signal)
           .then((r) => r.items)
           .catch(() => [])
       : Promise.resolve([] as Awaited<ReturnType<typeof getDispatchReservations>>['items'])
@@ -78,7 +78,9 @@ export function BalancePickerSheet({
     return base.filter((b) => fold(`${b.product_name} ${variantLabel(b)}`).includes(needle))
   }, [items, search, existing])
 
-  const dispatchGood = isDispatch && cargoType !== 'defect'
+  // Брак и годный без упаковки минуют упаковку: источник только склад, «в пути» не планируем.
+  const bypassPacking = cargoType === 'defect' || cargoType === 'good_unpacked'
+  const dispatchGood = isDispatch && !bypassPacking
   function ready(b: PlannableItem): number {
     // «Готов к отгрузке» = разложенное ready + упакованное на столе (packed) — оба отгружаемы.
     return dispatchGood ? b.ready_good + (b.packed_good ?? 0) : 0
@@ -91,7 +93,7 @@ export function BalancePickerSheet({
     return cargoType === 'defect' ? b.storage_defect : b.storage_good
   }
   function transitOf(b: PlannableItem): number {
-    return cargoType === 'defect' ? 0 : b.in_transit
+    return bypassPacking ? 0 : b.in_transit
   }
   function cap(b: PlannableItem): number {
     return ready(b) + packing(b) + storage(b) + transitOf(b)

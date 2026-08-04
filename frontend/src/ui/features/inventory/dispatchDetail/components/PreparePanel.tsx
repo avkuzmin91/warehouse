@@ -41,11 +41,12 @@ type Props = {
 export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUploadFile, onDeleteFile, onSavePallets, onSaveBoxes, onDone }: Props) {
   const toast = useToast()
   const isDefect = doc.cargo_type === 'defect'
+  const isUnpacked = doc.cargo_type === 'good_unpacked'
   // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready,
   // разложен по ячейкам) ИЛИ прямо из «Упаковано» (packed, зона упаковки — отгрузка из
-  // ещё не завершённой задачи упаковки); брак — «На хранении» (storage). Всё переезжает
-  // в «Зону отгрузки».
-  const srcOps = isDefect ? ['storage'] : ['ready', 'packed']
+  // ещё не завершённой задачи упаковки); брак и годный без упаковки — «На хранении»
+  // (storage). Всё переезжает в «Зону отгрузки».
+  const srcOps = isDefect || isUnpacked ? ['storage'] : ['ready', 'packed']
   const srcOpsKey = srcOps.join(',')
   const srcQuality = isDefect ? 'defect' : 'good'
 
@@ -249,6 +250,7 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 17, fontWeight: 600 }}>Соберите {noun} по ячейкам</span>
                 {isDefect && <Badge tone="warning">Брак</Badge>}
+                {isUnpacked && <Badge>Без упаковки</Badge>}
               </div>
               <div style={{ fontSize: 13, color: 'var(--c-text-muted)', marginTop: 3, lineHeight: 1.45 }}>
                 {doc.client_name ?? '—'} · отгрузка {fmtDateLong(doc.ship_date)}. По каждой строке укажите,

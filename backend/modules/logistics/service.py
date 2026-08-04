@@ -8,6 +8,7 @@ from config import (
     DISPATCH_ALLOW_SHIP_FROM_PACKED,
     DISPATCH_CARGO_DEFECT,
     DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_GOOD_UNPACKED,
     DISPATCH_OP_ADVANCE,
     DISPATCH_OP_PRIORITY_UPDATE,
     DISPATCH_OP_SHIP,
@@ -34,7 +35,17 @@ from config import (
 from dbconn import ci_like_substring_param
 from utils import now_iso as _now
 
-_CARGO_RU = {DISPATCH_CARGO_GOOD: "товар", DISPATCH_CARGO_DEFECT: "брак"}
+_CARGO_RU = {
+    DISPATCH_CARGO_GOOD: "товар",
+    DISPATCH_CARGO_GOOD_UNPACKED: "товар без упаковки",
+    DISPATCH_CARGO_DEFECT: "брак",
+}
+
+
+def _cargo_family(cargo: str) -> str:
+    """Семейство груза для совместимости рейс↔отгрузка: брак отдельно, годный
+    (упакованный и без упаковки) — вместе, одним годным рейсом."""
+    return DISPATCH_CARGO_DEFECT if cargo == DISPATCH_CARGO_DEFECT else DISPATCH_CARGO_GOOD
 
 
 
@@ -293,7 +304,7 @@ def link_dispatches(connection, trip_id: str, items: list[dict], uid: str) -> in
             raise HTTPException(status_code=400, detail=f"Отгрузка не найдена: {sid}")
 
         ship_cargo = str(ship["cargo_type"]) if ship["cargo_type"] else DISPATCH_CARGO_GOOD
-        if ship_cargo != trip_cargo:
+        if _cargo_family(ship_cargo) != _cargo_family(trip_cargo):
             raise HTTPException(
                 status_code=400,
                 detail=(

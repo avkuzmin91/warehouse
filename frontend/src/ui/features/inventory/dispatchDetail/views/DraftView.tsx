@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
+import type { DispatchCargoType, DispatchDetail, DispatchLine } from '../../../../../api/dispatchApi'
 import { recommendedPallets, recommendedBoxes, getDispatchReservations } from '../../../../../api/dispatchApi'
 import type { PlannableItem } from '../../../../../api/balancesApi'
 import { getPlannableItems } from '../../../../../api/balancesApi'
@@ -142,6 +142,8 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
     if (!doc.client_id) { setAvailMap(null); return }
     const ctrl = new AbortController()
     const isDefect = doc.cargo_type === 'defect'
+    // Брак и годный без упаковки берут только со хранения (упаковка/в пути — не источник).
+    const bypassPacking = isDefect || doc.cargo_type === 'good_unpacked'
     Promise.all([
       getPlannableItems({ client_id: doc.client_id, cargo_type: doc.cargo_type, limit: 200 }, ctrl.signal),
       getDispatchReservations({ client_id: doc.client_id, cargo_type: doc.cargo_type }, ctrl.signal)
@@ -154,11 +156,11 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
         const map: Record<string, LineAvailability> = {}
         for (const b of res.items) {
           const k = variantKey(b.product_id, b.color_id, b.size_id)
-          const ready = isDefect ? 0 : b.ready_good + (b.packed_good ?? 0)
+          const ready = bypassPacking ? 0 : b.ready_good + (b.packed_good ?? 0)
           const storage = isDefect ? b.storage_defect : b.storage_good
-          const packing = isDefect ? 0 : (b.packing_good ?? 0)
-          const inTransit = isDefect ? 0 : b.in_transit
-          const primaryRaw = isDefect ? storage : ready
+          const packing = bypassPacking ? 0 : (b.packing_good ?? 0)
+          const inTransit = bypassPacking ? 0 : b.in_transit
+          const primaryRaw = bypassPacking ? storage : ready
           const rv = reserved[k] ?? 0
           map[k] = { free: Math.max(0, primaryRaw - rv), ready, reserved: rv, storage, packing, inTransit, isDefect }
         }
@@ -570,7 +572,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       {showPicker && (
         <BalancePicker
           clientId={doc.client_id}
-          cargoType={isDefectCargo ? 'defect' : 'good'}
+          cargoType={doc.cargo_type as DispatchCargoType}
           source="dispatch"
           onAdd={(item, qty) => { void onAddLine(item, qty); setShowPicker(false) }}
           onClose={() => setShowPicker(false)}

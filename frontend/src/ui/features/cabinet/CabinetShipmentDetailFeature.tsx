@@ -35,7 +35,7 @@ export function CabinetShipmentDetailFeature({ docId }: Props) {
 
   return (
     <DetailPage
-      title={doc ? `${isDefect ? 'Возврат брака' : 'Отгрузка'} ${doc.doc_number}` : 'Отгрузка'}
+      title={doc ? `${isDefect ? 'Возврат брака' : doc.cargo_type === 'good_unpacked' ? 'Отгрузка без упаковки' : 'Отгрузка'} ${doc.doc_number}` : 'Отгрузка'}
       subtitle={storeNames.length > 0 ? storeNames.join(', ') : undefined}
       backTo="/cabinet/shipments"
       actions={doc && (

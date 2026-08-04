@@ -95,6 +95,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   const createdIdRef = useRef<string | null>(null)
 
   const isDefect = cargoType === 'defect'
+  const isUnpacked = cargoType === 'good_unpacked'
+  // Брак и годный без упаковки минуют задачу упаковки: источник — склад (storage).
+  const bypassPacking = isDefect || isUnpacked
 
   useEffect(() => {
     const ac = new AbortController()
@@ -140,10 +143,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
             size_id: l.size_id,
             size_name: l.size_name,
             qty: l.qty,
-            ready: d.cargo_type === 'defect' ? 0 : ((p?.ready_good ?? 0) + (p?.packed_good ?? 0)),
+            ready: d.cargo_type !== 'good' ? 0 : ((p?.ready_good ?? 0) + (p?.packed_good ?? 0)),
             onHand: d.cargo_type === 'defect' ? (p?.storage_defect ?? 0) : (p?.storage_good ?? 0),
-            packing: d.cargo_type === 'defect' ? 0 : (p?.packing_good ?? 0),
-            inTransit: d.cargo_type === 'defect' ? 0 : (p?.in_transit ?? 0),
+            packing: d.cargo_type !== 'good' ? 0 : (p?.packing_good ?? 0),
+            inTransit: d.cargo_type !== 'good' ? 0 : (p?.in_transit ?? 0),
             sku_pending: !!p?.sku_pending,
             itemsPerBox: l.items_per_box ?? p?.items_per_box ?? null,
             boxesPerPallet: l.boxes_per_pallet ?? p?.boxes_per_pallet ?? null,
@@ -208,8 +211,8 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   // автоматически по готовности (бэк паркует). Брак упаковку минует — только со склада.
   // Товар лишь на хранении/в пути пакуется отдельной задачей — его сохраняем черновиком.
   const reservedFor = (l: DraftLine) => reservedMap[l._key] ?? 0
-  const srcAvail = (l: DraftLine) => Math.max(0, (isDefect ? l.onHand : l.ready) - reservedFor(l))
-  const sendAvail = (l: DraftLine) => isDefect
+  const srcAvail = (l: DraftLine) => Math.max(0, (bypassPacking ? l.onHand : l.ready) - reservedFor(l))
+  const sendAvail = (l: DraftLine) => bypassPacking
     ? Math.max(0, l.onHand - reservedFor(l))
     : Math.max(0, l.ready + l.packing - reservedFor(l))
   const allSendable = lines.every((l) => l.qty <= sendAvail(l))
@@ -228,7 +231,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
   if (!allSendable) blockReasons.push(
     isDefect
       ? 'Часть брака недоступна (на складе или в резерве у других отгрузок) — уменьшите количество'
-      : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик',
+      : isUnpacked
+        ? 'Часть товара недоступна на хранении (нет остатка или в резерве у других отгрузок) — уменьшите количество'
+        : 'Часть запрошенного нельзя передать на подготовку: товар лишь на хранении, ещё в пути или в резерве у других отгрузок — сохраните черновик',
   )
 
   function changeClient(id: string, name: string | null) {
@@ -257,10 +262,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
         size_id: b.size_id,
         size_name: b.size_name,
         qty,
-        ready: cargoType === 'defect' ? 0 : b.ready_good + (b.packed_good ?? 0),
+        ready: cargoType !== 'good' ? 0 : b.ready_good + (b.packed_good ?? 0),
         onHand: cargoType === 'defect' ? b.storage_defect : b.storage_good,
-        packing: cargoType === 'defect' ? 0 : (b.packing_good ?? 0),
-        inTransit: cargoType === 'defect' ? 0 : b.in_transit,
+        packing: cargoType !== 'good' ? 0 : (b.packing_good ?? 0),
+        inTransit: cargoType !== 'good' ? 0 : b.in_transit,
         sku_pending: !!b.sku_pending,
         itemsPerBox: b.items_per_box,
         boxesPerPallet: b.boxes_per_pallet,
@@ -505,6 +510,9 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
           <button className={cargoType === 'good' ? 'btn' : 'btn ghost'} style={{ flex: 1 }} onClick={() => changeCargo('good')}>
             Товар
           </button>
+          <button className={cargoType === 'good_unpacked' ? 'btn' : 'btn ghost'} style={{ flex: 1 }} onClick={() => changeCargo('good_unpacked')}>
+            Без упаковки
+          </button>
           <button className={cargoType === 'defect' ? 'btn' : 'btn ghost'} style={{ flex: 1 }} onClick={() => changeCargo('defect')}>
             Брак
           </button>
@@ -581,10 +589,10 @@ export function DispatchFormScreen({ docId }: { docId?: string } = {}) {
                     <div className="tile-meta">{lineSub(l)}</div>
                     <div className="tile-meta">
                       {`свободно ${freeQ}`}
-                      {reserved > 0 ? ` · ${isDefect ? 'брак' : 'упаковано'} ${isDefect ? l.onHand : l.ready}, в резерве ${reserved}` : ''}
-                      {!isDefect && l.packing > 0 ? ` · на упаковке ${l.packing}` : ''}
-                      {!isDefect && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
-                      {!isDefect && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
+                      {reserved > 0 ? ` · ${isDefect ? 'брак' : isUnpacked ? 'склад' : 'упаковано'} ${bypassPacking ? l.onHand : l.ready}, в резерве ${reserved}` : ''}
+                      {!bypassPacking && l.packing > 0 ? ` · на упаковке ${l.packing}` : ''}
+                      {!bypassPacking && l.onHand > 0 ? ` · склад ${l.onHand}` : ''}
+                      {!bypassPacking && l.inTransit > 0 && <> · <span className="hint-warn">в пути {l.inTransit}</span></>}
                       {overCap ? <> · <span className="hint-danger">превышение</span></> : waiting ? <> · <span className="hint-warn">сверх свободного</span></> : ''}
                     </div>
                   </div>

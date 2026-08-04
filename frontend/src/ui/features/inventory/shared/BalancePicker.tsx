@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getPlannableItems } from '../../../../api/balancesApi'
 import type { PlannableItem } from '../../../../api/balancesApi'
 import { getDispatchReservations } from '../../../../api/dispatchApi'
+import type { DispatchCargoType } from '../../../../api/dispatchApi'
 import type { ShipmentCargoType } from '../../../../api/shipmentsApi'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { Icon } from '../../../primitives/Icon'
@@ -9,7 +10,7 @@ import { NumberStep } from './NumberStep'
 
 type Props = {
   clientId: string | null
-  cargoType: ShipmentCargoType
+  cargoType: ShipmentCargoType | DispatchCargoType
   /**
    * `pack` — выбор для «Задачи упаковки»: источник годного «На хранении» (`storage`),
    * товар ещё предстоит упаковать. `dispatch` — выбор для «Отгрузки»: годный отдаётся
@@ -62,10 +63,12 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
 
   const multi = !!onAddMany
   const isDefect = cargoType === 'defect'
+  // Годный без упаковки: источник отгрузки — годный «На хранении», минуя упаковку.
+  const isUnpacked = cargoType === 'good_unpacked'
   // Отгрузка вычитает резерв и показывает свободный остаток главной цифрой.
   const isDispatch = source === 'dispatch'
   // Упакованное (ready) — источник отгрузки годного; при упаковке (pack) — склад.
-  const dispatchGood = isDispatch && !isDefect
+  const dispatchGood = isDispatch && !isDefect && !isUnpacked
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -98,7 +101,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
           // подготовку можно — уйдёт в «Ожидание упаковки» и продолжится по готовности.
           const packing = dispatchGood ? (b.packing_good ?? 0) : 0
           const storage = isDefect ? b.storage_defect : b.storage_good
-          const inTransit = isDefect ? 0 : b.in_transit
+          const inTransit = isDefect || isUnpacked ? 0 : b.in_transit
           const primaryRaw = dispatchGood ? ready : storage
           const reserved = isDispatch ? (reservedMap[rowKey(b)] ?? 0) : 0
           const free = Math.max(0, primaryRaw - reserved)
@@ -200,7 +203,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
             <div>
               <div style={{ fontWeight: 600, fontSize: 15 }}>Подобрать товар</div>
               <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
-                {isDefect ? 'Брак на хранении' : dispatchGood ? 'Свободный к отгрузке остаток (за вычетом резерва)' : 'Годный товар на хранении и в пути'}
+                {isDefect ? 'Брак на хранении' : dispatchGood ? 'Свободный к отгрузке остаток (за вычетом резерва)' : isUnpacked ? 'Свободный годный на хранении (за вычетом резерва)' : 'Годный товар на хранении и в пути'}
                 {clientId ? ' · по выбранному клиенту' : ''}
               </div>
             </div>
@@ -315,7 +318,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
             {loading ? (
               <div style={{ color: 'var(--c-text-muted)', fontSize: 13, padding: 12 }}>Загрузка…</div>
             ) : rows.length === 0 ? (
-              <EmptyState title="Ничего не найдено" sub={isDefect ? 'Нет брака на хранении по запросу' : 'Нет остатков и товара в пути по запросу'} />
+              <EmptyState title="Ничего не найдено" sub={isDefect ? 'Нет брака на хранении по запросу' : isUnpacked ? 'Нет годного товара на хранении по запросу' : 'Нет остатков и товара в пути по запросу'} />
             ) : (
               rows.map((row, i) => {
                 const k = rowKey(row.item)

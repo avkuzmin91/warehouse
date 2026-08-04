@@ -77,9 +77,10 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
   }, [load])
 
   // Источник зависит от груза: годный берём из «Готов к отгрузке» (ready) или прямо из
-  // «Упаковано» (packed — отгрузка из ещё не завершённой задачи упаковки); брак — из
-  // мест хранения (storage). Всё переезжает в зону отгрузки.
+  // «Упаковано» (packed — отгрузка из ещё не завершённой задачи упаковки); брак и годный
+  // без упаковки — из мест хранения (storage). Всё переезжает в зону отгрузки.
   const isDefect = doc?.cargo_type === 'defect'
+  const isUnpacked = doc?.cargo_type === 'good_unpacked'
   useEffect(() => {
     if (!doc || doc.status !== 'preparing' || !doc.client_id) return
     const ac = new AbortController()
@@ -92,7 +93,7 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
   const sourcesByLine = useMemo(() => {
     const map = new Map<string, ZoneSource[]>()
     if (!doc) return map
-    const srcOps = isDefect ? ['storage'] : ['ready', 'packed']
+    const srcOps = isDefect || isUnpacked ? ['storage'] : ['ready', 'packed']
     const srcQuality = isDefect ? 'defect' : 'good'
     for (const line of doc.lines) {
       const key = balanceKey(line)
@@ -110,7 +111,7 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
       map.set(line.id, [...byZone.values()])
     }
     return map
-  }, [doc, isDefect, zoneBalances])
+  }, [doc, isDefect, isUnpacked, zoneBalances])
 
   // Стабильный request_id на логическое действие (идемпотентность при обрыве сети).
   const reqIds = useRef<Record<string, string>>({})
@@ -188,7 +189,7 @@ export function DispatchPrepareScreen({ docId }: { docId: string }) {
     <div className="screen">
       <AppBar
         title={doc ? doc.doc_number : 'Отгрузка'}
-        sub={doc ? `${isDefect ? 'Брак · ' : ''}${DISPATCH_STATUS_LABELS[doc.status]}` : undefined}
+        sub={doc ? `${isDefect ? 'Брак · ' : isUnpacked ? 'Без упаковки · ' : ''}${DISPATCH_STATUS_LABELS[doc.status]}` : undefined}
         onBack={back}
       />
 
