@@ -248,6 +248,8 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
 
     packing_good = _empty()
     packing_defect = _empty()
+    packing_good_qty = _empty()
+    packing_defect_qty = _empty()
     prod = packing_productivity(connection, date_from=df, date_to=dt, client_id=client_id, with_earnings=True)
     for day in prod.get("days", []):
         i = idx.get(str(day["packed_date"]))
@@ -255,6 +257,8 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
             continue
         packing_good[i] += int(day.get("good_earn_kop", 0) or 0)
         packing_defect[i] += int(day.get("defect_earn_kop", 0) or 0)
+        packing_good_qty[i] += int(day.get("good", 0) or 0)
+        packing_defect_qty[i] += int(day.get("defect", 0) or 0)
         for row in day.get("rows", []):
             _add_client(
                 row.get("client_id"), row.get("client_name"),
@@ -317,6 +321,8 @@ def _income_by_source(connection, *, axis: list[str], client_id: str | None) -> 
         "income_series": income_series,
         "income_total": sum(income_series),
         "by_client": by_client,
+        "packing_good_qty": packing_good_qty,
+        "packing_defect_qty": packing_defect_qty,
     }
 
 
@@ -376,6 +382,108 @@ def pnl_report(connection, *, date_from: str, date_to: str, client_id: str | Non
         "net_cumulative": net_cumulative,
         "income_sources": income_sources,
         "expense_categories": expense_categories,
+    }
+
+
+def pnl_monthly(connection, *, date_from: str, date_to: str, client_id: str | None = None) -> dict:
+    """Помесячная финмодель по факту за [date_from..date_to] (вкл.): операционные показатели
+    (упаковано шт., средний доход на упаковку), доход по источникам, расход по категориям,
+    EBITDA (доход − расход OPEX) и маржа — колонками по месяцам.
+
+    Считается ОДНИМ проходом по всему окну (те же `_income_by_source` и `expense_analytics`,
+    что и в дневном P&L), затем дневные ряды группируются в месяцы. Поэтому сумма месяцев
+    копейка-в-копейку сходится с `pnl_report` в том же окне, а документ, разбитый на рейсы
+    в разных месяцах, атрибутируется к месяцу самого раннего рейса и не задваивается
+    (при помесячных запросах он попал бы в каждый месяц). Крайние месяцы окна могут быть
+    неполными — границы месяца обрезаются окном. Копейки INTEGER."""
+    from modules.expenses.service import expense_analytics
+
+    axis = _days_axis(date_from, date_to)
+    df, dt = axis[0], axis[-1]
+
+    months: list[str] = []
+    day_month: list[int] = []
+    for d in axis:
+        m = d[:7]
+        if not months or months[-1] != m:
+            months.append(m)
+        day_month.append(len(months) - 1)
+    nm = len(months)
+
+    def _bucket(series: list) -> list[int]:
+        out = [0] * nm
+        for i, v in enumerate(series):
+            out[day_month[i]] += int(v)
+        return out
+
+    # ── Доход ──
+    inc = _income_by_source(connection, axis=axis, client_id=client_id)
+    income_series = _bucket(inc["income_series"])
+    income_total = sum(income_series)
+    income_sources = [
+        {
+            "key": s["key"], "label": s["label"], "kind": s["kind"],
+            "amount": s["amount"], "series": _bucket(s["series"]),
+        }
+        for s in inc["sources"]
+    ]
+
+    # ── Операционные показатели: упаковано шт. и средний доход упаковки на 1 шт. ──
+    packed_good = _bucket(inc["packing_good_qty"])
+    packed_defect = _bucket(inc["packing_defect_qty"])
+    packed_total = [g + d for g, d in zip(packed_good, packed_defect)]
+    packing_income = [0] * nm
+    for s in inc["sources"]:
+        if s["key"] in ("packing_good", "packing_defect"):
+            for j, v in enumerate(_bucket(s["series"])):
+                packing_income[j] += v
+    avg_packing_income_kop = [
+        (round(packing_income[j] / packed_total[j]) if packed_total[j] > 0 else None)
+        for j in range(nm)
+    ]
+
+    # ── Расход (дневная аналитика расходов целиком, оси окон совпадают) ──
+    exp = expense_analytics(connection, date_from=df, date_to=dt, kinds=None)
+    exp_by_date = {p["date"]: int(p["amount"]) for p in exp["series"]}
+    expense_series = _bucket([exp_by_date.get(d, 0) for d in axis])
+    expense_total = sum(expense_series)
+    expense_categories = [
+        {
+            "key": c["name"], "label": c["name"], "kind": c.get("kind"),
+            "amount": sum(int(v) for v in c["series"]),
+            "series": _bucket(c["series"]),
+        }
+        for c in exp.get("categories", [])
+    ]
+    expense_categories.sort(key=lambda c: c["amount"], reverse=True)
+
+    # ── Итог: EBITDA месяца и маржа (net/income; без дохода — None, «—») ──
+    net_series = [income_series[j] - expense_series[j] for j in range(nm)]
+    net_total = income_total - expense_total
+    margin_series = [
+        (round(net_series[j] / income_series[j] * 100, 1) if income_series[j] > 0 else None)
+        for j in range(nm)
+    ]
+    margin_pct = round(net_total / income_total * 100, 1) if income_total > 0 else None
+
+    return {
+        "date_from": df,
+        "date_to": dt,
+        "months": months,
+        "packed_good": packed_good,
+        "packed_defect": packed_defect,
+        "packed_total": packed_total,
+        "avg_packing_income_kop": avg_packing_income_kop,
+        "income_total": income_total,
+        "income_series": income_series,
+        "income_sources": income_sources,
+        "expense_total": expense_total,
+        "expense_series": expense_series,
+        "expense_categories": expense_categories,
+        "net_total": net_total,
+        "net_series": net_series,
+        "margin_pct": margin_pct,
+        "margin_series": margin_series,
     }
 
 

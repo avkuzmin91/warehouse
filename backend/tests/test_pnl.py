@@ -428,12 +428,71 @@ def test_logistics_analytics_by_vehicle(admin_client, client_id):
     assert only_fura["spent_total"] == 50000
 
 
+def test_pnl_monthly_buckets_by_trip_month(admin_client, client_id):
+    """Помесячная финмодель: доход ложится в месяц фактического рейса, сумма месяцев
+    сходится с дневным /pnl в том же окне, EBITDA месяца = доход − расход."""
+    admin_client.post(f"/pallet-pricing/clients/{client_id}/prices",
+                      json={"price_kop": 35000, "effective_from": "2026-06-01"})
+    # Июнь: палеты 5×35000 = 175000 + логистика 1000 ₽ = 100000 → 275000.
+    _dispatch_in_trip(
+        admin_client, client_id, pallets=[3, 2], logistics_rub=1000.0, trip_cost_rub=400.0,
+        ship_date="2026-06-10", arrived_at="2026-06-12T08:00:00+00:00",
+    )
+    # Июль: палеты 2×35000 = 70000 + логистика 500 ₽ = 50000 → 120000.
+    _dispatch_in_trip(
+        admin_client, client_id, pallets=[2], logistics_rub=500.0, trip_cost_rub=300.0,
+        ship_date="2026-06-28", arrived_at="2026-07-05T08:00:00+00:00",
+    )
+
+    body = admin_client.get(
+        f"/pnl/monthly?date_from=2026-06-01&date_to=2026-07-31&client_id={client_id}"
+    ).json()
+
+    assert body["months"] == ["2026-06", "2026-07"]
+    assert body["income_series"] == [275000, 120000]
+    assert body["income_total"] == 395000
+
+    sources = {s["key"]: s for s in body["income_sources"]}
+    assert sources["pallets"]["series"] == [175000, 70000]
+    assert sources["logistics"]["series"] == [100000, 50000]
+
+    # EBITDA месяца = доход − расход; ряды согласованы поэлементно.
+    for j in range(2):
+        assert body["net_series"][j] == body["income_series"][j] - body["expense_series"][j]
+    assert body["net_total"] == body["income_total"] - body["expense_total"]
+
+    # Сумма месяцев сходится с дневным P&L в том же окне (общий расчёт).
+    pnl = admin_client.get(
+        f"/pnl?date_from=2026-06-01&date_to=2026-07-31&client_id={client_id}"
+    ).json()
+    assert body["income_total"] == pnl["income_total"]
+    assert body["expense_total"] == pnl["expense_total"]
+
+    # Операционные ряды выровнены по месяцам (упаковки в сценарии не было — нули).
+    assert body["packed_total"] == [0, 0]
+    assert body["avg_packing_income_kop"] == [None, None]
+
+
+def test_pnl_monthly_partial_month_window(admin_client, client_id):
+    """Неполные крайние месяцы: окно 15.06–10.07 даёт два месяца-колонки."""
+    body = admin_client.get(
+        f"/pnl/monthly?date_from=2026-06-15&date_to=2026-07-10&client_id={client_id}"
+    ).json()
+    assert body["months"] == ["2026-06", "2026-07"]
+    assert len(body["income_series"]) == 2
+    assert len(body["expense_series"]) == 2
+    assert len(body["margin_series"]) == 2
+
+
 def test_pnl_requires_finance_role(warehouse_client, client_id):
     assert warehouse_client.get(
         "/pnl?date_from=2026-06-01&date_to=2026-06-30"
     ).status_code == 403
     assert warehouse_client.get(
         "/pnl/income?date_from=2026-06-01&date_to=2026-06-30"
+    ).status_code == 403
+    assert warehouse_client.get(
+        "/pnl/monthly?date_from=2026-06-01&date_to=2026-06-30"
     ).status_code == 403
     assert warehouse_client.get(
         "/pnl/trips?date_from=2026-06-01&date_to=2026-06-30"

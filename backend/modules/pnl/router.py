@@ -8,6 +8,7 @@ from modules.expenses.service import ensure_analytics_window, validate_date
 from modules.pnl.schemas import (
     IncomeAnalyticsResponse,
     LogisticsAnalyticsResponse,
+    MonthlyPnlResponse,
     PnlDayResponse,
     PnlResponse,
     TripProfitabilityResponse,
@@ -16,6 +17,7 @@ from modules.pnl.service import (
     income_analytics,
     logistics_analytics,
     pnl_day_detail,
+    pnl_monthly,
     pnl_report,
     trip_profitability,
 )
@@ -44,6 +46,25 @@ def get_pnl(
     with get_connection() as conn:
         data = pnl_report(conn, date_from=df, date_to=dt, client_id=(client_id or None))
     return PnlResponse(**data)
+
+
+@router.get("/pnl/monthly", response_model=MonthlyPnlResponse)
+def get_pnl_monthly(
+    date_from: str = Query(...),
+    date_to:   str = Query(...),
+    client_id: str | None = Query(None),
+    user=Depends(_get_finance),
+):
+    """Помесячная финмодель по факту: упаковано шт., средний доход на упаковку, доход по
+    источникам, расход по категориям, EBITDA и маржа — колонками по месяцам. Считается тем
+    же расчётом, что и дневной P&L, поэтому сумма месяцев сходится с /pnl в том же окне.
+    Видна финансовым ролям (админ/менеджер)."""
+    df = validate_date(date_from)
+    dt = validate_date(date_to)
+    ensure_analytics_window(df, dt)
+    with get_connection() as conn:
+        data = pnl_monthly(conn, date_from=df, date_to=dt, client_id=(client_id or None))
+    return MonthlyPnlResponse(**data)
 
 
 @router.get("/pnl/income", response_model=IncomeAnalyticsResponse)

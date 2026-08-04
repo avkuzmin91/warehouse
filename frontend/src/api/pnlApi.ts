@@ -28,6 +28,34 @@ export type Pnl = {
 
 export type PnlParams = { date_from: string; date_to: string; client_id?: string }
 
+export type MonthlyPnlSeries = {
+  key: string
+  label: string
+  kind: string | null
+  amount: number       // копейки за период
+  series: number[]     // копейки по месяцам months
+}
+
+export type MonthlyPnl = {
+  date_from: string
+  date_to: string
+  months: string[]                          // 'YYYY-MM'
+  packed_good: number[]                     // упаковано годного, шт.
+  packed_defect: number[]
+  packed_total: number[]
+  avg_packing_income_kop: (number | null)[] // доход упаковки на 1 шт.; null — не паковали
+  income_total: number
+  income_series: number[]
+  income_sources: MonthlyPnlSeries[]
+  expense_total: number
+  expense_series: number[]
+  expense_categories: MonthlyPnlSeries[]
+  net_total: number                         // EBITDA: доход − расход OPEX
+  net_series: number[]
+  margin_pct: number | null
+  margin_series: (number | null)[]
+}
+
 export type IncomeSourceSeries = {
   key: string
   name: string
@@ -168,6 +196,14 @@ export function getPnl(params: PnlParams, signal?: AbortSignal) {
   sp.set('date_to', params.date_to)
   if (params.client_id) sp.set('client_id', params.client_id)
   return request<Pnl>(`/pnl?${sp.toString()}`, { signal })
+}
+
+export function getPnlMonthly(params: PnlParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('date_from', params.date_from)
+  sp.set('date_to', params.date_to)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  return request<MonthlyPnl>(`/pnl/monthly?${sp.toString()}`, { signal })
 }
 
 export function getIncomeAnalytics(params: PnlParams, signal?: AbortSignal) {
