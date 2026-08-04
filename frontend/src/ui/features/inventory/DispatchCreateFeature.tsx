@@ -701,7 +701,7 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
 
         {/* Right — маршрут + итог + готовность */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <RailPanel status="draft" />
+          <RailPanel status="draft" cargoType={cargoType} />
           <Panel icon="chart" title="Итого">
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="SKU" mono>{lines.length}</ReadRow>

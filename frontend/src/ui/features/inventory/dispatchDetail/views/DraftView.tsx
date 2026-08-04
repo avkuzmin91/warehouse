@@ -550,7 +550,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <RailPanel status={doc.status} ops={doc.ops} />
+        <RailPanel status={doc.status} ops={doc.ops} cargoType={doc.cargo_type as DispatchCargoType} />
         <Panel icon="chart" title="Итого">
           <div style={{ padding: '0 2px' }}>
             <ReadRow label="SKU" mono>{skuCount}</ReadRow>

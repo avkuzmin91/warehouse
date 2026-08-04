@@ -1,4 +1,4 @@
-import type { DispatchDetail } from '../../../../../api/dispatchApi'
+import type { DispatchCargoType, DispatchDetail } from '../../../../../api/dispatchApi'
 import { Icon } from '../../../../primitives/Icon'
 import { Alert } from '../../../../primitives/Alert'
 import { Panel, ReadRow, RailPanel } from '../components/processUI'
@@ -62,7 +62,7 @@ export function ReadyView({ doc, onOpenTrip, onSavePallets, onSaveBoxes }: Props
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <RailPanel status={doc.status} ops={doc.ops} />
+          <RailPanel status={doc.status} ops={doc.ops} cargoType={doc.cargo_type as DispatchCargoType} />
 
           {doc.trips.length > 0 && (
             <Panel icon="truckOut" title={doc.trips.length > 1 ? 'Рейсы отгрузки' : 'Рейс отгрузки'}>
