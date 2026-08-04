@@ -8,7 +8,7 @@ from psycopg import IntegrityError
 
 from config import (
     INV_OP_INTAKE,
-    INV_OP_SHIPPED,
+    INV_OP_SINKS,
     INV_Q_DEFECT,
     INV_Q_GOOD,
     PRODUCT_LIST_SORT_COLUMNS,
@@ -70,6 +70,8 @@ from .service import (
 )
 
 router = APIRouter(tags=["products"])
+
+_SINKS_SQL = ", ".join(f"'{s}'" for s in INV_OP_SINKS)
 
 
 def _get_strict_admin(user=Depends(get_current_user)):
@@ -146,9 +148,9 @@ def list_products(
     stock_join_sql = f"""
         LEFT JOIN (
             SELECT product_id,
-                   SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                   SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                      - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS good_in,
-                   SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                   SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                      - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS defect_in
             FROM zone_relocations
             GROUP BY product_id
@@ -225,9 +227,9 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
             ) vcnt ON vcnt.product_id = p.id
             LEFT JOIN (
                 SELECT product_id,
-                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                          - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS good_in,
-                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                          - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS defect_in
                 FROM zone_relocations
                 WHERE product_id = ?
@@ -545,9 +547,9 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             LEFT JOIN sizes sz ON sz.id = v.size_id
             LEFT JOIN (
                 SELECT product_id, color_id, size_id,
-                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                       SUM(CASE WHEN to_quality='{INV_Q_GOOD}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                          - SUM(CASE WHEN from_quality='{INV_Q_GOOD}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS good_in,
-                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op<>'{INV_OP_SHIPPED}' THEN qty ELSE 0 END)
+                       SUM(CASE WHEN to_quality='{INV_Q_DEFECT}' AND to_op NOT IN ({_SINKS_SQL}) THEN qty ELSE 0 END)
                          - SUM(CASE WHEN from_quality='{INV_Q_DEFECT}' AND from_op<>'{INV_OP_INTAKE}' THEN qty ELSE 0 END) AS defect_in
                 FROM zone_relocations
                 WHERE product_id = ?
