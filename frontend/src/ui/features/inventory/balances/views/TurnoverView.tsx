@@ -12,6 +12,7 @@ import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
+import { ProductLink } from '../../../shared/ProductLink'
 import { PositionHistoryDrawer } from '../PositionHistoryDrawer'
 
 const PAGE_SIZE = 50
@@ -153,7 +154,9 @@ export function TurnoverView() {
                 onClick={() => setSelected(item)}
               >
                 <Td>
-                  <div style={{ fontWeight: 500 }}>{item.product_name ?? '—'}</div>
+                  <div style={{ fontWeight: 500 }}>
+                    <ProductLink productId={item.product_id}>{item.product_name ?? '—'}</ProductLink>
+                  </div>
                   <div className="t-sub mono">
                     {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                   </div>
