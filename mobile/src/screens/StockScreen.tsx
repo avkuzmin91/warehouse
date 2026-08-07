@@ -43,6 +43,51 @@ function rowSort(a: ZoneBalance, b: ZoneBalance): number {
   return (a.location_name ?? '').localeCompare(b.location_name ?? '', 'ru')
 }
 
+// Сортировка вариантов внутри артикула: цвет, размер по сетке (sort_order,
+// без порядка — после упорядоченных по имени), затем процесс/качество.
+function variantSort(a: ZoneBalance, b: ZoneBalance): number {
+  const c = (a.color_name ?? '').localeCompare(b.color_name ?? '', 'ru')
+  if (c !== 0) return c
+  const ao = a.size_sort_order ?? null
+  const bo = b.size_sort_order ?? null
+  if (ao != null && bo != null && ao !== bo) return ao - bo
+  if (ao != null && bo == null) return -1
+  if (ao == null && bo != null) return 1
+  const s = (a.size_name ?? '').localeCompare(b.size_name ?? '', 'ru')
+  if (s !== 0) return s
+  return rowSort(a, b)
+}
+
+// Группа строк места по артикулу×клиенту: одежда с её цветами/размерами
+// сворачивается в одну карточку, «не одежда» остаётся плоской строкой.
+type ProductGroup = {
+  key: string
+  product_name: string
+  product_sku: string
+  rows: ZoneBalance[]
+  total: number
+  flat: boolean
+}
+
+function groupByProduct(rows: ZoneBalance[]): ProductGroup[] {
+  const map = new Map<string, ProductGroup>()
+  for (const r of rows) {
+    const key = `${r.product_id}__${r.client_id ?? ''}`
+    let g = map.get(key)
+    if (!g) {
+      g = { key, product_name: r.product_name, product_sku: r.product_sku, rows: [], total: 0, flat: false }
+      map.set(key, g)
+    }
+    g.rows.push(r)
+    g.total += r.qty
+  }
+  for (const g of map.values()) {
+    g.rows.sort(variantSort)
+    g.flat = g.rows.length === 1 && !g.rows[0].color_id && !g.rows[0].size_id
+  }
+  return [...map.values()].sort((a, b) => a.product_name.localeCompare(b.product_name, 'ru'))
+}
+
 export function StockScreen() {
   const toast = useToast()
   const [search, setSearch] = useState('')
@@ -53,6 +98,7 @@ export function StockScreen() {
   const [error, setError] = useState('')
 
   const [selected, setSelected] = useState<string | null>(null)
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const [moveFrom, setMoveFrom] = useState<ZoneBalance | null>(null)
   const [qualFrom, setQualFrom] = useState<ZoneBalance | null>(null)
   const [woffFrom, setWoffFrom] = useState<ZoneBalance | null>(null)
@@ -140,6 +186,23 @@ export function StockScreen() {
   }, [items])
 
   const selectedPlace = places.find((p) => p.key === selected) ?? null
+
+  // Внутри места артикулы свёрнуты в группы; при активном поиске раскрываем все —
+  // найденный вариант не должен прятаться под свёрнутым артикулом.
+  const groups = useMemo(
+    () => (selectedPlace ? groupByProduct(selectedPlace.rows) : []),
+    [selectedPlace],
+  )
+  const searchActive = search.trim() !== ''
+  const isGroupOpen = (key: string) => searchActive || openGroups.has(key)
+  const toggleGroup = (key: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Заголовок: список / название места.
   const heading = selectedPlace ? selectedPlace.name : 'Остатки'
@@ -229,16 +292,45 @@ export function StockScreen() {
 
         {selectedPlace && (
           <>
-            <div className="sec">Где лежит</div>
-            {selectedPlace.rows.map((r, i) => (
-              <RowCard
-                key={`${r.location_id ?? '∅'}__${r.op_status}__${r.quality}__${i}`}
-                row={r}
-                onMove={() => setMoveFrom(r)}
-                onQuality={() => setQualFrom(r)}
-                onWriteOff={() => setWoffFrom(r)}
-              />
-            ))}
+            <div className="sec">
+              Товары
+              <span className="sec-count">{groups.length}</span>
+            </div>
+            {groups.map((g) => {
+              const open = isGroupOpen(g.key)
+              const renderRows = (rows: ZoneBalance[], hideProduct: boolean) =>
+                rows.map((r, i) => (
+                  <RowCard
+                    key={`${g.key}__${r.location_id ?? '∅'}__${r.color_id ?? ''}__${r.size_id ?? ''}__${r.op_status}__${r.quality}__${i}`}
+                    row={r}
+                    hideProduct={hideProduct}
+                    onMove={() => setMoveFrom(r)}
+                    onQuality={() => setQualFrom(r)}
+                    onWriteOff={() => setWoffFrom(r)}
+                  />
+                ))
+              if (g.flat) return renderRows(g.rows, false)
+              return (
+                <div key={g.key}>
+                  <button className="tile" onClick={() => toggleGroup(g.key)}>
+                    <div className="tile-body">
+                      <div className="tile-title">{g.product_name}</div>
+                      <div className="tile-meta mono">
+                        {g.product_sku} · {g.rows.length} поз.
+                      </div>
+                    </div>
+                    <span className="tile-qty">
+                      {g.total}
+                      <span className="u">шт</span>
+                    </span>
+                    <span className="tile-chev" style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}>
+                      <Icon name="chev" size={18} />
+                    </span>
+                  </button>
+                  {open && renderRows(g.rows, true)}
+                </div>
+              )
+            })}
           </>
         )}
       </PullToRefresh>
@@ -285,17 +377,22 @@ export function StockScreen() {
 
 function RowCard({
   row,
+  hideProduct = false,
   onMove,
   onQuality,
   onWriteOff,
 }: {
   row: ZoneBalance
+  /** Строка внутри группы артикула: имя товара уже в шапке группы — показываем вариант. */
+  hideProduct?: boolean
   onMove: () => void
   onQuality: () => void
   onWriteOff: () => void
 }) {
-  // Место уже в заголовке экрана — в строке показываем товар.
-  const primary = [row.product_name, variantLabel(row)].filter(Boolean).join(' · ')
+  // Место уже в заголовке экрана — в строке показываем товар (или вариант в группе).
+  const primary = hideProduct
+    ? variantLabel(row) || 'Без цвета и размера'
+    : [row.product_name, variantLabel(row)].filter(Boolean).join(' · ')
   // Действия доступны для любого нетерминального статуса с привязкой к месту
   // (бэк требует зону-источник). Вне «На хранении» качество меняется только good → defect.
   const actionable = !!row.location_id && row.qty > 0
