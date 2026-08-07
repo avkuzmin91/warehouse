@@ -8,6 +8,7 @@ from config import (
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
     INV_OP_INTAKE,
+    INV_OP_SHIPPED,
     INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -23,6 +24,14 @@ from config import (
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     SHIPMENT_CARGO_DEFECT,
+    STOCK_EVENT_INCOMING,
+    STOCK_EVENT_RECEIPT,
+    STOCK_EVENT_RECEIPT_ADJUST,
+    STOCK_EVENT_SHIPMENT,
+    STOCK_EVENT_SHIPMENT_RETURN,
+    STOCK_EVENT_STOCK_ENTRY,
+    STOCK_EVENT_WRITE_OFF,
+    STOCK_EVENT_WRITE_OFF_UNDO,
     WRITEOFF_REASON_OTHER,
 )
 from dbconn import ci_like_substring_param
@@ -1405,3 +1414,366 @@ def list_zone_relocations(
         for row in rows
     ]
     return ZoneRelocationListResponse(items=items, total=total, page=page, limit=limit)
+
+
+# ── Оборот запаса: приход → расход → остаток ────────────────────────────────
+#
+# Отдельный от «Перемещений» срез журнала: только движения, меняющие ОБЩИЙ остаток
+# позиции. Внутренние переходы (storage → packing → packed → ready, смена места,
+# смена качества) идут между нетерминальными корзинами и на сумму остатка не влияют —
+# в ведомость они не попадают, иначе «как пришли от поступления к остатку» тонет
+# в технологических шагах.
+#
+# Инвариант: остаток позиции = Σ знаковых дельт значимых событий. Он же — сумма
+# нетерминальных корзин в get_balances (движение между корзинами взаимно
+# сокращается), поэтому «Остаток на конец» без верхней границы периода совпадает
+# с текущим остатком в «По товарам».
+
+# Бизнес-день (МСК) движения из UTC-метки журнала: остаток считается по московским
+# суткам, как и все склады́ские отчёты (см. business_today в modules/timesheet).
+_MSK_DAY_SQL = "((zr.created_at)::timestamptz AT TIME ZONE 'Europe/Moscow')::date::text"
+
+_SIGNIFICANT_SQL = (
+    f"(zr.from_op = '{INV_OP_INTAKE}' OR zr.to_op = '{INV_OP_INTAKE}'"
+    f" OR zr.from_op IN ({_SINKS_SQL}) OR zr.to_op IN ({_SINKS_SQL}))"
+)
+
+# Классификация значимого движения. Порядок ветвей важен: приход и корректировка
+# приёмки различаются только направлением по оси intake.
+_EVENT_KIND_SQL = f"""CASE
+        WHEN zr.from_op = '{INV_OP_INTAKE}' AND zr.receipt_line_id IS NOT NULL THEN '{STOCK_EVENT_RECEIPT}'
+        WHEN zr.from_op = '{INV_OP_INTAKE}' THEN '{STOCK_EVENT_STOCK_ENTRY}'
+        WHEN zr.to_op   = '{INV_OP_INTAKE}' THEN '{STOCK_EVENT_RECEIPT_ADJUST}'
+        WHEN zr.to_op   = '{INV_OP_SHIPPED}' THEN '{STOCK_EVENT_SHIPMENT}'
+        WHEN zr.from_op = '{INV_OP_SHIPPED}' THEN '{STOCK_EVENT_SHIPMENT_RETURN}'
+        WHEN zr.to_op   = '{INV_OP_WRITTEN_OFF}' THEN '{STOCK_EVENT_WRITE_OFF}'
+        ELSE '{STOCK_EVENT_WRITE_OFF_UNDO}'
+    END"""
+
+_INCOMING_SQL = ", ".join(f"'{k}'" for k in STOCK_EVENT_INCOMING)
+_DELTA_SQL = f"CASE WHEN kind IN ({_INCOMING_SQL}) THEN qty ELSE -qty END"
+
+TURNOVER_HISTORY_LIMIT = 2000
+
+
+def _period_exprs(date_from: str | None, date_to: str | None) -> tuple[str, str, str, list]:
+    """(до периода, внутри периода, по конец периода) + параметры дат в порядке SQL."""
+    params: list = []
+    before = "FALSE"
+    if date_from:
+        before = "day < ?"
+        params.append(date_from)
+
+    in_parts: list[str] = []
+    if date_from:
+        in_parts.append("day >= ?")
+        params.append(date_from)
+    if date_to:
+        in_parts.append("day <= ?")
+        params.append(date_to)
+    in_period = " AND ".join(in_parts) if in_parts else "TRUE"
+
+    upto = "TRUE"
+    if date_to:
+        upto = "day <= ?"
+        params.append(date_to)
+    return before, in_period, upto, params
+
+
+def get_turnover(
+    connection,
+    *,
+    page: int,
+    limit: int,
+    client_id: str | None,
+    search: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    only_moved: bool,
+) -> "TurnoverListResponse":
+    """Оборотная ведомость по позициям: остаток на начало → приход/расход → остаток на конец."""
+    from modules.balances.schemas import TurnoverItem, TurnoverListResponse, TurnoverTotals
+
+    before, in_period, upto, date_params = _period_exprs(date_from, date_to)
+
+    ev_conds = [_SIGNIFICANT_SQL]
+    ev_params: list = []
+    if client_id:
+        ev_conds.append("zr.client_id = ?")
+        ev_params.append(client_id.strip())
+
+    def _sum(kind: str) -> str:
+        return f"COALESCE(SUM(qty) FILTER (WHERE in_period AND kind = '{kind}'), 0)"
+
+    out_conds: list[str] = []
+    out_params: list = []
+    if search:
+        s = ci_like_substring_param(search)
+        out_conds.append(
+            "(fold_ci(COALESCE(NULLIF(TRIM(prod.name), ''), a.product_name)) LIKE ?"
+            " OR fold_ci(COALESCE(NULLIF(TRIM(prod.sku), ''), a.product_sku)) LIKE ?)"
+        )
+        out_params += [s, s]
+    if only_moved:
+        out_conds.append("(a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off) + ABS(a.adjustments)) > 0")
+    else:
+        out_conds.append(
+            "(a.opening <> 0 OR a.closing <> 0"
+            " OR (a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off) + ABS(a.adjustments)) > 0)"
+        )
+    out_where = "WHERE " + " AND ".join(out_conds)
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        f"""
+        WITH ev AS (
+            SELECT zr.product_id, zr.client_id, zr.color_id, zr.size_id,
+                   zr.product_name, zr.product_sku, zr.client_name, zr.color_name, zr.size_name,
+                   zr.qty, {_MSK_DAY_SQL} AS day, {_EVENT_KIND_SQL} AS kind
+            FROM zone_relocations zr
+            WHERE {" AND ".join(ev_conds)}
+        ),
+        marked AS (
+            SELECT ev.*, {_DELTA_SQL} AS delta,
+                   ({before}) AS before_period, ({in_period}) AS in_period, ({upto}) AS upto_period
+            FROM ev
+        ),
+        agg AS (
+            SELECT product_id, client_id, color_id, size_id,
+                   MAX(product_name) AS product_name, MAX(product_sku) AS product_sku,
+                   MAX(client_name)  AS client_name,  MAX(color_name)  AS color_name,
+                   MAX(size_name)    AS size_name,
+                   COALESCE(SUM(delta) FILTER (WHERE before_period), 0) AS opening,
+                   {_sum(STOCK_EVENT_RECEIPT)}     AS receipt,
+                   {_sum(STOCK_EVENT_STOCK_ENTRY)} AS stock_entry,
+                   {_sum(STOCK_EVENT_SHIPMENT)} - {_sum(STOCK_EVENT_SHIPMENT_RETURN)} AS shipped,
+                   {_sum(STOCK_EVENT_WRITE_OFF)} - {_sum(STOCK_EVENT_WRITE_OFF_UNDO)} AS written_off,
+                   -{_sum(STOCK_EVENT_RECEIPT_ADJUST)} AS adjustments,
+                   COALESCE(SUM(delta) FILTER (WHERE upto_period), 0) AS closing
+            FROM marked
+            GROUP BY product_id, client_id, color_id, size_id
+        )
+        SELECT a.product_id, a.client_id, a.color_id, a.size_id,
+               COALESCE(NULLIF(TRIM(prod.name), ''), a.product_name) AS product_name,
+               COALESCE(NULLIF(TRIM(prod.sku), ''),  a.product_sku)  AS product_sku,
+               COALESCE(lcl.name, a.client_name) AS client_name,
+               COALESCE(lco.name, a.color_name)  AS color_name,
+               COALESCE(lsz.name, a.size_name)   AS size_name,
+               a.opening, a.receipt, a.stock_entry, a.shipped, a.written_off,
+               a.adjustments, a.closing,
+               COUNT(*) OVER()             AS _total,
+               SUM(a.opening)     OVER()   AS _t_opening,
+               SUM(a.receipt)     OVER()   AS _t_receipt,
+               SUM(a.stock_entry) OVER()   AS _t_stock_entry,
+               SUM(a.shipped)     OVER()   AS _t_shipped,
+               SUM(a.written_off) OVER()   AS _t_written_off,
+               SUM(a.adjustments) OVER()   AS _t_adjustments,
+               SUM(a.closing)     OVER()   AS _t_closing
+        FROM agg a
+        LEFT JOIN products prod ON prod.id = a.product_id
+        LEFT JOIN clients  lcl  ON lcl.id  = a.client_id
+        LEFT JOIN colors   lco  ON lco.id  = a.color_id
+        LEFT JOIN sizes    lsz  ON lsz.id  = a.size_id
+        {out_where}
+        ORDER BY (a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off)) DESC,
+                 a.closing DESC, product_name, color_name, size_name
+        LIMIT ? OFFSET ?
+        """,
+        ev_params + date_params + out_params + [limit, offset],
+    ).fetchall()
+
+    total = int(rows[0]["_total"]) if rows else 0
+    totals = TurnoverTotals(
+        opening=int(rows[0]["_t_opening"] or 0),
+        receipt=int(rows[0]["_t_receipt"] or 0),
+        stock_entry=int(rows[0]["_t_stock_entry"] or 0),
+        shipped=int(rows[0]["_t_shipped"] or 0),
+        written_off=int(rows[0]["_t_written_off"] or 0),
+        adjustments=int(rows[0]["_t_adjustments"] or 0),
+        closing=int(rows[0]["_t_closing"] or 0),
+    ) if rows else TurnoverTotals()
+
+    items = [
+        TurnoverItem(
+            product_id=str(row["product_id"]),
+            product_name=row["product_name"],
+            product_sku=row["product_sku"],
+            client_id=row["client_id"],
+            client_name=row["client_name"],
+            color_id=row["color_id"],
+            color_name=row["color_name"],
+            size_id=row["size_id"],
+            size_name=row["size_name"],
+            opening=int(row["opening"] or 0),
+            receipt=int(row["receipt"] or 0),
+            stock_entry=int(row["stock_entry"] or 0),
+            shipped=int(row["shipped"] or 0),
+            written_off=int(row["written_off"] or 0),
+            adjustments=int(row["adjustments"] or 0),
+            closing=int(row["closing"] or 0),
+        )
+        for row in rows
+    ]
+    return TurnoverListResponse(
+        items=items, totals=totals, total=total, page=page, limit=limit,
+        date_from=date_from, date_to=date_to,
+    )
+
+
+def get_stock_history(
+    connection,
+    *,
+    product_id: str,
+    client_id: str | None,
+    color_id: str | None,
+    size_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> "StockHistoryResponse":
+    """Хронология значимых событий позиции с накопительным остатком после каждого.
+
+    Остаток считается «назад от итога»: закрытие позиции известно суммой всех дельт,
+    поэтому усечение длинной истории (TURNOVER_HISTORY_LIMIT последних событий)
+    не ломает накопительный расчёт — показанное окно всё равно сходится с текущим остатком.
+    """
+    from modules.balances.schemas import StockHistoryEvent, StockHistoryResponse
+
+    pos_where = (
+        "zr.product_id = ? AND zr.client_id IS NOT DISTINCT FROM ?"
+        " AND zr.color_id IS NOT DISTINCT FROM ? AND zr.size_id IS NOT DISTINCT FROM ?"
+    )
+    pos_params: list = [product_id, client_id, color_id, size_id]
+
+    totals = connection.execute(
+        f"""
+        SELECT COALESCE(SUM({_DELTA_SQL}), 0) AS closing, COUNT(*) AS cnt
+        FROM (
+            SELECT zr.qty, {_EVENT_KIND_SQL} AS kind
+            FROM zone_relocations zr
+            WHERE {_SIGNIFICANT_SQL} AND {pos_where}
+        ) e
+        """,
+        pos_params,
+    ).fetchone()
+    closing = int(totals["closing"] or 0) if totals else 0
+    total_events = int(totals["cnt"] or 0) if totals else 0
+
+    date_conds = ""
+    date_params: list = []
+    if date_from:
+        date_conds += f" AND {_MSK_DAY_SQL} >= ?"
+        date_params.append(date_from)
+    if date_to:
+        date_conds += f" AND {_MSK_DAY_SQL} <= ?"
+        date_params.append(date_to)
+
+    rows = connection.execute(
+        f"""
+        SELECT zr.id, zr.created_at, zr.qty, zr.reason, zr.comment,
+               zr.from_quality, zr.to_quality, zr.from_zone_name, zr.to_zone_name,
+               zr.trip_id, {_EVENT_KIND_SQL} AS kind,
+               COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email,
+               rd.id AS receipt_id, rd.doc_number AS receipt_number,
+               dd.id AS dispatch_id, dd.doc_number AS dispatch_number,
+               t.trip_number
+        FROM zone_relocations zr
+        LEFT JOIN users u           ON u.id  = zr.created_by
+        LEFT JOIN receipt_lines rl  ON rl.id = zr.receipt_line_id
+        LEFT JOIN receipt_docs rd   ON rd.id = rl.doc_id
+        LEFT JOIN dispatch_lines dl ON dl.id = zr.dispatch_line_id
+        LEFT JOIN dispatch_docs dd  ON dd.id = dl.doc_id
+        LEFT JOIN trip_docs t       ON t.id  = zr.trip_id
+        WHERE {_SIGNIFICANT_SQL} AND {pos_where}{date_conds}
+        ORDER BY zr.created_at DESC, zr.id DESC
+        LIMIT ?
+        """,
+        pos_params + date_params + [TURNOVER_HISTORY_LIMIT],
+    ).fetchall()
+
+    pos = connection.execute(
+        f"""
+        SELECT COALESCE(NULLIF(TRIM(prod.name), ''), MAX(zr.product_name)) AS product_name,
+               COALESCE(NULLIF(TRIM(prod.sku), ''),  MAX(zr.product_sku))  AS product_sku,
+               COALESCE(MAX(lcl.name), MAX(zr.client_name)) AS client_name,
+               COALESCE(MAX(lco.name), MAX(zr.color_name))  AS color_name,
+               COALESCE(MAX(lsz.name), MAX(zr.size_name))   AS size_name
+        FROM zone_relocations zr
+        LEFT JOIN products prod ON prod.id = zr.product_id
+        LEFT JOIN clients  lcl  ON lcl.id  = zr.client_id
+        LEFT JOIN colors   lco  ON lco.id  = zr.color_id
+        LEFT JOIN sizes    lsz  ON lsz.id  = zr.size_id
+        WHERE {pos_where}
+        GROUP BY prod.name, prod.sku
+        """,
+        pos_params,
+    ).fetchone()
+
+    ordered = list(reversed(rows))
+    deltas = [
+        int(r["qty"] or 0) if str(r["kind"]) in STOCK_EVENT_INCOMING else -int(r["qty"] or 0)
+        for r in ordered
+    ]
+    # Хвост истории мог быть отрезан фильтром дат — «остаток после» тогда считается
+    # от закрытия на конец периода, а не от общего итога позиции.
+    tail = 0
+    if date_to:
+        tail_row = connection.execute(
+            f"""
+            SELECT COALESCE(SUM({_DELTA_SQL}), 0) AS d
+            FROM (
+                SELECT zr.qty, {_EVENT_KIND_SQL} AS kind
+                FROM zone_relocations zr
+                WHERE {_SIGNIFICANT_SQL} AND {pos_where} AND {_MSK_DAY_SQL} > ?
+            ) e
+            """,
+            pos_params + [date_to],
+        ).fetchone()
+        tail = int(tail_row["d"] or 0) if tail_row else 0
+
+    running = closing - tail
+    balances: list[int] = []
+    for d in reversed(deltas):
+        balances.append(running)
+        running -= d
+    balances.reverse()
+    opening = running
+
+    events = [
+        StockHistoryEvent(
+            id=str(row["id"]),
+            created_at=str(row["created_at"]),
+            created_by_email=row["created_by_email"],
+            kind=str(row["kind"]),
+            quality=str(row["to_quality"] or row["from_quality"] or INV_Q_GOOD),
+            qty=int(row["qty"] or 0),
+            delta=delta,
+            balance_after=balance,
+            zone_name=row["to_zone_name"] or row["from_zone_name"],
+            receipt_id=str(row["receipt_id"]) if row["receipt_id"] else None,
+            receipt_number=row["receipt_number"],
+            dispatch_id=str(row["dispatch_id"]) if row["dispatch_id"] else None,
+            dispatch_number=row["dispatch_number"],
+            trip_id=str(row["trip_id"]) if row["trip_id"] else None,
+            trip_number=row["trip_number"],
+            reason=row["reason"],
+            comment=row["comment"],
+        )
+        for row, delta, balance in zip(ordered, deltas, balances, strict=True)
+    ]
+
+    return StockHistoryResponse(
+        product_id=product_id,
+        product_name=pos["product_name"] if pos else None,
+        product_sku=pos["product_sku"] if pos else None,
+        client_id=client_id,
+        client_name=pos["client_name"] if pos else None,
+        color_id=color_id,
+        color_name=pos["color_name"] if pos else None,
+        size_id=size_id,
+        size_name=pos["size_name"] if pos else None,
+        opening=opening,
+        closing=closing,
+        events=events,
+        total_events=total_events,
+        truncated=total_events > len(events),
+    )

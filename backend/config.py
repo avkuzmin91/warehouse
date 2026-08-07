@@ -353,6 +353,38 @@ INV_QUALITY_LABELS: dict[str, str] = {
     INV_Q_DEFECT: "Брак",
 }
 
+# Значимые события оборота: движения журнала, меняющие ОБЩИЙ остаток позиции.
+# Внутренние переходы (хранение → упаковка → упаковано → готов к отгрузке, смена
+# места, смена качества) остаток не меняют и в оборотную ведомость не попадают —
+# для них есть журнал «Перемещения». Классификация движения — по осям от/к:
+# из intake — приход, в intake — корректировка приёмки, в сток — расход,
+# из стока — возврат.
+STOCK_EVENT_RECEIPT          = "receipt"           # приход по поступлению (intake → …)
+STOCK_EVENT_STOCK_ENTRY      = "stock_entry"       # заведение остатка без документа
+STOCK_EVENT_RECEIPT_ADJUST   = "receipt_adjust"    # корректировка/сторно приёмки (… → intake)
+STOCK_EVENT_SHIPMENT         = "shipment"          # отгрузка клиенту (… → shipped)
+STOCK_EVENT_SHIPMENT_RETURN  = "shipment_return"   # возврат отгрузки при отмене рейса
+STOCK_EVENT_WRITE_OFF        = "write_off"         # списание (… → written_off)
+STOCK_EVENT_WRITE_OFF_UNDO   = "write_off_undo"    # откат списания
+
+STOCK_EVENT_LABELS: dict[str, str] = {
+    STOCK_EVENT_RECEIPT:         "Поступление",
+    STOCK_EVENT_STOCK_ENTRY:     "Заведение остатка",
+    STOCK_EVENT_RECEIPT_ADJUST:  "Корректировка приёмки",
+    STOCK_EVENT_SHIPMENT:        "Отгрузка",
+    STOCK_EVENT_SHIPMENT_RETURN: "Возврат отгрузки",
+    STOCK_EVENT_WRITE_OFF:       "Списание",
+    STOCK_EVENT_WRITE_OFF_UNDO:  "Откат списания",
+}
+
+# События с плюсом к остатку; остальные из STOCK_EVENT_LABELS — с минусом.
+STOCK_EVENT_INCOMING: tuple[str, ...] = (
+    STOCK_EVENT_RECEIPT,
+    STOCK_EVENT_STOCK_ENTRY,
+    STOCK_EVENT_SHIPMENT_RETURN,
+    STOCK_EVENT_WRITE_OFF_UNDO,
+)
+
 # ── Адресное хранение: ячейки стеллажей (unloading_zones со структурой адреса) ──
 # Место хранения с координатами Помещение-Стеллаж-Секция-Этаж (код вида «1-А-10-1»).
 # QR на ячейке несёт идентификатор записи (стабилен при переименовании адреса),
