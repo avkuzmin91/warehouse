@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { getBalancesGrouped, getBalancesSummary, INV_OP_LABELS } from '../../../../../api/balancesApi'
-import type { BalanceGroupItem, BalanceItem, BalanceSummary } from '../../../../../api/balancesApi'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  balanceGroupKey, balanceVariantLabel, getBalancesGrouped, getBalancesSummary,
+  isFlatBalanceGroup, INV_OP_LABELS,
+} from '../../../../../api/balancesApi'
+import type { BalanceGroupItem, BalanceSummary } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useFilterParam, usePageParam } from '../../../../../hooks/useFilterParams'
 import { foldCiSearch } from '../../../../../utils/foldCiSearch'
@@ -12,108 +15,9 @@ import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { BucketCell } from '../../../shared/BucketCell'
+import { SizeMatrix } from '../../../shared/SizeMatrix'
 
 const PAGE_SIZE = 25
-
-function groupKey(g: BalanceGroupItem): string {
-  return `${g.product_id}::${g.client_id ?? ''}`
-}
-
-/** Группа-«не одежда»: единственный вариант без цвета и размера — рисуем плоской строкой. */
-function isFlatGroup(g: BalanceGroupItem): boolean {
-  return g.variants_count === 1 && !g.items[0].color_id && !g.items[0].size_id
-}
-
-function variantLabel(item: BalanceItem): string {
-  return [item.color_name, item.size_name].filter(Boolean).join(' · ') || 'Без цвета и размера'
-}
-
-/** Сетка цвет×размер: строки — цвета, колонки — размеры (по sort_order справочника). */
-function SizeMatrix({ group }: { group: BalanceGroupItem }) {
-  const { colorRows, sizeCols } = useMemo(() => {
-    const colors: { id: string | null; name: string }[] = []
-    const colorSeen = new Set<string>()
-    const sizeMap = new Map<string, { id: string | null; name: string; order: number | null }>()
-    for (const it of group.items) {
-      const cKey = it.color_id ?? ''
-      if (!colorSeen.has(cKey)) {
-        colorSeen.add(cKey)
-        colors.push({ id: it.color_id, name: it.color_name ?? 'Без цвета' })
-      }
-      const sKey = it.size_id ?? ''
-      if (!sizeMap.has(sKey)) {
-        sizeMap.set(sKey, { id: it.size_id, name: it.size_name ?? '—', order: it.size_sort_order ?? null })
-      }
-    }
-    const sizes = [...sizeMap.values()].sort((a, b) => {
-      if (a.order != null && b.order != null) return a.order - b.order
-      if (a.order != null) return -1
-      if (b.order != null) return 1
-      return a.name.localeCompare(b.name, 'ru')
-    })
-    return { colorRows: colors, sizeCols: sizes }
-  }, [group])
-
-  const cell = (colorId: string | null, sizeId: string | null): number | null => {
-    const it = group.items.find((i) => i.color_id === colorId && i.size_id === sizeId)
-    return it ? it.total : null
-  }
-
-  return (
-    <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
-      <thead>
-        <tr>
-          <th style={{ textAlign: 'left', padding: '4px 16px 4px 0', fontWeight: 400, color: 'var(--c-text-subtle)', fontSize: 12 }}>Всего, шт</th>
-          {sizeCols.map((s) => (
-            <th key={s.id ?? ''} style={{ textAlign: 'right', padding: '4px 12px', fontWeight: 500 }}>{s.name}</th>
-          ))}
-          <th style={{ textAlign: 'right', padding: '4px 0 4px 16px', fontWeight: 600 }}>Σ</th>
-        </tr>
-      </thead>
-      <tbody>
-        {colorRows.map((c) => {
-          const rowSum = group.items.filter((i) => i.color_id === c.id).reduce((s, i) => s + i.total, 0)
-          return (
-            <tr key={c.id ?? ''}>
-              <td style={{ padding: '4px 16px 4px 0', color: 'var(--c-text-muted)' }}>{c.name}</td>
-              {sizeCols.map((s) => {
-                const v = cell(c.id, s.id)
-                return (
-                  <td key={s.id ?? ''} className="num" style={{ padding: '4px 12px', textAlign: 'right' }}>
-                    {v == null
-                      ? <span style={{ color: 'var(--c-text-faint)' }}>·</span>
-                      : v === 0
-                        ? <span style={{ color: 'var(--c-danger)' }}>0</span>
-                        : v.toLocaleString('ru-RU')}
-                  </td>
-                )
-              })}
-              <td className="num" style={{ padding: '4px 0 4px 16px', textAlign: 'right', fontWeight: 600 }}>
-                {rowSum.toLocaleString('ru-RU')}
-              </td>
-            </tr>
-          )
-        })}
-        {colorRows.length > 1 && (
-          <tr style={{ borderTop: '1px solid var(--c-border)' }}>
-            <td style={{ padding: '4px 16px 4px 0', color: 'var(--c-text-subtle)', fontSize: 12 }}>Σ</td>
-            {sizeCols.map((s) => {
-              const colSum = group.items.filter((i) => i.size_id === s.id).reduce((sum, i) => sum + i.total, 0)
-              return (
-                <td key={s.id ?? ''} className="num" style={{ padding: '4px 12px', textAlign: 'right', fontWeight: 600 }}>
-                  {colSum.toLocaleString('ru-RU')}
-                </td>
-              )
-            })}
-            <td className="num" style={{ padding: '4px 0 4px 16px', textAlign: 'right', fontWeight: 600 }}>
-              {group.total.toLocaleString('ru-RU')}
-            </td>
-          </tr>
-        )}
-      </tbody>
-    </table>
-  )
-}
 
 export function ByProductView() {
   const [groups, setGroups] = useState<BalanceGroupItem[]>([])
@@ -157,10 +61,10 @@ export function ByProductView() {
       if (q) {
         const autoKeys = res.items
           .filter((g) =>
-            !isFlatGroup(g)
+            !isFlatBalanceGroup(g)
             && !foldCiSearch(`${g.product_name} ${g.product_sku}`).includes(q)
             && g.items.some((i) => foldCiSearch(`${i.color_name ?? ''} ${i.size_name ?? ''}`).includes(q)))
-          .map(groupKey)
+          .map(balanceGroupKey)
         if (autoKeys.length) setExpanded((prev) => new Set([...prev, ...autoKeys]))
       }
     } catch (e) {
@@ -196,7 +100,7 @@ export function ByProductView() {
     })
   }
 
-  const expandableKeys = groups.filter((g) => !isFlatGroup(g)).map(groupKey)
+  const expandableKeys = groups.filter((g) => !isFlatBalanceGroup(g)).map(balanceGroupKey)
   const allExpanded = expandableKeys.length > 0 && expandableKeys.every((k) => expanded.has(k))
   const toggleAll = () => {
     setExpanded((prev) => {
@@ -331,8 +235,8 @@ export function ByProductView() {
             <tr><td colSpan={7}><EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений" /></td></tr>
           ) : (
             groups.map((g) => {
-              const key = groupKey(g)
-              const flat = isFlatGroup(g)
+              const key = balanceGroupKey(g)
+              const flat = isFlatBalanceGroup(g)
               const isOpen = !flat && expanded.has(key)
               const showMatrix = isOpen && matrixKeys.has(key)
               return [
@@ -405,7 +309,7 @@ export function ByProductView() {
                   ? g.items.map((item, i) => (
                       <tr key={`${key}-v-${item.color_id ?? ''}-${item.size_id ?? ''}-${i}`} style={{ background: 'var(--c-bg-sunken)' }}>
                         <Td style={{ paddingLeft: 40 }}>
-                          <span style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{variantLabel(item)}</span>
+                          <span style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{balanceVariantLabel(item)}</span>
                         </Td>
                         <Td />
                         <Td className="num">

@@ -136,6 +136,8 @@ class BalanceZoneItem(BaseModel):
     color_name: str | None
     size_id: str | None
     size_name: str | None
+    # Порядок размера из справочника (sizes.sort_order) — для сортировки сеток.
+    size_sort_order: int | None = None
     qty: int
 
 

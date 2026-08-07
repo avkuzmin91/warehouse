@@ -585,6 +585,7 @@ def _zone_item(row) -> BalanceZoneItem:
         color_name=row["color_name"],
         size_id=row["size_id"],
         size_name=row["size_name"],
+        size_sort_order=row["size_sort_order"],
         qty=int(row["qty"] or 0),
     )
 
@@ -697,6 +698,7 @@ def get_balances_by_zone(
                COALESCE(lcl.name, pm.client_name) AS client_name,
                COALESCE(lco.name, pm.color_name)  AS color_name,
                COALESCE(lsz.name, pm.size_name)   AS size_name,
+               lsz.sort_order AS size_sort_order,
                GREATEST(0, COALESCE(gi.qty, 0) - COALESCE(lo.qty, 0)) AS qty
         FROM locs x
         JOIN position_meta pm ON {pos_join}

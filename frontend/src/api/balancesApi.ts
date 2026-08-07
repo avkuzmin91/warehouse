@@ -19,6 +19,20 @@ export const INV_QUALITY_LABELS: Record<InvQuality, string> = {
   defect: 'Брак',
 }
 
+/** Ключ группы остатков для UI-состояний (разворот, режим матрицы). */
+export function balanceGroupKey(g: { product_id: string; client_id: string | null }): string {
+  return `${g.product_id}::${g.client_id ?? ''}`
+}
+
+/** Группа-«не одежда»: единственный вариант без цвета и размера — плоская строка без разворота. */
+export function isFlatBalanceGroup(g: { variants_count: number; items: { color_id: string | null; size_id: string | null }[] }): boolean {
+  return g.variants_count === 1 && !g.items[0].color_id && !g.items[0].size_id
+}
+
+export function balanceVariantLabel(item: { color_name: string | null; size_name: string | null }): string {
+  return [item.color_name, item.size_name].filter(Boolean).join(' · ') || 'Без цвета и размера'
+}
+
 /** Причина списания остатков (движение → written_off). */
 export type WriteOffReason = 'shortage' | 'damage' | 'disposal' | 'client_return' | 'other'
 

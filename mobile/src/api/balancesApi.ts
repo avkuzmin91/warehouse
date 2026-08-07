@@ -17,6 +17,8 @@ export type ZoneBalance = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  /** Порядок размера из справочника — для сортировки сеток (S < M < L). */
+  size_sort_order?: number | null
   client_id: string | null
   client_name: string | null
   qty: number
