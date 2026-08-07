@@ -15,6 +15,7 @@ import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { BucketCell } from '../../../shared/BucketCell'
+import { ProductLink } from '../../../shared/ProductLink'
 import { SizeMatrix } from '../../../shared/SizeMatrix'
 
 const PAGE_SIZE = 25
@@ -30,7 +31,9 @@ export function ByProductView() {
   const [onlyPositive, setOnlyPositive] = useState(true)
   const [hasDefect, setHasDefect] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [matrixKeys, setMatrixKeys] = useState<Set<string>>(new Set())
+  // Матрица цвет×размер — режим разворота по умолчанию; здесь ключи групп,
+  // переключённых пользователем обратно на список.
+  const [listKeys, setListKeys] = useState<Set<string>>(new Set())
   const { clients } = useLookups()
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -92,7 +95,7 @@ export function ByProductView() {
   }
 
   const toggleMatrix = (key: string) => {
-    setMatrixKeys((prev) => {
+    setListKeys((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -238,7 +241,7 @@ export function ByProductView() {
               const key = balanceGroupKey(g)
               const flat = isFlatBalanceGroup(g)
               const isOpen = !flat && expanded.has(key)
-              const showMatrix = isOpen && matrixKeys.has(key)
+              const showMatrix = isOpen && g.sizes_count > 0 && !listKeys.has(key)
               return [
                 <tr
                   key={key}
@@ -258,10 +261,13 @@ export function ByProductView() {
                         />
                       )}
                       <div style={flat ? { paddingLeft: 20 } : undefined}>
-                        <div style={{ fontWeight: 500 }}>{g.product_name}</div>
+                        <div style={{ fontWeight: 500 }}>
+                          <ProductLink productId={g.product_id}>{g.product_name}</ProductLink>
+                        </div>
                         <div className="t-sub mono">
-                          {g.product_sku}
-                          {!flat && ` · ${g.colors_count > 0 ? `${g.colors_count} цв. · ` : ''}${g.sizes_count > 0 ? `${g.sizes_count} разм. · ` : ''}${g.variants_count} поз.`}
+                          {flat
+                            ? [g.product_sku, g.items[0].color_name, g.items[0].size_name].filter(Boolean).join(' · ')
+                            : `${g.product_sku ? `${g.product_sku} · ` : ''}${g.colors_count > 0 ? `${g.colors_count} цв. · ` : ''}${g.sizes_count > 0 ? `${g.sizes_count} разм. · ` : ''}${g.variants_count} поз.`}
                         </div>
                       </div>
                     </div>

@@ -27,6 +27,7 @@ import type { BadgeTone } from '../../../../primitives/Badge'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { NumberStep } from '../../shared/NumberStep'
+import { ProductLink } from '../../../shared/ProductLink'
 
 type LocationGroup = {
   locationId: string | null
@@ -471,7 +472,9 @@ export function ByZoneView() {
                   {group.items.map((item, i) => (
                     <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${item.op_status}-${item.quality}-${i}`}>
                       <Td>
-                        <div style={{ fontWeight: 500 }}>{item.product_name}</div>
+                        <div style={{ fontWeight: 500 }}>
+                          <ProductLink productId={item.product_id}>{item.product_name}</ProductLink>
+                        </div>
                         <div className="t-sub mono">
                           {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                         </div>

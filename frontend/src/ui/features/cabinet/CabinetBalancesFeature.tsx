@@ -20,6 +20,7 @@ import { Icon } from '../../primitives/Icon'
 import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { BucketCell } from '../shared/BucketCell'
+import { ProductLink } from '../shared/ProductLink'
 import { SizeMatrix } from '../shared/SizeMatrix'
 import { useToast } from '../../feedback/Toast'
 
@@ -57,7 +58,9 @@ export function CabinetBalancesFeature() {
   )
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [matrixKeys, setMatrixKeys] = useState<Set<string>>(new Set())
+  // Матрица цвет×размер — режим разворота по умолчанию; здесь ключи групп,
+  // переключённых пользователем обратно на список.
+  const [listKeys, setListKeys] = useState<Set<string>>(new Set())
   const toggle = (key: string) => {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -67,7 +70,7 @@ export function CabinetBalancesFeature() {
     })
   }
   const toggleMatrix = (key: string) => {
-    setMatrixKeys((prev) => {
+    setListKeys((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -238,7 +241,7 @@ export function CabinetBalancesFeature() {
                   const key = balanceGroupKey(g)
                   const flat = isFlatBalanceGroup(g)
                   const isOpen = !flat && expanded.has(key)
-                  const showMatrix = isOpen && matrixKeys.has(key)
+                  const showMatrix = isOpen && g.sizes_count > 0 && !listKeys.has(key)
                   const distbar = (row: { storage_good: number; storage_defect: number; packing_good: number; packing_defect: number; packed_good: number; packed_defect: number; ready_good: number; ready_defect: number }) => {
                     const stor = row.storage_good + row.storage_defect
                     const pack = row.packing_good + row.packing_defect
@@ -276,10 +279,13 @@ export function CabinetBalancesFeature() {
                             />
                           )}
                           <div style={flat ? { paddingLeft: 20 } : undefined}>
-                            <div style={{ fontWeight: 500 }}>{g.product_name}</div>
+                            <div style={{ fontWeight: 500 }}>
+                              <ProductLink productId={g.product_id}>{g.product_name}</ProductLink>
+                            </div>
                             <div className="t-sub mono">
-                              {g.product_sku}
-                              {!flat && ` · ${g.colors_count > 0 ? `${g.colors_count} цв. · ` : ''}${g.sizes_count > 0 ? `${g.sizes_count} разм. · ` : ''}${g.variants_count} поз.`}
+                              {flat
+                                ? [g.product_sku, g.items[0].color_name, g.items[0].size_name].filter(Boolean).join(' · ')
+                                : `${g.product_sku ? `${g.product_sku} · ` : ''}${g.colors_count > 0 ? `${g.colors_count} цв. · ` : ''}${g.sizes_count > 0 ? `${g.sizes_count} разм. · ` : ''}${g.variants_count} поз.`}
                             </div>
                           </div>
                         </div>

@@ -24,9 +24,10 @@ export function balanceGroupKey(g: { product_id: string; client_id: string | nul
   return `${g.product_id}::${g.client_id ?? ''}`
 }
 
-/** Группа-«не одежда»: единственный вариант без цвета и размера — плоская строка без разворота. */
-export function isFlatBalanceGroup(g: { variants_count: number; items: { color_id: string | null; size_id: string | null }[] }): boolean {
-  return g.variants_count === 1 && !g.items[0].color_id && !g.items[0].size_id
+/** Группа с единственным вариантом (техника: один цвет, без размеров) — плоская
+ * строка без разворота; атрибуты варианта показываются прямо в подзаголовке. */
+export function isFlatBalanceGroup(g: { variants_count: number }): boolean {
+  return g.variants_count === 1
 }
 
 export function balanceVariantLabel(item: { color_name: string | null; size_name: string | null }): string {

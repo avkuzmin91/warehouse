@@ -83,7 +83,8 @@ function groupByProduct(rows: ZoneBalance[]): ProductGroup[] {
   }
   for (const g of map.values()) {
     g.rows.sort(variantSort)
-    g.flat = g.rows.length === 1 && !g.rows[0].color_id && !g.rows[0].size_id
+    // Один вариант (техника: один цвет, без размеров) — плоская строка без разворота.
+    g.flat = g.rows.length === 1
   }
   return [...map.values()].sort((a, b) => a.product_name.localeCompare(b.product_name, 'ru'))
 }
