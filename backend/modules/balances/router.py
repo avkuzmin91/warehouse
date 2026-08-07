@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from dbconn import get_connection
 from idempotency import begin_idempotent
@@ -12,6 +12,8 @@ from modules.balances.schemas import (
     PlannableListResponse,
     QualityChangeCreate,
     StockEntryCreate,
+    StockHistoryResponse,
+    TurnoverListResponse,
     WriteOffCreate,
     ZoneRelocationCreate,
     ZoneRelocationListResponse,
@@ -25,9 +27,12 @@ from modules.balances.service import (
     get_balances_by_zone,
     get_balances_summary,
     get_plannable_items,
+    get_stock_history,
+    get_turnover,
     list_zone_relocations,
     reverse_write_off,
 )
+from utils import validate_business_date
 
 router = APIRouter(tags=["balances"])
 
@@ -159,6 +164,60 @@ def create_stock_entry_op(payload: StockEntryCreate, user=Depends(get_current_ma
     with get_connection() as conn:
         n = create_stock_entry(conn, payload, str(user["id"]))
     return {"message": str(n)}
+
+
+@router.get("/balances/turnover", response_model=TurnoverListResponse)
+def stock_turnover(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    only_moved: bool = Query(False),
+    user=Depends(get_current_shipment_viewer),
+):
+    """Оборот запаса: остаток на начало → приход/отгрузка/списание → остаток на конец."""
+    d_from = validate_business_date(date_from, field_ru="Дата с")
+    d_to = validate_business_date(date_to, field_ru="Дата по")
+    if d_from and d_to and d_from > d_to:
+        raise HTTPException(status_code=400, detail="Дата «с» позже даты «по»")
+    with get_connection() as conn:
+        return get_turnover(
+            conn,
+            page=page,
+            limit=limit,
+            client_id=client_id,
+            search=search,
+            date_from=d_from,
+            date_to=d_to,
+            only_moved=only_moved,
+        )
+
+
+@router.get("/balances/turnover/history", response_model=StockHistoryResponse)
+def stock_history(
+    product_id: str = Query(...),
+    client_id: str | None = Query(None),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    user=Depends(get_current_shipment_viewer),
+):
+    """Хронология событий позиции: как остаток пришёл к текущему значению."""
+    d_from = validate_business_date(date_from, field_ru="Дата с")
+    d_to = validate_business_date(date_to, field_ru="Дата по")
+    with get_connection() as conn:
+        return get_stock_history(
+            conn,
+            product_id=product_id,
+            client_id=(client_id or "").strip() or None,
+            color_id=(color_id or "").strip() or None,
+            size_id=(size_id or "").strip() or None,
+            date_from=d_from,
+            date_to=d_to,
+        )
 
 
 @router.get("/balances/relocations", response_model=ZoneRelocationListResponse)

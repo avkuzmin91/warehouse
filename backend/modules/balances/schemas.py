@@ -225,3 +225,89 @@ class ZoneRelocationListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class TurnoverTotals(BaseModel):
+    """Итоги оборота по всей выборке (не по странице)."""
+    opening: int = 0
+    receipt: int = 0
+    stock_entry: int = 0
+    shipped: int = 0
+    written_off: int = 0
+    adjustments: int = 0
+    closing: int = 0
+
+
+class TurnoverItem(BaseModel):
+    """Строка оборотной ведомости по позиции.
+
+    Инвариант: closing = opening + receipt + stock_entry + adjustments − shipped − written_off.
+    """
+    product_id: str
+    product_name: str | None
+    product_sku: str | None
+    client_id: str | None
+    client_name: str | None
+    color_id: str | None
+    color_name: str | None
+    size_id: str | None
+    size_name: str | None
+    opening: int
+    receipt: int
+    stock_entry: int
+    shipped: int
+    written_off: int
+    # Корректировки приёмки: со знаком (обычно отрицательные).
+    adjustments: int
+    closing: int
+
+
+class TurnoverListResponse(BaseModel):
+    items: list[TurnoverItem]
+    totals: TurnoverTotals
+    total: int
+    page: int
+    limit: int
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+class StockHistoryEvent(BaseModel):
+    """Событие, изменившее остаток позиции (внутренние перемещения исключены)."""
+    id: str
+    created_at: str
+    created_by_email: str | None
+    kind: str
+    quality: str
+    qty: int
+    # Знаковое изменение остатка позиции.
+    delta: int
+    # Остаток позиции после события.
+    balance_after: int
+    zone_name: str | None
+    receipt_id: str | None = None
+    receipt_number: str | None = None
+    dispatch_id: str | None = None
+    dispatch_number: str | None = None
+    trip_id: str | None = None
+    trip_number: str | None = None
+    reason: str | None = None
+    comment: str | None = None
+
+
+class StockHistoryResponse(BaseModel):
+    product_id: str
+    product_name: str | None
+    product_sku: str | None
+    client_id: str | None
+    client_name: str | None
+    color_id: str | None
+    color_name: str | None
+    size_id: str | None
+    size_name: str | None
+    # Остаток до первого показанного события (при усечении длинной истории > 0).
+    opening: int
+    closing: int
+    events: list[StockHistoryEvent]
+    total_events: int
+    truncated: bool = False

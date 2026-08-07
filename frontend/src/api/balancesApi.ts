@@ -373,3 +373,149 @@ export function undoWriteOff(relocationId: string) {
     method: 'POST',
   })
 }
+
+// --- Оборот запаса: приход → расход → остаток ---
+
+/** Событие, меняющее общий остаток позиции (внутренние перемещения сюда не входят). */
+export type StockEventKind =
+  | 'receipt'
+  | 'stock_entry'
+  | 'receipt_adjust'
+  | 'shipment'
+  | 'shipment_return'
+  | 'write_off'
+  | 'write_off_undo'
+
+export const STOCK_EVENT_LABELS: Record<StockEventKind, string> = {
+  receipt:         'Поступление',
+  stock_entry:     'Заведение остатка',
+  receipt_adjust:  'Корректировка приёмки',
+  shipment:        'Отгрузка',
+  shipment_return: 'Возврат отгрузки',
+  write_off:       'Списание',
+  write_off_undo:  'Откат списания',
+}
+
+/** Строка оборотной ведомости: closing = opening + receipt + stock_entry + adjustments − shipped − written_off. */
+export type TurnoverItem = {
+  product_id:   string
+  product_name: string | null
+  product_sku:  string | null
+  client_id:    string | null
+  client_name:  string | null
+  color_id:     string | null
+  color_name:   string | null
+  size_id:      string | null
+  size_name:    string | null
+  opening:      number
+  receipt:      number
+  stock_entry:  number
+  shipped:      number
+  written_off:  number
+  /** Корректировки приёмки со знаком (обычно отрицательные). */
+  adjustments:  number
+  closing:      number
+}
+
+export type TurnoverTotals = {
+  opening:     number
+  receipt:     number
+  stock_entry: number
+  shipped:     number
+  written_off: number
+  adjustments: number
+  closing:     number
+}
+
+export type TurnoverListResponse = {
+  items:      TurnoverItem[]
+  totals:     TurnoverTotals
+  total:      number
+  page:       number
+  limit:      number
+  date_from:  string | null
+  date_to:    string | null
+}
+
+export type TurnoverParams = {
+  page?:        number
+  limit?:       number
+  client_id?:   string
+  search?:      string
+  date_from?:   string
+  date_to?:     string
+  only_moved?:  boolean
+}
+
+export function getStockTurnover(params: TurnoverParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to) sp.set('date_to', params.date_to)
+  if (params.only_moved) sp.set('only_moved', 'true')
+  const q = sp.toString()
+  return request<TurnoverListResponse>(`/balances/turnover${q ? `?${q}` : ''}`, { signal })
+}
+
+export type StockHistoryEvent = {
+  id:               string
+  created_at:       string
+  created_by_email: string | null
+  kind:             StockEventKind
+  quality:          InvQuality
+  qty:              number
+  /** Знаковое изменение остатка. */
+  delta:            number
+  /** Остаток позиции после события. */
+  balance_after:    number
+  zone_name:        string | null
+  receipt_id:       string | null
+  receipt_number:   string | null
+  dispatch_id:      string | null
+  dispatch_number:  string | null
+  trip_id:          string | null
+  trip_number:      string | null
+  reason:           string | null
+  comment:          string | null
+}
+
+export type StockHistoryResponse = {
+  product_id:   string
+  product_name: string | null
+  product_sku:  string | null
+  client_id:    string | null
+  client_name:  string | null
+  color_id:     string | null
+  color_name:   string | null
+  size_id:      string | null
+  size_name:    string | null
+  /** Остаток до первого показанного события. */
+  opening:      number
+  closing:      number
+  events:       StockHistoryEvent[]
+  total_events: number
+  truncated:    boolean
+}
+
+export type StockHistoryParams = {
+  product_id: string
+  client_id?: string | null
+  color_id?:  string | null
+  size_id?:   string | null
+  date_from?: string
+  date_to?:   string
+}
+
+export function getStockHistory(params: StockHistoryParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  sp.set('product_id', params.product_id)
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.color_id) sp.set('color_id', params.color_id)
+  if (params.size_id) sp.set('size_id', params.size_id)
+  if (params.date_from) sp.set('date_from', params.date_from)
+  if (params.date_to) sp.set('date_to', params.date_to)
+  return request<StockHistoryResponse>(`/balances/turnover/history?${sp.toString()}`, { signal })
+}

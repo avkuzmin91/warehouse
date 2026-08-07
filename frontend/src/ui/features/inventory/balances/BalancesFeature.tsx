@@ -5,6 +5,7 @@ import { Icon } from '../../../primitives/Icon'
 import { ByProductView } from './views/ByProductView'
 import { ByZoneView } from './views/ByZoneView'
 import { RelocationsView } from './views/RelocationsView'
+import { TurnoverView } from './views/TurnoverView'
 import { StockEntryDrawer } from './StockEntryDrawer'
 
 export function BalancesFeature() {
@@ -36,6 +37,9 @@ export function BalancesFeature() {
         <button className={`tab ${view === 'zone' ? 'active' : ''}`} onClick={() => setView('zone')}>
           По местоположению
         </button>
+        <button className={`tab ${view === 'turnover' ? 'active' : ''}`} onClick={() => setView('turnover')}>
+          Оборот
+        </button>
         <button className={`tab ${view === 'relocations' ? 'active' : ''}`} onClick={() => setView('relocations')}>
           Перемещения
         </button>
@@ -43,9 +47,11 @@ export function BalancesFeature() {
 
       {view === 'zone'
         ? <ByZoneView key={reloadKey} />
-        : view === 'relocations'
-          ? <RelocationsView key={reloadKey} />
-          : <ByProductView key={reloadKey} />}
+        : view === 'turnover'
+          ? <TurnoverView key={reloadKey} />
+          : view === 'relocations'
+            ? <RelocationsView key={reloadKey} />
+            : <ByProductView key={reloadKey} />}
 
       <StockEntryDrawer
         open={entryOpen}
