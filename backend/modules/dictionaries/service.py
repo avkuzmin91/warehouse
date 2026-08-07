@@ -154,6 +154,7 @@ def _size_row_to_item(row: Mapping[str, Any]) -> SizeItem:
         id=row["id"],
         name=row["name"],
         is_active=bool(row["is_active"]),
+        sort_order=row["sort_order"],
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
         deleted_by=row["deleted_by"],
@@ -541,7 +542,7 @@ def get_size_item(item_id: str, *, include_deleted: bool = False) -> SizeItem:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+            SELECT d.id, d.name, d.is_active, d.sort_order, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM sizes d
@@ -571,7 +572,7 @@ def list_sizes_page(
     if not include_deleted:
         conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
-    order_sql = _order_sql_from_sort_param(sort, SIZE_LIST_SORT_COLUMNS) or "d.created_at DESC"
+    order_sql = _order_sql_from_sort_param(sort, SIZE_LIST_SORT_COLUMNS) or "d.sort_order IS NULL, d.sort_order, LOWER(d.name)"
     with get_connection() as connection:
         ia = _resolve_actuality_filter(connection, actuality_id)
         if ia is not None:
@@ -586,7 +587,7 @@ def list_sizes_page(
         )
         rows = connection.execute(
             f"""
-            SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+            SELECT d.id, d.name, d.is_active, d.sort_order, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM sizes d
@@ -613,8 +614,8 @@ def create_size(payload: SizeCreateRequest, creator_id: str) -> MessageResponse:
     with get_connection() as connection:
         try:
             connection.execute(
-                "INSERT INTO sizes (id, name, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?)",
-                (item_id, name, 1 if payload.is_active else 0, _now(), creator_id),
+                "INSERT INTO sizes (id, name, is_active, sort_order, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (item_id, name, 1 if payload.is_active else 0, payload.sort_order, _now(), creator_id),
             )
             connection.commit()
         except IntegrityError as exc:
@@ -657,6 +658,11 @@ def update_size(item_id: str, payload: SizeUpdateRequest, editor_id: str) -> Mes
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
+        if payload.clear_sort_order:
+            fields.append("sort_order = NULL")
+        elif payload.sort_order is not None:
+            fields.append("sort_order = ?")
+            values.append(payload.sort_order)
         if not fields:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет данных для обновления")
         fields.extend(["updated_at = ?", "updated_by_id = ?"])

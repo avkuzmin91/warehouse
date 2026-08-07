@@ -1124,6 +1124,7 @@ SIZE_LIST_SORT_COLUMNS: dict[str, str] = {
     "name":       "LOWER(d.name)",
     "created_at": "d.created_at",
     "is_active":  "d.is_active",
+    "sort_order": "d.sort_order",
 }
 COLOR_LIST_SORT_COLUMNS: dict[str, str] = {
     "name":       "LOWER(d.name)",

@@ -88,14 +88,14 @@ export function getSize(id: string) {
   return request<SizeItem>(`/sizes/${id}`)
 }
 
-export function createSize(payload: { name: string; is_active: boolean }) {
+export function createSize(payload: { name: string; is_active: boolean; sort_order?: number | null }) {
   return request<{ message: string }>('/sizes', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
 }
 
-export function updateSize(id: string, payload: { name?: string; is_active?: boolean }) {
+export function updateSize(id: string, payload: { name?: string; is_active?: boolean; sort_order?: number | null; clear_sort_order?: boolean }) {
   return request<{ message: string }>(`/sizes/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),

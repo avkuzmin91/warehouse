@@ -84,6 +84,7 @@ class SizeItem(BaseModel):
     id: str
     name: str
     is_active: bool
+    sort_order: int | None = None
     is_deleted: bool = False
     deleted_at: str | None = None
     deleted_by: str | None = None
@@ -96,12 +97,16 @@ class SizeItem(BaseModel):
 class SizeCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     is_active: bool = True
+    sort_order: int | None = None
 
 
 class SizeUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     is_active: bool | None = None
     is_deleted: bool | None = None
+    sort_order: int | None = None
+    # sort_order=None в PATCH означает «не менять»; сброс порядка — отдельным флагом
+    clear_sort_order: bool = False
 
 
 class DictionaryListResponse(BaseModel):

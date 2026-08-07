@@ -10,6 +10,7 @@ export function SizeCreateFeature() {
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [isActive, setIsActive] = useState(true)
+  const [sortOrder, setSortOrder] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -19,7 +20,8 @@ export function SizeCreateFeature() {
     try {
       setSaving(true)
       setError('')
-      await createSize({ name: name.trim(), is_active: isActive })
+      const so = sortOrder.trim() === '' ? null : Number(sortOrder)
+      await createSize({ name: name.trim(), is_active: isActive, sort_order: Number.isFinite(so as number) ? so : null })
       navigate('/dictionaries/sizes')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка')
@@ -36,6 +38,9 @@ export function SizeCreateFeature() {
             <div className="card-body">
               <Field label="Название" required>
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Например: XL, 42, Универсальный" autoFocus />
+              </Field>
+              <Field label="Порядок сортировки" hint="Меньше — раньше в списках (XS=10, S=20, M=30…). Пусто — после упорядоченных, по алфавиту.">
+                <Input value={sortOrder} onChange={(e) => setSortOrder(e.target.value.replace(/[^\d-]/g, ''))} placeholder="Например: 30" inputMode="numeric" />
               </Field>
               <Field label="Активен">
                 <Toggle checked={isActive} onChange={setIsActive} label="Размер активен" />

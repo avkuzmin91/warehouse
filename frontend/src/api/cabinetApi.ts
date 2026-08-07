@@ -1,6 +1,6 @@
 import { request, requestBlob } from './http'
 import type { ProductItem, ProductListResponse, ProductVariantItem } from './domainTypes'
-import type { BalanceListResponse, BalanceSummary } from './balancesApi'
+import type { BalanceGroupedResponse, BalanceListResponse, BalanceSummary } from './balancesApi'
 
 // --- Types ---
 
@@ -280,6 +280,17 @@ export function getCabinetBalances(params: CabinetBalanceListParams = {}, signal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/cabinet/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getCabinetBalancesGrouped(params: CabinetBalanceListParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.search) sp.set('search', params.search)
+  if (params.only_positive === false) sp.set('only_positive', 'false')
+  if (params.has_defect) sp.set('has_defect', 'true')
+  const q = sp.toString()
+  return request<BalanceGroupedResponse>(`/cabinet/balances/grouped${q ? `?${q}` : ''}`, { signal })
 }
 
 export function exportCabinetBalancesXlsx(

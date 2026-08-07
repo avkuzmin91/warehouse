@@ -14,8 +14,8 @@ from config import (
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
-from modules.balances.schemas import BalanceListResponse, BalanceSummaryResponse
-from modules.balances.service import get_balances, get_balances_summary
+from modules.balances.schemas import BalanceGroupedResponse, BalanceListResponse, BalanceSummaryResponse
+from modules.balances.service import get_balances, get_balances_grouped, get_balances_summary
 from modules.products.schemas import ProductItem, ProductListResponse, ProductVariantItem
 from security import user_client_id_opt
 
@@ -98,6 +98,27 @@ def list_client_balances(
 ):
     with get_connection() as conn:
         return get_balances(
+            conn,
+            page=page,
+            limit=limit,
+            client_id=client_id,
+            search=search,
+            only_positive=only_positive,
+            has_defect=has_defect,
+        )
+
+
+@router.get("/cabinet/balances/grouped", response_model=BalanceGroupedResponse)
+def list_client_balances_grouped(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    search: str | None = Query(None),
+    only_positive: bool = Query(True),
+    has_defect: bool = Query(False),
+    client_id: str = Depends(_get_current_client_id),
+):
+    with get_connection() as conn:
+        return get_balances_grouped(
             conn,
             page=page,
             limit=limit,

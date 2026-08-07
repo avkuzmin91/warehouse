@@ -62,6 +62,7 @@ export type SizeItem = {
   id: string
   name: string
   is_active: boolean
+  sort_order?: number | null
   is_deleted?: boolean
   deleted_at?: string | null
   deleted_by?: string | null

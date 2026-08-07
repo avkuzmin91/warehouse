@@ -85,6 +85,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
   const [colorHex, setColorHex] = useState(DEFAULT_COLOR_HEX)
   const [rentRub, setRentRub] = useState('')
   const [active, setActive] = useState(true)
+  const [sortOrder, setSortOrder] = useState('')
   const [reqColor, setReqColor] = useState(false)
   const [reqSize, setReqSize] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -105,6 +106,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     const initialRent = initial && 'rent_monthly_kopecks' in initial ? initial.rent_monthly_kopecks : null
     setRentRub(apiType === 'own-warehouses' && initialRent != null ? String(initialRent / 100) : '')
     setActive(initial?.is_active ?? true)
+    const initialSortOrder = initial && 'sort_order' in initial ? initial.sort_order : null
+    setSortOrder(apiType === 'sizes' && initialSortOrder != null ? String(initialSortOrder) : '')
     setError(null)
     if (apiType === 'product-types' && initial) {
       const pt = initial as ProductTypeDictionaryItem
@@ -183,7 +186,8 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         if (apiType === 'product-types') {
           await createProductType({ name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize })
         } else if (apiType === 'sizes') {
-          await createSize({ name: name.trim(), is_active: active })
+          const so = sortOrder.trim() === '' ? null : Number(sortOrder)
+          await createSize({ name: name.trim(), is_active: active, sort_order: Number.isFinite(so as number) ? so : null })
         } else {
           const path = _apiPath(apiType)
           await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
@@ -192,7 +196,12 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         if (apiType === 'product-types') {
           await updateProductType(initial.id, { name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize })
         } else if (apiType === 'sizes') {
-          await updateSize(initial.id, { name: name.trim(), is_active: active })
+          const so = sortOrder.trim() === '' ? null : Number(sortOrder)
+          await updateSize(initial.id, {
+            name: name.trim(),
+            is_active: active,
+            ...(so == null || !Number.isFinite(so) ? { clear_sort_order: true } : { sort_order: so }),
+          })
         } else {
           const path = _apiPath(apiType)
           await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
@@ -239,6 +248,17 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           autoFocus
         />
       </Field>
+
+      {kind === 'Размер' && (
+        <Field label="Порядок сортировки" help="Меньше — раньше в списках (XS=10, S=20, M=30…). Пусто — после упорядоченных, по алфавиту.">
+          <Input
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value.replace(/[^\d-]/g, ''))}
+            placeholder="Например: 30"
+            inputMode="numeric"
+          />
+        </Field>
+      )}
 
       {kind === 'Тип товара' && (
         <Field label="Атрибуты вариантов" help="Какие признаки требует тип при создании товара">
