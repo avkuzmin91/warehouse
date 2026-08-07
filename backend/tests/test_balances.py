@@ -1189,3 +1189,85 @@ def test_plannable_shows_position_left_only_on_packing(admin_client, client_id, 
         assert [i for i in d.json()["items"] if i["product_id"] == pid] == []
     finally:
         _cleanup_test_docs(client_id)
+
+
+# ── grouped: группировка по артикулу × клиенту ────────────────────────────────
+
+def test_balances_grouped_variants_and_size_order(admin_client, client_id, product_ids):
+    """Варианты артикула собираются в одну группу; размеры — по sort_order справочника.
+
+    Имена размеров подобраны так, что алфавитный порядок (M, S, XS) отличается от
+    порядка сетки (XS, S, M): регрессия на сортировку по имени вместо sort_order."""
+    pid, color_id, _size_id = product_ids
+    size_xs, size_s, size_m = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+
+    with get_connection() as conn:
+        for sid, name, so in ((size_xs, "XS", 10), (size_s, "S", 20), (size_m, "M", 30)):
+            conn.execute(
+                "INSERT INTO sizes (id, name, is_active, sort_order, created_at) VALUES (?, ?, 1, ?, NOW())",
+                (sid, f"{name}-{sid[:8]}", so),
+            )
+        _seed_received(conn, client_id, (pid, color_id, size_m), 30)
+        _seed_received(conn, client_id, (pid, color_id, size_s), 20)
+        _seed_received(conn, client_id, (pid, color_id, size_xs), 10)
+        conn.commit()
+
+    try:
+        r = admin_client.get(f"/balances/grouped?client_id={client_id}")
+        assert r.status_code == 200, r.text
+        groups = [g for g in r.json()["items"] if g["product_id"] == pid]
+        assert len(groups) == 1, f"Ожидалась одна группа, получено {len(groups)}"
+        g = groups[0]
+        assert g["variants_count"] == 3
+        assert g["colors_count"] == 1
+        assert g["sizes_count"] == 3
+        assert g["storage_good"] == 60
+        assert g["total"] == 60
+        assert sum(i["total"] for i in g["items"]) == g["total"]
+        assert [i["size_id"] for i in g["items"]] == [size_xs, size_s, size_m]
+    finally:
+        _cleanup_test_docs(client_id)
+        with get_connection() as conn:
+            conn.execute("DELETE FROM sizes WHERE id IN (?, ?, ?)", (size_xs, size_s, size_m))
+            conn.commit()
+
+
+def test_balances_grouped_pagination_by_groups(admin_client, client_id, product_ids):
+    """Страница режется по группам: артикул не рвётся, total — число групп."""
+    pid, color_id, _size_id = product_ids
+    pid2 = str(uuid.uuid4())
+
+    with get_connection() as conn:
+        type_row = conn.execute("SELECT type_id FROM products WHERE id = ?", (pid,)).fetchone()
+        conn.execute(
+            """INSERT INTO products (id, name, type_id, sku, is_active, is_deleted, created_at)
+               VALUES (?, ?, ?, ?, 1, 0, NOW())""",
+            (pid2, f"TestProduct2-{pid2[:8]}", type_row["type_id"], f"TST2-{pid2[:8]}"),
+        )
+        # Первый артикул крупнее (две позиции), второй меньше — порядок групп по остатку.
+        _seed_received(conn, client_id, (pid, color_id, None), 30)
+        _seed_received(conn, client_id, (pid, str(uuid.uuid4()), None), 20)
+        _seed_received(conn, client_id, (pid2, color_id, None), 10)
+        conn.commit()
+
+    try:
+        r1 = admin_client.get(f"/balances/grouped?client_id={client_id}&limit=1&page=1")
+        assert r1.status_code == 200, r1.text
+        d1 = r1.json()
+        assert d1["total"] == 2
+        assert len(d1["items"]) == 1
+        assert d1["items"][0]["product_id"] == pid
+        assert d1["items"][0]["variants_count"] == 2
+        assert d1["items"][0]["total"] == 50
+
+        r2 = admin_client.get(f"/balances/grouped?client_id={client_id}&limit=1&page=2")
+        assert r2.status_code == 200, r2.text
+        d2 = r2.json()
+        assert len(d2["items"]) == 1
+        assert d2["items"][0]["product_id"] == pid2
+        assert d2["items"][0]["total"] == 10
+    finally:
+        _cleanup_test_docs(client_id)
+        with get_connection() as conn:
+            conn.execute("DELETE FROM products WHERE id = ?", (pid2,))
+            conn.commit()

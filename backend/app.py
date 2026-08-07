@@ -133,6 +133,10 @@ def _ensure_runtime_schema() -> None:
                 ADD COLUMN IF NOT EXISTS color_hex TEXT
         """)
         conn.execute("""
+            ALTER TABLE IF EXISTS sizes
+                ADD COLUMN IF NOT EXISTS sort_order INTEGER
+        """)
+        conn.execute("""
             ALTER TABLE IF EXISTS users
                 ADD COLUMN IF NOT EXISTS display_name TEXT
         """)

@@ -36,6 +36,8 @@ from config import (
 )
 from dbconn import ci_like_substring_param
 from modules.balances.schemas import (
+    BalanceGroupItem,
+    BalanceGroupedResponse,
     BalanceItem,
     BalanceListResponse,
     BalanceSummaryResponse,
@@ -120,8 +122,13 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
         line_params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?))")
-        line_params += [s, s, s, s]
+        pos_conds.append(
+            "(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ?"
+            " OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?)"
+            " OR u.color_id IN (SELECT id FROM colors WHERE fold_ci(name) LIKE ?)"
+            " OR u.size_id IN (SELECT id FROM sizes WHERE fold_ci(name) LIKE ?))"
+        )
+        line_params += [s, s, s, s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полный GROUP BY журнала: client_id — ключ группировки и
@@ -184,6 +191,7 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             COALESCE(lcl.name, a.client_name) AS client_name,
             COALESCE(lco.name, a.color_name)  AS color_name,
             COALESCE(lsz.name, a.size_name)   AS size_name,
+            lsz.sort_order AS size_sort_order,
             {bucket_selects},
             a.docs_count
         FROM accepted a
@@ -248,6 +256,7 @@ def get_balances(
                 color_name=row["color_name"],
                 size_id=row["size_id"],
                 size_name=row["size_name"],
+                size_sort_order=row["size_sort_order"],
                 **buckets,
                 total=sum(buckets.values()),
                 docs_count=int(row["docs_count"] or 0),
@@ -255,6 +264,122 @@ def get_balances(
         )
 
     return BalanceListResponse(items=items, total=total, page=page, limit=limit)
+
+
+def _row_to_balance_item(row) -> BalanceItem:
+    buckets = {_bucket_col(op, q): int(row[_bucket_col(op, q)] or 0) for op, q in _BUCKETS}
+    return BalanceItem(
+        product_id=str(row["product_id"]),
+        product_name=str(row["product_name"]),
+        product_sku=str(row["product_sku"]),
+        client_id=row["client_id"],
+        client_name=row["client_name"],
+        color_id=row["color_id"],
+        color_name=row["color_name"],
+        size_id=row["size_id"],
+        size_name=row["size_name"],
+        size_sort_order=row["size_sort_order"],
+        **buckets,
+        total=sum(buckets.values()),
+        docs_count=int(row["docs_count"] or 0),
+    )
+
+
+def get_balances_grouped(
+    connection,
+    *,
+    page: int,
+    limit: int,
+    client_id: str | None,
+    search: str | None,
+    only_positive: bool,
+    has_defect: bool,
+) -> BalanceGroupedResponse:
+    """Остатки, сгруппированные по «артикул × клиент», с пагинацией по группам.
+
+    Страница режется по группам (не по вариантам), чтобы артикул никогда не
+    рвался границей страницы, а суммы группы всегда сходились с её вариантами.
+    Порядок групп — как в плоском списке (крупный остаток сверху); варианты
+    внутри — цвет, затем размер по sort_order справочника (без порядка — по имени
+    после упорядоченных)."""
+    agg_query, line_params = _position_agg_query(client_id, search)
+    total_expr = _total_expr()
+
+    where_parts = []
+    if only_positive:
+        where_parts.append(f"({total_expr}) > 0")
+    if has_defect:
+        where_parts.append(f"({_defect_expr()}) > 0")
+    where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    offset = (page - 1) * limit
+    rows = connection.execute(
+        f"""
+        WITH pos AS (
+            SELECT * FROM ({agg_query}) a
+            {where_clause}
+        ),
+        grp AS (
+            SELECT product_id, client_id,
+                   ROW_NUMBER() OVER (
+                       ORDER BY SUM({total_expr}) DESC, MAX(product_name), product_id
+                   ) AS _rn,
+                   COUNT(*) OVER () AS _groups_total
+            FROM pos
+            GROUP BY product_id, client_id
+        ),
+        pg AS (
+            SELECT * FROM grp WHERE _rn > ? AND _rn <= ?
+        )
+        SELECT p.*, pg._rn, pg._groups_total
+        FROM pos p
+        JOIN pg ON pg.product_id = p.product_id
+               AND pg.client_id IS NOT DISTINCT FROM p.client_id
+        ORDER BY pg._rn,
+                 p.color_name NULLS FIRST,
+                 p.size_sort_order IS NULL, p.size_sort_order,
+                 p.size_name NULLS FIRST
+        """,
+        line_params + [offset, offset + limit],
+    ).fetchall()
+
+    total_groups = int(rows[0]["_groups_total"]) if rows else 0
+
+    groups: list[BalanceGroupItem] = []
+    current_key: tuple[str, str | None] | None = None
+    for row in rows:
+        key = (str(row["product_id"]), row["client_id"])
+        item = _row_to_balance_item(row)
+        if key != current_key:
+            current_key = key
+            groups.append(
+                BalanceGroupItem(
+                    product_id=item.product_id,
+                    product_name=item.product_name,
+                    product_sku=item.product_sku,
+                    client_id=item.client_id,
+                    client_name=item.client_name,
+                    **{_bucket_col(op, q): 0 for op, q in _BUCKETS},
+                    total=0,
+                    variants_count=0,
+                    colors_count=0,
+                    sizes_count=0,
+                    items=[],
+                )
+            )
+        group = groups[-1]
+        group.items.append(item)
+        for op, q in _BUCKETS:
+            col = _bucket_col(op, q)
+            setattr(group, col, getattr(group, col) + getattr(item, col))
+        group.total += item.total
+
+    for group in groups:
+        group.variants_count = len(group.items)
+        group.colors_count = len({i.color_id for i in group.items if i.color_id})
+        group.sizes_count = len({i.size_id for i in group.items if i.size_id})
+
+    return BalanceGroupedResponse(items=groups, total=total_groups, page=page, limit=limit)
 
 
 def get_plannable_items(
@@ -489,8 +614,13 @@ def get_balances_by_zone(
         line_params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        pos_conds.append("(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ? OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?))")
-        line_params += [s, s, s, s]
+        pos_conds.append(
+            "(fold_ci(u.product_name) LIKE ? OR fold_ci(u.product_sku) LIKE ?"
+            " OR u.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ? OR fold_ci(name) LIKE ?)"
+            " OR u.color_id IN (SELECT id FROM colors WHERE fold_ci(name) LIKE ?)"
+            " OR u.size_id IN (SELECT id FROM sizes WHERE fold_ci(name) LIKE ?))"
+        )
+        line_params += [s, s, s, s, s, s]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полные GROUP BY журнала (gain/lose): client_id — ключ

@@ -6,6 +6,7 @@ from dbconn import get_connection
 from idempotency import begin_idempotent
 from modules.auth.service import get_current_manager, get_current_shipment_viewer, get_current_stock_operator
 from modules.balances.schemas import (
+    BalanceGroupedResponse,
     BalanceListResponse,
     BalanceSummaryResponse,
     BalanceZonesResponse,
@@ -25,6 +26,7 @@ from modules.balances.service import (
     create_zone_relocation,
     get_balances,
     get_balances_by_zone,
+    get_balances_grouped,
     get_balances_summary,
     get_plannable_items,
     get_stock_history,
@@ -49,6 +51,29 @@ def list_balances(
 ):
     with get_connection() as conn:
         return get_balances(
+            conn,
+            page=page,
+            limit=limit,
+            client_id=client_id,
+            search=search,
+            only_positive=only_positive,
+            has_defect=has_defect,
+        )
+
+
+@router.get("/balances/grouped", response_model=BalanceGroupedResponse)
+def list_balances_grouped(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    client_id: str | None = Query(None),
+    search: str | None = Query(None),
+    only_positive: bool = Query(True),
+    has_defect: bool = Query(False),
+    user=Depends(get_current_shipment_viewer),
+):
+    """Остатки группами «артикул × клиент»: агрегаты + варианты, страница по группам."""
+    with get_connection() as conn:
+        return get_balances_grouped(
             conn,
             page=page,
             limit=limit,

@@ -38,6 +38,8 @@ export type BalanceItem = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  /** Порядок размера из справочника — для сеток цвет×размер. */
+  size_sort_order?: number | null
   client_id: string | null
   client_name: string | null
   storage_good: number
@@ -129,6 +131,39 @@ export type BalanceListResponse = {
   limit: number
 }
 
+/**
+ * Группа остатков «артикул × клиент»: агрегаты по корзинам + варианты.
+ * Варианты отсортированы сервером: цвет, затем размер по sort_order справочника.
+ */
+export type BalanceGroupItem = {
+  product_id: string
+  product_name: string
+  product_sku: string
+  client_id: string | null
+  client_name: string | null
+  storage_good: number
+  storage_defect: number
+  packing_good: number
+  packing_defect: number
+  packed_good: number
+  packed_defect: number
+  ready_good: number
+  ready_defect: number
+  total: number
+  variants_count: number
+  colors_count: number
+  sizes_count: number
+  items: BalanceItem[]
+}
+
+export type BalanceGroupedResponse = {
+  items: BalanceGroupItem[]
+  /** Число групп — пагинация по группам, не по вариантам. */
+  total: number
+  page: number
+  limit: number
+}
+
 export type BalanceZoneItem = {
   location_id:   string | null
   location_name: string | null
@@ -179,6 +214,18 @@ export function getBalances(params: BalanceListParams = {}, signal?: AbortSignal
   if (params.has_defect) sp.set('has_defect', 'true')
   const q = sp.toString()
   return request<BalanceListResponse>(`/balances${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getBalancesGrouped(params: BalanceListParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.search) sp.set('search', params.search)
+  if (params.only_positive === false) sp.set('only_positive', 'false')
+  if (params.has_defect) sp.set('has_defect', 'true')
+  const q = sp.toString()
+  return request<BalanceGroupedResponse>(`/balances/grouped${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getPlannableItems(params: PlannableParams = {}, signal?: AbortSignal) {

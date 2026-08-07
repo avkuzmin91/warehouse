@@ -15,6 +15,8 @@ class BalanceItem(BaseModel):
     color_name: str | None
     size_id: str | None
     size_name: str | None
+    # Порядок размера из справочника (sizes.sort_order) — для сеток на клиенте.
+    size_sort_order: int | None = None
     # Корзины: операционный статус × качество.
     storage_good: int
     storage_defect: int
@@ -30,6 +32,41 @@ class BalanceItem(BaseModel):
 
 class BalanceListResponse(BaseModel):
     items: list[BalanceItem]
+    total: int
+    page: int
+    limit: int
+
+
+class BalanceGroupItem(BaseModel):
+    """Группа остатков «артикул × клиент»: агрегаты по корзинам + варианты.
+
+    Варианты отсортированы по цвету, внутри цвета — по порядку размеров из
+    справочника (sort_order, затем имя). Товар без цвета/размера — группа с
+    единственным вариантом без color_id/size_id (фронт рисует плоской строкой)."""
+
+    product_id: str
+    product_name: str
+    product_sku: str
+    client_id: str | None
+    client_name: str | None
+    storage_good: int
+    storage_defect: int
+    packing_good: int
+    packing_defect: int
+    packed_good: int
+    packed_defect: int
+    ready_good: int
+    ready_defect: int
+    total: int
+    variants_count: int
+    colors_count: int
+    sizes_count: int
+    items: list[BalanceItem]
+
+
+class BalanceGroupedResponse(BaseModel):
+    items: list[BalanceGroupItem]
+    # total — число групп (пагинация по группам, не по вариантам).
     total: int
     page: int
     limit: int
