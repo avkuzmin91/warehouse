@@ -34,6 +34,7 @@ export type ProductVariantPair = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  size_sort_order?: number | null
 }
 
 /** Полная матрица вариантов товара (цвет × размер) одним запросом — для массового ввода. */

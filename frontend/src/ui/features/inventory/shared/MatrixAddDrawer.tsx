@@ -34,7 +34,7 @@ type Props = {
   onSubmit: (entries: ProductMatrixEntry[]) => void | Promise<void>
 }
 
-type Axis = { id: string | null; name: string | null }
+type Axis = { id: string | null; name: string | null; order?: number | null }
 
 const NULL = '∅'
 function axisKey(id: string | null): string {
@@ -57,10 +57,17 @@ function axesFromVariants(variants: ProductVariantPair[]) {
     if (v.color_id) hasColor = true
     if (v.size_id) hasSize = true
     colors.set(axisKey(v.color_id), { id: v.color_id, name: v.color_name })
-    sizes.set(axisKey(v.size_id), { id: v.size_id, name: v.size_name })
+    sizes.set(axisKey(v.size_id), { id: v.size_id, name: v.size_name, order: v.size_sort_order ?? null })
     valid.add(cellKey(v.color_id, v.size_id))
   }
-  return { colorAxis: [...colors.values()], sizeAxis: [...sizes.values()], validSet: valid, hasColor, hasSize }
+  // Ось размеров — по sort_order справочника; без порядка — по имени после упорядоченных.
+  const sizeAxis = [...sizes.values()].sort((a, b) => {
+    if (a.order != null && b.order != null) return a.order - b.order
+    if (a.order != null) return -1
+    if (b.order != null) return 1
+    return (a.name ?? '').localeCompare(b.name ?? '', 'ru')
+  })
+  return { colorAxis: [...colors.values()], sizeAxis, validSet: valid, hasColor, hasSize }
 }
 
 /**
