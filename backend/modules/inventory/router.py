@@ -40,6 +40,7 @@ class ProductVariantPair(BaseModel):
     color_name: str | None = None
     size_id: str | None = None
     size_name: str | None = None
+    size_sort_order: int | None = None
 
 
 def _dict_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
@@ -339,7 +340,7 @@ def lookup_sizes_for_sku(
     with get_connection() as connection:
         rows = connection.execute(
             f"""
-            SELECT DISTINCT sz.id, sz.name, sz.is_active, COALESCE(sz.is_deleted, 0) AS is_deleted,
+            SELECT DISTINCT sz.id, sz.name, sz.sort_order, sz.is_active, COALESCE(sz.is_deleted, 0) AS is_deleted,
                    sz.deleted_at, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by,
                    sz.created_at, COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by,
                    sz.updated_at, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by
@@ -354,7 +355,7 @@ def lookup_sizes_for_sku(
               AND p.is_active = 1 AND COALESCE(p.is_deleted, 0) = 0
               AND v.is_active = 1 AND COALESCE(v.is_deleted, 0) = 0
               AND sz.is_active = 1 AND COALESCE(sz.is_deleted, 0) = 0
-            ORDER BY sz.name ASC
+            ORDER BY sz.sort_order ASC NULLS LAST, sz.name ASC
             """,
             (*match_params, color_t),
         ).fetchall()
@@ -378,7 +379,8 @@ def lookup_variants(
             """
             SELECT DISTINCT
                    v.color_id, c.name AS color_name,
-                   v.size_id,  sz.name AS size_name
+                   v.size_id,  sz.name AS size_name,
+                   sz.sort_order AS size_sort_order
             FROM product_variants v
             LEFT JOIN colors c ON c.id = v.color_id
                  AND c.is_active = 1 AND COALESCE(c.is_deleted, 0) = 0
@@ -388,7 +390,7 @@ def lookup_variants(
               AND v.is_active = 1 AND COALESCE(v.is_deleted, 0) = 0
               AND (v.color_id IS NULL OR c.id IS NOT NULL)
               AND (v.size_id IS NULL OR sz.id IS NOT NULL)
-            ORDER BY c.name ASC, sz.name ASC
+            ORDER BY c.name ASC, size_sort_order ASC NULLS LAST, sz.name ASC
             """,
             (pid_t,),
         ).fetchall()
@@ -398,6 +400,7 @@ def lookup_variants(
             color_name=str(row["color_name"]) if row["color_name"] else None,
             size_id=str(row["size_id"]) if row["size_id"] else None,
             size_name=str(row["size_name"]) if row["size_name"] else None,
+            size_sort_order=row["size_sort_order"],
         )
         for row in rows
     ]
