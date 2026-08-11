@@ -1171,6 +1171,7 @@ def list_dispatches_aggregated(
     order_by = _dispatch_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
     rows = connection.execute(
         f"""SELECT d.*,
+                (SELECT COALESCE(NULLIF(u.display_name, ''), u.email) FROM users u WHERE u.id = d.created_by) AS created_by_name,
                 COUNT(DISTINCT l.product_id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                 COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
                 COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty
@@ -1201,6 +1202,7 @@ def list_dispatches_aggregated(
             "total_qty": int(r["total_qty"] or 0),
             "total_shipped_qty": int(r["total_shipped_qty"] or 0),
             "created_at": str(r["created_at"]),
+            "created_by_name": r.get("created_by_name"),
         }
         for r in rows
     ]

@@ -128,6 +128,7 @@ export type DispatchListItem = {
   total_qty:         number
   total_shipped_qty: number
   created_at:        string
+  created_by_name?:  string | null
 }
 
 export type DispatchDetail = {

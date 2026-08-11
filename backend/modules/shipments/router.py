@@ -50,8 +50,10 @@ from modules.auth.service import (
     get_current_warehouse,
 )
 from modules.shipments.schemas import (
+    DuplicateCheckResponse,
     ShipmentDetailResponse,
     ShipmentDocCreate,
+    ShipmentDuplicateCheck,
     ShipmentDocUpdate,
     ShipmentFinishDefectRelocationPayload,
     ShipmentFinishRelocationPayload,
@@ -84,6 +86,7 @@ from modules.shipments.service import (
     _check_lines_covered_by_stock,
     _doc_packed_qty,
     advance_shipment,
+    find_duplicate_shipments,
     finish_defect_relocation,
     finish_relocation,
     line_on_packing_qty,
@@ -237,6 +240,21 @@ def create_shipment(
     return result
 
 
+@router.post("/shipments/check-duplicate", response_model=DuplicateCheckResponse)
+def check_shipment_duplicate(body: ShipmentDuplicateCheck, user=Depends(get_current_document_creator)):
+    if not body.client_id or not body.lines:
+        return {"matches": []}
+    with get_connection() as conn:
+        matches = find_duplicate_shipments(
+            conn,
+            client_id=body.client_id,
+            cargo_type=normalize_cargo_type(body.cargo_type),
+            ship_date=body.ship_date,
+            lines=body.lines,
+        )
+    return {"matches": matches}
+
+
 @router.get("/shipments/summary")
 def shipments_summary(
     client_id: str | None = Query(None),
@@ -357,6 +375,7 @@ def list_shipments(
         order_by = _shipment_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
         rows = conn.execute(
             f"""SELECT d.*,
+                    (SELECT COALESCE(NULLIF(u.display_name, ''), u.email) FROM users u WHERE u.id = d.created_by) AS created_by_name,
                     COUNT(l.id) FILTER (WHERE l.is_deleted=0) AS sku_count,
                     COALESCE(SUM(l.qty) FILTER (WHERE l.is_deleted=0), 0) AS total_qty,
                     COALESCE(SUM(COALESCE(l.shipped_qty, 0)) FILTER (WHERE l.is_deleted=0), 0) AS total_shipped_qty,
@@ -444,6 +463,7 @@ def list_shipments(
             lines_with_packed_qty=int(r["lines_with_packed_qty"] or 0),
             lines_with_zone=int(r["lines_with_zone"] or 0),
             created_at=str(r["created_at"]),
+            created_by_name=r.get("created_by_name"),
         )
         for r in rows
     ]

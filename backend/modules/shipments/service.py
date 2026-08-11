@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -28,6 +28,7 @@ from config import (
     SHIPMENT_REPACK_KINDS,
     SHIPMENT_REPACK_PAID,
     SHIPMENT_STATUS_ASSIGNED,
+    SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
@@ -51,6 +52,89 @@ def next_doc_number(connection) -> str:
 def normalize_cargo_type(raw: str | None) -> str:
     s = str(raw or SHIPMENT_CARGO_GOOD).strip().lower()
     return s if s in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT) else SHIPMENT_CARGO_GOOD
+
+
+def _dup_key(product_id, color_id, size_id) -> tuple[str, str, str]:
+    """Ключ строки для сравнения состава. NULL цвет/размер → ''."""
+    return (str(product_id or ""), str(color_id or ""), str(size_id or ""))
+
+
+def _moscow_day(iso: str | None) -> str:
+    """Московская календарная дата из UTC-ISO (fallback, TZ контейнера = Europe/Moscow)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone().date().isoformat()
+
+
+def find_duplicate_shipments(connection, *, client_id, cargo_type, ship_date, lines) -> list[dict]:
+    """Задачи упаковки того же клиента и типа груза за тот же день с ТОЧНО таким же составом.
+
+    День — по плановой дате упаковки (ship_date); если не задана — по дате создания
+    за сегодня (МСК). Совпадение = равенство {(товар,цвет,размер): кол-во}. Аннулированные исключены.
+    """
+    want: dict[tuple[str, str, str], int] = {}
+    for ln in lines:
+        want[_dup_key(ln.product_id, ln.color_id, ln.size_id)] = int(ln.qty)
+    if not client_id or not want:
+        return []
+
+    ship = (ship_date or "").strip()
+    if ship:
+        docs = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM shipment_docs "
+            "WHERE client_id = ? AND COALESCE(cargo_type, 'good') = ? AND ship_date = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, cargo_type, ship, SHIPMENT_STATUS_CANCELLED),
+        ).fetchall()
+    else:
+        today = _moscow_day(_now())
+        rows = connection.execute(
+            "SELECT id, doc_number, status, created_at, created_by FROM shipment_docs "
+            "WHERE client_id = ? AND COALESCE(cargo_type, 'good') = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            "ORDER BY created_at DESC",
+            (client_id, cargo_type, SHIPMENT_STATUS_CANCELLED),
+        ).fetchall()
+        docs = [r for r in rows if _moscow_day(r["created_at"]) == today]
+
+    matches: list[dict] = []
+    for doc in docs:
+        line_rows = connection.execute(
+            "SELECT product_id, color_id, size_id, qty, product_sku, product_name, color_name, size_name "
+            "FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted,0)=0",
+            (doc["id"],),
+        ).fetchall()
+        have = {_dup_key(r["product_id"], r["color_id"], r["size_id"]): int(r["qty"] or 0) for r in line_rows}
+        if have != want:
+            continue
+        email = None
+        if doc["created_by"]:
+            u = connection.execute("SELECT COALESCE(NULLIF(display_name, ''), email) AS email FROM users WHERE id = ?", (doc["created_by"],)).fetchone()
+            email = u["email"] if u else None
+        matches.append({
+            "id": doc["id"],
+            "doc_number": doc["doc_number"],
+            "status": doc["status"],
+            "status_label": SHIPMENT_STATUS_LABELS.get(doc["status"], doc["status"]),
+            "created_at": doc["created_at"],
+            "created_by_name": email,
+            "lines": [
+                {
+                    "product_sku": r["product_sku"],
+                    "product_name": r["product_name"],
+                    "color_name": r["color_name"],
+                    "size_name": r["size_name"],
+                    "qty": int(r["qty"] or 0),
+                }
+                for r in line_rows
+            ],
+        })
+    return matches
 
 
 def _check_duplicate_lines(connection, doc_id: str) -> None:

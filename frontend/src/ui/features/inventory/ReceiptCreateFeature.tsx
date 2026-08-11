@@ -26,6 +26,7 @@ import { DocHeader } from '../shared/process/DocHeader'
 import { PrimaryAction } from '../shared/process/PrimaryAction'
 import { Panel, ReadRow, ChecklistPanel, LockedGrid } from '../shared/process/processUI'
 import { NumberStep } from './shared/NumberStep'
+import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveReceipts } from './shared/ClientActiveDocsPanel'
 import { receiptLineVariantKey } from './shared/receiptLineVariantRules'
 import { MatrixAddDrawer } from './shared/MatrixAddDrawer'
 import type { MatrixCell } from './shared/MatrixAddDrawer'
@@ -225,6 +226,14 @@ export function ReceiptCreateFeature() {
                   style={{ resize: 'vertical', minHeight: 76 }}
                 />
               </Field>
+              <ClientActiveDocsPanel
+                clientId={clientId || null}
+                nounForms={['активное поступление', 'активных поступления', 'активных поступлений']}
+                load={loadActiveReceipts}
+                detailHref={(id) => `/inventory/receipts/${id}`}
+                formKeys={lines.map((l) => activeDocVariantKey(l.product_sku, l.product_name, l.color_name, l.size_name))}
+                style={{ gridColumn: '1 / -1' }}
+              />
             </div>
           </PhaseBlock>
 
