@@ -161,7 +161,7 @@ function moscowDayOfIso(iso: string | null): string {
 }
 
 function variantLabel(l: ActiveDocLine): string {
-  return [l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ') || l.product_name || '—'
+  return [l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')
 }
 
 interface ClientActiveDocsPanelProps {
@@ -267,8 +267,11 @@ export function ClientActiveDocsPanel({ clientId, nounForms, load, detailHref, f
                       padding: '4px 6px', margin: '0 -6px', fontSize: 12, borderRadius: 6,
                       background: hit ? 'var(--c-warning-bg)' : 'transparent',
                     }}>
-                      <span className="mono" style={{ color: 'var(--c-text-subtle)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {variantLabel(l)}
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {l.product_name || '—'}
+                        {variantLabel(l) && (
+                          <span className="mono" style={{ color: 'var(--c-text-subtle)', marginLeft: 8 }}>{variantLabel(l)}</span>
+                        )}
                       </span>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
                         {hit && <span style={{ fontSize: 10.5, color: 'var(--c-warning)', fontWeight: 500 }}>есть в вашем документе</span>}
