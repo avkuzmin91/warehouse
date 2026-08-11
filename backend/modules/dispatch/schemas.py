@@ -143,6 +143,7 @@ class DispatchListItem(BaseModel):
     total_qty:         int
     total_shipped_qty: int = 0
     created_at:        str
+    created_by_name:   str | None = None
 
 
 class DispatchListResponse(BaseModel):

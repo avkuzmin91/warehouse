@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
-import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile } from '../../../api/shipmentsApi'
+import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate } from '../../../api/shipmentsApi'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
+import type { DuplicateMatch } from '../../../api/domainTypes'
+import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
+import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveShipments } from './shared/ClientActiveDocsPanel'
 import type { PlannableItem } from '../../../api/balancesApi'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../api/domainTypes'
@@ -50,6 +53,9 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showBlockReasons, setShowBlockReasons] = useState(false)
+  const [dupMatches, setDupMatches] = useState<DuplicateMatch[]>([])
+  // Куда идти после подтверждения дубля: черновик или сразу «Запланировать упаковку».
+  const pendingPackingRef = useRef(false)
   const lineUidSeq = useRef(0)
 
   const { clients } = useLookups()
@@ -200,6 +206,20 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     setError('')
     setSaving(true)
     try {
+      const dup = await checkShipmentDuplicate({
+        cargo_type: cargoType,
+        client_id: clientId || '',
+        ship_date: shipDate || null,
+        lines: lines.map((l) => ({ product_id: l.product_id, color_id: l.color_id ?? null, size_id: l.size_id ?? null, qty: l.qty })),
+      })
+      if (dup.matches.length > 0) { pendingPackingRef.current = toPacking; setDupMatches(dup.matches); setSaving(false); return }
+    } catch { /* проверка на дубль не критична — не блокируем создание */ }
+    await runCreate(toPacking)
+  }
+
+  async function runCreate(toPacking: boolean) {
+    setSaving(true)
+    try {
       const res = await createShipment({
         cargo_type:     cargoType,
         client_id:      clientId || null,
@@ -324,6 +344,16 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                     style={{ resize: 'vertical', minHeight: 76 }}
                   />
                 </Field>
+                <ClientActiveDocsPanel
+                  clientId={clientId}
+                  nounForms={isDefectCargo
+                    ? ['активная задача упаковки брака', 'активные задачи упаковки брака', 'активных задач упаковки брака']
+                    : ['активная задача упаковки', 'активные задачи упаковки', 'активных задач упаковки']}
+                  load={(cid, signal) => loadActiveShipments(cid, cargoType, signal)}
+                  detailHref={(id) => `/inventory/shipments/${id}`}
+                  formKeys={lines.map((l) => activeDocVariantKey(l.product_sku, l.product_name, l.color_name, l.size_name))}
+                  style={{ gridColumn: '1 / -1' }}
+                />
               </div>
           </PhaseBlock>
 
@@ -515,6 +545,16 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       <DraftFilePreviewModal
         preview={filePreview}
         onClose={() => setFilePreview(null)}
+      />
+
+      <DuplicateWarnModal
+        open={dupMatches.length > 0}
+        matches={dupMatches}
+        entityAccusative="задачу упаковки"
+        busy={saving}
+        onOpenExisting={(id) => navigate(`/inventory/shipments/${id}`)}
+        onProceed={() => { setDupMatches([]); void runCreate(pendingPackingRef.current) }}
+        onCancel={() => setDupMatches([])}
       />
     </div>
   )

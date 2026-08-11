@@ -1,5 +1,6 @@
 import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
+import type { DuplicateCheckResponse } from './domainTypes'
 
 export type ShipmentStatus = 'draft' | 'assigned' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
@@ -161,6 +162,7 @@ export type ShipmentListItem = {
   lines_with_packed_qty?: number
   lines_with_zone?: number
   created_at:     string
+  created_by_name?: string | null
 }
 
 export type ShipmentDetail = ShipmentListItem & {
@@ -335,6 +337,20 @@ export function getShipment(id: string, signal?: AbortSignal) {
 
 export function createShipment(body: ShipmentDocCreate) {
   return request<{ message: string }>('/shipments', { method: 'POST', body: JSON.stringify(body), idempotent: true })
+}
+
+export type ShipmentDuplicateCheckPayload = {
+  cargo_type: ShipmentCargoType
+  client_id: string
+  ship_date?: string | null
+  lines: { product_id: string; color_id?: string | null; size_id?: string | null; qty: number }[]
+}
+
+export function checkShipmentDuplicate(payload: ShipmentDuplicateCheckPayload) {
+  return request<DuplicateCheckResponse>('/shipments/check-duplicate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function updateShipment(id: string, body: ShipmentDocUpdate) {

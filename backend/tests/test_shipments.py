@@ -597,3 +597,83 @@ def test_line_full_patch_blocked_on_packing(admin_client, client_id):
 
     r = admin_client.patch(f"/shipments/{doc_id}/lines/{line_id}", json={**line, "qty": 5})
     assert r.status_code == 400, r.text
+
+
+# --- Проверка на дубль (check-duplicate) ---
+
+def _dup_product(client_id: str, *, sku: str) -> str:
+    type_id = str(uuid.uuid4())
+    product_id = str(uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO product_types (id, name, is_active, created_at) VALUES (?, ?, 1, NOW())",
+            (type_id, f"Type-{type_id[:8]}"),
+        )
+        conn.execute(
+            "INSERT INTO products (id, name, type_id, client_id, sku, is_active, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 1, NOW())",
+            (product_id, f"Product-{product_id[:8]}", type_id, client_id, sku),
+        )
+        conn.commit()
+    return product_id
+
+
+def _dup_create(admin_client, client_id, product_id, sku, qty, *, ship_date="2026-07-01", cargo_type="good") -> str:
+    payload = _make_shipment_payload(client_id, lines=[{
+        "product_id": product_id, "product_name": "Product", "product_sku": sku, "qty": qty,
+    }])
+    payload["ship_date"] = ship_date
+    payload["cargo_type"] = cargo_type
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 200, r.text
+    return r.json()["message"]
+
+
+def _dup_check(admin_client, client_id, product_id, qty, *, ship_date="2026-07-01", cargo_type="good"):
+    return admin_client.post("/shipments/check-duplicate", json={
+        "cargo_type": cargo_type,
+        "client_id": client_id,
+        "ship_date": ship_date,
+        "lines": [{"product_id": product_id, "color_id": None, "size_id": None, "qty": qty}],
+    })
+
+
+def test_duplicate_check_exact_match(admin_client, client_id):
+    """Тот же клиент + плановая дата + состав → совпадение 100%."""
+    pid = _dup_product(client_id, sku="SHP-DUP1")
+    doc_id = _dup_create(admin_client, client_id, pid, "SHP-DUP1", 10)
+    r = _dup_check(admin_client, client_id, pid, 10)
+    assert r.status_code == 200, r.text
+    matches = r.json()["matches"]
+    assert len(matches) == 1
+    assert matches[0]["id"] == doc_id
+    assert matches[0]["lines"][0]["qty"] == 10
+
+
+def test_duplicate_check_qty_differs(admin_client, client_id):
+    """Другое количество — состав не совпадает, дубля нет."""
+    pid = _dup_product(client_id, sku="SHP-DUP2")
+    _dup_create(admin_client, client_id, pid, "SHP-DUP2", 10)
+    assert _dup_check(admin_client, client_id, pid, 11).json()["matches"] == []
+
+
+def test_duplicate_check_date_differs(admin_client, client_id):
+    """Другая плановая дата — за тот день дубля нет."""
+    pid = _dup_product(client_id, sku="SHP-DUP3")
+    _dup_create(admin_client, client_id, pid, "SHP-DUP3", 10)
+    assert _dup_check(admin_client, client_id, pid, 10, ship_date="2026-07-02").json()["matches"] == []
+
+
+def test_duplicate_check_ignores_cancelled(admin_client, client_id):
+    """Аннулированная задача упаковки не считается дублем."""
+    pid = _dup_product(client_id, sku="SHP-DUP4")
+    doc_id = _dup_create(admin_client, client_id, pid, "SHP-DUP4", 10)
+    assert admin_client.post(f"/shipments/{doc_id}/cancel").status_code == 200
+    assert _dup_check(admin_client, client_id, pid, 10).json()["matches"] == []
+
+
+def test_duplicate_check_cargo_type_differs(admin_client, client_id):
+    """Годная задача и брак с одинаковым составом — разные типы, не дубль."""
+    pid = _dup_product(client_id, sku="SHP-DUP5")
+    _dup_create(admin_client, client_id, pid, "SHP-DUP5", 10)
+    assert _dup_check(admin_client, client_id, pid, 10, cargo_type="defect").json()["matches"] == []

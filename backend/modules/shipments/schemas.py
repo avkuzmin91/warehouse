@@ -318,6 +318,7 @@ class ShipmentListItem(BaseModel):
     lines_with_packed_qty: int = 0
     lines_with_zone: int = 0
     created_at:   str
+    created_by_name: str | None = None
 
 
 class ShipmentListResponse(BaseModel):
@@ -398,3 +399,39 @@ class ShipmentDetailResponse(BaseModel):
     ops:          list[ShipmentOpItem]
     sku_count:    int
     total_qty:    int
+
+
+class ShipmentDuplicateCheckLine(BaseModel):
+    product_id: str
+    color_id:   str | None = None
+    size_id:    str | None = None
+    qty:        int = Field(ge=1)
+
+
+class ShipmentDuplicateCheck(BaseModel):
+    cargo_type: str = "good"
+    client_id:  str | None = None
+    ship_date:  str | None = None
+    lines:      list[ShipmentDuplicateCheckLine] = []
+
+
+class DuplicateMatchLine(BaseModel):
+    product_sku:  str | None = None
+    product_name: str | None = None
+    color_name:   str | None = None
+    size_name:    str | None = None
+    qty:          int
+
+
+class DuplicateMatch(BaseModel):
+    id:              str
+    doc_number:      str
+    status:          str
+    status_label:    str
+    created_at:      str
+    created_by_name: str | None = None
+    lines:           list[DuplicateMatchLine] = []
+
+
+class DuplicateCheckResponse(BaseModel):
+    matches: list[DuplicateMatch] = []

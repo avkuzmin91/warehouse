@@ -6,6 +6,7 @@ import type { DispatchCargoType, DispatchLineIn } from '../../../api/dispatchApi
 import type { PlannableItem } from '../../../api/balancesApi'
 import type { DuplicateMatch } from '../../../api/domainTypes'
 import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
+import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveDispatches } from './shared/ClientActiveDocsPanel'
 import { balanceKey } from '../../../utils/balanceKey'
 import { getInventoryClientStores } from '../../../api/inventoryLookupsApi'
 import type { ClientStoreItem } from '../../../api/domainTypes'
@@ -511,6 +512,16 @@ export function DispatchCreateFeature({ cargoType }: { cargoType: DispatchCargoT
                   style={{ resize: 'vertical', minHeight: 76 }}
                 />
               </Field>
+              <ClientActiveDocsPanel
+                clientId={clientId}
+                nounForms={isDefectCargo
+                  ? ['активная отгрузка брака', 'активные отгрузки брака', 'активных отгрузок брака']
+                  : ['активная отгрузка', 'активные отгрузки', 'активных отгрузок']}
+                load={(cid, signal) => loadActiveDispatches(cid, cargoType, signal)}
+                detailHref={(id) => `/inventory/dispatches/${id}`}
+                formKeys={lines.map((l) => activeDocVariantKey(l.product_sku, l.product_name, l.color_name, l.size_name))}
+                style={{ gridColumn: '1 / -1' }}
+              />
             </div>
           </PhaseBlock>
 
