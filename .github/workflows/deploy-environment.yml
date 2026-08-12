@@ -162,6 +162,9 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
+          # Сборка backend-образа качает зависимости с PyPI по медленному каналу VPS:
+          # смена requirements.txt сбрасывает слой кэша, дефолтных 10m не хватает.
+          command_timeout: 40m
           envs: APP_VERSION=${{ steps.rev.outputs.sha }}
           script: |
             set -euo pipefail
@@ -192,6 +195,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
+          command_timeout: 40m
           envs: APP_VERSION=${{ steps.rev.outputs.sha }}
           script: |
             set -euo pipefail
