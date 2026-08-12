@@ -9,8 +9,11 @@ import {
   advanceShipment,
   getShipment,
   uploadShipmentLineFile,
+  type LineFileBarcode,
   type ShipmentLineIn,
 } from '../../api/shipmentsApi'
+import { addProductBarcode, addProductBarcodeFile, getProductFiles, type ProductFileItem } from '../../api/productsApi'
+import { attachShipmentLineFileFromProduct } from '../../api/shipmentsApi'
 import { newRequestId } from '../../api/http'
 import { getClients, getClientStores, type DictionaryItem, type ClientStoreItem } from '../../api/lookupsApi'
 import { getPlannableItems, type PlannableItem, type InvQuality } from '../../api/balancesApi'
@@ -22,6 +25,7 @@ import { TextArea } from '../../components/TextArea'
 import { Icon } from '../../components/Icon'
 import { BalancePickerSheet } from './BalancePickerSheet'
 import { AssignSkuSheet } from './AssignSkuSheet'
+import { Sheet } from '../../components/Sheet'
 
 const ALLOWED_EXTS = ['pdf', 'png', 'jpg', 'jpeg']
 const MAX_BYTES = 10 * 1024 * 1024
@@ -41,11 +45,14 @@ type DraftLine = ShipmentLineIn & {
   inTransit: number
   sku_pending: boolean
   files: File[]
+  productFiles: ProductFileItem[]
 }
 
 function lineSub(l: DraftLine): string {
   return [l.product_sku || 'без SKU', l.color_name, l.size_name].filter(Boolean).join(' · ')
 }
+
+type BcFinding = LineFileBarcode & { file: File; productId: string; productName: string }
 
 export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
   const { back } = useNav()
@@ -96,6 +103,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
         setClientName(d.client_name)
         setShipDate(d.ship_date ?? '')
         setComment(d.comment ?? '')
+        docNumberRef.current = d.doc_number
         setLines(d.lines.map((l) => {
           initIds.add(l.id)
           const p = byKey.get(balanceKey(l))
@@ -117,6 +125,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
             store_id: l.store_id,
             store_name: l.store_name,
             files: [],
+            productFiles: [],
           }
         }))
         initialServerIds.current = initIds
@@ -182,6 +191,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
         store_id: null as string | null,
         store_name: null as string | null,
         files: [] as File[],
+        productFiles: [] as ProductFileItem[],
       })),
     ])
     setShowPicker(false)
@@ -228,11 +238,23 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
     }
   }
 
+  // Итог распознавания ШК на файлах — копится за время сохранения, показывается
+  // одной шторкой перед выходом с формы.
+  const bcFindingsRef = useRef<BcFinding[]>([])
+  const docNumberRef = useRef('')
+
+  function collectFindings(barcodes: LineFileBarcode[] | undefined, l: { product_id: string; product_name: string }, file: File) {
+    for (const b of barcodes ?? []) {
+      bcFindingsRef.current.push({ ...b, file, productId: l.product_id, productName: l.product_name })
+    }
+  }
+
   // Создание: файлы грузим после получения id строк (матч по ключу+магазину).
   async function uploadDraftFiles(docId: string) {
-    const withFiles = lines.filter((l) => l.files.length > 0)
+    const withFiles = lines.filter((l) => l.files.length > 0 || l.productFiles.length > 0)
     if (withFiles.length === 0) return
     const detail = await getShipment(docId)
+    docNumberRef.current = detail.doc_number
     const used = new Set<string>()
     for (const draft of withFiles) {
       const target = detail.lines.find((cl) =>
@@ -240,7 +262,12 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
       if (!target) continue
       used.add(target.id)
       for (const file of draft.files) {
-        await uploadShipmentLineFile(docId, target.id, file)
+        const res = await uploadShipmentLineFile(docId, target.id, file)
+        collectFindings(res.barcodes, draft, file)
+      }
+      for (const pf of draft.productFiles) {
+        // Дубль этикетки на строке (повторное сохранение) — не ошибка, пропускаем.
+        await attachShipmentLineFileFromProduct(docId, target.id, pf.id).catch(() => {})
       }
     }
   }
@@ -274,11 +301,23 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
       if (l._serverId) {
         present.add(l._serverId)
         await updateShipmentLine(id, l._serverId, lineToIn(l))
-        for (const file of l.files) await uploadShipmentLineFile(id, l._serverId, file)
+        for (const file of l.files) {
+          const res = await uploadShipmentLineFile(id, l._serverId, file)
+          collectFindings(res.barcodes, l, file)
+        }
+        for (const pf of l.productFiles) {
+          await attachShipmentLineFileFromProduct(id, l._serverId, pf.id).catch(() => {})
+        }
       } else {
         const res = await addShipmentLine(id, lineToIn(l))
         const newLineId = res.message
-        for (const file of l.files) await uploadShipmentLineFile(id, newLineId, file)
+        for (const file of l.files) {
+          const up = await uploadShipmentLineFile(id, newLineId, file)
+          collectFindings(up.barcodes, l, file)
+        }
+        for (const pf of l.productFiles) {
+          await attachShipmentLineFileFromProduct(id, newLineId, pf.id).catch(() => {})
+        }
       }
     }
     for (const oldId of initialServerIds.current) {
@@ -292,15 +331,71 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
     if (!clientId || lines.length === 0) { setError('Выберите клиента и добавьте позиции'); return }
     setError('')
     setSaving(true)
+    bcFindingsRef.current = []
     try {
       const id = editing ? (docId as string) : await saveCreate()
       if (editing) await saveEdit(id)
       if (plan) await advanceShipment(id, newRequestId())
+      const seen = new Set<string>()
+      const uniq = bcFindingsRef.current.filter((f) => !seen.has(f.code) && (seen.add(f.code), true))
+      const unknown = uniq.filter((f) => f.status === 'unknown')
+      const foreign = uniq.filter((f) => f.status === 'other_product')
+      if (unknown.length > 0 || foreign.length > 0) {
+        setSaving(false)
+        setBcOffer({ unknown, foreign })
+        return
+      }
       back()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить')
       setSaving(false)
     }
+  }
+
+  const [bcOffer, setBcOffer] = useState<{ unknown: BcFinding[]; foreign: BcFinding[] } | null>(null)
+  const [bcSaving, setBcSaving] = useState(false)
+  const [bcSaveLabel, setBcSaveLabel] = useState(true)
+
+  async function attachOfferedBarcodes() {
+    if (!bcOffer || bcSaving) return
+    setBcSaving(true)
+    try {
+      for (const f of bcOffer.unknown) {
+        const res = await addProductBarcode(f.productId, { barcode: f.code, source: `Упаковка ${docNumberRef.current}`.trim() })
+        if (bcSaveLabel) await addProductBarcodeFile(f.productId, res.message, f.file)
+      }
+      setBcOffer(null)
+      back()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось привязать штрих-код')
+      setBcOffer(null)
+      setBcSaving(false)
+    }
+  }
+
+  // Выбор этикетки из карточки товара для строки черновика.
+  const [labelPickLine, setLabelPickLine] = useState<DraftLine | null>(null)
+  const [labelPickFiles, setLabelPickFiles] = useState<ProductFileItem[] | null>(null)
+
+  useEffect(() => {
+    if (!labelPickLine) { setLabelPickFiles(null); return }
+    const ac = new AbortController()
+    getProductFiles(labelPickLine.product_id, ac.signal)
+      .then((res) => { if (!ac.signal.aborted) setLabelPickFiles(res) })
+      .catch(() => { if (!ac.signal.aborted) setLabelPickFiles([]) })
+    return () => ac.abort()
+  }, [labelPickLine])
+
+  function addProductFileRef(uid: string, file: ProductFileItem) {
+    setLines((ls) => ls.map((l) => l._uid === uid && !l.productFiles.some((f) => f.id === file.id)
+      ? { ...l, productFiles: [...l.productFiles, file] }
+      : l))
+  }
+
+  function removeProductFileRef(uid: string, fileId: string) {
+    setLines((ls) => ls.map((l) => l._uid === uid
+      ? { ...l, productFiles: l.productFiles.filter((f) => f.id !== fileId) }
+      : l))
   }
 
   const storeOptions = stores.map((s) => ({ value: s.id, label: s.name }))
@@ -418,6 +513,15 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
                 )}
 
                 <div className="line-row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 6 }}>
+                  {l.productFiles.map((f) => (
+                    <span key={f.id} className="filechip" title={`Этикетка ${f.barcode}`}>
+                      <Icon name="tag" size={12} />
+                      <span className="fc-name">{f.filename}</span>
+                      <button className="fc-x" onClick={() => removeProductFileRef(l._uid, f.id)} aria-label="Убрать этикетку">
+                        <Icon name="x" size={12} />
+                      </button>
+                    </span>
+                  ))}
                   {l.files.map((f, i) => (
                     <span key={i} className="filechip">
                       <Icon name="file" size={12} />
@@ -440,6 +544,9 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
                       }}
                     />
                   </label>
+                  <button className="btn ghost sm auto" onClick={() => setLabelPickLine(l)}>
+                    <Icon name="tag" size={13} /> Из карточки
+                  </button>
                 </div>
               </div>
             )
@@ -493,6 +600,75 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
           onDone={(sku) => applySku(skuLine, sku)}
           onClose={() => setSkuLine(null)}
         />
+      )}
+
+      {labelPickLine && (
+        <Sheet onClose={() => setLabelPickLine(null)}>
+          <h3>Этикетка из карточки товара</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>{labelPickLine.product_name}</p>
+          {labelPickFiles === null ? (
+            <div className="center" style={{ padding: '16px 0' }}><div className="spin" /></div>
+          ) : labelPickFiles.length === 0 ? (
+            <p className="line-sub" style={{ fontSize: 13 }}>
+              В карточке товара нет этикеток. Этикетка сохраняется при привязке распознанного ШК.
+            </p>
+          ) : (
+            labelPickFiles
+              .filter((f) => !labelPickLine.productFiles.some((pf) => pf.id === f.id))
+              .map((f) => (
+                <button
+                  key={f.id}
+                  className="tile"
+                  style={{ width: '100%', marginBottom: 6 }}
+                  onClick={() => { addProductFileRef(labelPickLine._uid, f); setLabelPickLine(null) }}
+                >
+                  <div className="tile-title" style={{ fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Icon name="tag" size={14} />
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</span>
+                  </div>
+                  <div className="line-sub mono" style={{ fontSize: 12 }}>{f.barcode}</div>
+                </button>
+              ))
+          )}
+        </Sheet>
+      )}
+
+      {bcOffer && (
+        <Sheet onClose={() => { setBcOffer(null); back() }} locked={bcSaving}>
+          <h3>{bcOffer.unknown.length > 0 ? 'Привязать штрих-коды?' : 'Проверьте файлы'}</h3>
+          {bcOffer.foreign.map((f) => (
+            <p key={f.code} className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+              Код <span className="mono">{f.code}</span> принадлежит «{f.other_product_name}» — проверьте, тот ли файл приложен.
+            </p>
+          ))}
+          {bcOffer.unknown.length > 0 && (
+            <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+              На файлах распознаны новые коды:{' '}
+              {bcOffer.unknown.map((f) => `${f.code} → «${f.productName}»`).join('; ')}. В системе их нет — привязать к товарам?
+            </p>
+          )}
+          {bcOffer.unknown.length > 0 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '8px 0' }}>
+              <input
+                type="checkbox"
+                checked={bcSaveLabel}
+                disabled={bcSaving}
+                onChange={(e) => setBcSaveLabel(e.target.checked)}
+              />
+              Сохранить файлы этикеток в карточки товаров
+            </label>
+          )}
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={bcSaving} onClick={() => { setBcOffer(null); back() }}>
+              {bcOffer.unknown.length > 0 ? 'Не привязывать' : 'Понятно'}
+            </button>
+            {bcOffer.unknown.length > 0 && (
+              <button className="btn" disabled={bcSaving} onClick={() => void attachOfferedBarcodes()}>
+                {bcSaving ? <span className="spin spin-sm" /> : 'Привязать'}
+              </button>
+            )}
+          </div>
+        </Sheet>
       )}
     </div>
   )

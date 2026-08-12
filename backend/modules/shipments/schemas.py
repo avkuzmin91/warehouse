@@ -435,3 +435,9 @@ class DuplicateMatch(BaseModel):
 
 class DuplicateCheckResponse(BaseModel):
     matches: list[DuplicateMatch] = []
+
+
+class LineFileFromProduct(BaseModel):
+    """Прикрепление этикетки из карточки товара к строке задачи."""
+
+    product_file_id: str

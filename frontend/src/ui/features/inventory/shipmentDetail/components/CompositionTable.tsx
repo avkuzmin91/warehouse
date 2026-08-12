@@ -63,6 +63,8 @@ type CompositionTableProps = {
   onUploadFile:    (lineId: string, files: File[]) => void
   onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile:    (lineId: string, fileId: string) => void
+  // Этикетка из карточки товара — прикрепление без повторной загрузки файла.
+  onPickLabel?:    (line: ShipmentLine) => void
   // Дозаполнение SKU для товара «ожидает SKU» прямо из состава отгрузки.
   onAssignSku?:    (line: ShipmentLine) => void
   // Доступность строки под планом: «на хранении» + «в пути» (только при правке плана).
@@ -74,7 +76,7 @@ type CompositionTableProps = {
 export function CompositionTable({
   lines, showZone = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
-  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onAssignSku,
+  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku,
   getAvail, availLoading,
 }: CompositionTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
@@ -188,6 +190,7 @@ export function CompositionTable({
                   onAdd={(files) => onUploadFile(line.id, files)}
                   onReplace={(fileId, file) => onReplaceFile(line.id, fileId, file)}
                   onRemove={(fileId) => onDeleteFile(line.id, fileId)}
+                  onPickFromCard={onPickLabel ? () => onPickLabel(line) : undefined}
                 />
               </Td>
               <Td>

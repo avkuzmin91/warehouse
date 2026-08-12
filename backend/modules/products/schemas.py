@@ -80,10 +80,28 @@ class ProductVariantDimension(BaseModel):
     height: float = Field(ge=0)
 
 
-class VariantBarcodeItem(BaseModel):
+class ProductBarcodeFileItem(BaseModel):
+    id: str
+    filename: str
+    url: str
+    mime_type: str | None = None
+
+
+class ProductBarcodeItem(BaseModel):
     id: str
     barcode: str
     source: str | None = None
+    files: list[ProductBarcodeFileItem] = Field(default_factory=list)
+
+
+class ProductFileItem(BaseModel):
+    """Этикетка из карточки товара для выбора в документах (плоский список)."""
+
+    id: str
+    barcode: str
+    filename: str
+    url: str
+    mime_type: str | None = None
 
 
 class ProductVariantItem(BaseModel):
@@ -94,7 +112,6 @@ class ProductVariantItem(BaseModel):
     size_id: str | None = None
     size_name: str | None = None
     sku: str
-    barcodes: list[VariantBarcodeItem] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
     is_active: bool
     stock: int = 0
@@ -102,7 +119,7 @@ class ProductVariantItem(BaseModel):
     has_receipts: bool = False
 
 
-class VariantBarcodeAdd(BaseModel):
+class ProductBarcodeAdd(BaseModel):
     barcode: str = Field(min_length=1)
     source: str | None = None
 
@@ -154,14 +171,9 @@ class ProductVariantFindResponse(BaseModel):
 
 
 class BarcodeMatch(BaseModel):
-    variant_id: str
     product_id: str
     product_name: str
     sku: str
-    color_id: str | None = None
-    color_name: str | None = None
-    size_id: str | None = None
-    size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
 

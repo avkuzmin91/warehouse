@@ -7,11 +7,12 @@ import {
   patchProductVariants,
   changeVariantIdentity,
   deleteProductVariant,
-  addVariantBarcode,
-  deleteVariantBarcode,
+  getProductBarcodes,
+  addProductBarcode,
+  deleteProductBarcode,
   uploadProductDictionaryImage,
 } from '../../../api/adminApi'
-import type { ProductItem, ProductVariantItem, ProductVariantWriteItem, VariantBarcodeItem } from '../../../api/domainTypes'
+import type { ProductBarcodeItem, ProductItem, ProductVariantItem, ProductVariantWriteItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { getInventoryColors, getInventorySizes } from '../../../api/inventoryLookupsApi'
 import { useLookups } from '../../../hooks/useLookups'
@@ -112,12 +113,12 @@ export function ProductEditFeature({ id }: { id: string }) {
   )
   const [rows, setRows] = useState<ProductVariantWriteItem[]>([])
   const [variantMeta, setVariantMeta] = useState<Map<string, { hasReceipts: boolean; sku: string; colorId: string | null; sizeId: string | null }>>(new Map())
-  const [barcodesByVariant, setBarcodesByVariant] = useState<Map<string, VariantBarcodeItem[]>>(new Map())
+  const [barcodes, setBarcodes] = useState<ProductBarcodeItem[]>([])
   const [varLoading, setVarLoading] = useState(false)
   const [varError, setVarError] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const [bcTargetId, setBcTargetId] = useState<string | null>(null)
+  const [bcOpen, setBcOpen] = useState(false)
   const [bcCode, setBcCode] = useState('')
   const [bcSource, setBcSource] = useState('')
   const [bcSaving, setBcSaving] = useState(false)
@@ -168,7 +169,6 @@ export function ProductEditFeature({ id }: { id: string }) {
         })),
       )
       setVariantMeta(new Map(items.map((v) => [v.id, { hasReceipts: v.has_receipts ?? false, sku: v.sku, colorId: v.color_id ?? null, sizeId: v.size_id ?? null }])))
-      setBarcodesByVariant(new Map(items.map((v) => [v.id, v.barcodes])))
     } catch (e: unknown) {
       setVarError(e instanceof Error ? e.message : 'Ошибка загрузки вариантов')
     } finally {
@@ -176,20 +176,18 @@ export function ProductEditFeature({ id }: { id: string }) {
     }
   }, [id])
 
-  // Обновить только карту ШК, не трогая rows — иначе несохранённые правки вариантов слетят.
   const refreshBarcodes = useCallback(async () => {
     if (!id) return
-    const items = await getProductVariants(id)
-    setBarcodesByVariant(new Map(items.map((v) => [v.id, v.barcodes])))
+    setBarcodes(await getProductBarcodes(id))
   }, [id])
 
   async function handleAddBarcode() {
-    if (!id || !bcTargetId || !bcCode.trim() || bcSaving) return
+    if (!id || !bcCode.trim() || bcSaving) return
     setBcSaving(true)
     try {
-      await addVariantBarcode(id, bcTargetId, { barcode: bcCode.trim(), source: bcSource.trim() || null })
+      await addProductBarcode(id, { barcode: bcCode.trim(), source: bcSource.trim() || null })
       toast('Штрих-код добавлен', 'success')
-      setBcTargetId(null)
+      setBcOpen(false)
       await refreshBarcodes()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось добавить штрих-код', 'error')
@@ -198,17 +196,17 @@ export function ProductEditFeature({ id }: { id: string }) {
     }
   }
 
-  async function handleDeleteBarcode(variantId: string, bc: VariantBarcodeItem) {
+  async function handleDeleteBarcode(bc: ProductBarcodeItem) {
     if (!id) return
     const ok = await confirm({
       title: 'Снять штрих-код?',
-      body: `Код ${bc.barcode} перестанет опознавать этот вариант при сканировании.`,
+      body: `Код ${bc.barcode} перестанет опознавать этот товар при сканировании.`,
       danger: true,
       confirmLabel: 'Снять',
     })
     if (!ok) return
     try {
-      await deleteVariantBarcode(id, variantId, bc.id)
+      await deleteProductBarcode(id, bc.id)
       toast('Штрих-код снят', 'success')
       await refreshBarcodes()
     } catch (e) {
@@ -216,15 +214,19 @@ export function ProductEditFeature({ id }: { id: string }) {
     }
   }
 
-  function openAddBarcode(variantId: string) {
+  function openAddBarcode() {
     setBcCode('')
     setBcSource('')
-    setBcTargetId(variantId)
+    setBcOpen(true)
   }
 
   useEffect(() => {
     void loadVariants()
   }, [loadVariants])
+
+  useEffect(() => {
+    void refreshBarcodes().catch(() => {})
+  }, [refreshBarcodes])
 
   const handlePhotoDragStart = useCallback((e: DragEvent, i: number) => {
     dragSrcRef.current = i
@@ -524,6 +526,33 @@ export function ProductEditFeature({ id }: { id: string }) {
                     <div style={{ fontSize: 12, color: 'var(--c-danger)', marginTop: 2 }}>Обязательное поле</div>
                   )}
                 </Field>
+                <Field label="Штрих-коды">
+                  <div className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                    {barcodes.map((bc) => (
+                      <span
+                        key={bc.id}
+                        className="mono"
+                        title={bc.source ?? undefined}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
+                      >
+                        {bc.barcode}
+                        <button
+                          type="button"
+                          title="Снять штрих-код"
+                          disabled={busy}
+                          onClick={() => void handleDeleteBarcode(bc)}
+                          style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                        >
+                          <Icon name="x" size={12} />
+                        </button>
+                      </span>
+                    ))}
+                    {barcodes.length === 0 && <span className="faint text-xs">Нет штрих-кодов</span>}
+                    <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" disabled={busy} onClick={openAddBarcode}>
+                      <Icon name="plus" size={13} />
+                    </button>
+                  </div>
+                </Field>
                 <Field label="Активен">
                   <Toggle checked={isActive} onChange={setIsActive} label="Товар активен" />
                 </Field>
@@ -666,14 +695,13 @@ export function ProductEditFeature({ id }: { id: string }) {
                       <th>Цвет</th>
                       {requiresSize && <th>Размер</th>}
                       <th>Д x Ш x В (см)</th>
-                      <th>Штрих-коды</th>
                       <th style={{ width: 28 }} />
                     </tr>
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={requiresSize ? 6 : 5} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
+                        <td colSpan={requiresSize ? 5 : 4} style={{ padding: '28px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
                           Нет вариантов — нажмите «Добавить»
                         </td>
                       </tr>
@@ -739,36 +767,6 @@ export function ProductEditFeature({ id }: { id: string }) {
                         </div>
                       </Td>
                       <Td>
-                        {row.id ? (
-                          <div className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
-                            {(barcodesByVariant.get(row.id) ?? []).map((bc) => (
-                              <span
-                                key={bc.id}
-                                className="mono"
-                                title={bc.source ?? undefined}
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
-                              >
-                                {bc.barcode}
-                                <button
-                                  type="button"
-                                  title="Снять штрих-код"
-                                  disabled={busy}
-                                  onClick={() => void handleDeleteBarcode(row.id!, bc)}
-                                  style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
-                                >
-                                  <Icon name="x" size={12} />
-                                </button>
-                              </span>
-                            ))}
-                            <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" disabled={busy} onClick={() => openAddBarcode(row.id!)}>
-                              <Icon name="plus" size={13} />
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="faint text-xs">после сохранения</span>
-                        )}
-                      </Td>
-                      <Td>
                         <button
                           type="button"
                           className="btn ghost icon sm"
@@ -795,14 +793,14 @@ export function ProductEditFeature({ id }: { id: string }) {
         </div>
       </div>
       <Modal
-        open={bcTargetId !== null}
-        onClose={() => setBcTargetId(null)}
+        open={bcOpen}
+        onClose={() => setBcOpen(false)}
         title="Добавить штрих-код"
-        subtitle={bcTargetId ? variantMeta.get(bcTargetId)?.sku : undefined}
+        subtitle={product?.name}
         width={420}
         footer={
           <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn ghost" onClick={() => setBcTargetId(null)}>Отмена</button>
+            <button className="btn ghost" onClick={() => setBcOpen(false)}>Отмена</button>
             <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
               {bcSaving ? 'Добавление…' : 'Добавить'}
             </button>

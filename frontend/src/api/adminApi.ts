@@ -8,6 +8,8 @@ import type {
   DictionaryItem,
   DictionaryListQueryParams,
   DictionaryListResponse,
+  ProductBarcodeItem,
+  ProductFileItem,
   ProductItem,
   ProductListQueryParams,
   ProductListResponse,
@@ -382,17 +384,43 @@ export function deleteProductVariant(productId: string, variantId: string) {
   })
 }
 
-export function addVariantBarcode(productId: string, variantId: string, payload: { barcode: string; source?: string | null }) {
-  return request<{ message: string }>(`/products/${productId}/variants/${variantId}/barcodes`, {
+export function getProductBarcodes(productId: string, signal?: AbortSignal) {
+  return request<ProductBarcodeItem[]>(`/products/${productId}/barcodes`, { signal })
+}
+
+export function addProductBarcode(productId: string, payload: { barcode: string; source?: string | null }) {
+  return request<{ message: string }>(`/products/${productId}/barcodes`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
 }
 
-export function deleteVariantBarcode(productId: string, variantId: string, barcodeId: string) {
-  return request<{ message: string }>(`/products/${productId}/variants/${variantId}/barcodes/${barcodeId}`, {
+export function deleteProductBarcode(productId: string, barcodeId: string) {
+  return request<{ message: string }>(`/products/${productId}/barcodes/${barcodeId}`, {
     method: 'DELETE',
   })
+}
+
+// Этикетка кода (PDF/фото ШК) в карточке товара. addProductBarcode возвращает id кода
+// в message — можно грузить этикетку сразу после привязки.
+export function addProductBarcodeFile(productId: string, barcodeId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ message: string }>(`/products/${productId}/barcodes/${barcodeId}/files`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function deleteProductBarcodeFile(productId: string, barcodeId: string, fileId: string) {
+  return request<{ message: string }>(`/products/${productId}/barcodes/${barcodeId}/files/${fileId}`, {
+    method: 'DELETE',
+  })
+}
+
+// Плоский список этикеток товара — для выбора в документах (читается складскими ролями).
+export function getProductFiles(productId: string, signal?: AbortSignal) {
+  return request<ProductFileItem[]>(`/products/${productId}/files`, { signal })
 }
 
 export function uploadProductDictionaryImage(file: File) {

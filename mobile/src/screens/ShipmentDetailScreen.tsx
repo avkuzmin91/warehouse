@@ -18,19 +18,21 @@ import {
   SHIPMENT_STATUS_LABELS,
   updateShipment,
   uploadShipmentLineFile,
+  type LineFileBarcode,
   type MoveAllocation,
   type RelocateLine,
   type ShipmentDefectRelocateLine,
   type ShipmentDetail,
   type ShipmentLine,
 } from '../api/shipmentsApi'
+import { addProductBarcode, addProductBarcodeFile } from '../api/productsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { LineFiles } from '../components/LineFiles'
 import { Sheet } from '../components/Sheet'
 import { TextArea } from '../components/TextArea'
 import { ZoneField } from '../components/ZoneField'
-import { canAcceptPackingTask } from '../utils/access'
+import { canAcceptPackingTask, canCreateDocuments } from '../utils/access'
 import { fmtDate, variantTitle } from '../utils/format'
 
 type Row = { zoneId: string; qty: number }
@@ -317,13 +319,61 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     if (files.length === 0 || saving || savingLine) return
     setSavingLine(line.id)
     setError('')
+    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
     try {
-      for (const f of files) await uploadShipmentLineFile(shipmentId, line.id, f)
+      for (const f of files) {
+        const res = await uploadShipmentLineFile(shipmentId, line.id, f)
+        perFile.push({ file: f, barcodes: res.barcodes ?? [] })
+      }
       reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить файл')
     } finally {
       setSavingLine(null)
+    }
+    // Итог распознавания ШК: чужой код — предупреждение; неизвестный — предложение
+    // привязать к товару строки (только admin/manager — у складских ролей нет права
+    // писать в карточку товара).
+    const seen = new Set<string>()
+    const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
+    const foreign = codes.find((b) => b.status === 'other_product')
+    if (foreign) setError(`Код ${foreign.code} принадлежит «${foreign.other_product_name}» — проверьте, тот ли файл приложен`)
+    const unknown = codes
+      .filter((b) => b.status === 'unknown')
+      .map((b) => ({
+        code: b.code,
+        files: perFile.filter((f) => f.barcodes.some((x) => x.code === b.code)).map((f) => f.file),
+      }))
+    if (unknown.length > 0 && canCreateDocuments(user?.role)) {
+      setBcOffer({ items: unknown, productId: line.product_id, productName: line.product_name })
+    }
+  }
+
+  const [bcOffer, setBcOffer] = useState<{
+    items: { code: string; files: File[] }[]
+    productId: string
+    productName: string
+  } | null>(null)
+  const [bcSaving, setBcSaving] = useState(false)
+  const [bcSaveLabel, setBcSaveLabel] = useState(true)
+
+  async function attachOfferedBarcodes() {
+    if (!bcOffer || bcSaving) return
+    setBcSaving(true)
+    setError('')
+    try {
+      for (const item of bcOffer.items) {
+        const res = await addProductBarcode(bcOffer.productId, { barcode: item.code, source: `Упаковка ${doc?.doc_number ?? ''}`.trim() })
+        if (bcSaveLabel) {
+          for (const f of item.files) await addProductBarcodeFile(bcOffer.productId, res.message, f)
+        }
+      }
+      setBcOffer(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось привязать штрих-код')
+      setBcOffer(null)
+    } finally {
+      setBcSaving(false)
     }
   }
 
@@ -921,6 +971,34 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
             </button>
             <button className="btn" disabled={saving} onClick={() => void saveTz()}>
               {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
+            </button>
+          </div>
+        </Sheet>
+      )}
+
+      {bcOffer && (
+        <Sheet onClose={() => setBcOffer(null)} locked={bcSaving}>
+          <h3>{bcOffer.items.length === 1 ? 'Привязать штрих-код?' : 'Привязать штрих-коды?'}</h3>
+          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
+            На файле распознан{bcOffer.items.length === 1 ? ' код' : 'ы коды'}{' '}
+            <span className="mono">{bcOffer.items.map((i) => i.code).join(', ')}</span> — в системе их нет.
+            Привязать к товару «{bcOffer.productName}»?
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '8px 0' }}>
+            <input
+              type="checkbox"
+              checked={bcSaveLabel}
+              disabled={bcSaving}
+              onChange={(e) => setBcSaveLabel(e.target.checked)}
+            />
+            Сохранить файл этикетки в карточку товара
+          </label>
+          <div className="dtf-actions">
+            <button className="btn ghost" disabled={bcSaving} onClick={() => setBcOffer(null)}>
+              Отмена
+            </button>
+            <button className="btn" disabled={bcSaving} onClick={() => void attachOfferedBarcodes()}>
+              {bcSaving ? <span className="spin spin-sm" /> : 'Привязать'}
             </button>
           </div>
         </Sheet>

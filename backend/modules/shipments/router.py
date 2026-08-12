@@ -51,6 +51,7 @@ from modules.auth.service import (
 )
 from modules.shipments.schemas import (
     DuplicateCheckResponse,
+    LineFileFromProduct,
     ShipmentDetailResponse,
     ShipmentDocCreate,
     ShipmentDuplicateCheck,
@@ -86,6 +87,8 @@ from modules.shipments.service import (
     _check_lines_covered_by_stock,
     _doc_packed_qty,
     advance_shipment,
+    classify_barcodes_for_product,
+    decode_line_file_barcodes,
     find_duplicate_shipments,
     finish_defect_relocation,
     finish_relocation,
@@ -1468,7 +1471,7 @@ async def upload_shipment_line_file(
             raise HTTPException(status_code=404, detail="Документ не найден")
         _ensure_can_edit_files(user, str(row["status"]))
         line_row = conn.execute(
-            "SELECT id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, product_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
@@ -1486,6 +1489,60 @@ async def upload_shipment_line_file(
             "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
             "VALUES (?,?,?,?,?,?,?,?)",
             (file_id, line_id, doc_id, file.filename, url, file.content_type or None, now, uid),
+        )
+        conn.commit()
+        # Распознавание ШК на файле — подсказка фронту (привязку кодов делает
+        # отдельный вызов POST /products/{id}/barcodes); сбой декода не мешает загрузке.
+        codes = decode_line_file_barcodes(data, ext)
+        barcodes = classify_barcodes_for_product(conn, codes, str(line_row["product_id"]))
+    return {"message": file_id, "barcodes": barcodes}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/files/from-product")
+def attach_shipment_line_file_from_product(
+    doc_id: str,
+    line_id: str,
+    payload: LineFileFromProduct,
+    user=Depends(_get_manager),
+):
+    """Прикрепить этикетку из карточки товара к строке: без повторной загрузки байтов —
+    новая запись shipment_line_files ссылается на тот же upload (файлы неизменяемые)."""
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        _ensure_can_edit_files(user, str(row["status"]))
+        line_row = conn.execute(
+            "SELECT id, product_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line_row:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        pf = conn.execute(
+            "SELECT id, product_id, filename, url, mime_type FROM product_barcode_files "
+            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            (payload.product_file_id,),
+        ).fetchone()
+        if not pf:
+            raise HTTPException(status_code=404, detail="Файл в карточке товара не найден")
+        if str(pf["product_id"]) != str(line_row["product_id"]):
+            raise HTTPException(status_code=400, detail="Этикетка принадлежит другому товару")
+        dup = conn.execute(
+            "SELECT 1 FROM shipment_line_files WHERE line_id = ? AND url = ? AND is_deleted = 0 LIMIT 1",
+            (line_id, str(pf["url"])),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="Эта этикетка уже прикреплена к строке")
+        file_id = str(uuid4())
+        conn.execute(
+            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (file_id, line_id, doc_id, str(pf["filename"]), str(pf["url"]),
+             str(pf["mime_type"]) if pf["mime_type"] else None, now, uid),
         )
         conn.commit()
     return {"message": file_id}

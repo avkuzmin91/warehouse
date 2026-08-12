@@ -36,11 +36,11 @@ function qtyLabel(d: ScanContextDoc): string {
 }
 
 export function ScanDocsBlock({
-  variantId,
+  productId,
   locationId,
   packFocus,
 }: {
-  variantId?: string
+  productId?: string
   locationId?: string
   packFocus?: PackFocus
 }) {
@@ -53,12 +53,12 @@ export function ScanDocsBlock({
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!variantId && !locationId) return
+    if (!productId && !locationId) return
     const ac = new AbortController()
     setLoading(true)
     setError('')
     Promise.all([
-      getScanContext({ variantId, locationId }, ac.signal),
+      getScanContext({ productId, locationId }, ac.signal),
       getTasks({ limit: 100 }, ac.signal).catch(() => ({ items: [], total: 0 })),
     ])
       .then(([ctx, tasks]) => {
@@ -73,7 +73,7 @@ export function ScanDocsBlock({
         if (!ac.signal.aborted) setLoading(false)
       })
     return () => ac.abort()
-  }, [variantId, locationId])
+  }, [productId, locationId])
 
   return (
     <>

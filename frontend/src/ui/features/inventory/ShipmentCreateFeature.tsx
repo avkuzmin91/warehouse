@@ -2,8 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate } from '../../../api/shipmentsApi'
+import type { LineFileBarcode } from '../../../api/shipmentsApi'
+import { useConfirm } from '../../feedback/ConfirmDialog'
+import { useToast } from '../../feedback/Toast'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
-import type { DuplicateMatch } from '../../../api/domainTypes'
+import type { DuplicateMatch, ProductFileItem } from '../../../api/domainTypes'
+import { attachShipmentLineFileFromProduct } from '../../../api/shipmentsApi'
+import { resolvePublicUploadSrc } from '../../../api/constants'
+import { ProductLabelPickerModal } from './shipmentDetail/components/ProductLabelPickerModal'
 import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
 import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveShipments } from './shared/ClientActiveDocsPanel'
 import type { PlannableItem } from '../../../api/balancesApi'
@@ -19,7 +25,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { BalancePicker } from './shared/BalancePicker'
 import { AssignSkuDrawer } from './shared/AssignSkuDrawer'
 import { NumberStep } from './shared/NumberStep'
-import { updateProduct } from '../../../api/adminApi'
+import { addProductBarcode, addProductBarcodeFile, updateProduct } from '../../../api/adminApi'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
 import { ShipHeader } from './shipmentDetail/components/ShipHeader'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './shipmentDetail/components/processUI'
@@ -34,8 +40,8 @@ import { canCreateDocuments } from '../../../utils/access'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 
-type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; sku_pending: boolean; files: File[] }
-type DraftLineFilePreview = FilePreviewMeta & { file: File }
+type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; sku_pending: boolean; files: File[]; productFiles: ProductFileItem[] }
+type DraftLineFilePreview = FilePreviewMeta & { file?: File; url?: string; mimeType?: string | null; filename?: string }
 
 export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
   const navigate = useNavigate()
@@ -61,6 +67,8 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const { clients } = useLookups()
   const { user } = useCurrentUser()
   const canCreate = canCreateDocuments(user)
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
   const storeOptions: ComboboxOption[] = clientStores.map((s) => ({ value: s.id, label: s.name }))
@@ -119,6 +127,20 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
+  const [labelPickerLine, setLabelPickerLine] = useState<DraftLine | null>(null)
+
+  function addProductFileRef(uid: string, file: ProductFileItem) {
+    setLines((ls) => ls.map((l) => l._uid === uid && !l.productFiles.some((f) => f.id === file.id)
+      ? { ...l, productFiles: [...l.productFiles, file] }
+      : l))
+  }
+
+  function removeProductFileRef(uid: string, fileId: string) {
+    setLines((ls) => ls.map((l) => l._uid === uid
+      ? { ...l, productFiles: l.productFiles.filter((f) => f.id !== fileId) }
+      : l))
+  }
+
   function addLineFiles(uid: string, files: File[]) {
     if (files.length === 0) return
     for (const file of files) {
@@ -164,6 +186,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       store_id:          null,
       store_name:        null,
       files:             [],
+      productFiles:      [],
     }
   }
 
@@ -184,11 +207,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
-  async function uploadDraftFiles(docId: string) {
-    const withFiles = lines.filter((l) => l.files.length > 0)
-    if (withFiles.length === 0) return
+  type DraftBarcodeFinding = LineFileBarcode & { file: File; productId: string; productName: string }
+
+  async function uploadDraftFiles(docId: string): Promise<{ findings: DraftBarcodeFinding[]; docNumber: string }> {
+    const withFiles = lines.filter((l) => l.files.length > 0 || l.productFiles.length > 0)
+    if (withFiles.length === 0) return { findings: [], docNumber: '' }
     const detail = await getShipment(docId)
     const used = new Set<string>()
+    const findings: DraftBarcodeFinding[] = []
     for (const draft of withFiles) {
       const target = detail.lines.find((cl) =>
         !used.has(cl.id) &&
@@ -197,8 +223,47 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       if (!target) continue
       used.add(target.id)
       for (const file of draft.files) {
-        await uploadShipmentLineFile(docId, target.id, file)
+        const res = await uploadShipmentLineFile(docId, target.id, file)
+        for (const b of res.barcodes ?? []) {
+          findings.push({ ...b, file, productId: draft.product_id, productName: draft.product_name })
+        }
       }
+      for (const pf of draft.productFiles) {
+        // Дубль этикетки на строке — не ошибка, пропускаем.
+        await attachShipmentLineFileFromProduct(docId, target.id, pf.id).catch(() => {})
+      }
+    }
+    return { findings, docNumber: detail.doc_number }
+  }
+
+  // Итог распознавания ШК на файлах черновика — одним диалогом после сохранения,
+  // чтобы не показывать модалку на каждый файл.
+  async function offerDraftBarcodes(findings: DraftBarcodeFinding[], docNumber: string) {
+    const seen = new Set<string>()
+    const uniq = findings.filter((f) => !seen.has(f.code) && (seen.add(f.code), true))
+    for (const f of uniq) {
+      if (f.status === 'other_product') {
+        toast(`Код ${f.code} принадлежит «${f.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
+      }
+    }
+    const unknown = uniq.filter((f) => f.status === 'unknown')
+    if (unknown.length === 0) return
+    if (user?.role !== 'admin' && user?.role !== 'manager') return
+    const listing = unknown.map((f) => `${f.code} → «${f.productName}»`).join('; ')
+    const ok = await confirm({
+      title: unknown.length === 1 ? 'Привязать штрих-код к товару?' : 'Привязать штрих-коды к товарам?',
+      body: `На файлах распознаны новые коды: ${listing}. В системе их нет — коды будут привязаны, а файлы этикеток сохранятся в карточки товаров.`,
+      confirmLabel: 'Привязать',
+    })
+    if (!ok) return
+    try {
+      for (const f of unknown) {
+        const bcId = (await addProductBarcode(f.productId, { barcode: f.code, source: `Упаковка ${docNumber}` })).message
+        await addProductBarcodeFile(f.productId, bcId, f.file)
+      }
+      toast(unknown.length === 1 ? 'Штрих-код привязан, этикетка сохранена в карточку' : `Штрих-коды привязаны: ${unknown.length}, этикетки сохранены`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось привязать штрих-код', 'error')
     }
   }
 
@@ -242,8 +307,9 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         })),
       })
       const docId = res.message
-      await uploadDraftFiles(docId)
+      const { findings, docNumber } = await uploadDraftFiles(docId)
       if (toPacking) await advanceShipment(docId)
+      await offerDraftBarcodes(findings, docNumber)
       navigate(`/inventory/shipments/${docId}`, { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
@@ -440,27 +506,52 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           <LineFilesCell
-                            entries={l.files.map((f, i) => ({
-                              id: String(i),
-                              filename: f.name,
-                              mimeType: f.type || null,
-                            }))}
+                            entries={[
+                              ...l.productFiles.map((f) => ({
+                                id: `pf-${f.id}`,
+                                filename: f.filename,
+                                mimeType: f.mime_type,
+                                href: resolvePublicUploadSrc(f.url),
+                              })),
+                              ...l.files.map((f, i) => ({
+                                id: String(i),
+                                filename: f.name,
+                                mimeType: f.type || null,
+                              })),
+                            ]}
                             canEdit
                             onPreview={(entry) => {
-                              const file = l.files[Number(entry.id)]
-                              if (!file) return
-                              setFilePreview({
-                                file,
+                              const meta = {
                                 productName: l.product_name,
                                 sku: l.product_sku,
                                 colorName: l.color_name ?? null,
                                 sizeName: l.size_name ?? null,
                                 qty: l.qty,
-                              })
+                              }
+                              if (entry.id.startsWith('pf-')) {
+                                const pf = l.productFiles.find((f) => `pf-${f.id}` === entry.id)
+                                if (!pf) return
+                                setFilePreview({ ...meta, url: resolvePublicUploadSrc(pf.url), mimeType: pf.mime_type, filename: pf.filename })
+                                return
+                              }
+                              const file = l.files[Number(entry.id)]
+                              if (!file) return
+                              setFilePreview({ ...meta, file })
                             }}
                             onAdd={(files) => addLineFiles(l._uid, files)}
-                            onReplace={(entryId, file) => replaceLineFile(l._uid, Number(entryId), file)}
-                            onRemove={(entryId) => removeLineFile(l._uid, Number(entryId))}
+                            onReplace={(entryId, file) => {
+                              if (entryId.startsWith('pf-')) {
+                                removeProductFileRef(l._uid, entryId.slice(3))
+                                addLineFiles(l._uid, [file])
+                                return
+                              }
+                              replaceLineFile(l._uid, Number(entryId), file)
+                            }}
+                            onRemove={(entryId) => {
+                              if (entryId.startsWith('pf-')) removeProductFileRef(l._uid, entryId.slice(3))
+                              else removeLineFile(l._uid, Number(entryId))
+                            }}
+                            onPickFromCard={() => setLabelPickerLine(l)}
                           />
                         </td>
                         <td>
@@ -547,6 +638,16 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         onClose={() => setFilePreview(null)}
       />
 
+      {labelPickerLine && (
+        <ProductLabelPickerModal
+          productId={labelPickerLine.product_id}
+          productName={labelPickerLine.product_name}
+          excludeUrls={labelPickerLine.productFiles.map((f) => f.url)}
+          onPick={(f) => { addProductFileRef(labelPickerLine._uid, f); setLabelPickerLine(null) }}
+          onClose={() => setLabelPickerLine(null)}
+        />
+      )}
+
       <DuplicateWarnModal
         open={dupMatches.length > 0}
         matches={dupMatches}
@@ -560,20 +661,21 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   )
 }
 
-/** Обёртка общей модалки для локальных (ещё не загруженных) файлов: object URL + revoke. */
+/** Обёртка общей модалки: локальные файлы — через object URL + revoke, этикетки из
+ * карточки товара — по серверному url. */
 function DraftFilePreviewModal({ preview, onClose }: {
   preview: DraftLineFilePreview | null
   onClose: () => void
 }) {
   const file = preview?.file ?? null
-  const url = useMemo(() => (file ? URL.createObjectURL(file) : ''), [file])
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+  const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : ''), [file])
+  useEffect(() => () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }, [objectUrl])
 
   return (
     <FilePreviewModal
-      filename={file?.name ?? null}
-      mimeType={file ? (file.type || null) : null}
-      url={url}
+      filename={file ? file.name : preview?.filename ?? null}
+      mimeType={file ? (file.type || null) : preview?.mimeType ?? null}
+      url={file ? objectUrl : preview?.url ?? ''}
       meta={preview}
       onClose={onClose}
     />

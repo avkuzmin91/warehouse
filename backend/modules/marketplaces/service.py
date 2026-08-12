@@ -462,25 +462,18 @@ def sync_account_catalog(connection, account) -> dict:
     return stats
 
 
-def _variants_by_barcodes(connection, client_id: str, barcodes: list[str]) -> dict[str, dict]:
-    """ШК → вариант (только товары этого клиента, активные записи)."""
+def _products_by_barcodes(connection, client_id: str, barcodes: list[str]) -> dict[str, dict]:
+    """ШК → товар (только товары этого клиента, активные записи)."""
     if not barcodes:
         return {}
     placeholders = ",".join("?" for _ in barcodes)
     rows = connection.execute(
         f"""
-        SELECT vb.barcode, v.id AS variant_id, v.product_id,
-               COALESCE(NULLIF(v.sku, ''), p.sku) AS product_sku,
-               p.name AS product_name,
-               col.name AS color_name, s.name AS size_name
-        FROM product_variant_barcodes vb
-        JOIN product_variants v ON v.id = vb.variant_id
-        JOIN products p ON p.id = v.product_id
-        LEFT JOIN colors col ON col.id = v.color_id
-        LEFT JOIN sizes s ON s.id = v.size_id
-        WHERE vb.barcode IN ({placeholders})
-          AND COALESCE(vb.is_deleted, 0) = 0
-          AND COALESCE(v.is_deleted, 0) = 0
+        SELECT pb.barcode, p.id AS product_id, p.sku AS product_sku, p.name AS product_name
+        FROM product_barcodes pb
+        JOIN products p ON p.id = pb.product_id
+        WHERE pb.barcode IN ({placeholders})
+          AND COALESCE(pb.is_deleted, 0) = 0
           AND COALESCE(p.is_deleted, 0) = 0
           AND p.client_id = ?
         """,
@@ -490,8 +483,8 @@ def _variants_by_barcodes(connection, client_id: str, barcodes: list[str]) -> di
 
 
 def auto_link_by_barcode(connection, account) -> int:
-    """Связать несвязанные карточки МП с вариантами WMS по точному совпадению ШК.
-    Карточка с ШК, ведущими к разным вариантам, — конфликт, не связываем."""
+    """Связать несвязанные карточки МП с товарами WMS по точному совпадению ШК.
+    Карточка с ШК, ведущими к разным товарам, — конфликт, не связываем."""
     account_id = str(account["id"])
     client_id = str(account["client_id"])
     rows = connection.execute(
@@ -512,15 +505,15 @@ def auto_link_by_barcode(connection, account) -> int:
             barcodes = [str(b) for b in json.loads(row["barcodes"] or "[]") if str(b)]
         except ValueError:
             continue
-        matches = _variants_by_barcodes(connection, client_id, barcodes)
-        variant_ids = {str(m["variant_id"]) for m in matches.values()}
-        if len(variant_ids) != 1:
+        matches = _products_by_barcodes(connection, client_id, barcodes)
+        product_ids = {str(m["product_id"]) for m in matches.values()}
+        if len(product_ids) != 1:
             continue
         match = next(iter(matches.values()))
         connection.execute(
             "INSERT INTO mp_product_links (id, mp_product_id, product_id, variant_id, "
-            "link_source, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
-            (str(uuid4()), str(row["id"]), str(match["product_id"]), str(match["variant_id"]),
+            "link_source, created_at, created_by) VALUES (?,?,?,NULL,?,?,?)",
+            (str(uuid4()), str(row["id"]), str(match["product_id"]),
              MP_LINK_SOURCE_BARCODE, now, None),
         )
         linked += 1
@@ -711,7 +704,7 @@ def list_mp_products(connection, account, *, page: int, limit: int,
             codes = []
         parsed_barcodes[str(r["id"])] = codes
         page_barcodes.extend(codes)
-    matches = _variants_by_barcodes(connection, client_id, page_barcodes)
+    matches = _products_by_barcodes(connection, client_id, page_barcodes)
 
     items = []
     for r in rows:
@@ -720,18 +713,15 @@ def list_mp_products(connection, account, *, page: int, limit: int,
         d["barcodes"] = codes
         d["linked"] = d["product_id"] is not None
         row_matches = {c: matches[c] for c in codes if c in matches}
-        variant_ids = {str(m["variant_id"]) for m in row_matches.values()}
-        d["barcode_conflict"] = (not d["linked"]) and len(variant_ids) > 1
+        product_ids = {str(m["product_id"]) for m in row_matches.values()}
+        d["barcode_conflict"] = (not d["linked"]) and len(product_ids) > 1
         suggestion = None
-        if not d["linked"] and len(variant_ids) == 1:
+        if not d["linked"] and len(product_ids) == 1:
             m = next(iter(row_matches.values()))
             suggestion = {
                 "product_id": str(m["product_id"]),
-                "variant_id": str(m["variant_id"]),
                 "product_sku": m["product_sku"],
                 "product_name": m["product_name"],
-                "color_name": m["color_name"],
-                "size_name": m["size_name"],
             }
         d["suggestion"] = suggestion
         items.append(d)

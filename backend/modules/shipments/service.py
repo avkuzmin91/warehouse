@@ -2251,3 +2251,79 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
     )
     connection.commit()
     return next_status
+
+
+# ── Распознавание ШК на файлах строк ──────────────────────────────────────────
+
+def decode_line_file_barcodes(data: bytes, ext: str) -> list[str]:
+    """Товарные штрих-коды (EAN/UPC/Code128) с картинки или PDF-этикетки.
+
+    Возвращает уникальные коды в порядке обнаружения; QR и служебные символогии
+    отбрасываются. Любая ошибка декодирования — пустой список: распознавание не
+    должно блокировать загрузку файла.
+    """
+    try:
+        import io
+
+        import zxingcpp
+        from PIL import Image
+
+        images = []
+        if ext == ".pdf":
+            import pypdfium2 as pdfium
+
+            pdf = pdfium.PdfDocument(data)
+            try:
+                # Первые страницы: этикетка — 1 страница, защита от тяжёлых PDF.
+                for i in range(min(len(pdf), 3)):
+                    images.append(pdf[i].render(scale=3).to_pil())
+            finally:
+                pdf.close()
+        else:
+            images.append(Image.open(io.BytesIO(data)))
+
+        formats = [
+            zxingcpp.BarcodeFormat.EAN13,
+            zxingcpp.BarcodeFormat.EAN8,
+            zxingcpp.BarcodeFormat.UPCA,
+            zxingcpp.BarcodeFormat.UPCE,
+            zxingcpp.BarcodeFormat.Code128,
+        ]
+        codes: list[str] = []
+        for img in images:
+            for result in zxingcpp.read_barcodes(img, formats=formats):
+                text = (result.text or "").strip()
+                if text and text not in codes:
+                    codes.append(text)
+        return codes
+    except Exception:
+        return []
+
+
+def classify_barcodes_for_product(connection, codes: list[str], product_id: str) -> list[dict]:
+    """Статус каждого распознанного кода относительно товара строки:
+    confirmed — уже привязан к этому товару; other_product — занят другим товаром;
+    unknown — в системе нет (кандидат на привязку)."""
+    out: list[dict] = []
+    for code in codes:
+        row = connection.execute(
+            """
+            SELECT pb.product_id, p.name AS product_name
+            FROM product_barcodes pb
+            JOIN products p ON p.id = pb.product_id
+            WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (code,),
+        ).fetchone()
+        if row is None:
+            out.append({"code": code, "status": "unknown", "other_product_name": None})
+        elif str(row["product_id"]) == product_id:
+            out.append({"code": code, "status": "confirmed", "other_product_name": None})
+        else:
+            out.append({
+                "code": code,
+                "status": "other_product",
+                "other_product_name": str(row["product_name"]),
+            })
+    return out

@@ -108,11 +108,8 @@ class MpOrderDetailResponse(BaseModel):
 
 class MpProductSuggestion(BaseModel):
     product_id: str
-    variant_id: str
     product_sku: str | None = None
     product_name: str | None = None
-    color_name: str | None = None
-    size_name: str | None = None
 
 
 class MpProductItem(BaseModel):

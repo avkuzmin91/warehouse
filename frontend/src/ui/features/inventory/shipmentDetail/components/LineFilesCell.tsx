@@ -15,7 +15,7 @@ export type LineFileEntry = {
 }
 
 export function LineFilesCell({
-  entries, canEdit, uploading, onPreview, onAdd, onReplace, onRemove,
+  entries, canEdit, uploading, onPreview, onAdd, onReplace, onRemove, onPickFromCard,
   accept = '.pdf,.png,.jpg,.jpeg',
   glyphFor = (mime, filename) => ({ name: fileTypeIcon(mime, filename), color: fileTypeColor(mime, filename) }),
 }: {
@@ -26,6 +26,8 @@ export function LineFilesCell({
   onAdd: (files: File[]) => void
   onReplace: (entryId: string, file: File) => void
   onRemove: (entryId: string) => void
+  /** Выбор этикетки из карточки товара — кнопка появляется, только если проп передан. */
+  onPickFromCard?: () => void
   /** Список расширений для input[type=file]. По умолчанию — набор упаковки (pdf/png/jpg). */
   accept?: string
   /** Иконка+цвет глифа по файлу — для доменов с другим набором типов (напр. zip в отгрузке). */
@@ -113,7 +115,7 @@ export function LineFilesCell({
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        style={{ display: 'inline-flex' }}
+        style={{ display: 'inline-flex', gap: 4 }}
       >
         {hiddenInput}
         <button
@@ -132,6 +134,23 @@ export function LineFilesCell({
         >
           <Icon name={uploading ? 'refresh' : 'importFile'} size={15} />
         </button>
+        {onPickFromCard && (
+          <button
+            type="button"
+            title="Этикетка из карточки товара"
+            disabled={uploading}
+            onClick={onPickFromCard}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              height: 28, width: 28, borderRadius: 'var(--r-md)',
+              border: '1px solid var(--c-border)', background: 'var(--c-bg-elev)',
+              color: 'var(--c-text-subtle)',
+              cursor: uploading ? 'default' : 'pointer', transition: 'all 120ms ease',
+            }}
+          >
+            <Icon name="box" size={14} />
+          </button>
+        )}
       </div>
     )
   }
@@ -234,6 +253,18 @@ export function LineFilesCell({
                 >
                   <Icon name="importFile" size={12} />
                 </button>
+                {onPickFromCard && (
+                  <button
+                    type="button"
+                    title="Этикетка из карточки товара"
+                    disabled={uploading}
+                    onClick={(e) => { e.stopPropagation(); onPickFromCard() }}
+                    className="btn ghost icon sm"
+                    style={{ width: 22, height: 22, color: 'var(--c-text-subtle)' }}
+                  >
+                    <Icon name="box" size={12} />
+                  </button>
+                )}
                 <button
                   type="button"
                   title="Заменить файл"
@@ -321,6 +352,21 @@ export function LineFilesCell({
               >
                 <Icon name="importFile" size={15} />Прикрепить файл
               </button>
+              {onPickFromCard && (
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={() => { setPopoverOpen(false); onPickFromCard() }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                    padding: '6px 8px', borderRadius: 'var(--r-md)',
+                    border: 0, background: 'transparent', cursor: 'pointer',
+                    fontSize: 12.5, color: 'var(--c-text-muted)',
+                  }}
+                >
+                  <Icon name="box" size={15} />Из карточки товара
+                </button>
+              )}
             </>
           )}
         </div>,

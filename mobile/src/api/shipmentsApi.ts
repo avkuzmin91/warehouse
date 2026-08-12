@@ -167,14 +167,33 @@ export function deleteShipmentLine(docId: string, lineId: string): Promise<{ mes
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
 
-export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<{ message: string }> {
+// Распознавание ШК на загруженном файле строки: confirmed — код уже привязан к товару
+// строки, unknown — кода нет в системе (кандидат на привязку), other_product — код занят
+// другим товаром (возможно, приложен не тот файл).
+export type LineFileBarcodeStatus = 'confirmed' | 'unknown' | 'other_product'
+export type LineFileBarcode = {
+  code: string
+  status: LineFileBarcodeStatus
+  other_product_name: string | null
+}
+export type LineFileUploadResult = { message: string; barcodes: LineFileBarcode[] }
+
+export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<LineFileUploadResult> {
   const form = new FormData()
   form.append('file', file)
-  return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
+  return requestForm<LineFileUploadResult>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
 }
 
 export function deleteShipmentLineFile(docId: string, lineId: string, fileId: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}`, { method: 'DELETE' })
+}
+
+// Прикрепить этикетку из карточки товара к строке (без повторной загрузки файла).
+export function attachShipmentLineFileFromProduct(docId: string, lineId: string, productFileId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/from-product`, {
+    method: 'POST',
+    body: JSON.stringify({ product_file_id: productFileId }),
+  })
 }
 
 // Менеджерский список «Задач упаковки»: пагинация + фильтры (status опционален → все статусы).

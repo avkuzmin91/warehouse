@@ -14,11 +14,12 @@ import {
   deleteShipmentLine,
   uploadShipmentLineFile,
   deleteShipmentLineFile,
+  attachShipmentLineFileFromProduct,
   returnShipmentLineFromPacking,
   returnShipmentToPacking,
   SHIPMENT_STATUS_LABELS,
 } from '../../../../api/shipmentsApi'
-import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ReturnToPackingPayload } from '../../../../api/shipmentsApi'
+import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ReturnToPackingPayload, LineFileBarcode } from '../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../api/constants'
 import { getBalances, getBalancesByZone, getPlannableItems } from '../../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem, PlannableItem } from '../../../../api/balancesApi'
@@ -38,8 +39,9 @@ import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
 import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
-import { updateProduct } from '../../../../api/adminApi'
+import { addProductBarcode, addProductBarcodeFile, updateProduct } from '../../../../api/adminApi'
 import { OpEntry } from './components/OpEntry'
+import { ProductLabelPickerModal } from './components/ProductLabelPickerModal'
 import { lineAvailable } from './shared/opLabels'
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MoveToPackingDrawer'
@@ -596,6 +598,49 @@ export function ShipmentDetailFeature() {
     })
   }
 
+  // Итог распознавания ШК на загруженных файлах строки: чужой код — предупреждение,
+  // подтверждённый — зелёный тост, неизвестный — предложение привязать к товару строки;
+  // при привязке файл-источник сохраняется в карточку товара как этикетка кода
+  // (только admin/manager: у начальника склада нет права писать в карточку товара).
+  async function handleRecognizedBarcodes(lineId: string, perFile: { file: File; barcodes: LineFileBarcode[] }[]) {
+    const line = doc?.lines.find((l) => l.id === lineId)
+    if (!line || !doc) return
+    const seen = new Set<string>()
+    const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
+    for (const b of codes) {
+      if (b.status === 'other_product') {
+        toast(`Код ${b.code} принадлежит «${b.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
+      } else if (b.status === 'confirmed') {
+        toast(`ШК подтверждён: ${b.code}`, 'success')
+      }
+    }
+    const unknown = codes.filter((b) => b.status === 'unknown')
+    if (unknown.length === 0) return
+    if (user?.role !== 'admin' && user?.role !== 'manager') return
+    const codeList = unknown.map((b) => b.code).join(', ')
+    const ok = await confirm({
+      title: unknown.length === 1 ? 'Привязать штрих-код к товару?' : 'Привязать штрих-коды к товару?',
+      body: `${unknown.length === 1
+        ? `На файле распознан код ${codeList} — в системе его нет.`
+        : `На файлах распознаны коды ${codeList} — в системе их нет.`} Код будет привязан к товару «${line.product_name}», а файл этикетки сохранится в его карточку.`,
+      confirmLabel: 'Привязать',
+    })
+    if (!ok) return
+    try {
+      for (const b of unknown) {
+        const bcId = (await addProductBarcode(line.product_id, { barcode: b.code, source: `Упаковка ${doc.doc_number}` })).message
+        for (const f of perFile) {
+          if (f.barcodes.some((x) => x.code === b.code)) {
+            await addProductBarcodeFile(line.product_id, bcId, f.file)
+          }
+        }
+      }
+      toast(unknown.length === 1 ? 'Штрих-код привязан, этикетка сохранена в карточку' : `Штрих-коды привязаны: ${unknown.length}, этикетки сохранены в карточку`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось привязать штрих-код', 'error')
+    }
+  }
+
   async function handleUploadFile(lineId: string, files: File[]) {
     if (!docId) return
     if (files.length === 0) return
@@ -604,9 +649,11 @@ export function ShipmentDetailFeature() {
       if (invalid) { toast(`${file.name}: ${invalid}`, 'error'); return }
     }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
     try {
       for (const file of files) {
-        await uploadShipmentLineFile(docId, lineId, file)
+        const res = await uploadShipmentLineFile(docId, lineId, file)
+        perFile.push({ file, barcodes: res.barcodes ?? [] })
       }
       await refresh()
       toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
@@ -615,6 +662,7 @@ export function ShipmentDetailFeature() {
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
+    await handleRecognizedBarcodes(lineId, perFile)
   }
 
   async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
@@ -622,13 +670,35 @@ export function ShipmentDetailFeature() {
     const invalid = validateLineFile(file)
     if (invalid) { toast(invalid, 'error'); return }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
     try {
-      await uploadShipmentLineFile(docId, lineId, file)
+      const res = await uploadShipmentLineFile(docId, lineId, file)
+      perFile.push({ file, barcodes: res.barcodes ?? [] })
       await deleteShipmentLineFile(docId, lineId, oldFileId)
       await refresh()
       toast('Файл заменён', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Ошибка замены файла', 'error')
+    } finally {
+      setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
+    }
+    await handleRecognizedBarcodes(lineId, perFile)
+  }
+
+  // Этикетка из карточки товара → строка задачи (без повторной загрузки байтов).
+  const [labelPickerLine, setLabelPickerLine] = useState<ShipmentLine | null>(null)
+
+  async function handlePickLabel(file: { id: string; filename: string }) {
+    if (!docId || !labelPickerLine) return
+    const lineId = labelPickerLine.id
+    setLabelPickerLine(null)
+    setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
+    try {
+      await attachShipmentLineFileFromProduct(docId, lineId, file.id)
+      await refresh()
+      toast(`Этикетка «${file.filename}» прикреплена`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось прикрепить этикетку', 'error')
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
@@ -820,6 +890,7 @@ export function ShipmentDetailFeature() {
     onUploadFile: handleUploadFile,
     onReplaceFile: handleReplaceFile,
     onDeleteFile: handleDeleteFile,
+    onPickLabel: canAttachFiles ? setLabelPickerLine : undefined,
     onAssignSku: setSkuLine,
     getAvail: canEditPlan ? getLineAvail : undefined,
     availLoading,
@@ -1050,6 +1121,16 @@ export function ShipmentDetailFeature() {
         meta={filePreview}
         onClose={() => setFilePreview(null)}
       />
+
+      {labelPickerLine && (
+        <ProductLabelPickerModal
+          productId={labelPickerLine.product_id}
+          productName={labelPickerLine.product_name}
+          excludeUrls={(labelPickerLine.files ?? []).map((f) => f.url)}
+          onPick={(f) => void handlePickLabel(f)}
+          onClose={() => setLabelPickerLine(null)}
+        />
+      )}
 
       {moveDrawer && (
         <MoveToPackingDrawer

@@ -30,6 +30,7 @@ export type CompositionPhaseProps = {
   onUploadFile: (lineId: string, files: File[]) => void
   onReplaceFile: (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile: (lineId: string, fileId: string) => void
+  onPickLabel?: (line: ShipmentLine) => void
   onAssignSku: (line: ShipmentLine) => void
   getAvail?: (line: ShipmentLine) => LineAvailability
   availLoading: boolean
@@ -39,7 +40,7 @@ export function CompositionPhase({
   lines, clientId, state, hint, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onAdd, onPreviewFile, onQty, onStore, onDelete,
-  onUploadFile, onReplaceFile, onDeleteFile, onAssignSku, getAvail, availLoading,
+  onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku, getAvail, availLoading,
 }: CompositionPhaseProps) {
   return (
     <PhaseBlock
@@ -82,6 +83,7 @@ export function CompositionPhase({
           onUploadFile={onUploadFile}
           onReplaceFile={onReplaceFile}
           onDeleteFile={onDeleteFile}
+          onPickLabel={onPickLabel}
           onAssignSku={onAssignSku}
           getAvail={getAvail}
           availLoading={availLoading}

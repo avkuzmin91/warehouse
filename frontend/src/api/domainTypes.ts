@@ -97,10 +97,27 @@ export type ProductVariantDimension = {
   height: number
 }
 
-export type VariantBarcodeItem = {
+export type ProductBarcodeFileItem = {
+  id: string
+  filename: string
+  url: string
+  mime_type: string | null
+}
+
+export type ProductBarcodeItem = {
   id: string
   barcode: string
   source: string | null
+  files: ProductBarcodeFileItem[]
+}
+
+/** Этикетка из карточки товара для выбора в документах (плоский список). */
+export type ProductFileItem = {
+  id: string
+  barcode: string
+  filename: string
+  url: string
+  mime_type: string | null
 }
 
 export type ProductVariantItem = {
@@ -111,7 +128,6 @@ export type ProductVariantItem = {
   size_id: string | null
   size_name: string | null
   sku: string
-  barcodes: VariantBarcodeItem[]
   images: string[]
   is_active: boolean
   stock: number
