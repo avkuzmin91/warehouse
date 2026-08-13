@@ -440,6 +440,13 @@ export function ShipmentDetailFeature() {
         },
         ...(isPlanning
           ? [{
+              ok: !!infoShipDate,
+              label: 'Дата упаковки (план) указана',
+              error: 'Укажите дату упаковки (план)',
+            }]
+          : []),
+        ...(isPlanning
+          ? [{
               ok: allLinesOnStock,
               label: 'Весь товар на остатках',
               error: 'Часть товара ещё в пути — дождитесь прихода на склад и повторите',

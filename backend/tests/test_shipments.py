@@ -112,6 +112,18 @@ def test_shipment_advance_requires_technical_task(admin_client, client_id):
     assert r2.json()["detail"] == "Заполните техническое задание"
 
 
+def test_shipment_advance_requires_ship_date(admin_client, client_id):
+    payload = _make_shipment_payload(client_id)
+    payload["ship_date"] = None
+    r = admin_client.post("/shipments", json=payload)
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["message"]
+
+    r2 = admin_client.post(f"/shipments/{doc_id}/advance")
+    assert r2.status_code == 400, r2.text
+    assert r2.json()["detail"] == "Укажите дату упаковки (план)"
+
+
 def test_shipment_packing_requires_handoff_to_advance(admin_client, client_id):
     """packing → on_packing требует передачи на упаковку: без перемещения — 400."""
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))

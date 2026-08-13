@@ -2189,7 +2189,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
     finish_defect_relocation. Отгрузку к рейсу далее возит домен dispatch.
     """
     row = connection.execute(
-        "SELECT status, comment, client_id, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        "SELECT status, comment, client_id, cargo_type, ship_date FROM shipment_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchone()
     if not row:
@@ -2215,6 +2215,8 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         _check_lines_have_sku(connection, doc_id)
         _check_defect_lines_ready(connection, doc_id, row["client_id"])
     elif next_status == SHIPMENT_STATUS_PACKING:
+        if not str(row["ship_date"] or "").strip():
+            raise HTTPException(status_code=400, detail="Укажите дату упаковки (план)")
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)
