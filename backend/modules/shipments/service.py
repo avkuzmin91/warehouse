@@ -305,17 +305,16 @@ def _move_one_to_packing(
         remaining -= take
 
 
-def move_line_to_packing(connection, doc_id: str, line_id: str, allocations, user_id: str) -> int:
-    """Передача / подвоз on_review → «Зона упаковки» по списку аллокаций (зона, кол-во).
+def _move_items_to_packing(connection, doc_id: str, items, user_id: str) -> int:
+    """Передача / подвоз on_review → «Зона упаковки». items — [(line_id, [(qty, from_zone_id)])].
 
     Доступно в статусах «В плане» (первичная передача) и «На упаковке» (подвоз, чтобы
-    добить план годным при браке). allocations — список объектов с .qty и .from_zone_id;
-    from_zone_id=None означает FIFO по местам приёмки. Возвращает перемещённое количество.
+    добить план годным при браке). from_zone_id=None означает FIFO по местам.
+    Все движения — одной транзакцией, без commit. Возвращает перемещённое количество.
     """
     from modules.balances.service import get_packing_zone
 
-    items = [(int(a.qty), a.from_zone_id) for a in (allocations or [])]
-    total = sum(qty for qty, _ in items)
+    total = sum(qty for _, allocs in items for qty, _ in allocs)
     if total <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
 
@@ -328,26 +327,58 @@ def move_line_to_packing(connection, doc_id: str, line_id: str, allocations, use
     if status not in (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING):
         raise HTTPException(status_code=400, detail="Перемещать в зону упаковки можно только «В плане» или «На упаковке»")
 
-    line = connection.execute(
-        "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name "
-        "FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-        (line_id, doc_id),
-    ).fetchone()
-    if not line:
-        raise HTTPException(status_code=404, detail="Строка не найдена")
-
     packing_id, packing_name = get_packing_zone(connection)
     client_id = doc["client_id"]
     comment = ("Подвоз на упаковку" if status == SHIPMENT_STATUS_ON_PACKING else "Подготовка к упаковке")
+    label_errors = len(items) > 1
 
-    for qty, from_zone_id in items:
-        _move_one_to_packing(
-            connection, line,
-            packing_id=packing_id, packing_name=packing_name, client_id=client_id,
-            qty=qty, from_zone_id=from_zone_id, user_id=user_id, comment=f"{comment}: {qty} шт.",
-        )
+    for line_id, allocs in items:
+        line = connection.execute(
+            "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name "
+            "FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        label = " · ".join(
+            x for x in [line["product_sku"], line["color_name"], line["size_name"]] if x
+        ) or line["product_name"]
+        for qty, from_zone_id in allocs:
+            try:
+                _move_one_to_packing(
+                    connection, line,
+                    packing_id=packing_id, packing_name=packing_name, client_id=client_id,
+                    qty=qty, from_zone_id=from_zone_id, user_id=user_id, comment=f"{comment}: {qty} шт.",
+                )
+            except HTTPException as e:
+                if label_errors and e.status_code == 400:
+                    raise HTTPException(status_code=400, detail=f"«{label}»: {e.detail}") from e
+                raise
+    return total
+
+
+def move_line_to_packing(connection, doc_id: str, line_id: str, allocations, user_id: str) -> int:
+    """Передача одной строки по списку аллокаций (зона, кол-во). См. _move_items_to_packing."""
+    items = [(str(line_id), [(int(a.qty), a.from_zone_id) for a in (allocations or [])])]
+    total = _move_items_to_packing(connection, doc_id, items, user_id)
     connection.commit()
     return total
+
+
+def move_lines_to_packing(connection, doc_id: str, lines, user_id: str) -> int:
+    """Массовая передача нескольких строк одной транзакцией. Без commit.
+
+    lines — список объектов с .line_id и .allocations; строки без аллокаций пропускаются.
+    Ошибка по любой строке откатывает всю передачу целиком.
+    """
+    items = [
+        (str(l.line_id), [(int(a.qty), a.from_zone_id) for a in (l.allocations or [])])
+        for l in (lines or [])
+    ]
+    items = [(line_id, allocs) for line_id, allocs in items if allocs]
+    if not items:
+        raise HTTPException(status_code=400, detail="Укажите количество для перемещения")
+    return _move_items_to_packing(connection, doc_id, items, user_id)
 
 
 def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str, qty: int | None = None) -> int:

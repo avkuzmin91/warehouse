@@ -43,8 +43,8 @@ import { BarcodeReviewModal } from './components/BarcodeReviewModal'
 import type { BarcodeReviewItem } from './components/BarcodeReviewModal'
 import { ProductLabelPickerModal } from './components/ProductLabelPickerModal'
 import { lineAvailable } from './shared/opLabels'
-import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
-import type { MoveZoneOption } from './components/MoveToPackingDrawer'
+import { MassMoveToPackingDrawer } from './components/MassMoveToPackingDrawer'
+import type { MoveZoneOption } from './components/MassMoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
 import { PlacePackedDrawer } from './components/PlacePackedDrawer'
 import { ReturnToPackingDrawer } from './components/ReturnToPackingDrawer'
@@ -95,9 +95,10 @@ export function ShipmentDetailFeature() {
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [uploadingLines, setUploadingLines] = useState<Record<string, boolean>>({})
 
-  // Передача/подвоз на упаковку и внесение годного/брака (on_packing) — через шторки по строке.
+  // Передача/подвоз на упаковку — массовая шторка (focusLineId — точечное открытие из строки);
+  // внесение годного/брака (on_packing) — шторки по строке.
   const [reviewZoneBalances, setReviewZoneBalances] = useState<BalanceZoneItem[]>([])
-  const [moveDrawer, setMoveDrawer] = useState<{ line: ShipmentLine; mode: 'transfer' | 'replenish' } | null>(null)
+  const [moveDrawer, setMoveDrawer] = useState<{ mode: 'transfer' | 'replenish'; focusLineId: string | null } | null>(null)
   const [packingLine, setPackingLine] = useState<ShipmentLine | null>(null)
   const [placeLine, setPlaceLine] = useState<ShipmentLine | null>(null)
   const [savingLine, setSavingLine] = useState<string | null>(null)
@@ -914,7 +915,8 @@ export function ShipmentDetailFeature() {
     repackActive: doc.repack_active,
     repackKind: doc.repack_kind,
     repackReason: doc.repack_reason,
-    onOpenMove: (line) => setMoveDrawer({ line, mode: isOnPacking ? 'replenish' : 'transfer' }),
+    onOpenMove: (line) => setMoveDrawer({ mode: isOnPacking ? 'replenish' : 'transfer', focusLineId: line.id }),
+    onOpenMassMove: () => setMoveDrawer({ mode: isOnPacking ? 'replenish' : 'transfer', focusLineId: null }),
     onReturn: handleReturnFromPacking,
     onOpenPacking: setPackingLine,
     onOpenPlace: setPlaceLine,
@@ -1125,11 +1127,13 @@ export function ShipmentDetailFeature() {
       )}
 
       {moveDrawer && (
-        <MoveToPackingDrawer
+        <MassMoveToPackingDrawer
           docId={docId!}
-          line={moveDrawer.line}
+          docNumber={doc.doc_number}
+          lines={doc.lines}
           mode={moveDrawer.mode}
-          zoneOptions={getLineSourceZoneOptions(moveDrawer.line)}
+          focusLineId={moveDrawer.focusLineId}
+          getZoneOptions={getLineSourceZoneOptions}
           onClose={() => setMoveDrawer(null)}
           onDone={refreshAfterLineChange}
         />

@@ -29,6 +29,7 @@ export type PackingPhaseData = {
   repackKind?: ShipmentRepackKind | null
   repackReason?: string | null
   onOpenMove: (line: ShipmentLine) => void
+  onOpenMassMove: () => void
   onReturn: (line: ShipmentLine) => void
   onOpenPacking: (line: ShipmentLine) => void
   onOpenPlace: (line: ShipmentLine) => void
@@ -37,7 +38,7 @@ export type PackingPhaseData = {
 export function PackingPhase({
   phase, lines, canMove, canPack, canReturn, canPlace, acting, savingLine,
   repackActive, repackKind, repackReason,
-  onOpenMove, onReturn, onOpenPacking, onOpenPlace,
+  onOpenMove, onOpenMassMove, onReturn, onOpenPacking, onOpenPlace,
 }: PackingPhaseData & { phase: PackPhase }) {
   return (
     <PhaseBlock
@@ -72,6 +73,19 @@ export function PackingPhase({
           Нет позиций для упаковки.
         </div>
       ) : (
+        <>
+        {phase.mode !== 'result' && canMove && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <button
+              className="btn primary sm"
+              disabled={acting}
+              title="Передать несколько позиций одним действием: система подставит количества и места из остатков"
+              onClick={onOpenMassMove}
+            >
+              <Icon name="forklift" size={12} />{phase.mode === 'packing' ? 'Передать ещё на упаковку' : 'Передать на упаковку'}
+            </button>
+          </div>
+        )}
         <PackingTable
           mode={phase.mode}
           lines={lines}
@@ -86,6 +100,7 @@ export function PackingPhase({
           onOpenPacking={onOpenPacking}
           onOpenPlace={onOpenPlace}
         />
+        </>
       )}
     </PhaseBlock>
   )

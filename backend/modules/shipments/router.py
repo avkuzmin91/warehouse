@@ -67,6 +67,7 @@ from modules.shipments.schemas import (
     ShipmentLinesResponse,
     ShipmentListItem,
     ShipmentListResponse,
+    ShipmentMassMoveToPackingPayload,
     ShipmentMoveToPackingPayload,
     ShipmentOpItem,
     PackDateMovePayload,
@@ -96,6 +97,7 @@ from modules.shipments.service import (
     list_packing_entries,
     list_productivity_entries,
     move_line_to_packing,
+    move_lines_to_packing,
     move_packing_date,
     next_doc_number,
     normalize_cargo_type,
@@ -1212,6 +1214,26 @@ def move_to_packing(
         if not proceed:
             return stored
         moved = move_line_to_packing(conn, doc_id, line_id, allocations, uid)
+        result = {"message": "ok", "moved": moved}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/move-to-packing")
+def mass_move_to_packing(
+    doc_id: str,
+    body: ShipmentMassMoveToPackingPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_warehouse),
+):
+    """Массовая передача на упаковку: несколько строк документа одним запросом (одна транзакция)."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_mass_move_to_packing")
+        if not proceed:
+            return stored
+        moved = move_lines_to_packing(conn, doc_id, body.lines, uid)
         result = {"message": "ok", "moved": moved}
         finish_idempotent(conn, x_request_id, result)
         conn.commit()

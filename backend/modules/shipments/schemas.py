@@ -169,6 +169,15 @@ class ShipmentMoveToPackingPayload(BaseModel):
         return []
 
 
+class ShipmentMassMoveLine(BaseModel):
+    line_id:     str
+    allocations: list[ShipmentMoveAllocation] = []
+
+
+class ShipmentMassMoveToPackingPayload(BaseModel):
+    lines: list[ShipmentMassMoveLine] = []
+
+
 class ShipmentReturnFromPackingPayload(BaseModel):
     # None — вернуть весь нерешённый пул строки.
     qty: int | None = Field(default=None, ge=1)
