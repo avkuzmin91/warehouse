@@ -27,7 +27,6 @@ from config import (
     SHIPMENT_REPACK_FREE,
     SHIPMENT_REPACK_KINDS,
     SHIPMENT_REPACK_PAID,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
@@ -2182,8 +2181,8 @@ def _finalize_repack(connection, doc_id: str, user_id: str) -> None:
 def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> str:
     """Переводит документ на следующий статус с ролевым гейтом и проверками фазы.
 
-    Годный груз: draft → packing (Запланировать) · packing → on_packing (Передать на
-    упаковку) · on_packing → relocating (Передать кладовщику). relocating →
+    Годный груз: draft → packing (Поставить задачу) · packing → on_packing (Передать
+    на упаковку) · on_packing → relocating (Передать кладовщику). relocating →
     packed («Готово») делает отдельный эндпоинт finish_relocation.
     Брак-отгрузка минует упаковку: draft → relocating (Запланировать — задача
     кладовщику подготовить брак); relocating → packed делает
@@ -2215,10 +2214,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         _check_duplicate_lines(connection, doc_id)
         _check_lines_have_sku(connection, doc_id)
         _check_defect_lines_ready(connection, doc_id, row["client_id"])
-    elif next_status in (SHIPMENT_STATUS_ASSIGNED, SHIPMENT_STATUS_PACKING):
-        # Постановка задачи (draft → assigned) и приёмка её в работу начальником склада
-        # (assigned → packing) проверяются одинаково: товар мог уйти со склада за время
-        # ожидания приёмки, поэтому покрытие остатком перепроверяется и на приёмке.
+    elif next_status == SHIPMENT_STATUS_PACKING:
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)

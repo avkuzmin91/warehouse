@@ -17,7 +17,6 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
     MAX_UPLOAD_BYTES,
-    SHIPMENT_ACCEPT_ROLES,
     SHIPMENT_CARGO_DEFECT,
     SHIPMENT_CARGO_GOOD,
     SHIPMENT_EDITABLE_LINE_STATUSES,
@@ -25,12 +24,10 @@ from config import (
     SHIPMENT_CANCELLABLE_STATUSES_DEFECT,
     SHIPMENT_OP_DOC_UPDATE,
     SHIPMENT_OP_PRIORITY_UPDATE,
-    SHIPMENT_OP_REJECT,
     SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REPACK_FREE,
     SHIPMENT_REPACK_PAID,
     SHIPMENT_REVERT_TRANSITIONS,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_LABELS,
@@ -80,7 +77,6 @@ from modules.shipments.schemas import (
     ShipmentPackingProductivityResponse,
     ShipmentPackingResponse,
     ShipmentPriorityUpdate,
-    ShipmentRejectPayload,
     ShipmentReturnFromPackingPayload,
     ShipmentReturnToPackingPayload,
 )
@@ -161,10 +157,7 @@ def _ensure_pack_date_editor(user) -> None:
 
 def _ensure_can_edit_files(user, status: str) -> None:
     role = str(user["role"])
-    # Начальник склада правит файлы только на шаге приёмки задачи («Ожидает принятия»):
-    # вместе с правом поправить ТЗ это позволяет ему подготовить задачу к принятию.
-    allowed = role in _FILE_EDIT_ROLES or (role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED)
-    if not allowed:
+    if role not in _FILE_EDIT_ROLES:
         raise HTTPException(status_code=403, detail="Менять файлы может только менеджер")
     if status in _FILE_FINAL_STATUSES:
         raise HTTPException(status_code=400, detail="Нельзя менять файлы в финальном статусе документа")
@@ -857,7 +850,6 @@ def update_shipment_priority(doc_id: str, body: ShipmentPriorityUpdate, user=Dep
 def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_manager)):
     now = _now()
     uid = str(user["id"])
-    role = str(user["role"])
     fields = body.model_dump(exclude_unset=True)
     with get_connection() as conn:
         row = conn.execute(
@@ -871,15 +863,8 @@ def update_shipment(doc_id: str, body: ShipmentDocUpdate, user=Depends(_get_mana
         on_packing_correction = status == SHIPMENT_STATUS_ON_PACKING
         if status not in SHIPMENT_EDITABLE_LINE_STATUSES and not on_packing_correction:
             raise HTTPException(status_code=400, detail="Нельзя редактировать отправленный документ")
-        # Планирование (состав, реквизиты) ведёт менеджерский состав. Начальник склада
-        # на шаге приёмки задачи («Ожидает принятия») может поправить только ТЗ.
-        wh_head_review = role == "warehouse_head" and status == SHIPMENT_STATUS_ASSIGNED
         if fields:
-            if wh_head_review:
-                if set(fields) - {"comment"}:
-                    raise HTTPException(status_code=403, detail="Начальник склада может править только техническое задание")
-            else:
-                ensure_shipment_planning_access(user)
+            ensure_shipment_planning_access(user)
         if on_packing_correction and set(fields) - {"comment", "ship_date"}:
             raise HTTPException(
                 status_code=400,
@@ -1369,48 +1354,6 @@ def cancel_shipment(
         )
         conn.commit()
     return {"message": SHIPMENT_STATUS_CANCELLED}
-
-
-@router.post("/shipments/{doc_id}/reject")
-def reject_shipment(
-    doc_id: str,
-    body: ShipmentRejectPayload,
-    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
-    user=Depends(_get_viewer),
-):
-    """Отклонить задачу упаковки на приёмке: возврат менеджеру (assigned → draft).
-
-    Доступно начальнику склада и менеджерскому составу (см. SHIPMENT_ACCEPT_ROLES).
-    Причина обязательна и фиксируется в журнале.
-    """
-    uid = str(user["id"])
-    now = _now()
-    if str(user["role"]) not in SHIPMENT_ACCEPT_ROLES:
-        raise HTTPException(status_code=403, detail="Недостаточно прав")
-    reason = body.reason.strip()
-    if not reason:
-        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
-    with get_connection() as conn:
-        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_reject", response={"message": SHIPMENT_STATUS_DRAFT})
-        if not proceed:
-            return stored
-        row = conn.execute(
-            "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Документ не найден")
-        if str(row["status"]) != SHIPMENT_STATUS_ASSIGNED:
-            raise HTTPException(status_code=400, detail="Отклонить можно только задачу, ожидающую принятия")
-        conn.execute(
-            "UPDATE shipment_docs SET status=?, updated_at=? WHERE id=?",
-            (SHIPMENT_STATUS_DRAFT, now, doc_id),
-        )
-        conn.execute(
-            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-            (str(uuid4()), doc_id, SHIPMENT_OP_REJECT, f"Задача отклонена: {reason}", now, uid),
-        )
-        conn.commit()
-    return {"message": SHIPMENT_STATUS_DRAFT}
 
 
 @router.post("/shipments/{doc_id}/return-to-packing")

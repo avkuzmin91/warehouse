@@ -3,7 +3,6 @@ import { request, requestForm, requestIdHeaders } from './http'
 // --- Types --- (зеркало backend/modules/shipments/schemas.py)
 export type ShipmentStatus =
   | 'draft'
-  | 'assigned'
   | 'packing'
   | 'on_packing'
   | 'relocating'
@@ -233,8 +232,8 @@ export function returnLineFromPacking(docId: string, lineId: string, qty?: numbe
   })
 }
 
-// Продвижение по плановому переходу: assigned → packing (начальник склада принимает
-// задачу в работу), packing → on_packing (передать начальнику смены) и т.д.
+// Продвижение по плановому переходу: draft → packing (менеджер ставит задачу),
+// packing → on_packing (передать начальнику смены) и т.д.
 export function advanceShipment(id: string, requestId: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, {
     method: 'POST',
@@ -277,14 +276,6 @@ export function returnShipmentToPacking(id: string, payload: ReturnToPackingPayl
   return request<{ message: string }>(`/shipments/${id}/return-to-packing`, {
     method: 'POST',
     body: JSON.stringify({ mode: 'rework', ...payload }),
-  })
-}
-
-// Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.
-export function rejectShipment(id: string, reason: string) {
-  return request<{ message: string }>(`/shipments/${id}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
   })
 }
 
@@ -448,7 +439,6 @@ export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' 
 // --- Labels ---
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft: 'Черновик',
-  assigned: 'Ожидает принятия',
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',

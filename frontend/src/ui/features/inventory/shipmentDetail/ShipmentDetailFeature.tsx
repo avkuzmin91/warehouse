@@ -4,7 +4,6 @@ import { useBackNav } from '../../../../hooks/useBackNav'
 import {
   getShipment,
   advanceShipment,
-  rejectShipment,
   deleteShipment,
   cancelShipment,
   addShipmentLine,
@@ -32,9 +31,8 @@ import { PrimaryAction } from '../../shared/process/PrimaryAction'
 import { useConfirm } from '../../../feedback/ConfirmDialog'
 import { useToast } from '../../../feedback/Toast'
 import { Drawer } from '../../../feedback/Drawer'
-import { AutoGrowTextarea, Field } from '../../../primitives/Input'
 import { balanceKey } from '../../../../utils/balanceKey'
-import { canAcceptPackingTask, canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
+import { canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
@@ -84,8 +82,6 @@ export function ShipmentDetailFeature() {
   const [acting, setActing] = useState(false)
   const [showBlockReasons, setShowBlockReasons] = useState(false)
   const [finishConfirm, setFinishConfirm] = useState(false)
-  const [rejectOpen, setRejectOpen] = useState(false)
-  const [rejectReason, setRejectReason] = useState('')
   const [returnOpen, setReturnOpen] = useState(false)
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
@@ -158,18 +154,16 @@ export function ShipmentDetailFeature() {
     if (!docId) return false
     setInfoSaving(true)
     try {
-      await updateShipment(docId, canEditTechTaskOnly
-        ? { comment: infoComment.trim() || null }
-        : canCorrectOnPacking
-          // «На упаковке» бэкенд принимает только ТЗ и дату (план) — реквизиты не шлём.
-          ? { ship_date: infoShipDate || null, comment: infoComment.trim() || null }
-          : {
-              client_id:      infoClientId,
-              client_name:    infoClientName,
-              ship_date:      infoShipDate || null,
-              ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
-              comment:        infoComment.trim() || null,
-            })
+      await updateShipment(docId, canCorrectOnPacking
+        // «На упаковке» бэкенд принимает только ТЗ и дату (план) — реквизиты не шлём.
+        ? { ship_date: infoShipDate || null, comment: infoComment.trim() || null }
+        : {
+            client_id:      infoClientId,
+            client_name:    infoClientName,
+            ship_date:      infoShipDate || null,
+            ...(canEditActualShipDate ? { actual_ship_date: infoActualShipDate || null } : {}),
+            comment:        infoComment.trim() || null,
+          })
       await load()
       setInfoDirty(false)
       setInfoSaved(true)
@@ -186,7 +180,6 @@ export function ShipmentDetailFeature() {
   const status = doc?.status as ShipmentStatus | undefined
   const isDefectCargo = doc?.cargo_type === 'defect'
   const isDraft = status === 'draft'
-  const isAssigned = status === 'assigned'
   const isPacking = status === 'packing'
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
@@ -194,20 +187,16 @@ export function ShipmentDetailFeature() {
   // Легаси-статусы рейса (исторические документы) — только read-only вид.
   const isLegacyTerminal = status === 'awaiting_trip' || status === 'partially_shipped'
     || status === 'shipped' || status === 'completed_no_goods'
-  // Состав и план менеджер правит до передачи на упаковку (черновик, «Ожидает принятия», «В плане»).
-  const editableComposition = isDraft || isAssigned || isPacking
+  // Состав и план менеджер правит до передачи на упаковку (черновик, «В плане»).
+  const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
   const canEditPlan = canEditPlanning && editableComposition
   const canEditInfo = canEditPlanning && editableComposition
-  // Начальник склада на приёмке задачи правит ТОЛЬКО ТЗ (и файлы) — состав и реквизиты нет.
-  const canEditTechTaskOnly = !canEditInfo && isAssigned && canAcceptPackingTask(user) && user?.role === 'warehouse_head'
   // «На упаковке» менеджер корректирует ТЗ, дату (план) и магазины строк — состав фиксирован.
   // Изменения журналируются, команда упаковки получает пуш.
   const canCorrectOnPacking = canEditPlanning && isOnPacking
-  // Приёмка/отклонение задачи (assigned → packing / draft).
-  const canAccept = isAssigned && canAcceptPackingTask(user)
   const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
-  const canAttachFiles = (canEditShipmentFiles(user) || canEditTechTaskOnly) && status !== 'cancelled' && !isPacked && !isLegacyTerminal
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isLegacyTerminal
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
@@ -224,8 +213,7 @@ export function ShipmentDetailFeature() {
   const primary: { label: string; icon: 'arrowRight' | 'forklift' | 'truckOut' | 'check' | 'inbox'; hint: string; show: boolean } | null =
     isDraft && isDefectCargo
       ? { label: 'Запланировать', icon: 'arrowRight', hint: 'уйдёт кладовщику на подготовку — статус «Перемещение»', show: canEdit }
-      : isDraft     ? { label: 'Поставить задачу',     icon: 'arrowRight', hint: 'уйдёт начальнику склада — статус «Ожидает принятия»', show: canEditPlanning }
-      : isAssigned  ? { label: 'Принять в работу',     icon: 'inbox',      hint: 'склад берёт задачу — статус «В плане»',         show: canAccept }
+      : isDraft     ? { label: 'Поставить задачу',     icon: 'arrowRight', hint: 'уйдёт в план склада — статус «В плане»',        show: canEditPlanning }
       : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   hint: 'уйдёт начальнику смены — статус «На упаковке»', show: canEdit }
       : isOnPacking ? { label: 'Завершить упаковку',    icon: 'check',      hint: 'уйдёт кладовщику — статус «Перемещение»',       show: canPack }
       : null
@@ -237,7 +225,7 @@ export function ShipmentDetailFeature() {
   // и подвозе (on_packing); полный список остатков (BalancePicker) — только при
   // редактировании состава.
   const loadBalances = useCallback(async () => {
-    if (!shipmentClientId || !(canDelete || isAssigned || canMovePacking || isOnPacking)) {
+    if (!shipmentClientId || !(canDelete || canMovePacking || isOnPacking)) {
       setBalances([])
       setReviewZoneBalances([])
       setPlannable(null)
@@ -255,9 +243,7 @@ export function ShipmentDetailFeature() {
     } else {
       setPlannable(null)
     }
-    // На приёмке задачи (assigned) начальнику склада тоже нужен остаток — чек-лист
-    // «Весь товар на остатках» считается на клиенте, а править состав он не может.
-    if (canDelete || isAssigned) {
+    if (canDelete) {
       const res = await getBalances({
         limit: 200,
         only_positive: true,
@@ -273,7 +259,7 @@ export function ShipmentDetailFeature() {
       only_positive: true,
     })
     setReviewZoneBalances(zonesRes.items.filter((item) => item.op_status === 'storage' && item.quality === 'good'))
-  }, [shipmentClientId, shipmentCargoType, canDelete, isAssigned, canMovePacking, isOnPacking])
+  }, [shipmentClientId, shipmentCargoType, canDelete, canMovePacking, isOnPacking])
 
   useEffect(() => {
     loadBalances().catch(() => {})
@@ -439,9 +425,7 @@ export function ShipmentDetailFeature() {
   // Готовность нужна только на этапе сборки (черновик и «В плане» до передачи на упаковку).
   // Дальнейшие переходы (передача/упаковка/отгрузка) валидируются на бэкенде.
   // Брак-отгрузка: ТЗ не требуется, места-источники выберет кладовщик при подготовке.
-  // Постановка задачи (draft) и её приёмка начальником склада (assigned) проверяют одно
-  // и то же: товар на остатках, SKU, ТЗ. Бэкенд проверяет это авторитетно при advance.
-  const isPlanning = isDraft || isAssigned
+  const isPlanning = isDraft
   const advanceChecks: ReadinessCheck[] = (isPlanning || isPacking)
     ? [
         {
@@ -637,21 +621,30 @@ export function ShipmentDetailFeature() {
   const reviewPendingCount = reviewItems.filter((i) => i.status === 'unknown').length
   const reviewConflictCount = reviewItems.filter((i) => i.status === 'other_product' || i.status === 'other_variant').length
 
+  // Разбор непривязанных ШК предлагается один раз за визит — при отправке дальше по
+  // этапу; после закрытия модалки (привязали или «Решить позже») переход продолжается сам.
+  const advanceAfterReviewRef = useRef(false)
+  const reviewPromptedRef = useRef(false)
+
   // Переход из создания задачи (state.reviewBarcodes) — разбор открывается сразу.
   const autoReviewRef = useRef(Boolean((location.state as { reviewBarcodes?: boolean } | null)?.reviewBarcodes))
   useEffect(() => {
     if (!autoReviewRef.current || !doc) return
     autoReviewRef.current = false
-    if (reviewPendingCount > 0 || reviewConflictCount > 0) setReviewOpen(true)
+    if (reviewPendingCount > 0 || reviewConflictCount > 0) {
+      reviewPromptedRef.current = true
+      setReviewOpen(true)
+    }
   }, [doc, reviewPendingCount, reviewConflictCount])
 
+  // Модалка разбора при добавлении файла не открывается — коды видны подписью под
+  // файлом, а разбор предлагается один раз при отправке дальше по этапу (или с плашки).
   function afterFilesRecognized(perFile: { barcodes: LineFileBarcode[] }[]) {
     const seen = new Set<string>()
     const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
     for (const b of codes) {
       if (b.status === 'confirmed') toast(`ШК подтверждён: ${b.code}`, 'success')
     }
-    if (codes.some((b) => b.status !== 'confirmed')) setReviewOpen(true)
   }
 
   async function handleUploadFile(lineId: string, files: File[]) {
@@ -737,6 +730,12 @@ export function ShipmentDetailFeature() {
       return
     }
     setShowBlockReasons(false)
+    if (canBindBarcodes && reviewPendingCount > 0 && !reviewPromptedRef.current) {
+      reviewPromptedRef.current = true
+      advanceAfterReviewRef.current = true
+      setReviewOpen(true)
+      return
+    }
     // Завершение упаковки с недобором — напоминание упаковать весь доступный объём.
     if (isOnPacking && packingGoodShortfall > 0) {
       setFinishConfirm(true)
@@ -807,17 +806,6 @@ export function ShipmentDetailFeature() {
     }
   }
 
-  async function handleReject() {
-    const reason = rejectReason.trim()
-    if (!reason) { toast('Укажите причину отклонения', 'error'); return }
-    await act(async () => {
-      await rejectShipment(docId!, reason)
-      setRejectOpen(false)
-      setRejectReason('')
-      await load()
-    })
-  }
-
   async function handleCancel() {
     const ok = await confirm({
       title: 'Аннулировать отгрузку?',
@@ -868,7 +856,6 @@ export function ShipmentDetailFeature() {
     isDraft,
     isDefectCargo,
     canEditInfo,
-    canEditTechTaskOnly,
     canCorrectOnPacking,
     canEditActualShipDate,
     saved: infoSaved,
@@ -963,11 +950,6 @@ export function ShipmentDetailFeature() {
                 <Icon name="arrowLeft" size={14} />Вернуть на упаковку
               </button>
             )}
-            {canAccept && (
-              <button className="btn ghost danger" disabled={acting} onClick={() => setRejectOpen(true)}>
-                <Icon name="arrowLeft" size={14} />Отклонить
-              </button>
-            )}
             {(
               (canEdit && (isPacking || (isDefectCargo && isRelocating)))
               // «На упаковке» менеджер может аннулировать, только пока ничего не упаковано.
@@ -977,7 +959,7 @@ export function ShipmentDetailFeature() {
                 <Icon name="x" size={14} />Аннулировать
               </button>
             )}
-            {(canEditPlan || canEditTechTaskOnly || canCorrectOnPacking) && (infoDirty || hasUnsavedLineChanges) && (
+            {(canEditPlan || canCorrectOnPacking) && (infoDirty || hasUnsavedLineChanges) && (
               <button className="btn" disabled={acting || infoSaving} onClick={() => { void handleSaveChanges() }}>
                 <Icon name="save" size={14} />Сохранить изменения
               </button>
@@ -999,13 +981,13 @@ export function ShipmentDetailFeature() {
         && (canBindBarcodes || canEditShipmentFiles(user)) && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 16,
-          background: reviewConflictCount > 0 ? 'var(--c-warning-bg)' : 'var(--c-accent-bg)',
+          background: reviewConflictCount > 0 ? 'var(--c-danger-bg)' : 'var(--c-accent-bg)',
           borderRadius: 'var(--r-md)',
         }}>
-          <span style={{ flex: 'none', color: reviewConflictCount > 0 ? 'var(--c-warning)' : 'var(--c-accent)' }}>
+          <span style={{ flex: 'none', color: reviewConflictCount > 0 ? 'var(--c-danger)' : 'var(--c-accent)' }}>
             <Icon name="qr" size={16} />
           </span>
-          <span style={{ flex: 1, fontSize: 13, color: reviewConflictCount > 0 ? 'var(--c-warning)' : 'var(--c-accent)' }}>
+          <span style={{ flex: 1, fontSize: 13, color: reviewConflictCount > 0 ? 'var(--c-danger)' : 'var(--c-accent)' }}>
             {reviewPendingCount > 0 && `На файлах строк распознаны непривязанные штрих-коды: ${reviewPendingCount}`}
             {reviewPendingCount > 0 && reviewConflictCount > 0 && ' · '}
             {reviewConflictCount > 0 && `${reviewPendingCount > 0 ? 'конфликтных' : 'На файлах строк конфликтные штрих-коды'}: ${reviewConflictCount}`}
@@ -1014,7 +996,7 @@ export function ShipmentDetailFeature() {
         </div>
       )}
 
-      {(isDraft || isAssigned) ? (
+      {isDraft ? (
         <PlanningView
           doc={doc}
           isDraft={isDraft}
@@ -1069,37 +1051,6 @@ export function ShipmentDetailFeature() {
         onClose={() => setReturnOpen(false)}
         onSubmit={handleReturnToPacking}
       />
-
-      <Drawer
-        open={rejectOpen}
-        onClose={() => { setRejectOpen(false); setRejectReason('') }}
-        title="Отклонить задачу"
-        subtitle={`Возврат менеджеру · ${doc.doc_number}`}
-        width={420}
-        footer={
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button className="btn ghost" disabled={acting} onClick={() => { setRejectOpen(false); setRejectReason('') }}>
-              Отмена
-            </button>
-            <button className="btn primary danger" disabled={acting || !rejectReason.trim()} onClick={handleReject}>
-              <Icon name="arrowLeft" size={14} />Отклонить и вернуть
-            </button>
-          </div>
-        }
-      >
-        <p style={{ marginTop: 0, fontSize: 13, color: 'var(--c-text-subtle)' }}>
-          Задача вернётся менеджеру в статус «Черновик». Укажите причину — она сохранится в журнале.
-        </p>
-        <Field label="Причина отклонения" required style={{ marginBottom: 0 }}>
-          <AutoGrowTextarea
-            minRows={3}
-            placeholder="Например: товара нет на остатках, ошибка в составе, неверное ТЗ"
-            value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)}
-            style={{ resize: 'vertical', minHeight: 90 }}
-          />
-        </Field>
-      </Drawer>
 
       <Drawer
         open={opsDrawerOpen}
@@ -1202,7 +1153,13 @@ export function ShipmentDetailFeature() {
           docNumber={doc.doc_number}
           items={reviewItems}
           canBind={canBindBarcodes}
-          onClose={() => setReviewOpen(false)}
+          onClose={() => {
+            setReviewOpen(false)
+            if (advanceAfterReviewRef.current) {
+              advanceAfterReviewRef.current = false
+              handleAdvanceClick()
+            }
+          }}
           onBound={refresh}
         />
       )}

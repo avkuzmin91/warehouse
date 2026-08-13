@@ -68,15 +68,10 @@ def test_shipment_advance_draft_to_packing(admin_client, client_id):
     assert r.status_code == 200
     doc_id = r.json()["message"]
 
-    # Менеджер ставит задачу: draft → assigned (ожидает принятия начальником склада).
+    # Менеджер ставит задачу: draft → packing (сразу в план склада).
     r2 = admin_client.post(f"/shipments/{doc_id}/advance")
     assert r2.status_code == 200, r2.text
-    assert r2.json()["message"] == "assigned"
-
-    # Приёмка задачи в работу: assigned → packing.
-    r3 = admin_client.post(f"/shipments/{doc_id}/advance")
-    assert r3.status_code == 200, r3.text
-    assert r3.json()["message"] == "packing"
+    assert r2.json()["message"] == "packing"
 
 
 def test_shipment_advance_idempotent_replay(admin_client, client_id):
@@ -92,13 +87,13 @@ def test_shipment_advance_idempotent_replay(admin_client, client_id):
     try:
         first = admin_client.post(f"/shipments/{doc_id}/advance", headers={"X-Request-Id": rid})
         assert first.status_code == 200, first.text
-        assert first.json()["message"] == "assigned"
+        assert first.json()["message"] == "packing"
 
         replay = admin_client.post(f"/shipments/{doc_id}/advance", headers={"X-Request-Id": rid})
         assert replay.status_code == 200, replay.text
-        assert replay.json()["message"] == "assigned"  # прежний ответ, не packing
+        assert replay.json()["message"] == "packing"  # прежний ответ, статус не двигается
 
-        assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "assigned"
+        assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "packing"
     finally:
         with get_connection() as conn:
             conn.execute("DELETE FROM idempotency_keys WHERE request_id = ?", (rid,))
@@ -122,8 +117,7 @@ def test_shipment_packing_requires_handoff_to_advance(admin_client, client_id):
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id))
     doc_id = r.json()["message"]
 
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned
-    r2 = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    r2 = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
     assert r2.status_code == 200 and r2.json()["message"] == "packing", r2.text
     r3 = admin_client.post(f"/shipments/{doc_id}/advance")  # packing → on_packing
     assert r3.status_code == 400, r3.text
@@ -154,8 +148,7 @@ def test_shipment_cancel_allowed_in_packing(admin_client, client_id):
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
     assert r.status_code == 200, r.text
     doc_id = r.json()["message"]
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned
-    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
     assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
 
     r_cancel = admin_client.post(f"/shipments/{doc_id}/cancel")
@@ -189,9 +182,9 @@ def test_shipment_plan_gate_passes_when_stock_arrives(admin_client, client_id):
         product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"],
         qty=10,
     )
-    # Покрытие проверяется на постановке задачи (draft → assigned).
+    # Покрытие проверяется на постановке задачи (draft → packing).
     adv = admin_client.post(f"/shipments/{doc_id}/advance")
-    assert adv.status_code == 200 and adv.json()["message"] == "assigned", adv.text
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
 
 
 def test_shipment_plan_gate_partial_stock_blocks(admin_client, client_id):
@@ -220,8 +213,7 @@ def test_add_line_in_plan_blocks_uncovered_product(admin_client, client_id):
     )
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
     doc_id = r.json()["message"]
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned
-    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing
     assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
 
     # Вторая позиция без остатка — должна отклоняться.
@@ -248,7 +240,6 @@ def test_add_line_in_plan_allows_covered_product(admin_client, client_id):
     )
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
     doc_id = r.json()["message"]
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned
     assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "packing"
 
     new_line = _fake_line()
@@ -275,7 +266,6 @@ def test_update_line_qty_in_plan_blocks_when_over_stock(admin_client, client_id)
     )
     r = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line]))
     doc_id = r.json()["message"]
-    admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned
     assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "packing"
 
     line_id = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
@@ -285,8 +275,8 @@ def test_update_line_qty_in_plan_blocks_when_over_stock(admin_client, client_id)
     assert admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["qty"] == 5
 
 
-def _covered_assigned_shipment(admin_client, client_id) -> str:
-    """Создаёт отгрузку с покрытой остатком позицией и ставит задачу (draft → assigned)."""
+def test_put_task_requires_manager(admin_client, warehouse_client, warehouse_head_client, client_id):
+    """Постановку задачи (draft → packing) делает менеджерский состав, не склад."""
     line = _fake_line()
     line["qty"] = 5
     seed_storage_good(
@@ -295,64 +285,14 @@ def _covered_assigned_shipment(admin_client, client_id) -> str:
         qty=5,
     )
     doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line])).json()["message"]
-    assert admin_client.post(f"/shipments/{doc_id}/advance").json()["message"] == "assigned"
-    return doc_id
 
+    for staff in (warehouse_client, warehouse_head_client):
+        blocked = staff.post(f"/shipments/{doc_id}/advance")
+        assert blocked.status_code == 403, blocked.text
+    assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "draft"
 
-def test_accept_requires_warehouse_head(admin_client, warehouse_client, warehouse_head_client, client_id):
-    """Приёмку задачи в работу (assigned → packing) делает начальник склада, не кладовщик."""
-    doc_id = _covered_assigned_shipment(admin_client, client_id)
-
-    blocked = warehouse_client.post(f"/shipments/{doc_id}/advance")  # кладовщик
-    assert blocked.status_code == 403, blocked.text
-    assert admin_client.get(f"/shipments/{doc_id}").json()["status"] == "assigned"
-
-    ok = warehouse_head_client.post(f"/shipments/{doc_id}/advance")  # начальник склада
+    ok = admin_client.post(f"/shipments/{doc_id}/advance")
     assert ok.status_code == 200 and ok.json()["message"] == "packing", ok.text
-
-
-def test_reject_returns_to_draft_with_reason(admin_client, warehouse_head_client, client_id):
-    """Отклонение задачи начальником склада: assigned → draft, причина в журнале."""
-    doc_id = _covered_assigned_shipment(admin_client, client_id)
-
-    r = warehouse_head_client.post(f"/shipments/{doc_id}/reject", json={"reason": "Нет места под товар"})
-    assert r.status_code == 200 and r.json()["message"] == "draft", r.text
-
-    detail = admin_client.get(f"/shipments/{doc_id}").json()
-    assert detail["status"] == "draft"
-    rejects = [o for o in detail["ops"] if o["op_type"] == "reject"]
-    assert rejects and "Нет места под товар" in (rejects[0]["comment"] or "")
-
-
-def test_reject_requires_reason_and_assigned_status(admin_client, warehouse_head_client, client_id):
-    line = _fake_line()
-    line["qty"] = 5
-    seed_storage_good(
-        client_id, product_id=line["product_id"], product_name=line["product_name"],
-        product_sku=line["product_sku"], color_id=line["color_id"], color_name=line["color_name"], qty=5,
-    )
-    doc_id = admin_client.post("/shipments", json=_make_shipment_payload(client_id, [line])).json()["message"]
-    # В черновике отклонять нечего.
-    in_draft = warehouse_head_client.post(f"/shipments/{doc_id}/reject", json={"reason": "x"})
-    assert in_draft.status_code == 400, in_draft.text
-    # Пустая причина не принимается (валидация схемы).
-    admin_client.post(f"/shipments/{doc_id}/advance")  # → assigned
-    no_reason = warehouse_head_client.post(f"/shipments/{doc_id}/reject", json={"reason": "   "})
-    assert no_reason.status_code in (400, 422), no_reason.text
-
-
-def test_warehouse_head_edits_tech_task_in_assigned(admin_client, warehouse_head_client, client_id):
-    """Начальник склада правит только ТЗ на приёмке (с журналом); прочие поля — нет."""
-    doc_id = _covered_assigned_shipment(admin_client, client_id)
-
-    ok = warehouse_head_client.patch(f"/shipments/{doc_id}", json={"comment": "Уточнённое ТЗ"})
-    assert ok.status_code == 200, ok.text
-    detail = admin_client.get(f"/shipments/{doc_id}").json()
-    assert detail["comment"] == "Уточнённое ТЗ"
-    assert any(o["op_type"] == "doc_update" for o in detail["ops"])
-
-    blocked = warehouse_head_client.patch(f"/shipments/{doc_id}", json={"ship_date": "2026-07-01"})
-    assert blocked.status_code == 403, blocked.text
 
 
 def test_plannable_lists_stock_and_in_transit(admin_client, client_id):

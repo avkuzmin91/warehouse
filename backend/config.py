@@ -147,10 +147,6 @@ RECEIPT_LINE_QC_STATUS_COMPLETED = "completed"
 # ---------------------------------------------------------------------------
 
 SHIPMENT_STATUS_DRAFT             = "draft"
-# Менеджер поставил задачу, но склад ещё не взял её в работу: задача ждёт приёмки
-# начальником склада (он может принять, отклонить либо поправить ТЗ/файлы). Только
-# для годного груза — брак-отгрузка минует и упаковку, и этот шаг.
-SHIPMENT_STATUS_ASSIGNED          = "assigned"
 SHIPMENT_STATUS_PACKING           = "packing"
 SHIPMENT_STATUS_ON_PACKING        = "on_packing"
 SHIPMENT_STATUS_RELOCATING        = "relocating"
@@ -171,7 +167,6 @@ SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_DRAFT,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -193,7 +188,6 @@ SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
 
 SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:             "Создание",
-    SHIPMENT_STATUS_ASSIGNED:          "Ожидает принятия",
     SHIPMENT_STATUS_PACKING:           "В плане",
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
@@ -208,36 +202,26 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
 # Плановые переходы через /advance. relocating → packed не здесь: его делает
 # отдельный эндпоинт «Готово к рейсу» (раскладка по местам). packed — терминальный
 # исход задачи упаковки; отгрузку к рейсу далее возит домен dispatch.
-# draft → assigned: менеджер ставит задачу. assigned → packing: начальник склада
-# принимает её в работу (см. SHIPMENT_TRANSITION_ROLES) — только тогда склад начинает.
+# draft → packing: менеджер ставит задачу — она сразу попадает в план склада.
 SHIPMENT_TRANSITIONS: dict[str, str] = {
-    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_ASSIGNED,
-    SHIPMENT_STATUS_ASSIGNED:   SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_DRAFT:      SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING:    SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_ON_PACKING: SHIPMENT_STATUS_RELOCATING,
 }
 
 # Роли, которым разрешён переход НА данный статус (целевой статус → роли).
-# Ожидает принятия: менеджер ставит задачу. В плане (приёмка задачи): начальник склада
-# берёт в работу; менеджер тоже может — физически это делает второй менеджер, проверяя
-# первого. В плане → На упаковке: кладовщик передаёт товар. На упаковке → Перемещение:
-# начальник смены упаковал годный/брак и передаёт кладовщику.
+# В плане: менеджер ставит задачу. В плане → На упаковке: кладовщик передаёт товар.
+# На упаковке → Перемещение: начальник смены упаковал годный/брак и передаёт кладовщику.
 SHIPMENT_TRANSITION_ROLES: dict[str, frozenset[str]] = {
-    SHIPMENT_STATUS_ASSIGNED:   frozenset({"manager", "admin"}),
-    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin", "warehouse_head"}),
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin"}),
     SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
     SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "shift_supervisor", "warehouse_head"}),
 }
-
-# Кто может принять/отклонить задачу упаковки на шаге «Ожидает принятия» — начальник
-# склада и менеджерский состав (см. примечание о роли в SHIPMENT_TRANSITION_ROLES).
-SHIPMENT_ACCEPT_ROLES: frozenset[str] = frozenset({"manager", "admin", "warehouse_head"})
 
 # Аннулировать можно до передачи на упаковку включительно; в «На упаковке» — только
 # пока нет ни одной упакованной единицы (гейт по факту упаковки — в роутере).
 SHIPMENT_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_ON_PACKING,
 })
@@ -268,7 +252,6 @@ EXTRA_INCOME_REPACK_CATEGORY_NAME = "Переупаковка"
 
 SHIPMENT_EDITABLE_LINE_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_PACKING,
 })
 
@@ -422,7 +405,8 @@ SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
 # выставлена клиенту автосозданной записью «Доп. работы» при выходе в «Упаковано».
 SHIPMENT_OP_REPACK_START  = "repack_start"
 SHIPMENT_OP_REPACK_CHARGE = "repack_charge"
-# Начальник склада отклонил задачу: assigned → draft с причиной, возврат менеджеру.
+# Легаси: отклонение задачи начальником склада на удалённом этапе «Ожидает принятия».
+# Константа нужна только для рендера исторических записей журнала.
 SHIPMENT_OP_REJECT          = "reject"
 SHIPMENT_OP_SHIP            = "ship"
 

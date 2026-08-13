@@ -111,10 +111,8 @@ def test_plan_passes_after_sku_assigned(admin_client, pending_product):
         ).fetchone()
         assert sku_base.upper() in str(stored_line["product_sku"]).upper()
 
-    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → assigned (гейт SKU здесь)
-    assert adv.status_code == 200 and adv.json()["message"] == "assigned", adv.text
-    adv2 = admin_client.post(f"/shipments/{doc_id}/advance")  # assigned → packing
-    assert adv2.status_code == 200 and adv2.json()["message"] == "packing", adv2.text
+    adv = admin_client.post(f"/shipments/{doc_id}/advance")  # draft → packing (гейт SKU здесь)
+    assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
 
 
 def test_assigned_sku_visible_in_lines_list(admin_client, pending_product):

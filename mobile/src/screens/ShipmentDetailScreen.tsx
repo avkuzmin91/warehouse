@@ -1,38 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
-import { useAuth } from '../auth/AuthContext'
 import { useNav } from '../nav/NavContext'
 import { getUnloadingZones, type Zone } from '../api/lookupsApi'
 import { getBalancesByZone, type ZoneBalance } from '../api/balancesApi'
 import { balanceKey } from '../utils/balanceKey'
 import {
   advanceShipment,
-  deleteShipmentLineFile,
   finishRelocation,
   finishShipmentDefectRelocation,
   getShipment,
   moveLineToPacking,
   placePackedShipment,
-  rejectShipment,
   returnLineFromPacking,
   SHIPMENT_STATUS_LABELS,
-  updateShipment,
-  uploadShipmentLineFile,
-  type LineFileBarcode,
   type MoveAllocation,
   type RelocateLine,
   type ShipmentDefectRelocateLine,
   type ShipmentDetail,
   type ShipmentLine,
 } from '../api/shipmentsApi'
-import { addProductBarcode, addProductBarcodeFile } from '../api/productsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { LineFiles } from '../components/LineFiles'
 import { Sheet } from '../components/Sheet'
-import { TextArea } from '../components/TextArea'
 import { ZoneField } from '../components/ZoneField'
-import { canAcceptPackingTask, canCreateDocuments } from '../utils/access'
 import { fmtDate, variantTitle } from '../utils/format'
 
 type Row = { zoneId: string; qty: number }
@@ -48,7 +39,6 @@ function sumRows(rows: Row[]): number {
 
 export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
   const { back } = useNav()
-  const { user } = useAuth()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [zoneBalances, setZoneBalances] = useState<ZoneBalance[]>([])
@@ -66,12 +56,6 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
   const [defectPrepRows, setDefectPrepRows] = useState<Record<string, Row[]>>({})
   const [showErrors, setShowErrors] = useState(false)
   const [returnLine, setReturnLine] = useState<ShipmentLine | null>(null)
-  // Отклонение задачи упаковки на приёмке (assigned → draft): обязательная причина.
-  const [rejectOpen, setRejectOpen] = useState(false)
-  const [rejectReason, setRejectReason] = useState('')
-  // Правка ТЗ на приёмке задачи (assigned): бэк пускает начсклада только к comment.
-  const [tzOpen, setTzOpen] = useState(false)
-  const [tzText, setTzText] = useState('')
 
   const load = useCallback(
     (signal?: AbortSignal) => {
@@ -281,112 +265,6 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     void runAction(() => advanceShipment(shipmentId, requestIdFor('advance')), 'advance')
   }
 
-  async function doReject() {
-    const reason = rejectReason.trim()
-    if (!reason || saving || savingLine) return
-    setSaving(true)
-    setError('')
-    try {
-      await rejectShipment(shipmentId, reason)
-      setRejectOpen(false)
-      setRejectReason('')
-      reload()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось отклонить задачу')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const canAccept = doc?.status === 'assigned' && canAcceptPackingTask(user?.role)
-
-  async function saveTz() {
-    if (saving || savingLine) return
-    setSaving(true)
-    setError('')
-    try {
-      await updateShipment(shipmentId, { comment: tzText.trim() || null })
-      setTzOpen(false)
-      reload()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось сохранить ТЗ')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function uploadTaskFiles(line: ShipmentLine, files: File[]) {
-    if (files.length === 0 || saving || savingLine) return
-    setSavingLine(line.id)
-    setError('')
-    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
-    let lineVariantId: string | null = null
-    try {
-      for (const f of files) {
-        const res = await uploadShipmentLineFile(shipmentId, line.id, f)
-        perFile.push({ file: f, barcodes: res.barcodes ?? [] })
-        lineVariantId = res.line_variant_id ?? lineVariantId
-      }
-      reload()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось загрузить файл')
-    } finally {
-      setSavingLine(null)
-    }
-    // Итог распознавания ШК: чужой товар или другой цвето-размер — предупреждение;
-    // неизвестный — предложение привязать к варианту строки (только admin/manager —
-    // у складских ролей нет права писать в карточку товара).
-    const seen = new Set<string>()
-    const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
-    const foreign = codes.find((b) => b.status === 'other_product')
-    if (foreign) setError(`Код ${foreign.code} принадлежит «${foreign.other_product_name}» — проверьте, тот ли файл приложен`)
-    const wrongVariant = codes.find((b) => b.status === 'other_variant')
-    if (wrongVariant) setError(`Код ${wrongVariant.code} принадлежит варианту «${wrongVariant.other_variant_label}» этого товара — возможен пересорт`)
-    const unknown = codes
-      .filter((b) => b.status === 'unknown')
-      .map((b) => ({
-        code: b.code,
-        files: perFile.filter((f) => f.barcodes.some((x) => x.code === b.code)).map((f) => f.file),
-      }))
-    if (unknown.length > 0 && lineVariantId && canCreateDocuments(user?.role)) {
-      setBcOffer({ items: unknown, productId: line.product_id, productName: lineTitle(line), variantId: lineVariantId })
-    }
-  }
-
-  const [bcOffer, setBcOffer] = useState<{
-    items: { code: string; files: File[] }[]
-    productId: string
-    productName: string
-    variantId: string
-  } | null>(null)
-  const [bcSaving, setBcSaving] = useState(false)
-  const [bcSaveLabel, setBcSaveLabel] = useState(true)
-
-  async function attachOfferedBarcodes() {
-    if (!bcOffer || bcSaving) return
-    setBcSaving(true)
-    setError('')
-    try {
-      for (const item of bcOffer.items) {
-        const res = await addProductBarcode(bcOffer.productId, { barcode: item.code, source: `Упаковка ${doc?.doc_number ?? ''}`.trim(), variant_id: bcOffer.variantId })
-        if (bcSaveLabel) {
-          for (const f of item.files) await addProductBarcodeFile(bcOffer.productId, res.message, f)
-        }
-      }
-      setBcOffer(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось привязать штрих-код')
-      setBcOffer(null)
-    } finally {
-      setBcSaving(false)
-    }
-  }
-
-  async function removeTaskFile(line: ShipmentLine, fileId: string) {
-    await deleteShipmentLineFile(shipmentId, line.id, fileId)
-    reload()
-  }
-
   function handleFinishRelocation() {
     const reasons: string[] = []
     for (const l of packedLines) {
@@ -493,88 +371,14 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                 <span className="v">{fmtDate(doc.ship_date)}</span>
               </div>
             </div>
-            {(doc.comment || canAccept) && (
+            {doc.comment && (
               <div className="tzcard">
-                <div className="tztitle" style={canAccept ? { display: 'flex', alignItems: 'center' } : undefined}>
-                  Техническое задание
-                  {canAccept && (
-                    <button
-                      className="btn ghost sm auto"
-                      style={{ marginLeft: 'auto' }}
-                      aria-label="Изменить ТЗ"
-                      onClick={() => { setTzText(doc.comment ?? ''); setTzOpen(true) }}
-                    >
-                      <Icon name="edit" size={13} /> Изменить
-                    </button>
-                  )}
-                </div>
-                <div className="tzbody">{doc.comment || 'ТЗ не заполнено'}</div>
+                <div className="tztitle">Техническое задание</div>
+                <div className="tzbody">{doc.comment}</div>
               </div>
             )}
 
-            {doc.status === 'assigned' ? (
-              <>
-                <div className="sec">
-                  Состав задачи
-                  <span className="sec-count">{doc.lines.length} SKU</span>
-                </div>
-                {doc.lines.map((l) => (
-                  <div key={l.id} className="line">
-                    <div className="line-name">{lineTitle(l)}</div>
-                    <div className="line-head">
-                      <span className="line-sub mono">{l.product_sku}</span>
-                      <span className="line-sub">{l.qty} шт</span>
-                    </div>
-                    <LineFiles
-                      files={l.files}
-                      onError={setError}
-                      onDelete={canAccept ? (f) => removeTaskFile(l, f.id) : undefined}
-                    />
-                    {canAccept && (
-                      <label className="btn ghost sm auto" style={{ marginTop: 8, cursor: 'pointer' }}>
-                        <Icon name="file" size={13} /> {savingLine === l.id ? <span className="spin spin-sm" /> : 'Файл ТЗ'}
-                        <input
-                          type="file"
-                          hidden
-                          multiple
-                          accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf"
-                          onChange={(e) => {
-                            void uploadTaskFiles(l, Array.from(e.target.files ?? []))
-                            e.target.value = ''
-                          }}
-                        />
-                      </label>
-                    )}
-                  </div>
-                ))}
-                {canAccept ? (
-                  <div className="actionbar">
-                    {error && (
-                      <div className="alert">
-                        <Icon name="alert" size={15} />
-                        {error}
-                      </div>
-                    )}
-                    <button className="btn" disabled={saving} onClick={handleAdvance}>
-                      {saving ? <span className="spin spin-sm" /> : <><Icon name="check" size={18} /> Принять в работу</>}
-                    </button>
-                    <button className="btn ghost" disabled={saving} onClick={() => { setError(''); setRejectOpen(true) }}>
-                      <Icon name="x" size={18} /> Отклонить
-                    </button>
-                  </div>
-                ) : (
-                  <div className="center">
-                    <div className="center-ico">
-                      <Icon name="box" size={26} />
-                    </div>
-                    <div>Ожидает принятия начальником склада.</div>
-                    <button className="btn ghost sm auto" onClick={back} style={{ marginTop: 4 }}>
-                      Назад
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : doc.status === 'packing' ? (
+            {doc.status === 'packing' ? (
               <>
                 <div className="sec">Передача на упаковку</div>
                 {doc.lines.map((l) => {
@@ -957,86 +761,6 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
         </Sheet>
       )}
 
-      {tzOpen && (
-        <Sheet onClose={() => setTzOpen(false)} dirty={tzText !== (doc?.comment ?? '')} locked={saving}>
-          <h3>Техническое задание</h3>
-          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-            Уточните задание перед принятием в работу — его увидит начальник смены на упаковке.
-          </p>
-          <TextArea value={tzText} onChange={setTzText} placeholder="Текст ТЗ…" minRows={4} />
-          {error && (
-            <div className="alert" style={{ marginTop: 10 }}>
-              <Icon name="alert" size={15} />
-              {error}
-            </div>
-          )}
-          <div className="dtf-actions">
-            <button className="btn ghost" disabled={saving} onClick={() => setTzOpen(false)}>
-              Отмена
-            </button>
-            <button className="btn" disabled={saving} onClick={() => void saveTz()}>
-              {saving ? <span className="spin spin-sm" /> : 'Сохранить'}
-            </button>
-          </div>
-        </Sheet>
-      )}
-
-      {bcOffer && (
-        <Sheet onClose={() => setBcOffer(null)} locked={bcSaving}>
-          <h3>{bcOffer.items.length === 1 ? 'Привязать штрих-код?' : 'Привязать штрих-коды?'}</h3>
-          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-            На файле распознан{bcOffer.items.length === 1 ? ' код' : 'ы коды'}{' '}
-            <span className="mono">{bcOffer.items.map((i) => i.code).join(', ')}</span> — в системе их нет.
-            Привязать к товару «{bcOffer.productName}»?
-          </p>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '8px 0' }}>
-            <input
-              type="checkbox"
-              checked={bcSaveLabel}
-              disabled={bcSaving}
-              onChange={(e) => setBcSaveLabel(e.target.checked)}
-            />
-            Сохранить файл этикетки в карточку товара
-          </label>
-          <div className="dtf-actions">
-            <button className="btn ghost" disabled={bcSaving} onClick={() => setBcOffer(null)}>
-              Отмена
-            </button>
-            <button className="btn" disabled={bcSaving} onClick={() => void attachOfferedBarcodes()}>
-              {bcSaving ? <span className="spin spin-sm" /> : 'Привязать'}
-            </button>
-          </div>
-        </Sheet>
-      )}
-
-      {rejectOpen && (
-        <Sheet onClose={() => setRejectOpen(false)} dirty={rejectReason.trim() !== ''} locked={saving}>
-          <h3>Отклонить задачу?</h3>
-          <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-            Задача вернётся менеджеру на доработку. Укажите причину отклонения.
-          </p>
-          <TextArea
-            value={rejectReason}
-            onChange={setRejectReason}
-            placeholder="Причина отклонения…"
-            minRows={3}
-          />
-          {error && (
-            <div className="alert" style={{ marginTop: 10 }}>
-              <Icon name="alert" size={15} />
-              {error}
-            </div>
-          )}
-          <div className="dtf-actions">
-            <button className="btn ghost" disabled={saving} onClick={() => setRejectOpen(false)}>
-              Отмена
-            </button>
-            <button className="btn danger" disabled={saving || !rejectReason.trim()} onClick={() => void doReject()}>
-              {saving ? <span className="spin spin-sm" /> : 'Отклонить'}
-            </button>
-          </div>
-        </Sheet>
-      )}
     </div>
   )
 }
