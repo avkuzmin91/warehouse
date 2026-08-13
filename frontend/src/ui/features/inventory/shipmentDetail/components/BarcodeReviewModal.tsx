@@ -155,9 +155,9 @@ export function BarcodeReviewModal({ docId, docNumber, items, canBind, onClose, 
 
       {groups.map((g) => (
         <div key={g.productName + g.productSku} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--c-text-subtle)', marginBottom: 6 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--c-text)', marginBottom: 6 }}>
             {g.productName}
-            {g.productSku && <span style={{ color: 'var(--c-text-faint)' }}> · {g.productSku}</span>}
+            {g.productSku && <span className="mono" style={{ fontWeight: 500, color: 'var(--c-text-subtle)' }}> · {g.productSku}</span>}
           </div>
           <div style={{ border: '1px solid var(--c-border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
             {g.rows.map((it, i) => {
