@@ -21,6 +21,9 @@ export type ShipmentLineFile = {
   filename: string
   url: string
   mime_type: string | null
+  barcodes: string[]
+  // Коды со статусом относительно варианта строки — как в frontend/src/api/shipmentsApi.ts.
+  barcode_details: LineFileBarcode[]
   created_at: string
 }
 

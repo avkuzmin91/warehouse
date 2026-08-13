@@ -254,12 +254,27 @@ class ShipmentReturnToPackingPayload(BaseModel):
     force:  bool = False
 
 
+class ShipmentLineFileBarcode(BaseModel):
+    code:                str
+    status:              str  # confirmed | unknown | other_variant | other_product
+    other_product_name:  str | None = None
+    other_variant_label: str | None = None
+
+
 class ShipmentLineFile(BaseModel):
     id:         str
     filename:   str
     url:        str
     mime_type:  str | None = None
+    barcodes:   list[str] = []
+    # Те же коды с актуальным статусом относительно варианта строки — считается при
+    # чтении деталки, чтобы «непривязанные ШК» были видны и после закрытия диалога.
+    barcode_details: list[ShipmentLineFileBarcode] = []
     created_at: str
+
+
+class ShipmentLineFileBindBarcode(BaseModel):
+    code: str
 
 
 class ShipmentLinePlacement(BaseModel):

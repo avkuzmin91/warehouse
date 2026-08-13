@@ -12,6 +12,8 @@ export type LineFileEntry = {
   filename: string
   mimeType: string | null
   href?: string
+  /** Подпись под файлом — например, распознанный на нём ШК. */
+  caption?: string
 }
 
 export function LineFilesCell({
@@ -197,7 +199,7 @@ export function LineFilesCell({
       onDrop={handleDrop}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ display: 'inline-flex', justifyContent: 'center' }}
+      style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
     >
       {hiddenInput}
       <div
@@ -290,6 +292,19 @@ export function LineFilesCell({
         )}
       </div>
 
+      {!many && single.caption && (
+        <span
+          className="mono"
+          title={single.caption}
+          style={{
+            fontSize: 10.5, lineHeight: '12px', color: 'var(--c-text-subtle)',
+            maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+        >
+          {single.caption}
+        </span>
+      )}
+
       {popoverOpen && many && createPortal(
         <div
           ref={popoverRef}
@@ -315,10 +330,20 @@ export function LineFilesCell({
                 () => { setPopoverOpen(false); onPreview(entry) },
                 <>
                   {entryGlyph(entry, 15)}
-                  <span style={{
-                    fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
-                    {entry.filename}
+                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{
+                      fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {entry.filename}
+                    </span>
+                    {entry.caption && (
+                      <span className="mono" style={{
+                        fontSize: 10.5, color: 'var(--c-text-subtle)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {entry.caption}
+                      </span>
+                    )}
                   </span>
                 </>,
                 { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 },

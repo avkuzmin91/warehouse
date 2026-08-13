@@ -100,6 +100,10 @@ export type ShipmentLineFile = {
   filename:   string
   url:        string
   mime_type:  string | null
+  barcodes:   string[]
+  // Те же коды с актуальным статусом относительно варианта строки (см. LineFileBarcode) —
+  // непривязанные ШК видны в деталке и после закрытия диалога разбора.
+  barcode_details: LineFileBarcode[]
   created_at: string
 }
 
@@ -694,5 +698,14 @@ export function attachShipmentLineFileFromProduct(docId: string, lineId: string,
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/from-product`, {
     method: 'POST',
     body: JSON.stringify({ product_file_id: productFileId }),
+  })
+}
+
+// Привязать распознанный на файле код к варианту строки: создаёт ШК товара и сохраняет
+// файл этикеткой в карточку. Идемпотентно, поэтому безопасно для повтора после ошибки.
+export function bindShipmentLineFileBarcode(docId: string, lineId: string, fileId: string, code: string) {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}/bind-barcode`, {
+    method: 'POST',
+    body: JSON.stringify({ code }),
   })
 }

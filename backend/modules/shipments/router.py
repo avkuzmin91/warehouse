@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from uuid import uuid4
 
@@ -52,6 +53,7 @@ from modules.auth.service import (
 from modules.shipments.schemas import (
     DuplicateCheckResponse,
     LineFileFromProduct,
+    ShipmentLineFileBindBarcode,
     ShipmentDetailResponse,
     ShipmentDocCreate,
     ShipmentDuplicateCheck,
@@ -713,18 +715,35 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             for l in lines_rows
         }
 
-    files_by_line: dict[str, list[ShipmentLineFile]] = {}
-    for f in files_rows:
-        lid = str(f["line_id"])
-        if lid not in files_by_line:
-            files_by_line[lid] = []
-        files_by_line[lid].append(ShipmentLineFile(
-            id=str(f["id"]),
-            filename=str(f["filename"]),
-            url=str(f["url"]),
-            mime_type=f["mime_type"],
-            created_at=str(f["created_at"]),
-        ))
+        # Статус сохранённых кодов файла считается при каждом чтении: «непривязанный»
+        # ШК остаётся видимым в деталке, пока его не привязали (или не привязал кто-то ещё).
+        line_by_id = {str(l["id"]): l for l in lines_rows}
+        variant_by_line: dict[str, str | None] = {}
+        files_by_line: dict[str, list[ShipmentLineFile]] = {}
+        for f in files_rows:
+            lid = str(f["line_id"])
+            codes = json.loads(f["barcodes"]) if f["barcodes"] else []
+            details: list[dict] = []
+            line_row = line_by_id.get(lid)
+            if codes and line_row is not None:
+                if lid not in variant_by_line:
+                    variant_by_line[lid] = resolve_line_variant_id(
+                        conn, str(line_row["product_id"]), line_row["color_id"], line_row["size_id"]
+                    )
+                details = classify_barcodes_for_variant(
+                    conn, codes, product_id=str(line_row["product_id"]), variant_id=variant_by_line[lid]
+                )
+            if lid not in files_by_line:
+                files_by_line[lid] = []
+            files_by_line[lid].append(ShipmentLineFile(
+                id=str(f["id"]),
+                filename=str(f["filename"]),
+                url=str(f["url"]),
+                mime_type=f["mime_type"],
+                barcodes=codes,
+                barcode_details=details,
+                created_at=str(f["created_at"]),
+            ))
 
     lines = [
         ShipmentLineItem(
@@ -1495,21 +1514,23 @@ async def upload_shipment_line_file(
         tmp_path.write_bytes(data)
         tmp_path.rename(file_path)
 
+        # Распознавание ШК на файле — подсказка фронту (привязку кодов делает
+        # отдельный вызов POST /products/{id}/barcodes); сбой декода не мешает загрузке.
+        # Коды сохраняются в записи файла, чтобы показывать их под файлом в карточке.
+        codes = decode_line_file_barcodes(data, ext)
         file_id = str(uuid4())
         url = f"/uploads/{saved_filename}"
         conn.execute(
-            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (file_id, line_id, doc_id, file.filename, url, file.content_type or None, now, uid),
+            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,barcodes,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (file_id, line_id, doc_id, file.filename, url, file.content_type or None,
+             json.dumps(codes) if codes else None, now, uid),
         )
         conn.commit()
-        # Распознавание ШК на файле — подсказка фронту (привязку кодов делает
-        # отдельный вызов POST /products/{id}/barcodes); сбой декода не мешает загрузке.
         # line_variant_id — вариант строки: нужен фронту для привязки кода к цвето-размеру.
         variant_id = resolve_line_variant_id(
             conn, str(line_row["product_id"]), line_row["color_id"], line_row["size_id"]
         )
-        codes = decode_line_file_barcodes(data, ext)
         barcodes = classify_barcodes_for_variant(
             conn, codes, product_id=str(line_row["product_id"]), variant_id=variant_id
         )
@@ -1541,7 +1562,7 @@ def attach_shipment_line_file_from_product(
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
         pf = conn.execute(
-            "SELECT f.id, f.product_id, pb.variant_id, f.filename, f.url, f.mime_type "
+            "SELECT f.id, f.product_id, pb.variant_id, pb.barcode, f.filename, f.url, f.mime_type "
             "FROM product_barcode_files f "
             "JOIN product_barcodes pb ON pb.id = f.barcode_id "
             "WHERE f.id = ? AND COALESCE(f.is_deleted, 0) = 0",
@@ -1564,13 +1585,106 @@ def attach_shipment_line_file_from_product(
             raise HTTPException(status_code=409, detail="Эта этикетка уже прикреплена к строке")
         file_id = str(uuid4())
         conn.execute(
-            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,created_at,created_by) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO shipment_line_files (id,line_id,doc_id,filename,url,mime_type,barcodes,created_at,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (file_id, line_id, doc_id, str(pf["filename"]), str(pf["url"]),
-             str(pf["mime_type"]) if pf["mime_type"] else None, now, uid),
+             str(pf["mime_type"]) if pf["mime_type"] else None,
+             json.dumps([str(pf["barcode"])]) if pf["barcode"] else None, now, uid),
         )
         conn.commit()
     return {"message": file_id}
+
+
+@router.post("/shipments/{doc_id}/lines/{line_id}/files/{file_id}/bind-barcode")
+def bind_shipment_line_file_barcode(
+    doc_id: str,
+    line_id: str,
+    file_id: str,
+    payload: ShipmentLineFileBindBarcode,
+    user=Depends(get_current_admin),
+):
+    """Привязка распознанного на файле кода к варианту строки: создаёт product_barcodes
+    и сохраняет файл этикеткой кода в карточку товара (та же запись upload, без повторной
+    загрузки байтов). Идемпотентно: код уже на этом варианте — только докрепляется этикетка."""
+    from psycopg import IntegrityError
+
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Укажите штрих-код")
+    uid = str(user["id"])
+    now = _now()
+    with get_connection() as conn:
+        doc_row = conn.execute(
+            "SELECT doc_number FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc_row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        line_row = conn.execute(
+            "SELECT id, product_id, color_id, size_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line_row:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        f = conn.execute(
+            "SELECT filename, url, mime_type, barcodes FROM shipment_line_files "
+            "WHERE id = ? AND line_id = ? AND doc_id = ? AND is_deleted = 0",
+            (file_id, line_id, doc_id),
+        ).fetchone()
+        if not f:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        codes = json.loads(f["barcodes"]) if f["barcodes"] else []
+        if code not in codes:
+            raise HTTPException(status_code=400, detail="Этот код не распознан на выбранном файле")
+        product_id = str(line_row["product_id"])
+        variant_id = resolve_line_variant_id(conn, product_id, line_row["color_id"], line_row["size_id"])
+        if not variant_id:
+            raise HTTPException(status_code=400, detail="У строки нет варианта товара (цвет × размер) — код привязать нельзя")
+        owner = conn.execute(
+            """SELECT pb.id, pb.product_id, pb.variant_id, p.name AS product_name,
+                      col.name AS color_name, sz.name AS size_name
+               FROM product_barcodes pb
+               JOIN products p ON p.id = pb.product_id
+               LEFT JOIN product_variants v ON v.id = pb.variant_id
+               LEFT JOIN colors col ON col.id = v.color_id
+               LEFT JOIN sizes sz ON sz.id = v.size_id
+               WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0 LIMIT 1""",
+            (code,),
+        ).fetchone()
+        if owner is not None and (
+            str(owner["product_id"]) != product_id
+            or (owner["variant_id"] and str(owner["variant_id"]) != variant_id)
+        ):
+            label = " · ".join(x for x in (owner["color_name"], owner["size_name"]) if x)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Штрих-код уже привязан: «{owner['product_name']}»" + (f" ({label})" if label else ""),
+            )
+        if owner is None:
+            bc_id = str(uuid4())
+            try:
+                conn.execute(
+                    "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, source, created_at, created_by, is_deleted) "
+                    "VALUES (?,?,?,?,?,?,?,0)",
+                    (bc_id, product_id, variant_id, code, f"Упаковка {doc_row['doc_number']}", now, uid),
+                )
+            except IntegrityError as exc:
+                conn.rollback()
+                raise HTTPException(status_code=409, detail="Штрих-код уже привязан к другому варианту") from exc
+        else:
+            bc_id = str(owner["id"])
+        has_label = conn.execute(
+            "SELECT 1 FROM product_barcode_files WHERE barcode_id = ? AND url = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+            (bc_id, str(f["url"])),
+        ).fetchone()
+        if not has_label:
+            conn.execute(
+                "INSERT INTO product_barcode_files (id, product_id, barcode_id, filename, url, mime_type, created_at, created_by, is_deleted) "
+                "VALUES (?,?,?,?,?,?,?,?,0)",
+                (str(uuid4()), product_id, bc_id, str(f["filename"]), str(f["url"]),
+                 str(f["mime_type"]) if f["mime_type"] else None, now, uid),
+            )
+        conn.commit()
+    return {"message": bc_id}
 
 
 @router.delete("/shipments/{doc_id}/lines/{line_id}/files/{file_id}")

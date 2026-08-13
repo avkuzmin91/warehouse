@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate } from '../../../api/shipmentsApi'
 import type { LineFileBarcode } from '../../../api/shipmentsApi'
-import { useConfirm } from '../../feedback/ConfirmDialog'
 import { useToast } from '../../feedback/Toast'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
 import type { DuplicateMatch, ProductFileItem } from '../../../api/domainTypes'
@@ -25,7 +24,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { BalancePicker } from './shared/BalancePicker'
 import { AssignSkuDrawer } from './shared/AssignSkuDrawer'
 import { NumberStep } from './shared/NumberStep'
-import { addProductBarcode, addProductBarcodeFile, updateProduct } from '../../../api/adminApi'
+import { updateProduct } from '../../../api/adminApi'
 import { PhaseBlock } from '../shared/process/PhaseBlock'
 import { ShipHeader } from './shipmentDetail/components/ShipHeader'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from './shipmentDetail/components/processUI'
@@ -67,7 +66,6 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
   const { clients } = useLookups()
   const { user } = useCurrentUser()
   const canCreate = canCreateDocuments(user)
-  const confirm = useConfirm()
   const toast = useToast()
 
   const clientOptions: ComboboxOption[] = clients.map((c) => ({ value: c.id, label: c.name }))
@@ -207,14 +205,15 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
-  type DraftBarcodeFinding = LineFileBarcode & { file: File; productId: string; productName: string; variantLabel: string; lineVariantId: string | null }
-
-  async function uploadDraftFiles(docId: string): Promise<{ findings: DraftBarcodeFinding[]; docNumber: string }> {
+  // Загрузка файлов черновика. Разбор распознанных ШК происходит в деталке
+  // (BarcodeReviewModal): коды хранятся на файлах строк и не теряются, здесь
+  // достаточно понять, есть ли что разбирать.
+  async function uploadDraftFiles(docId: string): Promise<{ needsReview: boolean; docNumber: string }> {
     const withFiles = lines.filter((l) => l.files.length > 0 || l.productFiles.length > 0)
-    if (withFiles.length === 0) return { findings: [], docNumber: '' }
+    if (withFiles.length === 0) return { needsReview: false, docNumber: '' }
     const detail = await getShipment(docId)
     const used = new Set<string>()
-    const findings: DraftBarcodeFinding[] = []
+    let needsReview = false
     for (const draft of withFiles) {
       const target = detail.lines.find((cl) =>
         !used.has(cl.id) &&
@@ -224,55 +223,14 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       used.add(target.id)
       for (const file of draft.files) {
         const res = await uploadShipmentLineFile(docId, target.id, file)
-        for (const b of res.barcodes ?? []) {
-          findings.push({
-            ...b, file,
-            productId: draft.product_id,
-            productName: draft.product_name,
-            variantLabel: [draft.color_name, draft.size_name].filter(Boolean).join(' / '),
-            lineVariantId: res.line_variant_id ?? null,
-          })
-        }
+        if ((res.barcodes ?? []).some((b: LineFileBarcode) => b.status !== 'confirmed')) needsReview = true
       }
       for (const pf of draft.productFiles) {
         // Дубль этикетки на строке — не ошибка, пропускаем.
         await attachShipmentLineFileFromProduct(docId, target.id, pf.id).catch(() => {})
       }
     }
-    return { findings, docNumber: detail.doc_number }
-  }
-
-  // Итог распознавания ШК на файлах черновика — одним диалогом после сохранения,
-  // чтобы не показывать модалку на каждый файл.
-  async function offerDraftBarcodes(findings: DraftBarcodeFinding[], docNumber: string) {
-    const seen = new Set<string>()
-    const uniq = findings.filter((f) => !seen.has(f.code) && (seen.add(f.code), true))
-    for (const f of uniq) {
-      if (f.status === 'other_product') {
-        toast(`Код ${f.code} принадлежит «${f.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
-      } else if (f.status === 'other_variant') {
-        toast(`Код ${f.code} принадлежит варианту «${f.other_variant_label}» товара «${f.productName}» — возможен пересорт`, 'error')
-      }
-    }
-    const unknown = uniq.filter((f) => f.status === 'unknown' && f.lineVariantId)
-    if (unknown.length === 0) return
-    if (user?.role !== 'admin' && user?.role !== 'manager') return
-    const listing = unknown.map((f) => `${f.code} → «${f.productName}»${f.variantLabel ? ` (${f.variantLabel})` : ''}`).join('; ')
-    const ok = await confirm({
-      title: unknown.length === 1 ? 'Привязать штрих-код к варианту?' : 'Привязать штрих-коды к вариантам?',
-      body: `На файлах распознаны новые коды: ${listing}. В системе их нет — коды будут привязаны к цвето-размерам строк, а файлы этикеток сохранятся в карточки товаров.`,
-      confirmLabel: 'Привязать',
-    })
-    if (!ok) return
-    try {
-      for (const f of unknown) {
-        const bcId = (await addProductBarcode(f.productId, { barcode: f.code, source: `Упаковка ${docNumber}`, variant_id: f.lineVariantId })).message
-        await addProductBarcodeFile(f.productId, bcId, f.file)
-      }
-      toast(unknown.length === 1 ? 'Штрих-код привязан, этикетка сохранена в карточку' : `Штрих-коды привязаны: ${unknown.length}, этикетки сохранены`, 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Не удалось привязать штрих-код', 'error')
-    }
+    return { needsReview, docNumber: detail.doc_number }
   }
 
   async function handleSave(toPacking: boolean) {
@@ -315,10 +273,15 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         })),
       })
       const docId = res.message
-      const { findings, docNumber } = await uploadDraftFiles(docId)
+      const { needsReview, docNumber } = await uploadDraftFiles(docId)
       if (toPacking) await advanceShipment(docId)
-      await offerDraftBarcodes(findings, docNumber)
-      navigate(`/inventory/shipments/${docId}`, { replace: true })
+      // Сохранение и разбор ШК — независимые шаги: сначала подтверждаем сохранение,
+      // затем деталка открывает разбор (state.reviewBarcodes) — отмена там ничего не отменит.
+      toast(`Задача ${docNumber ? `${docNumber} ` : ''}сохранена`, 'success')
+      navigate(`/inventory/shipments/${docId}`, {
+        replace: true,
+        state: needsReview ? { reviewBarcodes: true } : undefined,
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения')
     } finally {

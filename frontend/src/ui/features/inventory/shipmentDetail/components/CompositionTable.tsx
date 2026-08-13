@@ -1,4 +1,4 @@
-import type { ShipmentLine } from '../../../../../api/shipmentsApi'
+import type { ShipmentLine, ShipmentLineFile } from '../../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { Icon } from '../../../../primitives/Icon'
 import { Table, Td } from '../../../../data/Table'
@@ -10,6 +10,19 @@ import { AvailabilityCell } from '../../shared/AvailabilityCell'
 import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { LineFilesCell } from './LineFilesCell'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from '../shared/types'
+
+// Подпись под файлом: код + статус привязки, чтобы «не привязан» был виден прямо в строке.
+function fileBarcodeCaption(f: ShipmentLineFile): string | undefined {
+  const details = f.barcode_details ?? []
+  if (details.length === 0) {
+    return (f.barcodes ?? []).length > 0 ? `ШК ${f.barcodes.join(', ')}` : undefined
+  }
+  return details
+    .map((b) => b.status === 'unknown' ? `ШК ${b.code} — не привязан`
+      : b.status === 'confirmed' ? `ШК ${b.code}`
+      : `ШК ${b.code} — конфликт`)
+    .join(' · ')
+}
 
 export function StoreCell({
   value,
@@ -172,6 +185,7 @@ export function CompositionTable({
                     filename: f.filename,
                     mimeType: f.mime_type,
                     href: resolvePublicUploadSrc(f.url),
+                    caption: fileBarcodeCaption(f),
                   }))}
                   canEdit={canAttachFiles}
                   uploading={uploadingLines[line.id] ?? false}

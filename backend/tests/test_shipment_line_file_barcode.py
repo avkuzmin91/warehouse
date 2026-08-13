@@ -205,3 +205,94 @@ def test_unreadable_file_uploads_without_barcodes(admin_client, shipment_with_li
     assert data["barcodes"] == []
     files = admin_client.get(f"/shipments/{shipment_with_line['doc_id']}").json()["lines"][0]["files"]
     assert len(files) == 1
+
+
+def test_detail_exposes_barcode_details(admin_client, shipment_with_line):
+    """Классификация кодов живёт в деталке (barcode_details), а не только в ответе upload —
+    иначе закрытый диалог разбора терял бы непривязанные коды."""
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    r = _upload(admin_client, shipment_with_line["doc_id"], shipment_with_line["line_id"],
+                "shk.png", _barcode_png(code), "image/png")
+    assert r.status_code == 200, r.text
+    files = admin_client.get(f"/shipments/{shipment_with_line['doc_id']}").json()["lines"][0]["files"]
+    assert files[0]["barcode_details"] == [
+        {"code": code, "status": "unknown", "other_product_name": None, "other_variant_label": None}
+    ]
+
+
+def test_bind_barcode_creates_code_and_label(admin_client, shipment_with_line):
+    doc_id, line_id = shipment_with_line["doc_id"], shipment_with_line["line_id"]
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    file_id = _upload(admin_client, doc_id, line_id, "shk.png", _barcode_png(code), "image/png").json()["message"]
+    r = admin_client.post(f"/shipments/{doc_id}/lines/{line_id}/files/{file_id}/bind-barcode", json={"code": code})
+    assert r.status_code == 200, r.text
+    bc_id = r.json()["message"]
+    with get_connection() as conn:
+        bc = conn.execute("SELECT * FROM product_barcodes WHERE id = ?", (bc_id,)).fetchone()
+        labels = conn.execute(
+            "SELECT * FROM product_barcode_files WHERE barcode_id = ? AND COALESCE(is_deleted, 0) = 0", (bc_id,)
+        ).fetchall()
+    assert bc is not None
+    assert str(bc["product_id"]) == shipment_with_line["product_a"]
+    assert str(bc["variant_id"]) == shipment_with_line["variant_a"]
+    assert len(labels) == 1
+    # После привязки код в деталке — confirmed.
+    files = admin_client.get(f"/shipments/{doc_id}").json()["lines"][0]["files"]
+    assert files[0]["barcode_details"][0]["status"] == "confirmed"
+    with get_connection() as conn:
+        conn.execute("DELETE FROM product_barcode_files WHERE barcode_id = ?", (bc_id,))
+        conn.commit()
+
+
+def test_bind_barcode_idempotent(admin_client, shipment_with_line):
+    """Повторная привязка того же кода — 200 и без дубля этикетки (безопасный retry)."""
+    doc_id, line_id = shipment_with_line["doc_id"], shipment_with_line["line_id"]
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    file_id = _upload(admin_client, doc_id, line_id, "shk.png", _barcode_png(code), "image/png").json()["message"]
+    url = f"/shipments/{doc_id}/lines/{line_id}/files/{file_id}/bind-barcode"
+    bc_id = admin_client.post(url, json={"code": code}).json()["message"]
+    r2 = admin_client.post(url, json={"code": code})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["message"] == bc_id
+    with get_connection() as conn:
+        labels = conn.execute(
+            "SELECT * FROM product_barcode_files WHERE barcode_id = ? AND COALESCE(is_deleted, 0) = 0", (bc_id,)
+        ).fetchall()
+        conn.execute("DELETE FROM product_barcode_files WHERE barcode_id = ?", (bc_id,))
+        conn.commit()
+    assert len(labels) == 1
+
+
+def test_bind_barcode_conflict_names_owner(admin_client, shipment_with_line):
+    """Код чужого товара — 409 с именем владельца в detail."""
+    doc_id, line_id = shipment_with_line["doc_id"], shipment_with_line["line_id"]
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    assert admin_client.post(
+        f"/products/{shipment_with_line['product_b']}/barcodes", json={"barcode": code}
+    ).status_code == 200
+    file_id = _upload(admin_client, doc_id, line_id, "shk.png", _barcode_png(code), "image/png").json()["message"]
+    r = admin_client.post(f"/shipments/{doc_id}/lines/{line_id}/files/{file_id}/bind-barcode", json={"code": code})
+    assert r.status_code == 409, r.text
+    assert "BCFProductB-" in r.json()["detail"]
+
+
+def test_bind_barcode_rejects_code_not_on_file(admin_client, shipment_with_line):
+    doc_id, line_id = shipment_with_line["doc_id"], shipment_with_line["line_id"]
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    file_id = _upload(admin_client, doc_id, line_id, "shk.png", _barcode_png(code), "image/png").json()["message"]
+    r = admin_client.post(
+        f"/shipments/{doc_id}/lines/{line_id}/files/{file_id}/bind-barcode",
+        json={"code": "NOT-ON-FILE-123"},
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_add_product_barcode_duplicate_names_owner(admin_client, shipment_with_line):
+    """Ручное добавление занятого кода — 409 с владельцем, а не безликое сообщение."""
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    assert admin_client.post(
+        f"/products/{shipment_with_line['product_b']}/barcodes", json={"barcode": code}
+    ).status_code == 200
+    r = admin_client.post(f"/products/{shipment_with_line['product_a']}/barcodes", json={"barcode": code})
+    assert r.status_code == 409, r.text
+    assert "BCFProductB-" in r.json()["detail"]

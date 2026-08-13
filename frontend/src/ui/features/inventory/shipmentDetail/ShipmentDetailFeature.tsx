@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useBackNav } from '../../../../hooks/useBackNav'
 import {
   getShipment,
@@ -39,8 +39,10 @@ import { useCurrentUser } from '../../../../hooks/useCurrentUser'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
 import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
-import { addProductBarcode, addProductBarcodeFile, updateProduct } from '../../../../api/adminApi'
+import { updateProduct } from '../../../../api/adminApi'
 import { OpEntry } from './components/OpEntry'
+import { BarcodeReviewModal } from './components/BarcodeReviewModal'
+import type { BarcodeReviewItem } from './components/BarcodeReviewModal'
 import { ProductLabelPickerModal } from './components/ProductLabelPickerModal'
 import { lineAvailable } from './shared/opLabels'
 import { MoveToPackingDrawer } from './components/MoveToPackingDrawer'
@@ -66,6 +68,7 @@ type ReadinessCheck = { ok: boolean; label: string; error: string }
 export function ShipmentDetailFeature() {
   const { docId } = useParams<{ docId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const goBack = useBackNav('/inventory/shipments')
   const confirm = useConfirm()
   const toast = useToast()
@@ -598,51 +601,57 @@ export function ShipmentDetailFeature() {
     })
   }
 
-  // Итог распознавания ШК на загруженных файлах строки: чужой товар или другой
-  // цвето-размер — предупреждение, подтверждённый — зелёный тост, неизвестный —
-  // предложение привязать к варианту строки; при привязке файл-источник сохраняется
-  // в карточку товара как этикетка кода (только admin/manager).
-  async function handleRecognizedBarcodes(lineId: string, perFile: { file: File; barcodes: LineFileBarcode[] }[], lineVariantId: string | null) {
-    const line = doc?.lines.find((l) => l.id === lineId)
-    if (!line || !doc) return
-    const seen = new Set<string>()
-    const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
-    const variantLabel = [line.color_name, line.size_name].filter(Boolean).join(' / ')
-    for (const b of codes) {
-      if (b.status === 'other_product') {
-        toast(`Код ${b.code} принадлежит «${b.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
-      } else if (b.status === 'other_variant') {
-        toast(`Код ${b.code} принадлежит варианту «${b.other_variant_label}» этого товара — возможен пересорт`, 'error')
-      } else if (b.status === 'confirmed') {
-        toast(`ШК подтверждён: ${b.code}`, 'success')
-      }
-    }
-    const unknown = codes.filter((b) => b.status === 'unknown')
-    if (unknown.length === 0 || !lineVariantId) return
-    if (user?.role !== 'admin' && user?.role !== 'manager') return
-    const codeList = unknown.map((b) => b.code).join(', ')
-    const target = variantLabel ? `«${line.product_name}» (${variantLabel})` : `«${line.product_name}»`
-    const ok = await confirm({
-      title: unknown.length === 1 ? 'Привязать штрих-код к варианту?' : 'Привязать штрих-коды к варианту?',
-      body: `${unknown.length === 1
-        ? `На файле распознан код ${codeList} — в системе его нет.`
-        : `На файлах распознаны коды ${codeList} — в системе их нет.`} Код будет привязан к ${target}, а файл этикетки сохранится в карточку товара.`,
-      confirmLabel: 'Привязать',
-    })
-    if (!ok) return
-    try {
-      for (const b of unknown) {
-        const bcId = (await addProductBarcode(line.product_id, { barcode: b.code, source: `Упаковка ${doc.doc_number}`, variant_id: lineVariantId })).message
-        for (const f of perFile) {
-          if (f.barcodes.some((x) => x.code === b.code)) {
-            await addProductBarcodeFile(line.product_id, bcId, f.file)
-          }
+  // Разбор распознанных ШК — модалка BarcodeReviewModal. Коды хранятся на файлах строк
+  // (barcode_details деталки), поэтому «Решить позже» ничего не теряет: плашка над
+  // документом вернёт к разбору в любой момент.
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const canBindBarcodes = user?.role === 'admin' || user?.role === 'manager'
+
+  const reviewItems: BarcodeReviewItem[] = useMemo(() => {
+    if (!doc) return []
+    // Один код может встретиться на нескольких строках с разным статусом — показываем
+    // самое требующее действия вхождение: новый → конфликт → подтверждённый.
+    const prio: Record<string, number> = { unknown: 0, other_product: 1, other_variant: 1, confirmed: 2 }
+    const byCode = new Map<string, BarcodeReviewItem>()
+    for (const line of doc.lines) {
+      const variantLabel = [line.color_name, line.size_name].filter(Boolean).join(' / ') || null
+      for (const f of line.files ?? []) {
+        for (const b of f.barcode_details ?? []) {
+          const prev = byCode.get(b.code)
+          if (prev && prio[prev.status] <= prio[b.status]) continue
+          byCode.set(b.code, {
+            ...b,
+            lineId: line.id,
+            fileId: f.id,
+            fileName: f.filename,
+            productId: line.product_id,
+            productName: line.product_name,
+            productSku: line.product_sku,
+            variantLabel,
+          })
         }
       }
-      toast(unknown.length === 1 ? 'Штрих-код привязан, этикетка сохранена в карточку' : `Штрих-коды привязаны: ${unknown.length}, этикетки сохранены в карточку`, 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Не удалось привязать штрих-код', 'error')
     }
+    return [...byCode.values()]
+  }, [doc])
+  const reviewPendingCount = reviewItems.filter((i) => i.status === 'unknown').length
+  const reviewConflictCount = reviewItems.filter((i) => i.status === 'other_product' || i.status === 'other_variant').length
+
+  // Переход из создания задачи (state.reviewBarcodes) — разбор открывается сразу.
+  const autoReviewRef = useRef(Boolean((location.state as { reviewBarcodes?: boolean } | null)?.reviewBarcodes))
+  useEffect(() => {
+    if (!autoReviewRef.current || !doc) return
+    autoReviewRef.current = false
+    if (reviewPendingCount > 0 || reviewConflictCount > 0) setReviewOpen(true)
+  }, [doc, reviewPendingCount, reviewConflictCount])
+
+  function afterFilesRecognized(perFile: { barcodes: LineFileBarcode[] }[]) {
+    const seen = new Set<string>()
+    const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
+    for (const b of codes) {
+      if (b.status === 'confirmed') toast(`ШК подтверждён: ${b.code}`, 'success')
+    }
+    if (codes.some((b) => b.status !== 'confirmed')) setReviewOpen(true)
   }
 
   async function handleUploadFile(lineId: string, files: File[]) {
@@ -653,13 +662,11 @@ export function ShipmentDetailFeature() {
       if (invalid) { toast(`${file.name}: ${invalid}`, 'error'); return }
     }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
-    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
-    let lineVariantId: string | null = null
+    const perFile: { barcodes: LineFileBarcode[] }[] = []
     try {
       for (const file of files) {
         const res = await uploadShipmentLineFile(docId, lineId, file)
-        perFile.push({ file, barcodes: res.barcodes ?? [] })
-        lineVariantId = res.line_variant_id ?? lineVariantId
+        perFile.push({ barcodes: res.barcodes ?? [] })
       }
       await refresh()
       toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
@@ -668,7 +675,7 @@ export function ShipmentDetailFeature() {
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
-    await handleRecognizedBarcodes(lineId, perFile, lineVariantId)
+    afterFilesRecognized(perFile)
   }
 
   async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
@@ -676,12 +683,10 @@ export function ShipmentDetailFeature() {
     const invalid = validateLineFile(file)
     if (invalid) { toast(invalid, 'error'); return }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
-    const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
-    let lineVariantId: string | null = null
+    const perFile: { barcodes: LineFileBarcode[] }[] = []
     try {
       const res = await uploadShipmentLineFile(docId, lineId, file)
-      perFile.push({ file, barcodes: res.barcodes ?? [] })
-      lineVariantId = res.line_variant_id ?? null
+      perFile.push({ barcodes: res.barcodes ?? [] })
       await deleteShipmentLineFile(docId, lineId, oldFileId)
       await refresh()
       toast('Файл заменён', 'success')
@@ -690,7 +695,7 @@ export function ShipmentDetailFeature() {
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
-    await handleRecognizedBarcodes(lineId, perFile, lineVariantId)
+    afterFilesRecognized(perFile)
   }
 
   // Этикетка из карточки товара → строка задачи (без повторной загрузки байтов).
@@ -990,6 +995,25 @@ export function ShipmentDetailFeature() {
         }
       />
 
+      {(reviewPendingCount > 0 || reviewConflictCount > 0) && status !== 'cancelled'
+        && (canBindBarcodes || canEditShipmentFiles(user)) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 16,
+          background: reviewConflictCount > 0 ? 'var(--c-warning-bg)' : 'var(--c-accent-bg)',
+          borderRadius: 'var(--r-md)',
+        }}>
+          <span style={{ flex: 'none', color: reviewConflictCount > 0 ? 'var(--c-warning)' : 'var(--c-accent)' }}>
+            <Icon name="qr" size={16} />
+          </span>
+          <span style={{ flex: 1, fontSize: 13, color: reviewConflictCount > 0 ? 'var(--c-warning)' : 'var(--c-accent)' }}>
+            {reviewPendingCount > 0 && `На файлах строк распознаны непривязанные штрих-коды: ${reviewPendingCount}`}
+            {reviewPendingCount > 0 && reviewConflictCount > 0 && ' · '}
+            {reviewConflictCount > 0 && `${reviewPendingCount > 0 ? 'конфликтных' : 'На файлах строк конфликтные штрих-коды'}: ${reviewConflictCount}`}
+          </span>
+          <button className="btn sm" onClick={() => setReviewOpen(true)}>Разобрать</button>
+        </div>
+      )}
+
       {(isDraft || isAssigned) ? (
         <PlanningView
           doc={doc}
@@ -1169,6 +1193,17 @@ export function ShipmentDetailFeature() {
           zoneOptions={unloadingZones}
           onClose={() => setPlaceLine(null)}
           onDone={refreshAfterLineChange}
+        />
+      )}
+
+      {reviewOpen && (
+        <BarcodeReviewModal
+          docId={docId!}
+          docNumber={doc.doc_number}
+          items={reviewItems}
+          canBind={canBindBarcodes}
+          onClose={() => setReviewOpen(false)}
+          onBound={refresh}
         />
       )}
 
