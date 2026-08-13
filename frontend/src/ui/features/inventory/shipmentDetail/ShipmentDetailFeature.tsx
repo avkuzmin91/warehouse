@@ -598,37 +598,41 @@ export function ShipmentDetailFeature() {
     })
   }
 
-  // Итог распознавания ШК на загруженных файлах строки: чужой код — предупреждение,
-  // подтверждённый — зелёный тост, неизвестный — предложение привязать к товару строки;
-  // при привязке файл-источник сохраняется в карточку товара как этикетка кода
-  // (только admin/manager: у начальника склада нет права писать в карточку товара).
-  async function handleRecognizedBarcodes(lineId: string, perFile: { file: File; barcodes: LineFileBarcode[] }[]) {
+  // Итог распознавания ШК на загруженных файлах строки: чужой товар или другой
+  // цвето-размер — предупреждение, подтверждённый — зелёный тост, неизвестный —
+  // предложение привязать к варианту строки; при привязке файл-источник сохраняется
+  // в карточку товара как этикетка кода (только admin/manager).
+  async function handleRecognizedBarcodes(lineId: string, perFile: { file: File; barcodes: LineFileBarcode[] }[], lineVariantId: string | null) {
     const line = doc?.lines.find((l) => l.id === lineId)
     if (!line || !doc) return
     const seen = new Set<string>()
     const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
+    const variantLabel = [line.color_name, line.size_name].filter(Boolean).join(' / ')
     for (const b of codes) {
       if (b.status === 'other_product') {
         toast(`Код ${b.code} принадлежит «${b.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
+      } else if (b.status === 'other_variant') {
+        toast(`Код ${b.code} принадлежит варианту «${b.other_variant_label}» этого товара — возможен пересорт`, 'error')
       } else if (b.status === 'confirmed') {
         toast(`ШК подтверждён: ${b.code}`, 'success')
       }
     }
     const unknown = codes.filter((b) => b.status === 'unknown')
-    if (unknown.length === 0) return
+    if (unknown.length === 0 || !lineVariantId) return
     if (user?.role !== 'admin' && user?.role !== 'manager') return
     const codeList = unknown.map((b) => b.code).join(', ')
+    const target = variantLabel ? `«${line.product_name}» (${variantLabel})` : `«${line.product_name}»`
     const ok = await confirm({
-      title: unknown.length === 1 ? 'Привязать штрих-код к товару?' : 'Привязать штрих-коды к товару?',
+      title: unknown.length === 1 ? 'Привязать штрих-код к варианту?' : 'Привязать штрих-коды к варианту?',
       body: `${unknown.length === 1
         ? `На файле распознан код ${codeList} — в системе его нет.`
-        : `На файлах распознаны коды ${codeList} — в системе их нет.`} Код будет привязан к товару «${line.product_name}», а файл этикетки сохранится в его карточку.`,
+        : `На файлах распознаны коды ${codeList} — в системе их нет.`} Код будет привязан к ${target}, а файл этикетки сохранится в карточку товара.`,
       confirmLabel: 'Привязать',
     })
     if (!ok) return
     try {
       for (const b of unknown) {
-        const bcId = (await addProductBarcode(line.product_id, { barcode: b.code, source: `Упаковка ${doc.doc_number}` })).message
+        const bcId = (await addProductBarcode(line.product_id, { barcode: b.code, source: `Упаковка ${doc.doc_number}`, variant_id: lineVariantId })).message
         for (const f of perFile) {
           if (f.barcodes.some((x) => x.code === b.code)) {
             await addProductBarcodeFile(line.product_id, bcId, f.file)
@@ -650,10 +654,12 @@ export function ShipmentDetailFeature() {
     }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
     const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
+    let lineVariantId: string | null = null
     try {
       for (const file of files) {
         const res = await uploadShipmentLineFile(docId, lineId, file)
         perFile.push({ file, barcodes: res.barcodes ?? [] })
+        lineVariantId = res.line_variant_id ?? lineVariantId
       }
       await refresh()
       toast(files.length === 1 ? 'Файл прикреплён' : `Файлы прикреплены: ${files.length}`, 'success')
@@ -662,7 +668,7 @@ export function ShipmentDetailFeature() {
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
-    await handleRecognizedBarcodes(lineId, perFile)
+    await handleRecognizedBarcodes(lineId, perFile, lineVariantId)
   }
 
   async function handleReplaceFile(lineId: string, oldFileId: string, file: File) {
@@ -671,9 +677,11 @@ export function ShipmentDetailFeature() {
     if (invalid) { toast(invalid, 'error'); return }
     setUploadingLines((prev) => ({ ...prev, [lineId]: true }))
     const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
+    let lineVariantId: string | null = null
     try {
       const res = await uploadShipmentLineFile(docId, lineId, file)
       perFile.push({ file, barcodes: res.barcodes ?? [] })
+      lineVariantId = res.line_variant_id ?? null
       await deleteShipmentLineFile(docId, lineId, oldFileId)
       await refresh()
       toast('Файл заменён', 'success')
@@ -682,7 +690,7 @@ export function ShipmentDetailFeature() {
     } finally {
       setUploadingLines((prev) => ({ ...prev, [lineId]: false }))
     }
-    await handleRecognizedBarcodes(lineId, perFile)
+    await handleRecognizedBarcodes(lineId, perFile, lineVariantId)
   }
 
   // Этикетка из карточки товара → строка задачи (без повторной загрузки байтов).
@@ -1126,6 +1134,8 @@ export function ShipmentDetailFeature() {
         <ProductLabelPickerModal
           productId={labelPickerLine.product_id}
           productName={labelPickerLine.product_name}
+          lineColorId={labelPickerLine.color_id ?? null}
+          lineSizeId={labelPickerLine.size_id ?? null}
           excludeUrls={(labelPickerLine.files ?? []).map((f) => f.url)}
           onPick={(f) => void handlePickLabel(f)}
           onClose={() => setLabelPickerLine(null)}

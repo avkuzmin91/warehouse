@@ -288,7 +288,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
-                <label className="field-label"><span>План отгрузки</span></label>
+                <label className="field-label"><span>{isDispatch ? 'План отгрузки' : 'План упаковки'}</span></label>
                 <NumberStep
                   value={pending.qty}
                   onChange={(v) => setPending((p) => p && { ...p, qty: v })}

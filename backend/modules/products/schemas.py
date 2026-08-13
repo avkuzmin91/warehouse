@@ -95,10 +95,18 @@ class ProductBarcodeItem(BaseModel):
 
 
 class ProductFileItem(BaseModel):
-    """Этикетка из карточки товара для выбора в документах (плоский список)."""
+    """Этикетка из карточки товара для выбора в документах (плоский список).
+
+    Код принадлежит варианту — цвет/размер нужны, чтобы предлагать строке
+    документа только этикетки её варианта."""
 
     id: str
     barcode: str
+    variant_id: str | None = None
+    color_id: str | None = None
+    size_id: str | None = None
+    color_name: str | None = None
+    size_name: str | None = None
     filename: str
     url: str
     mime_type: str | None = None
@@ -112,6 +120,7 @@ class ProductVariantItem(BaseModel):
     size_id: str | None = None
     size_name: str | None = None
     sku: str
+    barcodes: list[ProductBarcodeItem] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
     is_active: bool
     stock: int = 0
@@ -122,6 +131,9 @@ class ProductVariantItem(BaseModel):
 class ProductBarcodeAdd(BaseModel):
     barcode: str = Field(min_length=1)
     source: str | None = None
+    # Вариант обязателен по смыслу; None допустим только для товара с единственным
+    # живым вариантом (привязка из упаковки, где вариант уже вычислен строкой).
+    variant_id: str | None = None
 
 
 class ProductVariantDeletePatchRequest(BaseModel):
@@ -171,9 +183,14 @@ class ProductVariantFindResponse(BaseModel):
 
 
 class BarcodeMatch(BaseModel):
+    variant_id: str
     product_id: str
     product_name: str
     sku: str
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
 

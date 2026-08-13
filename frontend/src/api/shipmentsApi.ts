@@ -661,16 +661,18 @@ export function deleteShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}`, { method: 'DELETE' })
 }
 
-// Распознавание ШК на загруженном файле строки: confirmed — код уже привязан к товару
-// строки, unknown — кода нет в системе (кандидат на привязку), other_product — код занят
-// другим товаром (возможно, приложен не тот файл).
-export type LineFileBarcodeStatus = 'confirmed' | 'unknown' | 'other_product'
+// Распознавание ШК на загруженном файле строки: confirmed — код привязан к варианту
+// строки, unknown — кода нет в системе (кандидат на привязку), other_variant — код
+// другого цвето-размера того же товара (вероятный пересорт), other_product — чужой товар.
+export type LineFileBarcodeStatus = 'confirmed' | 'unknown' | 'other_variant' | 'other_product'
 export type LineFileBarcode = {
   code: string
   status: LineFileBarcodeStatus
   other_product_name: string | null
+  other_variant_label: string | null
 }
-export type LineFileUploadResult = { message: string; barcodes: LineFileBarcode[] }
+// line_variant_id — вариант строки (товар+цвет+размер): к нему привязываются новые коды.
+export type LineFileUploadResult = { message: string; line_variant_id: string | null; barcodes: LineFileBarcode[] }
 
 export function uploadShipmentLineFile(docId: string, lineId: string, file: File) {
   const form = new FormData()

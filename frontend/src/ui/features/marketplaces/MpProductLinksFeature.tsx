@@ -106,6 +106,7 @@ export function MpProductLinksFeature() {
     if (!item.suggestion) return
     await linkMpProduct(item.id, {
       product_id: item.suggestion.product_id,
+      variant_id: item.suggestion.variant_id,
     })
     toast('Связка сохранена')
   })
@@ -301,7 +302,7 @@ function LinkModal({ item, clientId, onClose, onDone }: {
 }) {
   const toast = useToast()
   const [productId, setProductId] = useState<string>(item.suggestion?.product_id ?? '')
-  const [variantId, setVariantId] = useState<string>('')
+  const [variantId, setVariantId] = useState<string>(item.suggestion?.variant_id ?? '')
   const [saving, setSaving] = useState(false)
 
   const { data: products, loading: productsLoading } = useApi(

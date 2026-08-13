@@ -87,9 +87,10 @@ from modules.shipments.service import (
     _check_lines_covered_by_stock,
     _doc_packed_qty,
     advance_shipment,
-    classify_barcodes_for_product,
+    classify_barcodes_for_variant,
     decode_line_file_barcodes,
     find_duplicate_shipments,
+    resolve_line_variant_id,
     finish_defect_relocation,
     finish_relocation,
     line_on_packing_qty,
@@ -132,6 +133,17 @@ def _shipment_priority_order(alias: str = "d") -> str:
         f"CASE WHEN {alias}.priority_rank IS NULL THEN 1 ELSE 0 END, "
         f"{alias}.priority_rank ASC NULLS LAST, "
         f"{alias}.ship_date ASC NULLS LAST, "
+        f"{alias}.created_at DESC"
+    )
+
+
+def _shipment_date_order(alias: str = "d") -> str:
+    # Черновик сохраняется без даты упаковки (товар ещё в пути — дату ставят при
+    # планировании). При сортировке строго по ship_date такие документы уходили
+    # в самый хвост списка и на первых страницах их не было видно вовсе.
+    # Недатированные ранжируем по дате создания — свежий черновик остаётся наверху.
+    return (
+        f"COALESCE(NULLIF({alias}.ship_date, ''), LEFT({alias}.created_at, 10)) DESC, "
         f"{alias}.created_at DESC"
     )
 
@@ -375,7 +387,7 @@ def list_shipments(
             f"SELECT COUNT(*) AS cnt FROM shipment_docs d WHERE {where}", params
         ).fetchone()["cnt"])
         offset = (page - 1) * limit
-        order_by = _shipment_priority_order() if use_priority_order else "d.ship_date DESC NULLS LAST, d.created_at DESC"
+        order_by = _shipment_priority_order() if use_priority_order else _shipment_date_order()
         rows = conn.execute(
             f"""SELECT d.*,
                     (SELECT COALESCE(NULLIF(u.display_name, ''), u.email) FROM users u WHERE u.id = d.created_by) AS created_by_name,
@@ -542,7 +554,7 @@ def list_shipment_lines(
                 JOIN shipment_docs d ON d.id = l.doc_id
                 LEFT JOIN products p ON p.id = l.product_id
                 WHERE {where}
-                ORDER BY d.ship_date DESC NULLS LAST, d.created_at DESC, l.created_at
+                ORDER BY {_shipment_date_order()}, l.created_at
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
@@ -1471,7 +1483,7 @@ async def upload_shipment_line_file(
             raise HTTPException(status_code=404, detail="Документ не найден")
         _ensure_can_edit_files(user, str(row["status"]))
         line_row = conn.execute(
-            "SELECT id, product_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, product_id, color_id, size_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
@@ -1493,9 +1505,15 @@ async def upload_shipment_line_file(
         conn.commit()
         # Распознавание ШК на файле — подсказка фронту (привязку кодов делает
         # отдельный вызов POST /products/{id}/barcodes); сбой декода не мешает загрузке.
+        # line_variant_id — вариант строки: нужен фронту для привязки кода к цвето-размеру.
+        variant_id = resolve_line_variant_id(
+            conn, str(line_row["product_id"]), line_row["color_id"], line_row["size_id"]
+        )
         codes = decode_line_file_barcodes(data, ext)
-        barcodes = classify_barcodes_for_product(conn, codes, str(line_row["product_id"]))
-    return {"message": file_id, "barcodes": barcodes}
+        barcodes = classify_barcodes_for_variant(
+            conn, codes, product_id=str(line_row["product_id"]), variant_id=variant_id
+        )
+    return {"message": file_id, "line_variant_id": variant_id, "barcodes": barcodes}
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/files/from-product")
@@ -1517,20 +1535,27 @@ def attach_shipment_line_file_from_product(
             raise HTTPException(status_code=404, detail="Документ не найден")
         _ensure_can_edit_files(user, str(row["status"]))
         line_row = conn.execute(
-            "SELECT id, product_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+            "SELECT id, product_id, color_id, size_id FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
             (line_id, doc_id),
         ).fetchone()
         if not line_row:
             raise HTTPException(status_code=404, detail="Строка не найдена")
         pf = conn.execute(
-            "SELECT id, product_id, filename, url, mime_type FROM product_barcode_files "
-            "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+            "SELECT f.id, f.product_id, pb.variant_id, f.filename, f.url, f.mime_type "
+            "FROM product_barcode_files f "
+            "JOIN product_barcodes pb ON pb.id = f.barcode_id "
+            "WHERE f.id = ? AND COALESCE(f.is_deleted, 0) = 0",
             (payload.product_file_id,),
         ).fetchone()
         if not pf:
             raise HTTPException(status_code=404, detail="Файл в карточке товара не найден")
         if str(pf["product_id"]) != str(line_row["product_id"]):
             raise HTTPException(status_code=400, detail="Этикетка принадлежит другому товару")
+        line_variant = resolve_line_variant_id(
+            conn, str(line_row["product_id"]), line_row["color_id"], line_row["size_id"]
+        )
+        if line_variant and pf["variant_id"] and str(pf["variant_id"]) != line_variant:
+            raise HTTPException(status_code=400, detail="Этикетка принадлежит другому цвето-размеру этого товара")
         dup = conn.execute(
             "SELECT 1 FROM shipment_line_files WHERE line_id = ? AND url = ? AND is_deleted = 0 LIMIT 1",
             (line_id, str(pf["url"])),

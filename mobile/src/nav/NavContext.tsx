@@ -8,8 +8,7 @@ export type { TabName } from './tabs'
 
 // Позиция, к которой нужно проскроллить карточку упаковки (переход со скана:
 // отсканированный вариант → его строка в задаче).
-// colorId/sizeId не заданы — фокус на первую строку товара (скан ШК опознаёт товар целиком).
-export type PackFocus = { productId: string; colorId?: string | null; sizeId?: string | null }
+export type PackFocus = { productId: string; colorId: string | null; sizeId: string | null }
 
 export type Route =
   | { name: 'tasks' }

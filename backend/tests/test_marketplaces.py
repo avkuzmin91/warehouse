@@ -406,7 +406,7 @@ def test_order_detail_404(manager_client):
 
 @pytest.fixture
 def catalog_fixture(ozon_account):
-    """Товар с ШК + карточка МП с тем же ШК (не связаны)."""
+    """Вариант с ШК + карточка МП с тем же ШК (не связаны)."""
     cid = ozon_account["client_id"]
     type_id = str(uuid.uuid4())
     pid = str(uuid.uuid4())
@@ -430,9 +430,9 @@ def catalog_fixture(ozon_account):
             (vid, pid, cid, f"MP-V-{vid[:8]}"),
         )
         conn.execute(
-            "INSERT INTO product_barcodes (id, product_id, barcode, created_at, is_deleted) "
-            "VALUES (?, ?, ?, NOW(), 0)",
-            (str(uuid.uuid4()), pid, barcode),
+            "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, created_at, is_deleted) "
+            "VALUES (?, ?, ?, ?, NOW(), 0)",
+            (str(uuid.uuid4()), pid, vid, barcode),
         )
         conn.execute(
             "INSERT INTO mp_products (id, account_id, external_id, offer_id, title, barcodes, "
@@ -464,7 +464,7 @@ def test_auto_link_by_barcode(admin_client, catalog_fixture):
         ).fetchone()
     assert link is not None
     assert str(link["product_id"]) == catalog_fixture["product_id"]
-    assert link["variant_id"] is None
+    assert str(link["variant_id"]) == catalog_fixture["variant_id"]
     assert str(link["link_source"]) == MP_LINK_SOURCE_BARCODE
 
     # Повторный прогон ничего не задваивает.
@@ -473,24 +473,23 @@ def test_auto_link_by_barcode(admin_client, catalog_fixture):
 
 
 def test_auto_link_conflict_skipped(admin_client, catalog_fixture):
-    """Карточка, чьи ШК ведут к двум разным товарам, — конфликт: не связываем."""
+    """Карточка, чьи ШК ведут к двум разным вариантам, — конфликт: не связываем."""
     cid = catalog_fixture["client_id"]
-    pid2 = str(uuid.uuid4())
+    pid = catalog_fixture["product_id"]
+    vid2 = str(uuid.uuid4())
     barcode2 = f"46{uuid.uuid4().hex[:10]}"
     conflict_mp_id = str(uuid.uuid4())
     with get_connection() as conn:
-        type_id = conn.execute(
-            "SELECT type_id FROM products WHERE id = ?", (catalog_fixture["product_id"],)
-        ).fetchone()["type_id"]
         conn.execute(
-            "INSERT INTO products (id, name, type_id, client_id, sku, is_active, is_deleted, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 1, 0, NOW())",
-            (pid2, f"MpProduct2-{pid2[:8]}", type_id, cid, f"MP2-{pid2[:8]}"),
+            "INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, "
+            "length, width, height, sku, sku_pending, images_json, is_active, created_at, is_deleted) "
+            "VALUES (?, ?, ?, NULL, NULL, 1, 1, 1, ?, 0, '[]', 1, NOW(), 0)",
+            (vid2, pid, cid, f"MP-V2-{vid2[:8]}"),
         )
         conn.execute(
-            "INSERT INTO product_barcodes (id, product_id, barcode, created_at, is_deleted) "
-            "VALUES (?, ?, ?, NOW(), 0)",
-            (str(uuid.uuid4()), pid2, barcode2),
+            "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, created_at, is_deleted) "
+            "VALUES (?, ?, ?, ?, NOW(), 0)",
+            (str(uuid.uuid4()), pid, vid2, barcode2),
         )
         conn.execute(
             "INSERT INTO mp_products (id, account_id, external_id, offer_id, title, barcodes, "
@@ -513,8 +512,6 @@ def test_auto_link_conflict_skipped(admin_client, catalog_fixture):
             "SELECT 1 FROM mp_product_links WHERE mp_product_id = ? AND COALESCE(is_deleted,0) = 0",
             (conflict_mp_id,),
         ).fetchone()
-        conn.execute("DELETE FROM product_barcodes WHERE product_id = ?", (pid2,))
-        conn.execute("DELETE FROM products WHERE id = ?", (pid2,))
         conn.commit()
     assert link is None
 

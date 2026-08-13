@@ -5,7 +5,7 @@ import {
   QUALITY_LABELS,
   type ZoneBalance,
 } from '../api/balancesApi'
-import { type BarcodeMatch } from '../api/productsApi'
+import { barcodeVariantLabel, type BarcodeMatch } from '../api/productsApi'
 import { useNav } from '../nav/NavContext'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
@@ -21,15 +21,11 @@ function rowSort(a: ZoneBalance, b: ZoneBalance): number {
   return (a.location_name ?? '').localeCompare(b.location_name ?? '', 'ru')
 }
 
-function variantLabel(r: ZoneBalance): string {
-  return [r.color_name, r.size_name].filter(Boolean).join(' · ')
-}
-
 // Карточка товара по отсканированному ШК: что это (из barcode-lookup) + где лежит и сколько
-// (остатки всех цвето-размеров товара из /balances/zones).
+// (остатки этого варианта из /balances/zones, отфильтрованные точно по товар+цвет+размер).
 export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
   const { back } = useNav()
-  const { sku, product_id } = match
+  const { sku, product_id, color_id, size_id } = match
   const [rows, setRows] = useState<ZoneBalance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -38,11 +34,18 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
     (signal?: AbortSignal, silent = false) => {
       if (!silent) setLoading(true)
       setError('')
-      // Поиск по базовому SKU; на клиенте сужаем до точного товара (substring мог зацепить чужой SKU).
+      // Поиск по SKU варианта; на клиенте сужаем до точной позиции (substring мог зацепить чужой SKU).
       return getBalancesByZone({ search: sku }, signal)
         .then((r) => {
           if (signal?.aborted) return
-          setRows(r.items.filter((it) => it.product_id === product_id))
+          setRows(
+            r.items.filter(
+              (it) =>
+                it.product_id === product_id &&
+                (it.color_id ?? null) === (color_id ?? null) &&
+                (it.size_id ?? null) === (size_id ?? null),
+            ),
+          )
         })
         .catch((err) => {
           if (!signal?.aborted) setError(err instanceof Error ? err.message : 'Не удалось загрузить остатки')
@@ -51,7 +54,7 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
           if (!signal?.aborted) setLoading(false)
         })
     },
-    [sku, product_id],
+    [sku, product_id, color_id, size_id],
   )
 
   useEffect(() => {
@@ -81,14 +84,17 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
 
   const sortedRows = useMemo(() => [...rows].sort(rowSort), [rows])
 
+  const variant = barcodeVariantLabel(match)
+
   return (
     <div className="screen">
-      <AppBar title={match.product_name} sub="Товар" onBack={back} />
+      <AppBar title={match.product_name} sub={variant || 'Товар'} onBack={back} />
 
       <PullToRefresh className="scroll pad-nav" onRefresh={refresh}>
         <div className="line" style={{ marginTop: 0 }}>
           <div className="line-name">{match.product_name}</div>
           <div className="line-sub mono">{match.sku}</div>
+          {variant && <div className="line-sub">{variant}</div>}
           {match.client_name && <div className="line-sub">{match.client_name}</div>}
         </div>
 
@@ -131,35 +137,31 @@ export function ScanProductScreen({ match }: { match: BarcodeMatch }) {
             ) : (
               <>
                 <div className="sec">Где лежит</div>
-                {sortedRows.map((r, i) => {
-                  const variant = variantLabel(r)
-                  return (
-                    <div className="line" key={`${r.location_id ?? '∅'}__${r.color_id ?? '∅'}__${r.size_id ?? '∅'}__${r.op_status}__${r.quality}__${i}`}>
-                      <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="line-name">{r.location_name ?? 'Без места'}</div>
-                          {variant && <div className="line-sub">{variant}</div>}
-                          <div className="pills">
-                            <span className="pill">{OP_STATUS_LABELS[r.op_status]}</span>
-                            <span className={`pill ${r.quality}`}>{QUALITY_LABELS[r.quality]}</span>
-                          </div>
+                {sortedRows.map((r, i) => (
+                  <div className="line" key={`${r.location_id ?? '∅'}__${r.op_status}__${r.quality}__${i}`}>
+                    <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="line-name">{r.location_name ?? 'Без места'}</div>
+                        <div className="pills">
+                          <span className="pill">{OP_STATUS_LABELS[r.op_status]}</span>
+                          <span className={`pill ${r.quality}`}>{QUALITY_LABELS[r.quality]}</span>
                         </div>
-                        <span className="tile-qty">
-                          {r.qty}
-                          <span className="u">шт</span>
-                        </span>
                       </div>
+                      <span className="tile-qty">
+                        {r.qty}
+                        <span className="u">шт</span>
+                      </span>
                     </div>
-                  )
-                })}
+                  </div>
+                ))}
               </>
             )}
           </>
         )}
 
         <ScanDocsBlock
-          productId={product_id}
-          packFocus={{ productId: product_id }}
+          variantId={match.variant_id}
+          packFocus={{ productId: product_id, colorId: color_id ?? null, sizeId: size_id ?? null }}
         />
       </PullToRefresh>
     </div>

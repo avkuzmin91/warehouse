@@ -18,11 +18,11 @@ export type ScanContextResponse = { documents: ScanContextDoc[] }
 // Живые документы по отсканированному объекту (ровно один из параметров). Role-фильтр
 // не применяется — это контекст объекта, не личная очередь (её отдаёт /tasks).
 export function getScanContext(
-  params: { productId?: string; locationId?: string },
+  params: { variantId?: string; locationId?: string },
   signal?: AbortSignal,
 ): Promise<ScanContextResponse> {
   const sp = new URLSearchParams()
-  if (params.productId) sp.set('product_id', params.productId)
+  if (params.variantId) sp.set('variant_id', params.variantId)
   if (params.locationId) sp.set('location_id', params.locationId)
   return request<ScanContextResponse>(`/scan/context?${sp.toString()}`, { signal })
 }

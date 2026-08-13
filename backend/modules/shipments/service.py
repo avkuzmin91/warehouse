@@ -2300,30 +2300,49 @@ def decode_line_file_barcodes(data: bytes, ext: str) -> list[str]:
         return []
 
 
-def classify_barcodes_for_product(connection, codes: list[str], product_id: str) -> list[dict]:
-    """Статус каждого распознанного кода относительно товара строки:
-    confirmed — уже привязан к этому товару; other_product — занят другим товаром;
-    unknown — в системе нет (кандидат на привязку)."""
+def resolve_line_variant_id(connection, product_id: str, color_id, size_id) -> str | None:
+    """Вариант строки документа по тройке товар+цвет+размер (строки хранят её, не variant_id)."""
+    row = connection.execute(
+        "SELECT id FROM product_variants "
+        "WHERE product_id = ? AND color_id IS NOT DISTINCT FROM ?::text "
+        "  AND size_id IS NOT DISTINCT FROM ?::text AND COALESCE(is_deleted, 0) = 0 "
+        "LIMIT 1",
+        (product_id, color_id, size_id),
+    ).fetchone()
+    return str(row["id"]) if row else None
+
+
+def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: str, variant_id: str | None) -> list[dict]:
+    """Статус каждого распознанного кода относительно варианта строки:
+    confirmed — привязан к этому варианту; other_variant — другой цвет/размер того же
+    товара (вероятный пересорт); other_product — чужой товар; unknown — в системе нет."""
     out: list[dict] = []
     for code in codes:
         row = connection.execute(
             """
-            SELECT pb.product_id, p.name AS product_name
+            SELECT pb.product_id, pb.variant_id, p.name AS product_name,
+                   col.name AS color_name, sz.name AS size_name
             FROM product_barcodes pb
             JOIN products p ON p.id = pb.product_id
+            LEFT JOIN product_variants v ON v.id = pb.variant_id
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
             WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
             LIMIT 1
             """,
             (code,),
         ).fetchone()
-        if row is None:
-            out.append({"code": code, "status": "unknown", "other_product_name": None})
-        elif str(row["product_id"]) == product_id:
-            out.append({"code": code, "status": "confirmed", "other_product_name": None})
-        else:
-            out.append({
-                "code": code,
-                "status": "other_product",
-                "other_product_name": str(row["product_name"]),
-            })
+        item = {"code": code, "status": "unknown", "other_product_name": None, "other_variant_label": None}
+        if row is not None:
+            if str(row["product_id"]) != product_id:
+                item["status"] = "other_product"
+                item["other_product_name"] = str(row["product_name"])
+            elif variant_id is not None and row["variant_id"] and str(row["variant_id"]) != variant_id:
+                item["status"] = "other_variant"
+                item["other_variant_label"] = (
+                    " · ".join(x for x in (row["color_name"], row["size_name"]) if x) or "другой вариант"
+                )
+            else:
+                item["status"] = "confirmed"
+        out.append(item)
     return out

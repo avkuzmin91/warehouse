@@ -72,7 +72,7 @@ type CompositionTableProps = {
   availLoading?:   boolean
 }
 
-/** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
+/** Состав упаковки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
 export function CompositionTable({
   lines, showZone = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
@@ -90,7 +90,7 @@ export function CompositionTable({
           <th>Товар · вариант</th>
           {showZone && <th style={{ width: 170 }}>Местоположение</th>}
           <th style={{ width: 180 }}>Магазин</th>
-          <th style={{ width: 160, textAlign: 'right' }}>План отгрузки</th>
+          <th style={{ width: 160, textAlign: 'right' }}>План упаковки</th>
           <th style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
               <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы

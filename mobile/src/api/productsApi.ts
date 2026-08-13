@@ -2,9 +2,14 @@ import { request, requestForm } from './http'
 
 // --- Types --- (зеркало backend/modules/products/schemas.py)
 export type BarcodeMatch = {
+  variant_id: string
   product_id: string
   product_name: string
   sku: string
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
   client_id: string | null
   client_name: string | null
 }
@@ -104,10 +109,12 @@ export function updateProduct(productId: string, patch: ProductUpdatePatch): Pro
   })
 }
 
-// Привязка нового ШК к товару (admin/manager). source — откуда код («Упаковка SHP-…»).
+// Привязка нового ШК к варианту товара (admin/manager). source — откуда код
+// («Упаковка SHP-…»); message = id созданного кода. variant_id можно опустить
+// только у товара с единственным вариантом.
 export function addProductBarcode(
   productId: string,
-  payload: { barcode: string; source?: string | null },
+  payload: { barcode: string; source?: string | null; variant_id?: string | null },
 ): Promise<{ message: string }> {
   return request<{ message: string }>(`/products/${productId}/barcodes`, {
     method: 'POST',
@@ -116,9 +123,15 @@ export function addProductBarcode(
 }
 
 // Этикетка кода в карточке товара (плоский список — для выбора в документах).
+// Код принадлежит варианту — цвет/размер нужны для фильтра по строке документа.
 export type ProductFileItem = {
   id: string
   barcode: string
+  variant_id: string | null
+  color_id: string | null
+  size_id: string | null
+  color_name: string | null
+  size_name: string | null
   filename: string
   url: string
   mime_type: string | null
@@ -136,4 +149,9 @@ export function addProductBarcodeFile(productId: string, barcodeId: string, file
     method: 'POST',
     body: form,
   })
+}
+
+// --- Helpers ---
+export function barcodeVariantLabel(m: BarcodeMatch): string {
+  return [m.color_name, m.size_name].filter(Boolean).join(' · ')
 }

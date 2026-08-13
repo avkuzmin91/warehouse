@@ -85,8 +85,11 @@ export type MpOrderDetail = { doc: MpOrderListItem; lines: MpOrderLine[] }
 
 export type MpProductSuggestion = {
   product_id: string
+  variant_id: string
   product_sku: string | null
   product_name: string | null
+  color_name: string | null
+  size_name: string | null
 }
 
 export type MpProductItem = {

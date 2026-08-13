@@ -562,6 +562,36 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
                 item_id,
             ),
         ).fetchall()
+        bc_rows = connection.execute(
+            "SELECT id, variant_id, barcode, source FROM product_barcodes "
+            "WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
+            (item_id,),
+        ).fetchall()
+        file_rows = connection.execute(
+            "SELECT id, barcode_id, filename, url, mime_type FROM product_barcode_files "
+            "WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
+            (item_id,),
+        ).fetchall()
+    files_by_barcode: dict[str, list[ProductBarcodeFileItem]] = {}
+    for f in file_rows:
+        files_by_barcode.setdefault(str(f["barcode_id"]), []).append(
+            ProductBarcodeFileItem(
+                id=str(f["id"]),
+                filename=str(f["filename"]),
+                url=str(f["url"]),
+                mime_type=str(f["mime_type"]) if f["mime_type"] else None,
+            )
+        )
+    barcodes_by_variant: dict[str, list[ProductBarcodeItem]] = {}
+    for b in bc_rows:
+        barcodes_by_variant.setdefault(str(b["variant_id"] or ""), []).append(
+            ProductBarcodeItem(
+                id=str(b["id"]),
+                barcode=str(b["barcode"]),
+                source=str(b["source"]) if b["source"] else None,
+                files=files_by_barcode.get(str(b["id"]), []),
+            )
+        )
     return [
         ProductVariantItem(
             id=str(r["id"]),
@@ -571,6 +601,7 @@ def list_product_variants(item_id: str, admin=Depends(get_current_admin)):
             size_id=str(r["size_id"]) if r["size_id"] else None,
             size_name=r["size_name"],
             sku=str(r["sku"]),
+            barcodes=barcodes_by_variant.get(str(r["id"]), []),
             images=_decode_images_json(r["images_json"]),
             is_active=bool(r["is_active"]),
             stock=max(0, int(r["stock"])),
@@ -718,46 +749,6 @@ def find_product_variant_for_receipt(
         )
 
 
-@router.get("/products/{item_id}/barcodes", response_model=list[ProductBarcodeItem])
-def list_product_barcodes(item_id: str, admin=Depends(get_current_admin)):
-    _ = admin
-    with get_connection() as connection:
-        exists = connection.execute(
-            "SELECT 1 FROM products WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (item_id,)
-        ).fetchone()
-        if not exists:
-            raise HTTPException(status_code=404, detail="Товар не найден")
-        rows = connection.execute(
-            "SELECT id, barcode, source FROM product_barcodes "
-            "WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
-            (item_id,),
-        ).fetchall()
-        file_rows = connection.execute(
-            "SELECT id, barcode_id, filename, url, mime_type FROM product_barcode_files "
-            "WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at",
-            (item_id,),
-        ).fetchall()
-    files_by_barcode: dict[str, list[ProductBarcodeFileItem]] = {}
-    for f in file_rows:
-        files_by_barcode.setdefault(str(f["barcode_id"]), []).append(
-            ProductBarcodeFileItem(
-                id=str(f["id"]),
-                filename=str(f["filename"]),
-                url=str(f["url"]),
-                mime_type=str(f["mime_type"]) if f["mime_type"] else None,
-            )
-        )
-    return [
-        ProductBarcodeItem(
-            id=str(r["id"]),
-            barcode=str(r["barcode"]),
-            source=str(r["source"]) if r["source"] else None,
-            files=files_by_barcode.get(str(r["id"]), []),
-        )
-        for r in rows
-    ]
-
-
 @router.post("/products/{item_id}/barcodes", response_model=MessageResponse)
 def add_product_barcode(item_id: str, payload: ProductBarcodeAdd, admin=Depends(get_current_admin)):
     code = payload.barcode.strip()
@@ -776,18 +767,34 @@ def add_product_barcode(item_id: str, payload: ProductBarcodeAdd, admin=Depends(
             (code,),
         ).fetchone()
         if dup:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому товару")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту")
+        if payload.variant_id:
+            variant = connection.execute(
+                "SELECT id FROM product_variants WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
+                (payload.variant_id, item_id),
+            ).fetchone()
+            if not variant:
+                raise HTTPException(status_code=404, detail="Вариант не найден")
+            variant_id = str(variant["id"])
+        else:
+            variants = connection.execute(
+                "SELECT id FROM product_variants WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 2",
+                (item_id,),
+            ).fetchall()
+            if len(variants) != 1:
+                raise HTTPException(status_code=400, detail="Укажите вариант: у товара несколько цвето-размеров")
+            variant_id = str(variants[0]["id"])
         bc_id = str(uuid4())
         try:
             connection.execute(
-                "INSERT INTO product_barcodes (id, product_id, barcode, source, created_at, created_by, is_deleted) "
-                "VALUES (?,?,?,?,?,?,0)",
-                (bc_id, item_id, code, source, _now(), str(admin["id"])),
+                "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, source, created_at, created_by, is_deleted) "
+                "VALUES (?,?,?,?,?,?,?,0)",
+                (bc_id, item_id, variant_id, code, source, _now(), str(admin["id"])),
             )
             connection.commit()
         except IntegrityError as exc:
             connection.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому товару") from exc
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту") from exc
     return MessageResponse(message=bc_id)
 
 
@@ -876,14 +883,20 @@ def delete_product_barcode_file(item_id: str, barcode_id: str, file_id: str, adm
 
 @router.get("/products/{item_id}/files", response_model=list[ProductFileItem])
 def list_product_files(item_id: str, user=Depends(get_current_warehouse)):
-    """Этикетки товара плоским списком — для выбора в документах (склад читает)."""
+    """Этикетки товара плоским списком — для выбора в документах (склад читает).
+    Цвет/размер варианта нужны, чтобы строка документа фильтровала свои этикетки."""
     _ = user
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT f.id, pb.barcode, f.filename, f.url, f.mime_type
+            SELECT f.id, pb.barcode, pb.variant_id,
+                   v.color_id, v.size_id, col.name AS color_name, sz.name AS size_name,
+                   f.filename, f.url, f.mime_type
             FROM product_barcode_files f
             JOIN product_barcodes pb ON pb.id = f.barcode_id
+            LEFT JOIN product_variants v ON v.id = pb.variant_id
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
             WHERE f.product_id = ?
               AND COALESCE(f.is_deleted, 0) = 0
               AND COALESCE(pb.is_deleted, 0) = 0
@@ -895,6 +908,11 @@ def list_product_files(item_id: str, user=Depends(get_current_warehouse)):
         ProductFileItem(
             id=str(r["id"]),
             barcode=str(r["barcode"]),
+            variant_id=str(r["variant_id"]) if r["variant_id"] else None,
+            color_id=str(r["color_id"]) if r["color_id"] else None,
+            size_id=str(r["size_id"]) if r["size_id"] else None,
+            color_name=str(r["color_name"]) if r["color_name"] else None,
+            size_name=str(r["size_name"]) if r["size_name"] else None,
             filename=str(r["filename"]),
             url=str(r["url"]),
             mime_type=str(r["mime_type"]) if r["mime_type"] else None,
@@ -905,7 +923,7 @@ def list_product_files(item_id: str, user=Depends(get_current_warehouse)):
 
 @router.get("/products/by-barcode/{code}", response_model=BarcodeLookupResponse)
 def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
-    """Сканер кладовщика: штрих-код → товар. found=false, если не найден."""
+    """Сканер кладовщика: штрих-код → вариант товара. found=false, если не найден."""
     _ = user
     bc = (code or "").strip()
     if not bc:
@@ -913,13 +931,19 @@ def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT p.id AS product_id, p.name AS product_name, p.sku,
+            SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name, v.sku,
+                   v.color_id, col.name AS color_name,
+                   v.size_id, sz.name AS size_name,
                    p.client_id, cl.name AS client_name
             FROM product_barcodes pb
+            JOIN product_variants v ON v.id = pb.variant_id
             JOIN products p ON p.id = pb.product_id
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
             LEFT JOIN clients cl ON cl.id = p.client_id
             WHERE pb.barcode = ?
               AND COALESCE(pb.is_deleted, 0) = 0
+              AND COALESCE(v.is_deleted, 0) = 0
               AND COALESCE(p.is_deleted, 0) = 0
             LIMIT 1
             """,
@@ -930,9 +954,14 @@ def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
     return BarcodeLookupResponse(
         found=True,
         match=BarcodeMatch(
+            variant_id=str(row["variant_id"]),
             product_id=str(row["product_id"]),
             product_name=str(row["product_name"]),
             sku=str(row["sku"]),
+            color_id=str(row["color_id"]) if row["color_id"] else None,
+            color_name=str(row["color_name"]) if row["color_name"] else None,
+            size_id=str(row["size_id"]) if row["size_id"] else None,
+            size_name=str(row["size_name"]) if row["size_name"] else None,
             client_id=str(row["client_id"]) if row["client_id"] else None,
             client_name=str(row["client_name"]).strip() if row["client_name"] else None,
         ),

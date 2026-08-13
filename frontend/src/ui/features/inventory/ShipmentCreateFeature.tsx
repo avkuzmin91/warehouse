@@ -207,7 +207,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
-  type DraftBarcodeFinding = LineFileBarcode & { file: File; productId: string; productName: string }
+  type DraftBarcodeFinding = LineFileBarcode & { file: File; productId: string; productName: string; variantLabel: string; lineVariantId: string | null }
 
   async function uploadDraftFiles(docId: string): Promise<{ findings: DraftBarcodeFinding[]; docNumber: string }> {
     const withFiles = lines.filter((l) => l.files.length > 0 || l.productFiles.length > 0)
@@ -225,7 +225,13 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       for (const file of draft.files) {
         const res = await uploadShipmentLineFile(docId, target.id, file)
         for (const b of res.barcodes ?? []) {
-          findings.push({ ...b, file, productId: draft.product_id, productName: draft.product_name })
+          findings.push({
+            ...b, file,
+            productId: draft.product_id,
+            productName: draft.product_name,
+            variantLabel: [draft.color_name, draft.size_name].filter(Boolean).join(' / '),
+            lineVariantId: res.line_variant_id ?? null,
+          })
         }
       }
       for (const pf of draft.productFiles) {
@@ -244,21 +250,23 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     for (const f of uniq) {
       if (f.status === 'other_product') {
         toast(`Код ${f.code} принадлежит «${f.other_product_name}» — проверьте, тот ли файл приложен`, 'error')
+      } else if (f.status === 'other_variant') {
+        toast(`Код ${f.code} принадлежит варианту «${f.other_variant_label}» товара «${f.productName}» — возможен пересорт`, 'error')
       }
     }
-    const unknown = uniq.filter((f) => f.status === 'unknown')
+    const unknown = uniq.filter((f) => f.status === 'unknown' && f.lineVariantId)
     if (unknown.length === 0) return
     if (user?.role !== 'admin' && user?.role !== 'manager') return
-    const listing = unknown.map((f) => `${f.code} → «${f.productName}»`).join('; ')
+    const listing = unknown.map((f) => `${f.code} → «${f.productName}»${f.variantLabel ? ` (${f.variantLabel})` : ''}`).join('; ')
     const ok = await confirm({
-      title: unknown.length === 1 ? 'Привязать штрих-код к товару?' : 'Привязать штрих-коды к товарам?',
-      body: `На файлах распознаны новые коды: ${listing}. В системе их нет — коды будут привязаны, а файлы этикеток сохранятся в карточки товаров.`,
+      title: unknown.length === 1 ? 'Привязать штрих-код к варианту?' : 'Привязать штрих-коды к вариантам?',
+      body: `На файлах распознаны новые коды: ${listing}. В системе их нет — коды будут привязаны к цвето-размерам строк, а файлы этикеток сохранятся в карточки товаров.`,
       confirmLabel: 'Привязать',
     })
     if (!ok) return
     try {
       for (const f of unknown) {
-        const bcId = (await addProductBarcode(f.productId, { barcode: f.code, source: `Упаковка ${docNumber}` })).message
+        const bcId = (await addProductBarcode(f.productId, { barcode: f.code, source: `Упаковка ${docNumber}`, variant_id: f.lineVariantId })).message
         await addProductBarcodeFile(f.productId, bcId, f.file)
       }
       toast(unknown.length === 1 ? 'Штрих-код привязан, этикетка сохранена в карточку' : `Штрих-коды привязаны: ${unknown.length}, этикетки сохранены`, 'success')
@@ -423,7 +431,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
               </div>
           </PhaseBlock>
 
-          <PhaseBlock icon="boxes" title="Состав отгрузки" role="manager" state="active"
+          <PhaseBlock icon="boxes" title="Состав упаковки" role="manager" state="active"
             hint="Товар на остатках и в пути"
             right={
               <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
@@ -442,7 +450,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                     <th style={{ width: 32 }} />
                     <th>Товар · вариант</th>
                     <th style={{ width: 180 }}>Магазин</th>
-                    <th style={{ textAlign: 'right', width: 176 }}>План отгрузки</th>
+                    <th style={{ textAlign: 'right', width: 176 }}>План упаковки</th>
                     <th style={{ width: 124, textAlign: 'center' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
                         <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
@@ -642,6 +650,8 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
         <ProductLabelPickerModal
           productId={labelPickerLine.product_id}
           productName={labelPickerLine.product_name}
+          lineColorId={labelPickerLine.color_id ?? null}
+          lineSizeId={labelPickerLine.size_id ?? null}
           excludeUrls={labelPickerLine.productFiles.map((f) => f.url)}
           onPick={(f) => { addProductFileRef(labelPickerLine._uid, f); setLabelPickerLine(null) }}
           onClose={() => setLabelPickerLine(null)}

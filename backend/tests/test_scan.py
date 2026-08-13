@@ -1,4 +1,4 @@
-"""Справочник скана: живые документы по отсканированному товару (/scan/context)."""
+"""Справочник скана: живые документы по отсканированному варианту (/scan/context)."""
 from __future__ import annotations
 
 import os
@@ -71,8 +71,8 @@ def variant_with_receipt():
 
 
 def test_active_receipt_visible(warehouse_client, variant_with_receipt):
-    pid = variant_with_receipt["product_id"]
-    r = warehouse_client.get(f"/scan/context?product_id={pid}")
+    vid = variant_with_receipt["variant_id"]
+    r = warehouse_client.get(f"/scan/context?variant_id={vid}")
     assert r.status_code == 200, r.text
     docs = r.json()["documents"]
     receipts = [d for d in docs if d["doc_type"] == "receipt"]
@@ -84,14 +84,14 @@ def test_active_receipt_visible(warehouse_client, variant_with_receipt):
 
 
 def test_terminal_receipt_hidden(warehouse_client, variant_with_receipt):
-    pid = variant_with_receipt["product_id"]
+    vid = variant_with_receipt["variant_id"]
     with get_connection() as conn:
         conn.execute(
             "UPDATE receipt_docs SET status = ? WHERE id = ?",
             (RECEIPT_STATUS_DONE, variant_with_receipt["doc_id"]),
         )
         conn.commit()
-    r = warehouse_client.get(f"/scan/context?product_id={pid}")
+    r = warehouse_client.get(f"/scan/context?variant_id={vid}")
     assert r.status_code == 200, r.text
     docs = r.json()["documents"]
     assert [d for d in docs if d["doc_type"] == "receipt"] == []
@@ -99,10 +99,10 @@ def test_terminal_receipt_hidden(warehouse_client, variant_with_receipt):
 
 def test_requires_exactly_one_param(warehouse_client):
     assert warehouse_client.get("/scan/context").status_code == 400
-    assert warehouse_client.get("/scan/context?product_id=a&location_id=b").status_code == 400
+    assert warehouse_client.get("/scan/context?variant_id=a&location_id=b").status_code == 400
 
 
-def test_unknown_product_empty(warehouse_client):
-    r = warehouse_client.get(f"/scan/context?product_id={uuid.uuid4()}")
+def test_unknown_variant_empty(warehouse_client):
+    r = warehouse_client.get(f"/scan/context?variant_id={uuid.uuid4()}")
     assert r.status_code == 200, r.text
     assert r.json()["documents"] == []

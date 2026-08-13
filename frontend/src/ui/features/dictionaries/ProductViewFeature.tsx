@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { addProductBarcode, addProductBarcodeFile, deleteProduct, deleteProductBarcode, deleteProductBarcodeFile, getProduct, getProductBarcodes, getProductVariants } from '../../../api/adminApi'
-import type { ProductBarcodeFileItem, ProductBarcodeItem } from '../../../api/domainTypes'
+import { addProductBarcode, addProductBarcodeFile, deleteProduct, deleteProductBarcode, deleteProductBarcodeFile, getProduct, getProductVariants } from '../../../api/adminApi'
+import type { ProductBarcodeFileItem, ProductBarcodeItem, ProductVariantItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
@@ -45,36 +45,34 @@ export function ProductViewFeature({ productId }: Props) {
   const { user } = useCurrentUser()
   const isAdmin = user?.role === 'admin'
   const productState = useApi((signal) => getProduct(productId, signal), [productId])
-  const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId])
-  const [barcodesVersion, setBarcodesVersion] = useState(0)
-  const barcodesState = useApi((signal) => getProductBarcodes(productId, signal), [productId, barcodesVersion])
+  const [variantsVersion, setVariantsVersion] = useState(0)
+  const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId, variantsVersion])
   const product = productState.data
   const variants = variantsState.data ?? []
-  const barcodes = barcodesState.data ?? []
 
   const [mainIdx, setMainIdx] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  const [bcOpen, setBcOpen] = useState(false)
+  const [bcTarget, setBcTarget] = useState<ProductVariantItem | null>(null)
   const [bcCode, setBcCode] = useState('')
   const [bcSource, setBcSource] = useState('')
   const [bcSaving, setBcSaving] = useState(false)
 
-  function openAddBarcode() {
+  function openAddBarcode(variant: ProductVariantItem) {
     setBcCode('')
     setBcSource('')
-    setBcOpen(true)
+    setBcTarget(variant)
   }
 
   async function handleAddBarcode() {
-    if (!bcOpen || !bcCode.trim() || bcSaving) return
+    if (!bcTarget || !bcCode.trim() || bcSaving) return
     setBcSaving(true)
     try {
-      await addProductBarcode(productId, { barcode: bcCode.trim(), source: bcSource.trim() || null })
+      await addProductBarcode(productId, { barcode: bcCode.trim(), source: bcSource.trim() || null, variant_id: bcTarget.id })
       toast('Штрих-код добавлен', 'success')
-      setBcOpen(false)
-      setBarcodesVersion((v) => v + 1)
+      setBcTarget(null)
+      setVariantsVersion((v) => v + 1)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось добавить штрих-код', 'error')
     } finally {
@@ -93,7 +91,7 @@ export function ProductViewFeature({ productId }: Props) {
     try {
       await deleteProductBarcode(productId, bc.id)
       toast('Штрих-код снят', 'success')
-      setBarcodesVersion((v) => v + 1)
+      setVariantsVersion((v) => v + 1)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось снять штрих-код', 'error')
     }
@@ -118,7 +116,7 @@ export function ProductViewFeature({ productId }: Props) {
     try {
       await addProductBarcodeFile(productId, barcodeId, file)
       toast('Этикетка сохранена', 'success')
-      setBarcodesVersion((v) => v + 1)
+      setVariantsVersion((v) => v + 1)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось сохранить этикетку', 'error')
     } finally {
@@ -137,7 +135,7 @@ export function ProductViewFeature({ productId }: Props) {
     try {
       await deleteProductBarcodeFile(productId, bc.id, file.id)
       toast('Этикетка удалена', 'success')
-      setBarcodesVersion((v) => v + 1)
+      setVariantsVersion((v) => v + 1)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось удалить этикетку', 'error')
     }
@@ -265,74 +263,6 @@ export function ProductViewFeature({ productId }: Props) {
                   <Info label="Вариантов" value={product.variant_count.toLocaleString('ru-RU')} />
                 </div>
               </div>
-              <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--c-border)' }}>
-                <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 6 }}>Штрих-коды и этикетки</div>
-                <input
-                  ref={labelInputRef}
-                  type="file"
-                  accept=".pdf,.png,.jpg,.jpeg"
-                  style={{ display: 'none' }}
-                  onChange={(e) => { void handleLabelSelected(e.target.files); e.target.value = '' }}
-                />
-                <div className="col" style={{ gap: 6 }}>
-                  {barcodes.map((bc) => (
-                    <div key={bc.id} className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span
-                        className="mono"
-                        title={bc.source ?? undefined}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
-                      >
-                        {bc.barcode}
-                        <button
-                          type="button"
-                          title="Снять штрих-код"
-                          onClick={() => void handleDeleteBarcode(bc)}
-                          style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
-                        >
-                          <Icon name="x" size={12} />
-                        </button>
-                      </span>
-                      {bc.files.map((f) => (
-                        <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                          <a
-                            href={resolvePublicUploadSrc(f.url)}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={f.filename}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--c-accent)', textDecoration: 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          >
-                            <Icon name="file" size={12} />{f.filename}
-                          </a>
-                          <button
-                            type="button"
-                            title="Удалить этикетку"
-                            onClick={() => void handleDeleteLabel(bc, f)}
-                            style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-faint)' }}
-                          >
-                            <Icon name="x" size={11} />
-                          </button>
-                        </span>
-                      ))}
-                      <button
-                        type="button"
-                        className="btn ghost icon sm"
-                        title="Прикрепить этикетку (PDF, PNG, JPG)"
-                        disabled={labelUploading}
-                        onClick={() => pickLabelFile(bc.id)}
-                        style={{ width: 22, height: 22 }}
-                      >
-                        <Icon name="importFile" size={12} />
-                      </button>
-                    </div>
-                  ))}
-                  <div className="row gap-8" style={{ alignItems: 'center' }}>
-                    {barcodes.length === 0 && <span className="t-sub">Нет штрих-кодов</span>}
-                    <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" onClick={openAddBarcode}>
-                      <Icon name="plus" size={13} />
-                    </button>
-                  </div>
-                </div>
-              </div>
             </CardBody>
           </Card>
 
@@ -343,6 +273,13 @@ export function ProductViewFeature({ productId }: Props) {
               <div className="flex-1" />
               <span className="t-sub mono">{variants.length.toLocaleString('ru-RU')}</span>
             </CardHead>
+            <input
+              ref={labelInputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg"
+              style={{ display: 'none' }}
+              onChange={(e) => { void handleLabelSelected(e.target.files); e.target.value = '' }}
+            />
             <Table>
               <thead>
                 <tr>
@@ -351,17 +288,18 @@ export function ProductViewFeature({ productId }: Props) {
                   <th>Цвет</th>
                   <th>Размер</th>
                   <th>Габариты, см</th>
+                  <th>Штрих-коды и этикетки</th>
                   <th style={{ textAlign: 'right', width: 100 }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                 </tr>
               </thead>
               <tbody>
                 {variantsState.loading ? (
-                  <SkeletonRows rows={5} cols={7} />
+                  <SkeletonRows rows={5} cols={8} />
                 ) : variantsState.error ? (
-                  <tr><Td colSpan={7}><EmptyState title="Не удалось загрузить варианты" sub={variantsState.error.message} /></Td></tr>
+                  <tr><Td colSpan={8}><EmptyState title="Не удалось загрузить варианты" sub={variantsState.error.message} /></Td></tr>
                 ) : variants.length === 0 ? (
-                  <tr><Td colSpan={7}><EmptyState title="Вариантов нет" sub="Добавьте варианты в режиме редактирования" /></Td></tr>
+                  <tr><Td colSpan={8}><EmptyState title="Вариантов нет" sub="Добавьте варианты в режиме редактирования" /></Td></tr>
                 ) : (
                   <>
                     {variants.map((variant) => {
@@ -383,6 +321,65 @@ export function ProductViewFeature({ productId }: Props) {
                           <Td className="mono" style={{ fontSize: 12 }}>
                             {variant.dimension.length}×{variant.dimension.width}×{variant.dimension.height}
                           </Td>
+                          <Td>
+                            <div className="col" style={{ gap: 4 }}>
+                              {variant.barcodes.map((bc) => (
+                                <div key={bc.id} className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <span
+                                    className="mono"
+                                    title={bc.source ?? undefined}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
+                                  >
+                                    {bc.barcode}
+                                    <button
+                                      type="button"
+                                      title="Снять штрих-код"
+                                      onClick={() => void handleDeleteBarcode(bc)}
+                                      style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                                    >
+                                      <Icon name="x" size={12} />
+                                    </button>
+                                  </span>
+                                  {bc.files.map((f) => (
+                                    <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                                      <a
+                                        href={resolvePublicUploadSrc(f.url)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        title={f.filename}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--c-accent)', textDecoration: 'none', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                      >
+                                        <Icon name="file" size={12} />{f.filename}
+                                      </a>
+                                      <button
+                                        type="button"
+                                        title="Удалить этикетку"
+                                        onClick={() => void handleDeleteLabel(bc, f)}
+                                        style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-faint)' }}
+                                      >
+                                        <Icon name="x" size={11} />
+                                      </button>
+                                    </span>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    className="btn ghost icon sm"
+                                    title="Прикрепить этикетку (PDF, PNG, JPG)"
+                                    disabled={labelUploading}
+                                    onClick={() => pickLabelFile(bc.id)}
+                                    style={{ width: 22, height: 22 }}
+                                  >
+                                    <Icon name="importFile" size={12} />
+                                  </button>
+                                </div>
+                              ))}
+                              <div>
+                                <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" onClick={() => openAddBarcode(variant)}>
+                                  <Icon name="plus" size={13} />
+                                </button>
+                              </div>
+                            </div>
+                          </Td>
                           <Td className="num" style={{ color: variant.stock > 0 ? 'var(--c-success)' : undefined, fontWeight: variant.stock > 0 ? 500 : undefined }}>
                             {variant.stock.toLocaleString('ru-RU')}
                           </Td>
@@ -393,7 +390,7 @@ export function ProductViewFeature({ productId }: Props) {
                       )
                     })}
                     <tr>
-                      <Td colSpan={5} style={{ fontWeight: 500 }}>Итого</Td>
+                      <Td colSpan={6} style={{ fontWeight: 500 }}>Итого</Td>
                       <Td className="num" style={{ fontWeight: 500 }}>
                         {variants.reduce((s, v) => s + v.stock, 0).toLocaleString('ru-RU')}
                       </Td>
@@ -410,14 +407,14 @@ export function ProductViewFeature({ productId }: Props) {
       )}
 
       <Modal
-        open={bcOpen}
-        onClose={() => setBcOpen(false)}
+        open={bcTarget !== null}
+        onClose={() => setBcTarget(null)}
         title="Добавить штрих-код"
-        subtitle={product ? product.name : undefined}
+        subtitle={bcTarget ? `Вариант ${bcTarget.sku}${[bcTarget.color_name, bcTarget.size_name].filter(Boolean).length ? ` · ${[bcTarget.color_name, bcTarget.size_name].filter(Boolean).join(' / ')}` : ''}` : undefined}
         width={420}
         footer={
           <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn ghost" onClick={() => setBcOpen(false)}>Отмена</button>
+            <button className="btn ghost" onClick={() => setBcTarget(null)}>Отмена</button>
             <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
               {bcSaving ? 'Добавление…' : 'Добавить'}
             </button>

@@ -25,11 +25,18 @@ def env(admin_client):
             "INSERT INTO product_types (id, name, is_active, is_deleted, created_at) VALUES (?, ?, 1, 0, NOW())",
             (type_id, f"LFType-{type_id[:8]}"),
         )
-        for pid, tag in ((pid_a, "A"), (pid_b, "B")):
+        vid_a, vid_b = str(uuid.uuid4()), str(uuid.uuid4())
+        for pid, vid, tag in ((pid_a, vid_a, "A"), (pid_b, vid_b, "B")):
             conn.execute(
                 "INSERT INTO products (id, name, type_id, client_id, sku, is_active, is_deleted, created_at) "
                 "VALUES (?, ?, ?, ?, ?, 1, 0, NOW())",
                 (pid, f"LFProduct{tag}-{pid[:8]}", type_id, cid, f"LF{tag}-{pid[:8]}"),
+            )
+            conn.execute(
+                "INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, "
+                "length, width, height, sku, sku_pending, images_json, is_active, created_at, is_deleted) "
+                "VALUES (?, ?, ?, NULL, NULL, 1, 1, 1, ?, 0, '[]', 1, NOW(), 0)",
+                (vid, pid, cid, f"LF-V{tag}-{vid[:8]}"),
             )
         conn.commit()
     bc_a = admin_client.post(f"/products/{pid_a}/barcodes", json={"barcode": f"LF-{uuid.uuid4().hex[:10]}"}).json()["message"]
@@ -85,8 +92,8 @@ def test_label_file_upload_and_lists(admin_client, warehouse_client, env):
     assert up.status_code == 200, up.text
     file_id = up.json()["message"]
 
-    bcs = admin_client.get(f"/products/{env['product_a']}/barcodes").json()
-    target = next(b for b in bcs if b["id"] == env["barcode_a"])
+    variants = admin_client.get(f"/products/{env['product_a']}/variants").json()
+    target = next(b for v in variants for b in v["barcodes"] if b["id"] == env["barcode_a"])
     assert [f["id"] for f in target["files"]] == [file_id]
     assert target["files"][0]["filename"] == "этикетка.png"
     assert target["files"][0]["url"].startswith("/uploads/")

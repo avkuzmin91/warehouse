@@ -95,14 +95,14 @@ export function ShiftPackingDetailScreen({ shipmentId, focus }: { shipmentId: st
     [doc],
   )
 
-  // Переход со скана: подсветить и проскроллить строку отсканированного товара.
+  // Переход со скана: подсветить и проскроллить строку отсканированного варианта.
   const focusLineId = useMemo(() => {
     if (!focus || !doc) return null
     const l = doc.lines.find(
       (l) =>
         l.product_id === focus.productId &&
-        (focus.colorId === undefined || (l.color_id ?? null) === (focus.colorId ?? null)) &&
-        (focus.sizeId === undefined || (l.size_id ?? null) === (focus.sizeId ?? null)),
+        (l.color_id ?? null) === (focus.colorId ?? null) &&
+        (l.size_id ?? null) === (focus.sizeId ?? null),
     )
     return l?.id ?? null
   }, [focus, doc])

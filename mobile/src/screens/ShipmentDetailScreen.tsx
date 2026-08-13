@@ -320,10 +320,12 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     setSavingLine(line.id)
     setError('')
     const perFile: { file: File; barcodes: LineFileBarcode[] }[] = []
+    let lineVariantId: string | null = null
     try {
       for (const f of files) {
         const res = await uploadShipmentLineFile(shipmentId, line.id, f)
         perFile.push({ file: f, barcodes: res.barcodes ?? [] })
+        lineVariantId = res.line_variant_id ?? lineVariantId
       }
       reload()
     } catch (err) {
@@ -331,21 +333,23 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     } finally {
       setSavingLine(null)
     }
-    // Итог распознавания ШК: чужой код — предупреждение; неизвестный — предложение
-    // привязать к товару строки (только admin/manager — у складских ролей нет права
-    // писать в карточку товара).
+    // Итог распознавания ШК: чужой товар или другой цвето-размер — предупреждение;
+    // неизвестный — предложение привязать к варианту строки (только admin/manager —
+    // у складских ролей нет права писать в карточку товара).
     const seen = new Set<string>()
     const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
     const foreign = codes.find((b) => b.status === 'other_product')
     if (foreign) setError(`Код ${foreign.code} принадлежит «${foreign.other_product_name}» — проверьте, тот ли файл приложен`)
+    const wrongVariant = codes.find((b) => b.status === 'other_variant')
+    if (wrongVariant) setError(`Код ${wrongVariant.code} принадлежит варианту «${wrongVariant.other_variant_label}» этого товара — возможен пересорт`)
     const unknown = codes
       .filter((b) => b.status === 'unknown')
       .map((b) => ({
         code: b.code,
         files: perFile.filter((f) => f.barcodes.some((x) => x.code === b.code)).map((f) => f.file),
       }))
-    if (unknown.length > 0 && canCreateDocuments(user?.role)) {
-      setBcOffer({ items: unknown, productId: line.product_id, productName: line.product_name })
+    if (unknown.length > 0 && lineVariantId && canCreateDocuments(user?.role)) {
+      setBcOffer({ items: unknown, productId: line.product_id, productName: lineTitle(line), variantId: lineVariantId })
     }
   }
 
@@ -353,6 +357,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     items: { code: string; files: File[] }[]
     productId: string
     productName: string
+    variantId: string
   } | null>(null)
   const [bcSaving, setBcSaving] = useState(false)
   const [bcSaveLabel, setBcSaveLabel] = useState(true)
@@ -363,7 +368,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     setError('')
     try {
       for (const item of bcOffer.items) {
-        const res = await addProductBarcode(bcOffer.productId, { barcode: item.code, source: `Упаковка ${doc?.doc_number ?? ''}`.trim() })
+        const res = await addProductBarcode(bcOffer.productId, { barcode: item.code, source: `Упаковка ${doc?.doc_number ?? ''}`.trim(), variant_id: bcOffer.variantId })
         if (bcSaveLabel) {
           for (const f of item.files) await addProductBarcodeFile(bcOffer.productId, res.message, f)
         }

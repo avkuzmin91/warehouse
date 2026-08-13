@@ -8,7 +8,6 @@ import type {
   DictionaryItem,
   DictionaryListQueryParams,
   DictionaryListResponse,
-  ProductBarcodeItem,
   ProductFileItem,
   ProductItem,
   ProductListQueryParams,
@@ -384,11 +383,9 @@ export function deleteProductVariant(productId: string, variantId: string) {
   })
 }
 
-export function getProductBarcodes(productId: string, signal?: AbortSignal) {
-  return request<ProductBarcodeItem[]>(`/products/${productId}/barcodes`, { signal })
-}
-
-export function addProductBarcode(productId: string, payload: { barcode: string; source?: string | null }) {
+// message = id созданного кода (нужен для немедленной загрузки этикетки).
+// variant_id обязателен по смыслу; можно опустить только у товара с единственным вариантом.
+export function addProductBarcode(productId: string, payload: { barcode: string; source?: string | null; variant_id?: string | null }) {
   return request<{ message: string }>(`/products/${productId}/barcodes`, {
     method: 'POST',
     body: JSON.stringify(payload),

@@ -45,7 +45,7 @@ export function CompositionPhase({
   return (
     <PhaseBlock
       icon="boxes"
-      title="Состав отгрузки"
+      title="Состав упаковки"
       role="manager"
       state={state}
       hint={hint}

@@ -7,17 +7,23 @@ import { Icon } from '../../../../primitives/Icon'
 import { Skeleton } from '../../../../primitives/Skeleton'
 import { fileTypeColor, fileTypeIcon } from './fileHelpers'
 
-/** Выбор этикетки из карточки товара для прикрепления к строке задачи упаковки. */
-export function ProductLabelPickerModal({ productId, productName, excludeUrls = [], onPick, onClose }: {
+/** Выбор этикетки из карточки товара для прикрепления к строке задачи упаковки.
+ * Код принадлежит варианту: показываются этикетки цвето-размера строки
+ * (и коды без варианта — легаси до доукомплектования). */
+export function ProductLabelPickerModal({ productId, productName, lineColorId, lineSizeId, excludeUrls = [], onPick, onClose }: {
   productId: string
   productName: string
+  lineColorId: string | null
+  lineSizeId: string | null
   /** URL уже прикреплённых к строке файлов — прячем, чтобы не предлагать дубликат. */
   excludeUrls?: string[]
   onPick: (file: ProductFileItem) => void
   onClose: () => void
 }) {
   const { data, loading, error } = useApi((signal) => getProductFiles(productId, signal), [productId])
-  const files = (data ?? []).filter((f) => !excludeUrls.includes(f.url))
+  const files = (data ?? []).filter((f) =>
+    !excludeUrls.includes(f.url) &&
+    (f.variant_id === null || ((f.color_id ?? null) === (lineColorId ?? null) && (f.size_id ?? null) === (lineSizeId ?? null))))
 
   return (
     <Modal open onClose={onClose} title="Этикетка из карточки товара" subtitle={productName} width={440}>
@@ -52,7 +58,7 @@ export function ProductLabelPickerModal({ productId, productName, excludeUrls = 
                   {f.filename}
                 </span>
                 <span className="mono" style={{ display: 'block', fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-                  {f.barcode}
+                  {[f.barcode, [f.color_name, f.size_name].filter(Boolean).join(' / ')].filter(Boolean).join(' · ')}
                 </span>
               </span>
               <Icon name="plus" size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />

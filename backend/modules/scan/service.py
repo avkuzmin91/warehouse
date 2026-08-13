@@ -32,12 +32,23 @@ def _placeholders(n: int) -> str:
     return ",".join("?" * n)
 
 
-def product_context(connection, product_id: str) -> list[dict]:
-    """Живые документы (поступления / задачи упаковки / отгрузки), где участвует товар.
+def variant_context(connection, variant_id: str) -> list[dict]:
+    """Живые документы (поступления / задачи упаковки / отгрузки), где участвует вариант.
 
-    ШК опознаёт товар целиком, поэтому документы собираются по всем его
-    цвето-размерам сразу.
+    Сопоставление по тройке товар+цвет+размер (строки документов хранят её, не variant_id).
     """
+    v = connection.execute(
+        "SELECT product_id, color_id, size_id FROM product_variants "
+        "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (variant_id,),
+    ).fetchone()
+    if not v:
+        return []
+    pid = str(v["product_id"])
+    color_id = str(v["color_id"]) if v["color_id"] else None
+    size_id = str(v["size_id"]) if v["size_id"] else None
+    key = (pid, color_id, size_id)
+
     docs: list[dict] = []
 
     receipt_rows = connection.execute(
@@ -48,13 +59,15 @@ def product_context(connection, product_id: str) -> list[dict]:
         FROM receipt_lines l
         JOIN receipt_docs d ON d.id = l.doc_id
         WHERE l.product_id = ?
+          AND l.color_id IS NOT DISTINCT FROM ?::text
+          AND l.size_id  IS NOT DISTINCT FROM ?::text
           AND COALESCE(l.is_deleted, 0) = 0
           AND COALESCE(d.is_deleted, 0) = 0
           AND d.status NOT IN ({_placeholders(len(_RECEIPT_TERMINAL))})
         GROUP BY d.id, d.doc_number, d.status
         ORDER BY d.doc_number
         """,
-        (product_id, *_RECEIPT_TERMINAL),
+        (*key, *_RECEIPT_TERMINAL),
     ).fetchall()
     for r in receipt_rows:
         docs.append({
@@ -74,13 +87,15 @@ def product_context(connection, product_id: str) -> list[dict]:
         FROM shipment_lines l
         JOIN shipment_docs d ON d.id = l.doc_id
         WHERE l.product_id = ?
+          AND l.color_id IS NOT DISTINCT FROM ?::text
+          AND l.size_id  IS NOT DISTINCT FROM ?::text
           AND COALESCE(l.is_deleted, 0) = 0
           AND COALESCE(d.is_deleted, 0) = 0
           AND d.status IN ({_placeholders(len(_SHIPMENT_ACTIVE))})
         GROUP BY d.id, d.doc_number, d.status, d.cargo_type, d.priority_rank
         ORDER BY d.doc_number
         """,
-        (product_id, *_SHIPMENT_ACTIVE),
+        (*key, *_SHIPMENT_ACTIVE),
     ).fetchall()
     for r in shipment_rows:
         docs.append({
@@ -102,13 +117,15 @@ def product_context(connection, product_id: str) -> list[dict]:
         FROM dispatch_lines l
         JOIN dispatch_docs d ON d.id = l.doc_id
         WHERE l.product_id = ?
+          AND l.color_id IS NOT DISTINCT FROM ?::text
+          AND l.size_id  IS NOT DISTINCT FROM ?::text
           AND COALESCE(l.is_deleted, 0) = 0
           AND COALESCE(d.is_deleted, 0) = 0
           AND d.status NOT IN ({_placeholders(len(_DISPATCH_TERMINAL))})
         GROUP BY d.id, d.doc_number, d.status, d.priority_rank
         ORDER BY d.doc_number
         """,
-        (product_id, *_DISPATCH_TERMINAL),
+        (*key, *_DISPATCH_TERMINAL),
     ).fetchall()
     for r in dispatch_rows:
         docs.append({

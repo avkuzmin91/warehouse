@@ -52,7 +52,7 @@ function lineSub(l: DraftLine): string {
   return [l.product_sku || 'без SKU', l.color_name, l.size_name].filter(Boolean).join(' · ')
 }
 
-type BcFinding = LineFileBarcode & { file: File; productId: string; productName: string }
+type BcFinding = LineFileBarcode & { file: File; productId: string; productName: string; variantLabel: string; lineVariantId: string | null }
 
 export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
   const { back } = useNav()
@@ -243,9 +243,15 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
   const bcFindingsRef = useRef<BcFinding[]>([])
   const docNumberRef = useRef('')
 
-  function collectFindings(barcodes: LineFileBarcode[] | undefined, l: { product_id: string; product_name: string }, file: File) {
-    for (const b of barcodes ?? []) {
-      bcFindingsRef.current.push({ ...b, file, productId: l.product_id, productName: l.product_name })
+  function collectFindings(res: { barcodes?: LineFileBarcode[]; line_variant_id?: string | null }, l: DraftLine, file: File) {
+    for (const b of res.barcodes ?? []) {
+      bcFindingsRef.current.push({
+        ...b, file,
+        productId: l.product_id,
+        productName: l.product_name,
+        variantLabel: [l.color_name, l.size_name].filter(Boolean).join(' / '),
+        lineVariantId: res.line_variant_id ?? null,
+      })
     }
   }
 
@@ -263,7 +269,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
       used.add(target.id)
       for (const file of draft.files) {
         const res = await uploadShipmentLineFile(docId, target.id, file)
-        collectFindings(res.barcodes, draft, file)
+        collectFindings(res, draft, file)
       }
       for (const pf of draft.productFiles) {
         // Дубль этикетки на строке (повторное сохранение) — не ошибка, пропускаем.
@@ -303,7 +309,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
         await updateShipmentLine(id, l._serverId, lineToIn(l))
         for (const file of l.files) {
           const res = await uploadShipmentLineFile(id, l._serverId, file)
-          collectFindings(res.barcodes, l, file)
+          collectFindings(res, l, file)
         }
         for (const pf of l.productFiles) {
           await attachShipmentLineFileFromProduct(id, l._serverId, pf.id).catch(() => {})
@@ -313,7 +319,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
         const newLineId = res.message
         for (const file of l.files) {
           const up = await uploadShipmentLineFile(id, newLineId, file)
-          collectFindings(up.barcodes, l, file)
+          collectFindings(up, l, file)
         }
         for (const pf of l.productFiles) {
           await attachShipmentLineFileFromProduct(id, newLineId, pf.id).catch(() => {})
@@ -338,8 +344,8 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
       if (plan) await advanceShipment(id, newRequestId())
       const seen = new Set<string>()
       const uniq = bcFindingsRef.current.filter((f) => !seen.has(f.code) && (seen.add(f.code), true))
-      const unknown = uniq.filter((f) => f.status === 'unknown')
-      const foreign = uniq.filter((f) => f.status === 'other_product')
+      const unknown = uniq.filter((f) => f.status === 'unknown' && f.lineVariantId)
+      const foreign = uniq.filter((f) => f.status === 'other_product' || f.status === 'other_variant')
       if (unknown.length > 0 || foreign.length > 0) {
         setSaving(false)
         setBcOffer({ unknown, foreign })
@@ -615,6 +621,8 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
           ) : (
             labelPickFiles
               .filter((f) => !labelPickLine.productFiles.some((pf) => pf.id === f.id))
+              .filter((f) => f.variant_id === null ||
+                ((f.color_id ?? null) === (labelPickLine.color_id ?? null) && (f.size_id ?? null) === (labelPickLine.size_id ?? null)))
               .map((f) => (
                 <button
                   key={f.id}
@@ -638,13 +646,15 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
           <h3>{bcOffer.unknown.length > 0 ? 'Привязать штрих-коды?' : 'Проверьте файлы'}</h3>
           {bcOffer.foreign.map((f) => (
             <p key={f.code} className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
-              Код <span className="mono">{f.code}</span> принадлежит «{f.other_product_name}» — проверьте, тот ли файл приложен.
+              Код <span className="mono">{f.code}</span> принадлежит {f.status === 'other_variant'
+                ? `варианту «${f.other_variant_label}» товара «${f.productName}» — возможен пересорт.`
+                : `«${f.other_product_name}» — проверьте, тот ли файл приложен.`}
             </p>
           ))}
           {bcOffer.unknown.length > 0 && (
             <p className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
               На файлах распознаны новые коды:{' '}
-              {bcOffer.unknown.map((f) => `${f.code} → «${f.productName}»`).join('; ')}. В системе их нет — привязать к товарам?
+              {bcOffer.unknown.map((f) => `${f.code} → «${f.productName}»${f.variantLabel ? ` (${f.variantLabel})` : ''}`).join('; ')}. В системе их нет — привязать к вариантам?
             </p>
           )}
           {bcOffer.unknown.length > 0 && (

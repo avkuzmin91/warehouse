@@ -1,10 +1,13 @@
-"""Штрих-коды переносятся с варианта на товар (product_barcodes).
+"""Штрих-коды: таблица product_barcodes (замена product_variant_barcodes).
 
-ШК опознаёт товар целиком, а не конкретный цвет/размер: один и тот же код
-клеится на всю модель. Коды вариантов переезжают на их товары (активная
-глобальная уникальность кода сохраняется — конфликтов при переносе нет,
-т.к. активный код и раньше был уникален). Таблица product_variant_barcodes
-удаляется.
+Код принадлежит варианту товара (у каждой комбинации цвет×размер свои ШК),
+variant_id сохраняется при переносе; product_id денормализован для выборок
+«все коды товара». Активная глобальная уникальность кода сохраняется.
+
+История ревизии: первая редакция (успела примениться только на dev/test)
+переносила коды без variant_id — там связку доукомплектовывает 0097.
+На окружениях, где 0095 ещё не выполнялась (prod, новые инстансы),
+вариантная привязка переезжает без потерь.
 
 Revision ID: 0095
 Revises: 0094
@@ -27,6 +30,7 @@ def upgrade() -> None:
         CREATE TABLE IF NOT EXISTS product_barcodes (
             id TEXT PRIMARY KEY,
             product_id TEXT NOT NULL,
+            variant_id TEXT,
             barcode TEXT NOT NULL,
             source TEXT,
             created_at TEXT,
@@ -47,9 +51,13 @@ def upgrade() -> None:
         "ON product_barcodes (product_id)"
     )
     op.execute(
+        "CREATE INDEX IF NOT EXISTS product_barcodes_variant_idx "
+        "ON product_barcodes (variant_id)"
+    )
+    op.execute(
         """
-        INSERT INTO product_barcodes (id, product_id, barcode, source, created_at, created_by, is_deleted)
-        SELECT vb.id, v.product_id, vb.barcode, vb.source, vb.created_at, vb.created_by, vb.is_deleted
+        INSERT INTO product_barcodes (id, product_id, variant_id, barcode, source, created_at, created_by, is_deleted)
+        SELECT vb.id, v.product_id, vb.variant_id, vb.barcode, vb.source, vb.created_at, vb.created_by, vb.is_deleted
         FROM product_variant_barcodes vb
         JOIN product_variants v ON v.id = vb.variant_id
         """
@@ -84,18 +92,12 @@ def downgrade() -> None:
         "CREATE INDEX IF NOT EXISTS product_variant_barcodes_variant_idx "
         "ON product_variant_barcodes (variant_id)"
     )
-    # Код возвращается на первый (по created_at) живой вариант товара.
     op.execute(
         """
         INSERT INTO product_variant_barcodes (id, variant_id, barcode, source, created_at, created_by, is_deleted)
-        SELECT pb.id, v.variant_id, pb.barcode, pb.source, pb.created_at, pb.created_by, pb.is_deleted
+        SELECT pb.id, pb.variant_id, pb.barcode, pb.source, pb.created_at, pb.created_by, pb.is_deleted
         FROM product_barcodes pb
-        JOIN (
-            SELECT DISTINCT ON (product_id) product_id, id AS variant_id
-            FROM product_variants
-            WHERE COALESCE(is_deleted, 0) = 0
-            ORDER BY product_id, created_at
-        ) v ON v.product_id = pb.product_id
+        WHERE pb.variant_id IS NOT NULL
         """
     )
     op.execute("DROP TABLE IF EXISTS product_barcodes")
