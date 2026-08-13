@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { addProductBarcode, addProductBarcodeFile, deleteProduct, deleteProductBarcode, deleteProductBarcodeFile, getProduct, getProductVariants } from '../../../api/adminApi'
+import { useBarcodeDupCheck, barcodeOwnerLabel } from './useBarcodeDupCheck'
 import type { ProductBarcodeFileItem, ProductBarcodeItem, ProductVariantItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
@@ -58,6 +59,7 @@ export function ProductViewFeature({ productId }: Props) {
   const [bcCode, setBcCode] = useState('')
   const [bcSource, setBcSource] = useState('')
   const [bcSaving, setBcSaving] = useState(false)
+  const { owner: bcOwner } = useBarcodeDupCheck(bcTarget ? bcCode : '')
 
   function openAddBarcode(variant: ProductVariantItem) {
     setBcCode('')
@@ -66,7 +68,7 @@ export function ProductViewFeature({ productId }: Props) {
   }
 
   async function handleAddBarcode() {
-    if (!bcTarget || !bcCode.trim() || bcSaving) return
+    if (!bcTarget || !bcCode.trim() || bcSaving || bcOwner) return
     setBcSaving(true)
     try {
       await addProductBarcode(productId, { barcode: bcCode.trim(), source: bcSource.trim() || null, variant_id: bcTarget.id })
@@ -415,7 +417,7 @@ export function ProductViewFeature({ productId }: Props) {
         footer={
           <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
             <button className="btn ghost" onClick={() => setBcTarget(null)}>Отмена</button>
-            <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
+            <button className="btn primary" disabled={!bcCode.trim() || bcSaving || !!bcOwner} onClick={() => void handleAddBarcode()}>
               {bcSaving ? 'Добавление…' : 'Добавить'}
             </button>
           </div>
@@ -432,6 +434,23 @@ export function ProductViewFeature({ productId }: Props) {
               placeholder="Отсканируйте или введите код"
               autoFocus
             />
+            {bcOwner && (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-danger)', lineHeight: 1.5 }}>
+                Код уже привязан: {barcodeOwnerLabel(bcOwner)}
+                {bcOwner.product_id !== productId && (
+                  <>
+                    {' · '}
+                    <a
+                      href={`/dictionaries/products/${bcOwner.product_id}`}
+                      onClick={(e) => { e.preventDefault(); navigate(`/dictionaries/products/${bcOwner.product_id}`) }}
+                      style={{ color: 'var(--c-danger)', textDecoration: 'underline' }}
+                    >
+                      Открыть товар
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>Источник (необязательно)</div>

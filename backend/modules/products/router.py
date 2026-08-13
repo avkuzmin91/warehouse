@@ -749,6 +749,27 @@ def find_product_variant_for_receipt(
         )
 
 
+def _find_barcode_owner(connection, code: str):
+    return connection.execute(
+        """
+        SELECT p.name AS product_name, col.name AS color_name, sz.name AS size_name
+        FROM product_barcodes pb
+        JOIN products p ON p.id = pb.product_id
+        LEFT JOIN product_variants v ON v.id = pb.variant_id
+        LEFT JOIN colors col ON col.id = v.color_id
+        LEFT JOIN sizes sz ON sz.id = v.size_id
+        WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
+        LIMIT 1
+        """,
+        (code,),
+    ).fetchone()
+
+
+def _barcode_owner_label(owner) -> str:
+    label = " · ".join(x for x in (owner["color_name"], owner["size_name"]) if x)
+    return f"«{owner['product_name']}»" + (f" ({label})" if label else "")
+
+
 @router.post("/products/{item_id}/barcodes", response_model=MessageResponse)
 def add_product_barcode(item_id: str, payload: ProductBarcodeAdd, admin=Depends(get_current_admin)):
     code = payload.barcode.strip()
@@ -762,12 +783,9 @@ def add_product_barcode(item_id: str, payload: ProductBarcodeAdd, admin=Depends(
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Товар не найден")
-        dup = connection.execute(
-            "SELECT 1 FROM product_barcodes WHERE barcode = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
-            (code,),
-        ).fetchone()
+        dup = _find_barcode_owner(connection, code)
         if dup:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Штрих-код уже присвоен другому варианту")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Штрих-код уже присвоен: {_barcode_owner_label(dup)}")
         if payload.variant_id:
             variant = connection.execute(
                 "SELECT id FROM product_variants WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",

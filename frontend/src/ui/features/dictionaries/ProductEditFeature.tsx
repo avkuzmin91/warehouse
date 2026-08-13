@@ -12,6 +12,7 @@ import {
   uploadProductDictionaryImage,
 } from '../../../api/adminApi'
 import type { ProductBarcodeItem, ProductItem, ProductVariantItem, ProductVariantWriteItem } from '../../../api/domainTypes'
+import { useBarcodeDupCheck, barcodeOwnerLabel } from './useBarcodeDupCheck'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { getInventoryColors, getInventorySizes } from '../../../api/inventoryLookupsApi'
 import { useLookups } from '../../../hooks/useLookups'
@@ -121,6 +122,7 @@ export function ProductEditFeature({ id }: { id: string }) {
   const [bcCode, setBcCode] = useState('')
   const [bcSource, setBcSource] = useState('')
   const [bcSaving, setBcSaving] = useState(false)
+  const { owner: bcOwner } = useBarcodeDupCheck(bcTargetId ? bcCode : '')
 
   useEffect(() => {
     if (!id) return
@@ -184,7 +186,7 @@ export function ProductEditFeature({ id }: { id: string }) {
   }, [id])
 
   async function handleAddBarcode() {
-    if (!id || !bcTargetId || !bcCode.trim() || bcSaving) return
+    if (!id || !bcTargetId || !bcCode.trim() || bcSaving || bcOwner) return
     setBcSaving(true)
     try {
       await addProductBarcode(id, { barcode: bcCode.trim(), source: bcSource.trim() || null, variant_id: bcTargetId })
@@ -803,7 +805,7 @@ export function ProductEditFeature({ id }: { id: string }) {
         footer={
           <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
             <button className="btn ghost" onClick={() => setBcTargetId(null)}>Отмена</button>
-            <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
+            <button className="btn primary" disabled={!bcCode.trim() || bcSaving || !!bcOwner} onClick={() => void handleAddBarcode()}>
               {bcSaving ? 'Добавление…' : 'Добавить'}
             </button>
           </div>
@@ -819,6 +821,23 @@ export function ProductEditFeature({ id }: { id: string }) {
               placeholder="Отсканируйте или введите код"
               autoFocus
             />
+            {bcOwner && (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-danger)', lineHeight: 1.5 }}>
+                Код уже привязан: {barcodeOwnerLabel(bcOwner)}
+                {bcOwner.product_id !== id && (
+                  <>
+                    {' · '}
+                    <a
+                      href={`/dictionaries/products/${bcOwner.product_id}`}
+                      onClick={(e) => { e.preventDefault(); navigate(`/dictionaries/products/${bcOwner.product_id}`) }}
+                      style={{ color: 'var(--c-danger)', textDecoration: 'underline' }}
+                    >
+                      Открыть товар
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
           </Field>
           <Field label="Источник (необязательно)">
             <Input

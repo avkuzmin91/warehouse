@@ -398,6 +398,23 @@ export function deleteProductBarcode(productId: string, barcodeId: string) {
   })
 }
 
+// Владелец штрих-кода (found=false — код свободен). Используется для проверки
+// на дубль по мере ввода, до отправки формы.
+export type BarcodeOwnerMatch = {
+  variant_id:   string
+  product_id:   string
+  product_name: string
+  sku:          string
+  color_name:   string | null
+  size_name:    string | null
+  client_name:  string | null
+}
+export function lookupProductByBarcode(code: string, signal?: AbortSignal) {
+  return request<{ found: boolean; match: BarcodeOwnerMatch | null }>(
+    `/products/by-barcode/${encodeURIComponent(code)}`, { signal },
+  )
+}
+
 // Этикетка кода (PDF/фото ШК) в карточке товара. addProductBarcode возвращает id кода
 // в message — можно грузить этикетку сразу после привязки.
 export function addProductBarcodeFile(productId: string, barcodeId: string, file: File) {
