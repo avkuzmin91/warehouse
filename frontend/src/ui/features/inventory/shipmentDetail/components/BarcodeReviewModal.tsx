@@ -218,12 +218,12 @@ export function BarcodeReviewModal({ docId, docNumber, items, canBind, onClose, 
       ))}
 
       {conflicts.length > 0 && (
-        <div style={{ padding: '10px 12px', background: 'var(--c-warning-bg)', borderRadius: 'var(--r-md)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--c-warning)', marginBottom: 6 }}>
+        <div style={{ padding: '10px 12px', background: 'var(--c-danger-bg)', borderRadius: 'var(--r-md)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--c-danger)', marginBottom: 6 }}>
             <Icon name="alert" size={14} />Требует внимания — не будет привязано
           </div>
           {conflicts.map((it) => (
-            <div key={it.code} style={{ fontSize: 12.5, color: 'var(--c-warning)', lineHeight: 1.5, marginBottom: 4 }}>
+            <div key={it.code} style={{ fontSize: 12.5, color: 'var(--c-danger)', lineHeight: 1.5, marginBottom: 4 }}>
               <span className="mono">{it.code}</span>
               {it.status === 'other_product'
                 ? <> — уже принадлежит «{it.other_product_name}». Проверьте, тот ли файл «{it.fileName}» приложен к строке «{it.productName}».</>
