@@ -224,6 +224,17 @@ export function moveLineToPacking(docId: string, lineId: string, allocations: Mo
   })
 }
 
+export type MassMoveLine = { line_id: string; allocations: MoveAllocation[] }
+
+// Массовая передача на упаковку: несколько строк одним запросом (одна транзакция).
+export function moveLinesToPacking(docId: string, lines: MassMoveLine[], requestId: string) {
+  return request<{ message: string; moved: number }>(`/shipments/${docId}/move-to-packing`, {
+    method: 'POST',
+    body: JSON.stringify({ lines }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
 // Откат ошибочной передачи на упаковку: товар возвращается в исходные места хранения.
 export function returnLineFromPacking(docId: string, lineId: string, qty?: number) {
   return request<{ message: string; returned: number }>(`/shipments/${docId}/lines/${lineId}/return-from-packing`, {

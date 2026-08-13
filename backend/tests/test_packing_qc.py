@@ -1245,3 +1245,95 @@ def test_return_to_packing_requires_manager_staff(api, client_id):
     _advance(api, doc_id, _SHIFT)  # on_packing → relocating
     blocked = api.post(f"/shipments/{doc_id}/return-to-packing")  # ещё _SHIFT
     assert blocked.status_code == 403, blocked.text
+
+
+def _multi_line_shipment(api, client_id, positions_with_qty):
+    """Задача упаковки с несколькими строками; возвращает (doc_id, {product_id: line_id})."""
+    _as(_ADMIN)
+    lines = [
+        {**pos, "product_name": f"P{i}", "product_sku": f"SKU{i}", "color_name": "Red", "size_name": None, "qty": qty}
+        for i, (pos, qty) in enumerate(positions_with_qty, start=1)
+    ]
+    doc_id = api.post("/shipments", json={
+        "cargo_type": "good", "client_id": client_id, "client_name": "C",
+        "ship_date": "2026-05-27", "comment": "ТЗ", "lines": lines,
+    }).json()["message"]
+    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
+    by_product = {l["product_id"]: l["id"] for l in api.get(f"/shipments/{doc_id}").json()["lines"]}
+    return doc_id, by_product
+
+
+def test_mass_move_to_packing(api, client_id):
+    """Массовая передача: две строки одним запросом, FIFO и явная зона-источник."""
+    pos1, pos2 = _position(), _position()
+    zone = str(uuid.uuid4())
+    _receive(api, client_id, pos1, 30, zone)
+    _receive(api, client_id, pos2, 20, zone)
+    doc_id, by_product = _multi_line_shipment(api, client_id, [(pos1, 30), (pos2, 20)])
+
+    _as(_WH)
+    r = api.post(f"/shipments/{doc_id}/move-to-packing", json={"lines": [
+        {"line_id": by_product[pos1["product_id"]], "allocations": [{"qty": 30}]},
+        {"line_id": by_product[pos2["product_id"]], "allocations": [{"from_zone_id": zone, "qty": 20}]},
+    ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["moved"] == 50
+    assert _balance(client_id, pos1) == (0, 0, 0, 30)
+    assert _balance(client_id, pos2) == (0, 0, 0, 20)
+
+
+def test_mass_move_to_packing_skips_empty_lines(api, client_id):
+    """Строки без аллокаций пропускаются, а не валят запрос."""
+    pos1, pos2 = _position(), _position()
+    zone = str(uuid.uuid4())
+    _receive(api, client_id, pos1, 10, zone)
+    _receive(api, client_id, pos2, 10, zone)
+    doc_id, by_product = _multi_line_shipment(api, client_id, [(pos1, 10), (pos2, 10)])
+
+    _as(_WH)
+    r = api.post(f"/shipments/{doc_id}/move-to-packing", json={"lines": [
+        {"line_id": by_product[pos1["product_id"]], "allocations": [{"qty": 10}]},
+        {"line_id": by_product[pos2["product_id"]], "allocations": []},
+    ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["moved"] == 10
+    assert _balance(client_id, pos1) == (0, 0, 0, 10)
+    assert _balance(client_id, pos2) == (0, 0, 10, 0)
+
+
+def test_mass_move_to_packing_insufficient_rolls_back_all(api, client_id):
+    """Нехватка по одной строке откатывает всю передачу; в ошибке — метка позиции."""
+    pos1, pos2 = _position(), _position()
+    zone = str(uuid.uuid4())
+    _receive(api, client_id, pos1, 30, zone)
+    _receive(api, client_id, pos2, 20, zone)
+    doc_id, by_product = _multi_line_shipment(api, client_id, [(pos1, 30), (pos2, 20)])
+
+    _as(_WH)
+    r = api.post(f"/shipments/{doc_id}/move-to-packing", json={"lines": [
+        {"line_id": by_product[pos1["product_id"]], "allocations": [{"qty": 30}]},
+        {"line_id": by_product[pos2["product_id"]], "allocations": [{"qty": 25}]},  # > 20 на хранении
+    ]})
+    assert r.status_code == 400, r.text
+    assert "SKU2" in r.json()["detail"]
+    # Первая строка тоже откатилась — остатки не тронуты.
+    assert _balance(client_id, pos1) == (0, 0, 30, 0)
+    assert _balance(client_id, pos2) == (0, 0, 20, 0)
+
+
+def test_mass_move_to_packing_empty_payload(api, client_id):
+    _as(_WH)
+    r = api.post(f"/shipments/{str(uuid.uuid4())}/move-to-packing", json={"lines": []})
+    assert r.status_code == 400, r.text
+
+
+def test_mass_move_to_packing_requires_warehouse_role(api, client_id):
+    pos = _position()
+    zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, zone)
+    doc_id, by_product = _multi_line_shipment(api, client_id, [(pos, 10)])
+    _as(_SHIFT)  # начальник смены не вправе перемещать
+    r = api.post(f"/shipments/{doc_id}/move-to-packing", json={"lines": [
+        {"line_id": by_product[pos["product_id"]], "allocations": [{"qty": 10}]},
+    ]})
+    assert r.status_code == 403, r.text

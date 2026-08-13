@@ -82,7 +82,7 @@ export function PackingTable({
                     )}
                     {canMove && (
                       <button
-                        className="btn primary sm"
+                        className="btn ghost sm"
                         disabled={busy}
                         title={mode === 'packing' ? 'Передать ещё товар на упаковку' : 'Передать товар в зону упаковки'}
                         onClick={() => onOpenMove(line)}

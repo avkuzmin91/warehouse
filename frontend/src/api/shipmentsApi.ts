@@ -569,10 +569,12 @@ export function movePackingDate(payload: { entry_ids: string[]; new_date: string
 
 export type ShipmentMoveAllocation = { from_zone_id: string | null; qty: number }
 
-export function moveShipmentLineToPacking(docId: string, lineId: string, allocations: ShipmentMoveAllocation[]) {
+export type ShipmentMassMoveLine = { line_id: string; allocations: ShipmentMoveAllocation[] }
+
+export function moveShipmentLinesToPacking(docId: string, lines: ShipmentMassMoveLine[]) {
   return request<{ message: string; moved: number }>(
-    `/shipments/${docId}/lines/${lineId}/move-to-packing`,
-    { method: 'POST', body: JSON.stringify({ allocations }) },
+    `/shipments/${docId}/move-to-packing`,
+    { method: 'POST', body: JSON.stringify({ lines }) },
   )
 }
 
