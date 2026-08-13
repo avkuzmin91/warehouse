@@ -1,4 +1,4 @@
-import type { ShipmentLine } from '../../../../../api/shipmentsApi'
+import type { ShipmentLine, ShipmentLineFile } from '../../../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { Icon } from '../../../../primitives/Icon'
 import { Table, Td } from '../../../../data/Table'
@@ -10,6 +10,20 @@ import { AvailabilityCell } from '../../shared/AvailabilityCell'
 import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { LineFilesCell } from './LineFilesCell'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from '../shared/types'
+
+// Подпись под файлом — распознанные коды; помечается только конфликт (чужой
+// товар / другой цвето-размер), непривязанность кода не подписывается.
+function fileBarcodeCaption(f: ShipmentLineFile): string | undefined {
+  const details = f.barcode_details ?? []
+  if (details.length === 0) {
+    return (f.barcodes ?? []).length > 0 ? `ШК ${f.barcodes.join(', ')}` : undefined
+  }
+  return details
+    .map((b) => b.status === 'confirmed' || b.status === 'unknown'
+      ? `ШК ${b.code}`
+      : `ШК ${b.code} — конфликт`)
+    .join(' · ')
+}
 
 export function StoreCell({
   value,
@@ -63,6 +77,8 @@ type CompositionTableProps = {
   onUploadFile:    (lineId: string, files: File[]) => void
   onReplaceFile:   (lineId: string, oldFileId: string, file: File) => void
   onDeleteFile:    (lineId: string, fileId: string) => void
+  // Этикетка из карточки товара — прикрепление без повторной загрузки файла.
+  onPickLabel?:    (line: ShipmentLine) => void
   // Дозаполнение SKU для товара «ожидает SKU» прямо из состава отгрузки.
   onAssignSku?:    (line: ShipmentLine) => void
   // Доступность строки под планом: «на хранении» + «в пути» (только при правке плана).
@@ -70,11 +86,11 @@ type CompositionTableProps = {
   availLoading?:   boolean
 }
 
-/** Состав отгрузки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
+/** Состав упаковки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
 export function CompositionTable({
   lines, showZone = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
-  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onAssignSku,
+  onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku,
   getAvail, availLoading,
 }: CompositionTableProps) {
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
@@ -88,7 +104,7 @@ export function CompositionTable({
           <th>Товар · вариант</th>
           {showZone && <th style={{ width: 170 }}>Местоположение</th>}
           <th style={{ width: 180 }}>Магазин</th>
-          <th style={{ width: 160, textAlign: 'right' }}>План отгрузки</th>
+          <th style={{ width: 160, textAlign: 'right' }}>План упаковки</th>
           <th style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
               <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
@@ -113,7 +129,7 @@ export function CompositionTable({
                 </div>
               </Td>
               <Td>
-                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
                 {line.sku_pending ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
                     <span className="badge warning">Без SKU</span>
@@ -170,6 +186,7 @@ export function CompositionTable({
                     filename: f.filename,
                     mimeType: f.mime_type,
                     href: resolvePublicUploadSrc(f.url),
+                    caption: fileBarcodeCaption(f),
                   }))}
                   canEdit={canAttachFiles}
                   uploading={uploadingLines[line.id] ?? false}
@@ -188,6 +205,7 @@ export function CompositionTable({
                   onAdd={(files) => onUploadFile(line.id, files)}
                   onReplace={(fileId, file) => onReplaceFile(line.id, fileId, file)}
                   onRemove={(fileId) => onDeleteFile(line.id, fileId)}
+                  onPickFromCard={onPickLabel ? () => onPickLabel(line) : undefined}
                 />
               </Td>
               <Td>

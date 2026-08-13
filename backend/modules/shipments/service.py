@@ -27,7 +27,6 @@ from config import (
     SHIPMENT_REPACK_FREE,
     SHIPMENT_REPACK_KINDS,
     SHIPMENT_REPACK_PAID,
-    SHIPMENT_STATUS_ASSIGNED,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
@@ -2182,15 +2181,15 @@ def _finalize_repack(connection, doc_id: str, user_id: str) -> None:
 def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> str:
     """Переводит документ на следующий статус с ролевым гейтом и проверками фазы.
 
-    Годный груз: draft → packing (Запланировать) · packing → on_packing (Передать на
-    упаковку) · on_packing → relocating (Передать кладовщику). relocating →
+    Годный груз: draft → packing (Поставить задачу) · packing → on_packing (Передать
+    на упаковку) · on_packing → relocating (Передать кладовщику). relocating →
     packed («Готово») делает отдельный эндпоинт finish_relocation.
     Брак-отгрузка минует упаковку: draft → relocating (Запланировать — задача
     кладовщику подготовить брак); relocating → packed делает
     finish_defect_relocation. Отгрузку к рейсу далее возит домен dispatch.
     """
     row = connection.execute(
-        "SELECT status, comment, client_id, cargo_type FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        "SELECT status, comment, client_id, cargo_type, ship_date FROM shipment_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchone()
     if not row:
@@ -2215,10 +2214,9 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         _check_duplicate_lines(connection, doc_id)
         _check_lines_have_sku(connection, doc_id)
         _check_defect_lines_ready(connection, doc_id, row["client_id"])
-    elif next_status in (SHIPMENT_STATUS_ASSIGNED, SHIPMENT_STATUS_PACKING):
-        # Постановка задачи (draft → assigned) и приёмка её в работу начальником склада
-        # (assigned → packing) проверяются одинаково: товар мог уйти со склада за время
-        # ожидания приёмки, поэтому покрытие остатком перепроверяется и на приёмке.
+    elif next_status == SHIPMENT_STATUS_PACKING:
+        if not str(row["ship_date"] or "").strip():
+            raise HTTPException(status_code=400, detail="Укажите дату упаковки (план)")
         if not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
         _check_duplicate_lines(connection, doc_id)
@@ -2251,3 +2249,98 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
     )
     connection.commit()
     return next_status
+
+
+# ── Распознавание ШК на файлах строк ──────────────────────────────────────────
+
+def decode_line_file_barcodes(data: bytes, ext: str) -> list[str]:
+    """Товарные штрих-коды (EAN/UPC/Code128) с картинки или PDF-этикетки.
+
+    Возвращает уникальные коды в порядке обнаружения; QR и служебные символогии
+    отбрасываются. Любая ошибка декодирования — пустой список: распознавание не
+    должно блокировать загрузку файла.
+    """
+    try:
+        import io
+
+        import zxingcpp
+        from PIL import Image
+
+        images = []
+        if ext == ".pdf":
+            import pypdfium2 as pdfium
+
+            pdf = pdfium.PdfDocument(data)
+            try:
+                # Первые страницы: этикетка — 1 страница, защита от тяжёлых PDF.
+                for i in range(min(len(pdf), 3)):
+                    images.append(pdf[i].render(scale=3).to_pil())
+            finally:
+                pdf.close()
+        else:
+            images.append(Image.open(io.BytesIO(data)))
+
+        formats = [
+            zxingcpp.BarcodeFormat.EAN13,
+            zxingcpp.BarcodeFormat.EAN8,
+            zxingcpp.BarcodeFormat.UPCA,
+            zxingcpp.BarcodeFormat.UPCE,
+            zxingcpp.BarcodeFormat.Code128,
+        ]
+        codes: list[str] = []
+        for img in images:
+            for result in zxingcpp.read_barcodes(img, formats=formats):
+                text = (result.text or "").strip()
+                if text and text not in codes:
+                    codes.append(text)
+        return codes
+    except Exception:
+        return []
+
+
+def resolve_line_variant_id(connection, product_id: str, color_id, size_id) -> str | None:
+    """Вариант строки документа по тройке товар+цвет+размер (строки хранят её, не variant_id)."""
+    row = connection.execute(
+        "SELECT id FROM product_variants "
+        "WHERE product_id = ? AND color_id IS NOT DISTINCT FROM ?::text "
+        "  AND size_id IS NOT DISTINCT FROM ?::text AND COALESCE(is_deleted, 0) = 0 "
+        "LIMIT 1",
+        (product_id, color_id, size_id),
+    ).fetchone()
+    return str(row["id"]) if row else None
+
+
+def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: str, variant_id: str | None) -> list[dict]:
+    """Статус каждого распознанного кода относительно варианта строки:
+    confirmed — привязан к этому варианту; other_variant — другой цвет/размер того же
+    товара (вероятный пересорт); other_product — чужой товар; unknown — в системе нет."""
+    out: list[dict] = []
+    for code in codes:
+        row = connection.execute(
+            """
+            SELECT pb.product_id, pb.variant_id, p.name AS product_name,
+                   col.name AS color_name, sz.name AS size_name
+            FROM product_barcodes pb
+            JOIN products p ON p.id = pb.product_id
+            LEFT JOIN product_variants v ON v.id = pb.variant_id
+            LEFT JOIN colors col ON col.id = v.color_id
+            LEFT JOIN sizes sz ON sz.id = v.size_id
+            WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
+            LIMIT 1
+            """,
+            (code,),
+        ).fetchone()
+        item = {"code": code, "status": "unknown", "other_product_name": None, "other_variant_label": None}
+        if row is not None:
+            if str(row["product_id"]) != product_id:
+                item["status"] = "other_product"
+                item["other_product_name"] = str(row["product_name"])
+            elif variant_id is not None and row["variant_id"] and str(row["variant_id"]) != variant_id:
+                item["status"] = "other_variant"
+                item["other_variant_label"] = (
+                    " · ".join(x for x in (row["color_name"], row["size_name"]) if x) or "другой вариант"
+                )
+            else:
+                item["status"] = "confirmed"
+        out.append(item)
+    return out

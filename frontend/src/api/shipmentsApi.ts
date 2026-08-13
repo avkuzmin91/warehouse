@@ -2,11 +2,10 @@ import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type ShipmentStatus = 'draft' | 'assigned' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
-  assigned:          'Ожидает принятия',
   packing:           'В плане',
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
@@ -20,7 +19,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Создан',
-  assigned:          'Принята',
   packing:           'Передан на упаковку',
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
@@ -34,7 +32,6 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
 
 export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   draft:             '',
-  assigned:          'warning',
   packing:           'info',
   on_packing:        'info',
   relocating:        'info',
@@ -47,7 +44,7 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
 }
 
 export const SHIPMENT_STATUS_ORDER: ShipmentStatus[] = [
-  'draft', 'assigned', 'packing', 'on_packing', 'relocating', 'packed',
+  'draft', 'packing', 'on_packing', 'relocating', 'packed',
 ]
 
 // Приоритет — уровень срочности: 1 «Срочно», 2 «Повышенный», null «Обычный».
@@ -100,6 +97,10 @@ export type ShipmentLineFile = {
   filename:   string
   url:        string
   mime_type:  string | null
+  barcodes:   string[]
+  // Те же коды с актуальным статусом относительно варианта строки (см. LineFileBarcode) —
+  // непривязанные ШК видны в деталке и после закрытия диалога разбора.
+  barcode_details: LineFileBarcode[]
   created_at: string
 }
 
@@ -586,14 +587,6 @@ export function advanceShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, { method: 'POST' })
 }
 
-// Отклонить задачу упаковки на приёмке (assigned → draft) с причиной — возврат менеджеру.
-export function rejectShipment(id: string, reason: string) {
-  return request<{ message: string }>(`/shipments/${id}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
-  })
-}
-
 // Менеджерский возврат товарной задачи упаковки «на упаковку» (из «Перемещение» или
 // «Упаковано»). Для «Упаковано» бэкенд откатывает раскладку по местам.
 // mode: rework — обычная доработка; repack_free/repack_paid — переупаковка (reason
@@ -661,10 +654,33 @@ export function deleteShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}`, { method: 'DELETE' })
 }
 
+// Распознавание ШК на загруженном файле строки: confirmed — код привязан к варианту
+// строки, unknown — кода нет в системе (кандидат на привязку), other_variant — код
+// другого цвето-размера того же товара (вероятный пересорт), other_product — чужой товар.
+export type LineFileBarcodeStatus = 'confirmed' | 'unknown' | 'other_variant' | 'other_product'
+export type LineFileBarcode = {
+  code: string
+  status: LineFileBarcodeStatus
+  other_product_name: string | null
+  other_variant_label: string | null
+}
+// line_variant_id — вариант строки (товар+цвет+размер): к нему привязываются новые коды.
+export type LineFileUploadResult = { message: string; line_variant_id: string | null; barcodes: LineFileBarcode[] }
+
+// Распознать ШК на файле без документа — для черновика создания задачи (файл не сохраняется).
+export function decodeShipmentFileBarcodes(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ barcodes: string[] }>('/shipments/decode-file-barcodes', {
+    method: 'POST',
+    body: form,
+  })
+}
+
 export function uploadShipmentLineFile(docId: string, lineId: string, file: File) {
   const form = new FormData()
   form.append('file', file)
-  return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, {
+  return requestForm<LineFileUploadResult>(`/shipments/${docId}/lines/${lineId}/files`, {
     method: 'POST',
     body: form,
   })
@@ -673,5 +689,22 @@ export function uploadShipmentLineFile(docId: string, lineId: string, file: File
 export function deleteShipmentLineFile(docId: string, lineId: string, fileId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}`, {
     method: 'DELETE',
+  })
+}
+
+// Прикрепить этикетку из карточки товара к строке (без повторной загрузки файла).
+export function attachShipmentLineFileFromProduct(docId: string, lineId: string, productFileId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/from-product`, {
+    method: 'POST',
+    body: JSON.stringify({ product_file_id: productFileId }),
+  })
+}
+
+// Привязать распознанный на файле код к варианту строки: создаёт ШК товара и сохраняет
+// файл этикеткой в карточку. Идемпотентно, поэтому безопасно для повтора после ошибки.
+export function bindShipmentLineFileBarcode(docId: string, lineId: string, fileId: string, code: string) {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}/bind-barcode`, {
+    method: 'POST',
+    body: JSON.stringify({ code }),
   })
 }

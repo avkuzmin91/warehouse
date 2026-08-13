@@ -430,9 +430,9 @@ def catalog_fixture(ozon_account):
             (vid, pid, cid, f"MP-V-{vid[:8]}"),
         )
         conn.execute(
-            "INSERT INTO product_variant_barcodes (id, variant_id, barcode, created_at, is_deleted) "
-            "VALUES (?, ?, ?, NOW(), 0)",
-            (str(uuid.uuid4()), vid, barcode),
+            "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, created_at, is_deleted) "
+            "VALUES (?, ?, ?, ?, NOW(), 0)",
+            (str(uuid.uuid4()), pid, vid, barcode),
         )
         conn.execute(
             "INSERT INTO mp_products (id, account_id, external_id, offer_id, title, barcodes, "
@@ -446,9 +446,7 @@ def catalog_fixture(ozon_account):
         "barcode": barcode, "mp_product_id": mp_product_id,
     }
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM product_variant_barcodes WHERE variant_id IN "
-            "(SELECT id FROM product_variants WHERE product_id = ?)", (pid,))
+        conn.execute("DELETE FROM product_barcodes WHERE product_id = ?", (pid,))
         conn.execute("DELETE FROM product_variants WHERE product_id = ?", (pid,))
         conn.execute("DELETE FROM products WHERE id = ?", (pid,))
         conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
@@ -465,6 +463,7 @@ def test_auto_link_by_barcode(admin_client, catalog_fixture):
             (catalog_fixture["mp_product_id"],),
         ).fetchone()
     assert link is not None
+    assert str(link["product_id"]) == catalog_fixture["product_id"]
     assert str(link["variant_id"]) == catalog_fixture["variant_id"]
     assert str(link["link_source"]) == MP_LINK_SOURCE_BARCODE
 
@@ -488,9 +487,9 @@ def test_auto_link_conflict_skipped(admin_client, catalog_fixture):
             (vid2, pid, cid, f"MP-V2-{vid2[:8]}"),
         )
         conn.execute(
-            "INSERT INTO product_variant_barcodes (id, variant_id, barcode, created_at, is_deleted) "
-            "VALUES (?, ?, ?, NOW(), 0)",
-            (str(uuid.uuid4()), vid2, barcode2),
+            "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, created_at, is_deleted) "
+            "VALUES (?, ?, ?, ?, NOW(), 0)",
+            (str(uuid.uuid4()), pid, vid2, barcode2),
         )
         conn.execute(
             "INSERT INTO mp_products (id, account_id, external_id, offer_id, title, barcodes, "
@@ -513,6 +512,7 @@ def test_auto_link_conflict_skipped(admin_client, catalog_fixture):
             "SELECT 1 FROM mp_product_links WHERE mp_product_id = ? AND COALESCE(is_deleted,0) = 0",
             (conflict_mp_id,),
         ).fetchone()
+        conn.commit()
     assert link is None
 
 

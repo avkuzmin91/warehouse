@@ -12,7 +12,6 @@ export type InfoPhaseProps = {
   isDraft: boolean
   isDefectCargo: boolean
   canEditInfo: boolean
-  canEditTechTaskOnly: boolean
   // «На упаковке» менеджер корректирует только ТЗ и дату (план) — реквизиты read-only.
   canCorrectOnPacking?: boolean
   canEditActualShipDate: boolean
@@ -26,7 +25,7 @@ export type InfoPhaseProps = {
 }
 
 export function InfoPhase({
-  doc, isDraft, isDefectCargo, canEditInfo, canEditTechTaskOnly, canCorrectOnPacking,
+  doc, isDraft, isDefectCargo, canEditInfo, canCorrectOnPacking,
   canEditActualShipDate, saved, shipDate, actualShipDate, comment, onShipDate, onActualShipDate, onComment,
 }: InfoPhaseProps) {
   const editable = canEditInfo || canCorrectOnPacking
@@ -38,9 +37,8 @@ export function InfoPhase({
       state={isDraft ? 'active' : 'done'}
       hint={canCorrectOnPacking ? 'Корректировка: ТЗ и дату (план) можно изменить — фиксируется в журнале'
         : canEditInfo ? 'План можно править до передачи на упаковку'
-        : canEditTechTaskOnly ? 'Можно поправить техническое задание перед принятием задачи'
         : undefined}
-      right={(editable || canEditTechTaskOnly) && saved ? (
+      right={editable && saved ? (
         <span style={{ fontSize: 12, color: 'var(--c-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Icon name="check" size={12} />Сохранено
         </span>
@@ -86,22 +84,6 @@ export function InfoPhase({
               </Field>
             )}
             <Field label="Техническое задание" required={!isDefectCargo} style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-              <AutoGrowTextarea
-                minRows={3}
-                placeholder="Опишите задачу для команды склада"
-                value={comment}
-                onChange={(e) => onComment(e.target.value)}
-                style={{ resize: 'vertical', minHeight: 76 }}
-              />
-            </Field>
-          </div>
-        </>
-      ) : canEditTechTaskOnly ? (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <ReadOnlyField label="Клиент" value={doc.client_name} />
-            <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
-            <Field label="Техническое задание" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
               <AutoGrowTextarea
                 minRows={3}
                 placeholder="Опишите задачу для команды склада"

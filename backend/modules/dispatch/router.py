@@ -27,12 +27,13 @@ from config import (
     DISPATCH_STATUS_DRAFT,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_SHIPPED,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
     MAX_UPLOAD_BYTES,
     UPLOADS_DIR,
 )
-from dbconn import get_connection, ci_like_substring_param
+from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql, like_substring_param
 from utils import now_iso as _now, validate_business_date
 from modules.auth.service import get_current_document_creator, get_current_manager
 from security import can_view_costs, ensure_cost_access
@@ -61,6 +62,7 @@ from modules.dispatch.service import (
     check_lines_have_pallets,
     check_lines_have_ready,
     check_lines_have_sku,
+    close_dispatch_short,
     dispatch_alloc_remaining,
     find_duplicate_dispatches,
     dispatch_trip_allocations,
@@ -198,8 +200,13 @@ def dispatches_summary(
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
             s = ci_like_substring_param(search)
-            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
-            params += [s, s, s]
+            conds.append(
+                "(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?"
+                " OR EXISTS (SELECT 1 FROM dispatch_lines dl"
+                " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
+                f" AND {barcode_variant_exists_sql('dl.product_id', 'dl.color_id', 'dl.size_id')}))"
+            )
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM dispatch_lines dl"
@@ -256,8 +263,11 @@ def list_dispatch_lines(
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
             s = ci_like_substring_param(search)
-            conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
-            params += [s, s, s]
+            conds.append(
+                "(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?"
+                f" OR {barcode_variant_exists_sql('l.product_id', 'l.color_id', 'l.size_id')})"
+            )
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             s = ci_like_substring_param(sku)
             conds.append("(fold_ci(COALESCE(NULLIF(p.sku, ''), l.product_sku)) LIKE ? OR fold_ci(l.product_name) LIKE ?)")
@@ -803,6 +813,33 @@ def finish_dispatch_preparation(
         if not proceed:
             return stored
         next_status = prepare_to_ready(conn, doc_id, body.lines, uid)
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/dispatches/{doc_id}/close-short")
+def close_dispatch_short_endpoint(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
+    """Частично отгружено → Отгружено: менеджер закрывает отгрузку с недовозом.
+
+    Применяется, когда рейс увёз меньше плана и остаток больше не поедет: иначе документ
+    висит в «Частично отгружено», держит резерв на неувезённое и не попадает в счёт.
+    Остаток остаётся на складе (см. close_dispatch_short), в счёт документ идёт по факту.
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "dispatch_close_short",
+            response={"message": DISPATCH_STATUS_SHIPPED},
+        )
+        if not proceed:
+            return stored
+        next_status = close_dispatch_short(conn, doc_id, uid)
         result = {"message": next_status}
         finish_idempotent(conn, x_request_id, result)
         conn.commit()

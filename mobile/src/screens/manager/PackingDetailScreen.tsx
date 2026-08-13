@@ -34,7 +34,7 @@ const STATUS_TONE: Record<string, string> = {
 
 // Зеркала гейтов бэка (config.py): где документ ещё можно аннулировать / вернуть на
 // упаковку / поменять приоритет. Финальную проверку всегда делает сервер.
-const CANCELLABLE_GOOD = new Set<ShipmentStatus>(['draft', 'assigned', 'packing', 'on_packing'])
+const CANCELLABLE_GOOD = new Set<ShipmentStatus>(['draft', 'packing', 'on_packing'])
 const CANCELLABLE_DEFECT = new Set<ShipmentStatus>(['draft', 'relocating', 'awaiting_trip'])
 const RETURN_TO_PACKING = new Set<ShipmentStatus>(['relocating', 'packed'])
 const PRIORITY_FINAL = new Set<ShipmentStatus>(['shipped', 'partially_shipped', 'completed_no_goods', 'cancelled'])

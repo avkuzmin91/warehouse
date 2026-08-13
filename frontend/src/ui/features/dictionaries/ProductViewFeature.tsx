@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { addVariantBarcode, deleteProduct, deleteVariantBarcode, getProduct, getProductVariants } from '../../../api/adminApi'
-import type { ProductVariantItem, VariantBarcodeItem } from '../../../api/domainTypes'
+import { addProductBarcode, addProductBarcodeFile, deleteProduct, deleteProductBarcode, deleteProductBarcodeFile, getProduct, getProductVariants } from '../../../api/adminApi'
+import { useBarcodeDupCheck, barcodeOwnerLabel } from './useBarcodeDupCheck'
+import type { ProductBarcodeFileItem, ProductBarcodeItem, ProductVariantItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
@@ -58,6 +59,7 @@ export function ProductViewFeature({ productId }: Props) {
   const [bcCode, setBcCode] = useState('')
   const [bcSource, setBcSource] = useState('')
   const [bcSaving, setBcSaving] = useState(false)
+  const { owner: bcOwner } = useBarcodeDupCheck(bcTarget ? bcCode : '')
 
   function openAddBarcode(variant: ProductVariantItem) {
     setBcCode('')
@@ -66,10 +68,10 @@ export function ProductViewFeature({ productId }: Props) {
   }
 
   async function handleAddBarcode() {
-    if (!bcTarget || !bcCode.trim() || bcSaving) return
+    if (!bcTarget || !bcCode.trim() || bcSaving || bcOwner) return
     setBcSaving(true)
     try {
-      await addVariantBarcode(productId, bcTarget.id, { barcode: bcCode.trim(), source: bcSource.trim() || null })
+      await addProductBarcode(productId, { barcode: bcCode.trim(), source: bcSource.trim() || null, variant_id: bcTarget.id })
       toast('Штрих-код добавлен', 'success')
       setBcTarget(null)
       setVariantsVersion((v) => v + 1)
@@ -80,20 +82,64 @@ export function ProductViewFeature({ productId }: Props) {
     }
   }
 
-  async function handleDeleteBarcode(variant: ProductVariantItem, bc: VariantBarcodeItem) {
+  async function handleDeleteBarcode(bc: ProductBarcodeItem) {
     const ok = await confirm({
       title: 'Снять штрих-код?',
-      body: `Код ${bc.barcode} перестанет опознавать вариант ${variant.sku} при сканировании.`,
+      body: `Код ${bc.barcode} перестанет опознавать этот товар при сканировании.${bc.files.length > 0 ? ' Его этикетки тоже будут удалены из карточки.' : ''}`,
       danger: true,
       confirmLabel: 'Снять',
     })
     if (!ok) return
     try {
-      await deleteVariantBarcode(productId, variant.id, bc.id)
+      await deleteProductBarcode(productId, bc.id)
       toast('Штрих-код снят', 'success')
       setVariantsVersion((v) => v + 1)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось снять штрих-код', 'error')
+    }
+  }
+
+  // Этикетки кода (PDF/фото ШК) в карточке — их подтягивают задачи упаковки.
+  const labelInputRef = useRef<HTMLInputElement>(null)
+  const labelTargetRef = useRef<string | null>(null)
+  const [labelUploading, setLabelUploading] = useState(false)
+
+  function pickLabelFile(barcodeId: string) {
+    labelTargetRef.current = barcodeId
+    labelInputRef.current?.click()
+  }
+
+  async function handleLabelSelected(files: FileList | null) {
+    const barcodeId = labelTargetRef.current
+    labelTargetRef.current = null
+    const file = files?.[0]
+    if (!barcodeId || !file) return
+    setLabelUploading(true)
+    try {
+      await addProductBarcodeFile(productId, barcodeId, file)
+      toast('Этикетка сохранена', 'success')
+      setVariantsVersion((v) => v + 1)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось сохранить этикетку', 'error')
+    } finally {
+      setLabelUploading(false)
+    }
+  }
+
+  async function handleDeleteLabel(bc: ProductBarcodeItem, file: ProductBarcodeFileItem) {
+    const ok = await confirm({
+      title: 'Удалить этикетку?',
+      body: `Файл «${file.filename}» будет удалён из карточки товара. В задачах, куда он уже прикреплён, файл останется.`,
+      danger: true,
+      confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    try {
+      await deleteProductBarcodeFile(productId, bc.id, file.id)
+      toast('Этикетка удалена', 'success')
+      setVariantsVersion((v) => v + 1)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось удалить этикетку', 'error')
     }
   }
 
@@ -229,6 +275,13 @@ export function ProductViewFeature({ productId }: Props) {
               <div className="flex-1" />
               <span className="t-sub mono">{variants.length.toLocaleString('ru-RU')}</span>
             </CardHead>
+            <input
+              ref={labelInputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg"
+              style={{ display: 'none' }}
+              onChange={(e) => { void handleLabelSelected(e.target.files); e.target.value = '' }}
+            />
             <Table>
               <thead>
                 <tr>
@@ -237,7 +290,7 @@ export function ProductViewFeature({ productId }: Props) {
                   <th>Цвет</th>
                   <th>Размер</th>
                   <th>Габариты, см</th>
-                  <th>Штрих-коды</th>
+                  <th>Штрих-коды и этикетки</th>
                   <th style={{ textAlign: 'right', width: 100 }}>Годный</th>
                   <th style={{ textAlign: 'right', width: 90 }}>Брак</th>
                 </tr>
@@ -271,28 +324,62 @@ export function ProductViewFeature({ productId }: Props) {
                             {variant.dimension.length}×{variant.dimension.width}×{variant.dimension.height}
                           </Td>
                           <Td>
-                            <div className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                            <div className="col" style={{ gap: 4 }}>
                               {variant.barcodes.map((bc) => (
-                                <span
-                                  key={bc.id}
-                                  className="mono"
-                                  title={bc.source ?? undefined}
-                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
-                                >
-                                  {bc.barcode}
+                                <div key={bc.id} className="row gap-8" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <span
+                                    className="mono"
+                                    title={bc.source ?? undefined}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '2px 6px', borderRadius: 6, background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)' }}
+                                  >
+                                    {bc.barcode}
+                                    <button
+                                      type="button"
+                                      title="Снять штрих-код"
+                                      onClick={() => void handleDeleteBarcode(bc)}
+                                      style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                                    >
+                                      <Icon name="x" size={12} />
+                                    </button>
+                                  </span>
+                                  {bc.files.map((f) => (
+                                    <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                                      <a
+                                        href={resolvePublicUploadSrc(f.url)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        title={f.filename}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--c-accent)', textDecoration: 'none', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                      >
+                                        <Icon name="file" size={12} />{f.filename}
+                                      </a>
+                                      <button
+                                        type="button"
+                                        title="Удалить этикетку"
+                                        onClick={() => void handleDeleteLabel(bc, f)}
+                                        style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-faint)' }}
+                                      >
+                                        <Icon name="x" size={11} />
+                                      </button>
+                                    </span>
+                                  ))}
                                   <button
                                     type="button"
-                                    title="Снять штрих-код"
-                                    onClick={() => void handleDeleteBarcode(variant, bc)}
-                                    style={{ display: 'inline-flex', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-text-subtle)' }}
+                                    className="btn ghost icon sm"
+                                    title="Прикрепить этикетку (PDF, PNG, JPG)"
+                                    disabled={labelUploading}
+                                    onClick={() => pickLabelFile(bc.id)}
+                                    style={{ width: 22, height: 22 }}
                                   >
-                                    <Icon name="x" size={12} />
+                                    <Icon name="importFile" size={12} />
                                   </button>
-                                </span>
+                                </div>
                               ))}
-                              <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" onClick={() => openAddBarcode(variant)}>
-                                <Icon name="plus" size={13} />
-                              </button>
+                              <div>
+                                <button type="button" className="btn ghost icon sm" title="Добавить штрих-код" onClick={() => openAddBarcode(variant)}>
+                                  <Icon name="plus" size={13} />
+                                </button>
+                              </div>
                             </div>
                           </Td>
                           <Td className="num" style={{ color: variant.stock > 0 ? 'var(--c-success)' : undefined, fontWeight: variant.stock > 0 ? 500 : undefined }}>
@@ -325,12 +412,12 @@ export function ProductViewFeature({ productId }: Props) {
         open={bcTarget !== null}
         onClose={() => setBcTarget(null)}
         title="Добавить штрих-код"
-        subtitle={bcTarget ? `Вариант ${bcTarget.sku}` : undefined}
+        subtitle={bcTarget ? `Вариант ${bcTarget.sku}${[bcTarget.color_name, bcTarget.size_name].filter(Boolean).length ? ` · ${[bcTarget.color_name, bcTarget.size_name].filter(Boolean).join(' / ')}` : ''}` : undefined}
         width={420}
         footer={
           <div className="row gap-8" style={{ justifyContent: 'flex-end' }}>
             <button className="btn ghost" onClick={() => setBcTarget(null)}>Отмена</button>
-            <button className="btn primary" disabled={!bcCode.trim() || bcSaving} onClick={() => void handleAddBarcode()}>
+            <button className="btn primary" disabled={!bcCode.trim() || bcSaving || !!bcOwner} onClick={() => void handleAddBarcode()}>
               {bcSaving ? 'Добавление…' : 'Добавить'}
             </button>
           </div>
@@ -347,6 +434,23 @@ export function ProductViewFeature({ productId }: Props) {
               placeholder="Отсканируйте или введите код"
               autoFocus
             />
+            {bcOwner && (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-danger)', lineHeight: 1.5 }}>
+                Код уже привязан: {barcodeOwnerLabel(bcOwner)}
+                {bcOwner.product_id !== productId && (
+                  <>
+                    {' · '}
+                    <a
+                      href={`/dictionaries/products/${bcOwner.product_id}`}
+                      onClick={(e) => { e.preventDefault(); navigate(`/dictionaries/products/${bcOwner.product_id}`) }}
+                      style={{ color: 'var(--c-danger)', textDecoration: 'underline' }}
+                    >
+                      Открыть товар
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--c-text-subtle)', marginBottom: 4 }}>Источник (необязательно)</div>

@@ -102,6 +102,8 @@ class PlannableItem(BaseModel):
     in_transit: int
     items_per_box: int | None = None
     boxes_per_pallet: int | None = None
+    # ШК ровно этого варианта (цвет×размер) — для сверки позиции с коробкой/письмом клиента.
+    barcodes: list[str] = []
 
 
 class PlannableListResponse(BaseModel):

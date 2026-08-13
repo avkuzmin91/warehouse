@@ -48,6 +48,8 @@ export type PlannableItem = {
   storage_good: number
   storage_defect: number
   in_transit: number
+  /** ШК ровно этого варианта (цвет×размер) — для сверки позиции с коробкой/письмом клиента. */
+  barcodes?: string[]
   items_per_box: number | null
   boxes_per_pallet: number | null
 }

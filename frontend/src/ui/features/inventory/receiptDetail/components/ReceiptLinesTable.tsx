@@ -122,7 +122,7 @@ function Row(props: Props & { line: ReceiptLine }) {
   return (
     <tr>
       <Td>
-        <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+        <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
       </Td>
       <Td className="num" style={{ color: 'var(--c-text-muted)' }}>
         {props.stage === 'review'

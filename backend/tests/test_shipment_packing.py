@@ -75,8 +75,7 @@ def _create_packing_doc(api, client_id: str) -> tuple[str, str]:
         client_id, product_id=line["product_id"], product_name=line["product_name"],
         product_sku=line["product_sku"], qty=line["qty"],
     )
-    api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
-    adv = api.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    adv = api.post(f"/shipments/{doc_id}/advance")  # draft → packing
     assert adv.status_code == 200 and adv.json()["message"] == "packing", adv.text
     return doc_id, line["id"]
 

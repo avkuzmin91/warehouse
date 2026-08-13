@@ -194,7 +194,7 @@ export function PackingTasksFeature() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
-              placeholder="Номер, клиент, назначение…"
+              placeholder="Номер, клиент, назначение или ШК…"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
@@ -386,7 +386,7 @@ export function PackingTasksFeature() {
                       </Td>
                       <Td>
                         {(() => {
-                          const isActive = !['draft', 'assigned', 'cancelled'].includes(item.status)
+                          const isActive = !['draft', 'cancelled'].includes(item.status)
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           const progress = shipmentProgress(item)
                           const complete = progress.pct >= 100

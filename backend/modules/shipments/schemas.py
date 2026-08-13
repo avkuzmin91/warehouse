@@ -234,11 +234,6 @@ class ShipmentPriorityUpdate(BaseModel):
     priority_rank: int | None = Field(default=None, ge=1, le=2)
 
 
-class ShipmentRejectPayload(BaseModel):
-    # Причина отклонения задачи начальником склада (фиксируется в журнале).
-    reason: str = Field(min_length=1)
-
-
 class ShipmentReturnToPackingPayload(BaseModel):
     # rework — обычная доработка (текущее поведение return_to_packing);
     # repack_free — переупаковка за наш счёт; repack_paid — за счёт клиента.
@@ -254,12 +249,27 @@ class ShipmentReturnToPackingPayload(BaseModel):
     force:  bool = False
 
 
+class ShipmentLineFileBarcode(BaseModel):
+    code:                str
+    status:              str  # confirmed | unknown | other_variant | other_product
+    other_product_name:  str | None = None
+    other_variant_label: str | None = None
+
+
 class ShipmentLineFile(BaseModel):
     id:         str
     filename:   str
     url:        str
     mime_type:  str | None = None
+    barcodes:   list[str] = []
+    # Те же коды с актуальным статусом относительно варианта строки — считается при
+    # чтении деталки, чтобы «непривязанные ШК» были видны и после закрытия диалога.
+    barcode_details: list[ShipmentLineFileBarcode] = []
     created_at: str
+
+
+class ShipmentLineFileBindBarcode(BaseModel):
+    code: str
 
 
 class ShipmentLinePlacement(BaseModel):
@@ -435,3 +445,9 @@ class DuplicateMatch(BaseModel):
 
 class DuplicateCheckResponse(BaseModel):
     matches: list[DuplicateMatch] = []
+
+
+class LineFileFromProduct(BaseModel):
+    """Прикрепление этикетки из карточки товара к строке задачи."""
+
+    product_file_id: str

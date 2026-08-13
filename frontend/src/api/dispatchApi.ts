@@ -63,7 +63,8 @@ export const DISPATCH_CARGO_LABELS: Record<DispatchCargoType, string> = {
 
 export type DispatchOpType =
   | 'doc_create' | 'doc_update' | 'priority_update'
-  | 'line_add' | 'line_update' | 'line_delete' | 'advance' | 'prepare' | 'ship' | 'cancel'
+  | 'line_add' | 'line_update' | 'line_delete' | 'advance' | 'prepare' | 'ship'
+  | 'close_short' | 'cancel'
 
 export type DispatchOp = {
   id:               string
@@ -127,6 +128,8 @@ export type DispatchListItem = {
   sku_count:         number
   total_qty:         number
   total_shipped_qty: number
+  /** Завершена с недовозом: уехало меньше плана, остаток не поедет. */
+  closed_short:      boolean
   created_at:        string
   created_by_name?:  string | null
 }
@@ -148,6 +151,10 @@ export type DispatchDetail = {
   status_label:     string
   /** По отгрузке выставлен счёт (issued+) — палеты править нельзя. */
   invoiced:         boolean
+  /** Отгрузка закрыта с недовозом: остаток больше не поедет, в счёт идёт факт. */
+  closed_short_at:  string | null
+  /** Частично отгружено, активного рейса нет — можно закрыть с недовозом. */
+  can_close_short:  boolean
   trips:            { id: string; number: string }[]
   created_at:       string
   created_by:       string | null
@@ -451,6 +458,12 @@ export function finishDispatchPreparation(id: string, lines: DispatchPrepareLine
     method: 'POST',
     body: JSON.stringify({ lines }),
   })
+}
+
+// «Закрыть с недовозом» (Частично отгружено → Отгружено): остаток больше не поедет.
+// Блокируется привязкой к активному рейсу — сначала отвязать.
+export function closeDispatchShort(id: string) {
+  return request<{ message: string }>(`/dispatches/${id}/close-short`, { method: 'POST' })
 }
 
 export function cancelDispatch(id: string) {

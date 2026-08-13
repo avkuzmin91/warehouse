@@ -33,6 +33,7 @@ export function ReadyView({ doc, onOpenTrip, onSavePallets, onSaveBoxes }: Props
       ) : isPartially ? (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
           Часть отгрузки уже уехала. Остаток ожидает следующих рейсов — спишется при их отправке.
+          {doc.can_close_short && ' Если остаток больше не поедет — закройте отгрузку с недовозом.'}
         </Alert>
       ) : (
         <Alert tone="warning" style={{ marginBottom: 16 }}>

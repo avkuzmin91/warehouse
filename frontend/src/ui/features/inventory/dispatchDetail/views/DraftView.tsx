@@ -13,6 +13,7 @@ import { AutoGrowTextarea, Field } from '../../../../primitives/Input'
 import { DatePicker } from '../../../../primitives/DatePicker'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
+import { ProductLink } from '../../../shared/ProductLink'
 import { Panel, ReadRow, RailPanel, LockedGrid } from '../components/processUI'
 import { BalancePicker } from '../../shared/BalancePicker'
 import { AssignSkuDrawer } from '../../shared/AssignSkuDrawer'
@@ -397,7 +398,7 @@ export function DraftView({ doc, canEdit, acting, onAddLine, onUpdateLine, onDel
                         </div>
                       </td>
                       <td>
-                        <div style={{ fontWeight: 500, fontSize: 13 }}>{l.product_name}</div>
+                        <div style={{ fontWeight: 500, fontSize: 13 }}><ProductLink productId={l.product_id}>{l.product_name}</ProductLink></div>
                         <div className="t-sub mono">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
                         {l.sku_pending && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>

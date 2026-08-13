@@ -29,6 +29,11 @@ export function FinalView({ doc, onOpenTrip, onSavePallets, onSaveBoxes }: Props
         <Alert tone="danger" icon={false} style={{ marginBottom: 16 }}>
           Отгрузка аннулирована.
         </Alert>
+      ) : doc.closed_short_at ? (
+        <Alert tone="warning" style={{ marginBottom: 16 }}>
+          Закрыта с недовозом: уехало {shippedTotal} из {planTotal} шт., недовоз {planTotal - shippedTotal} шт.
+          больше не поедет. Неувезённый товар остался на складе, в счёт отгрузка идёт по факту.
+        </Alert>
       ) : (
         <Alert tone="success" style={{ marginBottom: 16 }}>
           Отгрузка полностью отгружена рейсами и списана с остатков.

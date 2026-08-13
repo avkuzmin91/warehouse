@@ -3,7 +3,6 @@ import { request, requestForm, requestIdHeaders } from './http'
 // --- Types --- (зеркало backend/modules/shipments/schemas.py)
 export type ShipmentStatus =
   | 'draft'
-  | 'assigned'
   | 'packing'
   | 'on_packing'
   | 'relocating'
@@ -21,6 +20,9 @@ export type ShipmentLineFile = {
   filename: string
   url: string
   mime_type: string | null
+  barcodes: string[]
+  // Коды со статусом относительно варианта строки — как в frontend/src/api/shipmentsApi.ts.
+  barcode_details: LineFileBarcode[]
   created_at: string
 }
 
@@ -167,14 +169,35 @@ export function deleteShipmentLine(docId: string, lineId: string): Promise<{ mes
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
 }
 
-export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<{ message: string }> {
+// Распознавание ШК на загруженном файле строки: confirmed — код привязан к варианту
+// строки, unknown — кода нет в системе (кандидат на привязку), other_variant — код
+// другого цвето-размера того же товара (вероятный пересорт), other_product — чужой товар.
+export type LineFileBarcodeStatus = 'confirmed' | 'unknown' | 'other_variant' | 'other_product'
+export type LineFileBarcode = {
+  code: string
+  status: LineFileBarcodeStatus
+  other_product_name: string | null
+  other_variant_label: string | null
+}
+// line_variant_id — вариант строки (товар+цвет+размер): к нему привязываются новые коды.
+export type LineFileUploadResult = { message: string; line_variant_id: string | null; barcodes: LineFileBarcode[] }
+
+export function uploadShipmentLineFile(docId: string, lineId: string, file: File): Promise<LineFileUploadResult> {
   const form = new FormData()
   form.append('file', file)
-  return requestForm<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
+  return requestForm<LineFileUploadResult>(`/shipments/${docId}/lines/${lineId}/files`, { method: 'POST', body: form })
 }
 
 export function deleteShipmentLineFile(docId: string, lineId: string, fileId: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/${fileId}`, { method: 'DELETE' })
+}
+
+// Прикрепить этикетку из карточки товара к строке (без повторной загрузки файла).
+export function attachShipmentLineFileFromProduct(docId: string, lineId: string, productFileId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/files/from-product`, {
+    method: 'POST',
+    body: JSON.stringify({ product_file_id: productFileId }),
+  })
 }
 
 // Менеджерский список «Задач упаковки»: пагинация + фильтры (status опционален → все статусы).
@@ -209,8 +232,8 @@ export function returnLineFromPacking(docId: string, lineId: string, qty?: numbe
   })
 }
 
-// Продвижение по плановому переходу: assigned → packing (начальник склада принимает
-// задачу в работу), packing → on_packing (передать начальнику смены) и т.д.
+// Продвижение по плановому переходу: draft → packing (менеджер ставит задачу),
+// packing → on_packing (передать начальнику смены) и т.д.
 export function advanceShipment(id: string, requestId: string) {
   return request<{ message: string }>(`/shipments/${id}/advance`, {
     method: 'POST',
@@ -253,14 +276,6 @@ export function returnShipmentToPacking(id: string, payload: ReturnToPackingPayl
   return request<{ message: string }>(`/shipments/${id}/return-to-packing`, {
     method: 'POST',
     body: JSON.stringify({ mode: 'rework', ...payload }),
-  })
-}
-
-// Отклонить задачу упаковки на приёмке (assigned → draft): возврат менеджеру, причина обязательна.
-export function rejectShipment(id: string, reason: string) {
-  return request<{ message: string }>(`/shipments/${id}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
   })
 }
 
@@ -424,7 +439,6 @@ export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' 
 // --- Labels ---
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft: 'Черновик',
-  assigned: 'Ожидает принятия',
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',

@@ -55,6 +55,24 @@ def ci_like_substring_param(raw: str) -> str:
     return f"%{escape_like(str(raw).strip().lower().replace('ё', 'е'))}%"
 
 
+def barcode_variant_exists_sql(product_col: str, color_col: str, size_col: str) -> str:
+    """EXISTS-фрагмент поиска позиции по штрих-коду товара; ждёт один параметр —
+    %...%-фрагмент кода (`like_substring_param`).
+
+    Совпадение по вхождению (можно искать по обрывку кода) и с точностью до
+    варианта: ШК принадлежит цвето-размеру, поэтому сужает выдачу до конкретной
+    позиции, а не до всех вариантов товара.
+    """
+    return (
+        "EXISTS (SELECT 1 FROM product_barcodes pb"
+        " JOIN product_variants pv ON pv.id = pb.variant_id"
+        " WHERE pb.barcode LIKE ? AND COALESCE(pb.is_deleted, 0) = 0"
+        f" AND pb.product_id = {product_col}"
+        f" AND pv.color_id IS NOT DISTINCT FROM {color_col}"
+        f" AND pv.size_id IS NOT DISTINCT FROM {size_col})"
+    )
+
+
 class _ConnAdapter:
     """Оборачивает psycopg-соединение, заменяя ? на %s в запросах."""
 

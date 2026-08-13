@@ -58,7 +58,7 @@ const DOCS_SHOWN = 5
 const LINES_COLLAPSED = 4
 
 const ACTIVE_RECEIPT_STATUSES: ReceiptStatus[] = ['draft', 'planned', 'on_intake', 'partially_received', 'on_review']
-const ACTIVE_SHIPMENT_STATUSES: ShipmentStatus[] = ['draft', 'assigned', 'packing', 'on_packing', 'relocating', 'awaiting_trip']
+const ACTIVE_SHIPMENT_STATUSES: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'relocating', 'awaiting_trip']
 const ACTIVE_DISPATCH_STATUSES: DispatchStatus[] = ['draft', 'awaiting_packing', 'preparing', 'awaiting_trip', 'partially_shipped']
 
 export async function loadActiveReceipts(clientId: string, signal: AbortSignal): Promise<ActiveDoc[]> {

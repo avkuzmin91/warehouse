@@ -469,17 +469,17 @@ def _variants_by_barcodes(connection, client_id: str, barcodes: list[str]) -> di
     placeholders = ",".join("?" for _ in barcodes)
     rows = connection.execute(
         f"""
-        SELECT vb.barcode, v.id AS variant_id, v.product_id,
+        SELECT pb.barcode, v.id AS variant_id, p.id AS product_id,
                COALESCE(NULLIF(v.sku, ''), p.sku) AS product_sku,
                p.name AS product_name,
                col.name AS color_name, s.name AS size_name
-        FROM product_variant_barcodes vb
-        JOIN product_variants v ON v.id = vb.variant_id
-        JOIN products p ON p.id = v.product_id
+        FROM product_barcodes pb
+        JOIN product_variants v ON v.id = pb.variant_id
+        JOIN products p ON p.id = pb.product_id
         LEFT JOIN colors col ON col.id = v.color_id
         LEFT JOIN sizes s ON s.id = v.size_id
-        WHERE vb.barcode IN ({placeholders})
-          AND COALESCE(vb.is_deleted, 0) = 0
+        WHERE pb.barcode IN ({placeholders})
+          AND COALESCE(pb.is_deleted, 0) = 0
           AND COALESCE(v.is_deleted, 0) = 0
           AND COALESCE(p.is_deleted, 0) = 0
           AND p.client_id = ?

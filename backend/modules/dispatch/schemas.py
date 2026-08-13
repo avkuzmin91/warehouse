@@ -142,6 +142,7 @@ class DispatchListItem(BaseModel):
     sku_count:         int
     total_qty:         int
     total_shipped_qty: int = 0
+    closed_short:      bool = False
     created_at:        str
     created_by_name:   str | None = None
 
@@ -247,6 +248,8 @@ class DispatchDetailResponse(BaseModel):
     status:           str
     status_label:     str
     invoiced:         bool = False
+    closed_short_at:  str | None = None
+    can_close_short:  bool = False
     trips:            list[TripRef] = []
     created_at:       str
     created_by:       str | None

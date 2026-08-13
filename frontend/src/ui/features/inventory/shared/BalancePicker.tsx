@@ -6,6 +6,7 @@ import type { DispatchCargoType } from '../../../../api/dispatchApi'
 import type { ShipmentCargoType } from '../../../../api/shipmentsApi'
 import { EmptyState } from '../../../primitives/EmptyState'
 import { Icon } from '../../../primitives/Icon'
+import { Tooltip } from '../../../primitives/Tooltip'
 import { NumberStep } from './NumberStep'
 
 type Props = {
@@ -117,6 +118,14 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
     return () => ctrl.abort()
   }, [search, clientId, cargoType, isDefect, isDispatch, dispatchGood])
 
+  // Совпавший с поисковым запросом код (по вхождению) показывается в строке сразу,
+  // без наведения — подтверждение «нашлось именно по этому ШК» после сканирования.
+  function matchedBarcode(item: PlannableItem): string | null {
+    const q = search.trim()
+    if (!q) return null
+    return (item.barcodes ?? []).find((b) => b.includes(q)) ?? null
+  }
+
   // Главная цифра позиции: для отгрузки — свободный остаток (минус резерв), иначе склад/брак.
   function primaryQty(row: PickRow): number {
     return isDispatch ? row.free : row.storage
@@ -215,7 +224,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
               <input
                 className="input"
                 style={{ paddingLeft: 32 }}
-                placeholder="SKU, название, цвет, размер…"
+                placeholder="SKU, название, цвет, размер или ШК…"
                 value={search}
                 autoFocus
                 onChange={(e) => setSearch(e.target.value)}
@@ -251,6 +260,12 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
                 )}
                 {[pending.row.item.product_sku, pending.row.item.color_name, pending.row.item.size_name].filter(Boolean).join(' · ')}
               </div>
+              {(pending.row.item.barcodes ?? []).length > 0 && (
+                <div className="t-sub mono" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="barcode" size={13} style={{ flexShrink: 0 }} />
+                  <span style={{ overflowWrap: 'anywhere' }}>{pending.row.item.barcodes!.join(' · ')}</span>
+                </div>
+              )}
               <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-text-muted)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>
                   {isDispatch ? 'Свободно' : isDefect ? 'Брак' : 'На складе'}:{' '}
@@ -288,7 +303,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
-                <label className="field-label"><span>План отгрузки</span></label>
+                <label className="field-label"><span>{isDispatch ? 'План отгрузки' : 'План упаковки'}</span></label>
                 <NumberStep
                   value={pending.qty}
                   onChange={(v) => setPending((p) => p && { ...p, qty: v })}
@@ -352,6 +367,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
                           </span>
                         )}
                         {[row.item.product_sku, row.item.color_name, row.item.size_name].filter(Boolean).join(' · ')}
+                        <BarcodeChip barcodes={row.item.barcodes ?? []} matched={matchedBarcode(row.item)} />
                       </div>
                     </div>
                     {multi && checked ? (
@@ -428,5 +444,23 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
         </div>
       </div>
     </>
+  )
+}
+
+function BarcodeChip({ barcodes, matched }: { barcodes: string[]; matched: string | null }) {
+  if (barcodes.length === 0) return null
+  if (matched) {
+    return (
+      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', borderRadius: 4, padding: '1px 6px', fontSize: 11.5, fontWeight: 500, verticalAlign: 'text-bottom' }}>
+        <Icon name="barcode" size={13} />{matched}
+      </span>
+    )
+  }
+  return (
+    <Tooltip content={barcodes.join(' · ')} maxWidth={280}>
+      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-bg-sunken)', borderRadius: 4, padding: '1px 6px', fontSize: 11, fontWeight: 500, color: 'var(--c-text-subtle)', verticalAlign: 'text-bottom', cursor: 'default' }}>
+        <Icon name="barcode" size={13} />ШК{barcodes.length > 1 ? ` ${barcodes.length}` : ''}
+      </span>
+    </Tooltip>
   )
 }

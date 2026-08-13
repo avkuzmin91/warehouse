@@ -19,7 +19,7 @@ type Props = {
   checklist: ChecklistItem[]
 }
 
-/** draft / assigned — сборка плана менеджером и приёмка задачи начальником склада. */
+/** draft — сборка плана менеджером перед постановкой задачи. */
 export function PlanningView({ doc, isDraft, isDefectCargo, info, composition, packing, checklist }: Props) {
   const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
   const skuCount = new Set(doc.lines.map((l) => l.product_sku)).size

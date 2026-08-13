@@ -103,8 +103,7 @@ def _packed_shipment(api, client_id, pos, qty, good_zone):
         "cargo_type": "good", "client_id": client_id, "client_name": "C",
         "ship_date": "2026-05-27", "comment": "ТЗ", "lines": [line],
     }).json()["message"]
-    api.post(f"/shipments/{doc_id}/advance")  # draft → assigned
-    api.post(f"/shipments/{doc_id}/advance")  # assigned → packing
+    api.post(f"/shipments/{doc_id}/advance")  # draft → packing
     line_id = api.get(f"/shipments/{doc_id}").json()["lines"][0]["id"]
     _as(_WH)
     api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": qty})

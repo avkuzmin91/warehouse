@@ -150,7 +150,7 @@ export function DispatchesListFeature() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
-              placeholder="Номер, клиент, назначение…"
+              placeholder="Номер, клиент, назначение или ШК…"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
@@ -319,9 +319,16 @@ export function DispatchesListFeature() {
                       <Td className="num">{item.total_qty.toLocaleString('ru-RU')}</Td>
                       <Td className="num">{(item.total_shipped_qty ?? 0).toLocaleString('ru-RU')}</Td>
                       <Td>
-                        <Badge tone={DISPATCH_STATUS_TONES[item.status] as BadgeTone} dot>
-                          {item.status_label}
-                        </Badge>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <Badge tone={DISPATCH_STATUS_TONES[item.status] as BadgeTone} dot>
+                            {item.status_label}
+                          </Badge>
+                          {item.closed_short && (
+                            <Badge tone="warning">
+                              Недовоз {(item.total_qty - (item.total_shipped_qty ?? 0)).toLocaleString('ru-RU')}
+                            </Badge>
+                          )}
+                        </span>
                       </Td>
                       <Td>
                         {showProgress ? (

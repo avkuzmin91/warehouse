@@ -43,12 +43,6 @@ export function canEditShipments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
 }
 
-// Приёмка/отклонение задачи упаковки на шаге «Ожидает принятия» — начальник склада;
-// менеджерский состав тоже (физически принимает второй менеджер, проверяя первого).
-export function canAcceptPackingTask(user: User | null | undefined): boolean {
-  return user?.role === 'admin' || user?.role === 'manager' || user?.role === 'warehouse_head'
-}
-
 // Отметка «Отгрузка подготовлена» (preparing → awaiting_trip) — задача кладовщика,
 // плюс менеджерский состав может закрыть её сам.
 export function canPrepareDispatch(user: User | null | undefined): boolean {

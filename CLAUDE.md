@@ -50,7 +50,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 |---|---|
 | `auth`, `users` | JWT + refresh-сессии (cookie `wms_rt`, мобильный режим `X-Client: mobile`), rate-limit; учётные записи |
 | `dictionaries` | справочники (clients, colors, sizes, warehouses, carriers, positions, own_warehouses, ...) |
-| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_variant_barcodes`), фото |
+| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_barcodes` с `variant_id`; этикетки — `product_barcode_files`), фото |
 | `receipts` | поступления `WH-xxxxx`; приёмка идёт через рейс (разгрузка) |
 | `shipments` | «Задача упаковки» склада; терминальный исход — `packed` |
 | `dispatch` | «Отгрузка» клиенту `DSP-xxxx`; дробление по рейсам через `trip_alloc` |
@@ -128,8 +128,8 @@ with get_connection() as conn:
 Полные перечни — в [backend/config.py](backend/config.py), здесь — для ориентира:
 
 - **Receipts:** ручной переход только `draft → planned`; дальше поступление двигает **рейс** (приёмка в разгрузке): `planned → partially_received → done`, плюс `cancelled`. `on_intake` / `on_review` — легаси, в новом потоке не используются.
-- **Shipments («Задача упаковки», годный груз):** `draft → assigned → packing → on_packing → relocating → packed`, плюс `completed_no_goods` (весь товар оказался браком — завершение без рейса) и `cancelled`. **`packed` — терминал**: дальше товар возит домен dispatch. `awaiting_trip` / `partially_shipped` / `shipped` — легаси, документы в них больше не переводятся. Брак-отгрузка минует упаковку: `draft → relocating → awaiting_trip`. Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
-- **Dispatch («Отгрузка» клиенту):** `draft → preparing → awaiting_trip → (partially_shipped) → shipped`, плюс `cancelled`. Переходы в `partially_shipped`/`shipped` делает выезд привязанного рейса, не ручной advance.
+- **Shipments («Задача упаковки», годный груз):** `draft → packing → on_packing → relocating → packed`, плюс `completed_no_goods` (весь товар оказался браком — завершение без рейса) и `cancelled`. **`packed` — терминал**: дальше товар возит домен dispatch. `awaiting_trip` / `partially_shipped` / `shipped` — легаси, документы в них больше не переводятся. Брак-отгрузка минует упаковку: `draft → relocating → awaiting_trip`. Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
+- **Dispatch («Отгрузка» клиенту):** `draft → preparing → awaiting_trip → (partially_shipped) → shipped`, плюс `cancelled`. Переходы в `partially_shipped`/`shipped` делает выезд привязанного рейса, не ручной advance. Единственное ручное исключение — `POST /dispatches/{id}/close-short` («Закрыть с недовозом»): `partially_shipped → shipped`, когда остаток больше не поедет. План строк не переписывается, недовоз = Σ(`qty` − `shipped_qty`), отметка — `dispatch_docs.closed_short_at`; по ней счёт тарифицируется по факту. Сток не двигается: неувезённое остаётся в `ready`/`packed` и после выхода из резервирующих статусов доступно другим отгрузкам.
 - **Trips:** `draft → awaiting_arrival → unloading → costing → closed`, плюс `cancelled`. Направления `inbound` / `outbound` (лексика статусов различается, коды общие).
 - **Invoices:** `draft → issued → partially_paid → closed`, плюс `cancelled`.
 

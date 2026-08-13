@@ -97,10 +97,33 @@ export type ProductVariantDimension = {
   height: number
 }
 
-export type VariantBarcodeItem = {
+export type ProductBarcodeFileItem = {
+  id: string
+  filename: string
+  url: string
+  mime_type: string | null
+}
+
+export type ProductBarcodeItem = {
   id: string
   barcode: string
   source: string | null
+  files: ProductBarcodeFileItem[]
+}
+
+/** Этикетка из карточки товара для выбора в документах (плоский список).
+ * Код принадлежит варианту — цвет/размер нужны для фильтра по строке документа. */
+export type ProductFileItem = {
+  id: string
+  barcode: string
+  variant_id: string | null
+  color_id: string | null
+  size_id: string | null
+  color_name: string | null
+  size_name: string | null
+  filename: string
+  url: string
+  mime_type: string | null
 }
 
 export type ProductVariantItem = {
@@ -111,7 +134,7 @@ export type ProductVariantItem = {
   size_id: string | null
   size_name: string | null
   sku: string
-  barcodes: VariantBarcodeItem[]
+  barcodes: ProductBarcodeItem[]
   images: string[]
   is_active: boolean
   stock: number
@@ -235,6 +258,12 @@ export type InventoryProductTypeLookup = {
   requires_size: boolean
 }
 
+export type InventoryProductBarcode = {
+  barcode: string
+  color_id: string | null
+  size_id: string | null
+}
+
 export type InventoryProductLookup = {
   id: string
   name: string
@@ -246,5 +275,6 @@ export type InventoryProductLookup = {
   supplier_name: string | null
   requires_color: boolean
   requires_size: boolean
+  barcodes?: InventoryProductBarcode[]
 }
 
