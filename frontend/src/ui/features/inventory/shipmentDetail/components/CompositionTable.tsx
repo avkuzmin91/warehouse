@@ -11,15 +11,16 @@ import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { LineFilesCell } from './LineFilesCell'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from '../shared/types'
 
-// Подпись под файлом: код + статус привязки, чтобы «не привязан» был виден прямо в строке.
+// Подпись под файлом — распознанные коды; помечается только конфликт (чужой
+// товар / другой цвето-размер), непривязанность кода не подписывается.
 function fileBarcodeCaption(f: ShipmentLineFile): string | undefined {
   const details = f.barcode_details ?? []
   if (details.length === 0) {
     return (f.barcodes ?? []).length > 0 ? `ШК ${f.barcodes.join(', ')}` : undefined
   }
   return details
-    .map((b) => b.status === 'unknown' ? `ШК ${b.code} — не привязан`
-      : b.status === 'confirmed' ? `ШК ${b.code}`
+    .map((b) => b.status === 'confirmed' || b.status === 'unknown'
+      ? `ШК ${b.code}`
       : `ШК ${b.code} — конфликт`)
     .join(' · ')
 }
@@ -128,7 +129,7 @@ export function CompositionTable({
                 </div>
               </Td>
               <Td>
-                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
                 {line.sku_pending ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
                     <span className="badge warning">Без SKU</span>

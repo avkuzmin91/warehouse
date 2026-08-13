@@ -123,7 +123,13 @@ export function BarcodeReviewModal({ docId, docNumber, items, canBind, onClose, 
         <>
           {canBind && unknown.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--c-text-subtle)', marginRight: 'auto', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allSelectableSelected} disabled={binding} onChange={toggleAll} />
+              <span
+                className={`t-checkbox ${allSelectableSelected ? 'checked' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', opacity: binding ? 0.6 : 1 }}
+              >
+                {allSelectableSelected && <Icon name="check" size={10} />}
+              </span>
+              <input type="checkbox" checked={allSelectableSelected} disabled={binding} onChange={toggleAll} style={{ display: 'none' }} />
               Выбрать все новые
             </label>
           )}
@@ -169,15 +175,23 @@ export function BarcodeReviewModal({ docId, docNumber, items, canBind, onClose, 
                   }}
                 >
                   {canBind && it.status === 'unknown' && !bound ? (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(it.code)}
-                      disabled={binding}
-                      onChange={() => toggle(it.code)}
-                      style={{ flex: 'none' }}
-                    />
+                    <label style={{ display: 'flex', flex: 'none', cursor: binding ? 'default' : 'pointer' }}>
+                      <span
+                        className={`t-checkbox ${selected.has(it.code) ? 'checked' : ''}`}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', opacity: binding ? 0.6 : 1 }}
+                      >
+                        {selected.has(it.code) && <Icon name="check" size={10} />}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(it.code)}
+                        disabled={binding}
+                        onChange={() => toggle(it.code)}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
                   ) : (
-                    <span style={{ width: 13, flex: 'none' }} />
+                    <span style={{ width: 14, flex: 'none' }} />
                   )}
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

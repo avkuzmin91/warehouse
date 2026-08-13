@@ -1476,6 +1476,21 @@ def revert_shipment(
     return result
 
 
+@router.post("/shipments/decode-file-barcodes")
+async def decode_file_barcodes(file: UploadFile = File(...), user=Depends(_get_manager)):
+    """Распознать ШК на файле без привязки к документу — для черновика создания
+    задачи: показать код под файлом сразу, до сохранения. Файл не сохраняется."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_LINE_FILE_EXTS:
+        raise HTTPException(status_code=400, detail="Допустимы файлы: pdf, png, jpg, jpeg")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
+    return {"barcodes": decode_line_file_barcodes(data, ext)}
+
+
 @router.post("/shipments/{doc_id}/lines/{line_id}/files")
 async def upload_shipment_line_file(
     doc_id: str,

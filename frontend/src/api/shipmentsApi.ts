@@ -678,6 +678,16 @@ export type LineFileBarcode = {
 // line_variant_id — вариант строки (товар+цвет+размер): к нему привязываются новые коды.
 export type LineFileUploadResult = { message: string; line_variant_id: string | null; barcodes: LineFileBarcode[] }
 
+// Распознать ШК на файле без документа — для черновика создания задачи (файл не сохраняется).
+export function decodeShipmentFileBarcodes(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return requestForm<{ barcodes: string[] }>('/shipments/decode-file-barcodes', {
+    method: 'POST',
+    body: form,
+  })
+}
+
 export function uploadShipmentLineFile(docId: string, lineId: string, file: File) {
   const form = new FormData()
   form.append('file', file)

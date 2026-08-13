@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useBackNav } from '../../../hooks/useBackNav'
-import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate } from '../../../api/shipmentsApi'
+import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate, decodeShipmentFileBarcodes } from '../../../api/shipmentsApi'
 import type { LineFileBarcode } from '../../../api/shipmentsApi'
 import { useToast } from '../../feedback/Toast'
 import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
@@ -139,6 +139,21 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       : l))
   }
 
+  // Распознанные ШК на локальных файлах черновика — код виден сразу при добавлении,
+  // до создания документа. Ключ — сам File (объекты стабильны до сохранения).
+  const [draftFileCodes, setDraftFileCodes] = useState<ReadonlyMap<File, string[]>>(new Map())
+
+  function recognizeDraftFiles(files: File[]) {
+    for (const file of files) {
+      decodeShipmentFileBarcodes(file)
+        .then((res) => {
+          if (res.barcodes.length === 0) return
+          setDraftFileCodes((prev) => new Map(prev).set(file, res.barcodes))
+        })
+        .catch(() => {})
+    }
+  }
+
   function addLineFiles(uid: string, files: File[]) {
     if (files.length === 0) return
     for (const file of files) {
@@ -147,6 +162,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     }
     setError('')
     setLines((ls) => ls.map((l) => l._uid === uid ? { ...l, files: [...l.files, ...files] } : l))
+    recognizeDraftFiles(files)
   }
 
   function replaceLineFile(uid: string, index: number, file: File) {
@@ -156,6 +172,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     setLines((ls) => ls.map((l) => l._uid === uid
       ? { ...l, files: l.files.map((f, i) => i === index ? file : f) }
       : l))
+    recognizeDraftFiles([file])
   }
 
   function removeLineFile(uid: string, index: number) {
@@ -483,11 +500,15 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
                                 filename: f.filename,
                                 mimeType: f.mime_type,
                                 href: resolvePublicUploadSrc(f.url),
+                                caption: f.barcode ? `ШК ${f.barcode}` : undefined,
                               })),
                               ...l.files.map((f, i) => ({
                                 id: String(i),
                                 filename: f.name,
                                 mimeType: f.type || null,
+                                caption: (draftFileCodes.get(f) ?? []).length > 0
+                                  ? `ШК ${(draftFileCodes.get(f) ?? []).join(', ')}`
+                                  : undefined,
                               })),
                             ]}
                             canEdit
