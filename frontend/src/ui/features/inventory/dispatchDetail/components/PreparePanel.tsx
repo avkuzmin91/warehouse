@@ -360,7 +360,7 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+                      <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <div className="mono" style={{ fontSize: 14, fontWeight: 600 }}>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { DispatchLine } from '../../../../../api/dispatchApi'
 import { Icon } from '../../../../primitives/Icon'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
+import { ProductLink } from '../../../shared/ProductLink'
 import { DispatchLineFiles } from './DispatchLineFiles'
 
 type Props = {
@@ -46,7 +47,7 @@ export function LinesTable({ lines, onSavePallets, onSaveBoxes }: Props) {
           return (
             <tr key={l.id}>
               <td>
-                <div style={{ fontWeight: 500, fontSize: 13 }}>{l.product_name}</div>
+                <div style={{ fontWeight: 500, fontSize: 13 }}><ProductLink productId={l.product_id}>{l.product_name}</ProductLink></div>
                 <div className="t-sub mono">{[l.product_sku, l.color_name, l.size_name].filter(Boolean).join(' · ')}</div>
                 {l.sku_pending && <span className="badge warning" style={{ marginTop: 4 }}>Без SKU</span>}
                 {l.files.length > 0 && (

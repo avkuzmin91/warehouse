@@ -50,7 +50,7 @@ export function PackingTable({
           return (
             <tr key={line.id}>
               <Td>
-                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} />
+                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
               </Td>
               <Td className="num"><span className="num" style={{ fontWeight: 500 }}>{line.qty}</span></Td>
               {!isResult && (
