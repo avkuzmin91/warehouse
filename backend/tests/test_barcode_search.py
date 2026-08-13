@@ -91,6 +91,8 @@ def test_plannable_picker_barcode_narrows_to_variant(manager_client, seeded):
     assert len(items) == 1
     assert items[0]["product_id"] == seeded["product_id"]
     assert items[0]["color_id"] == seeded["color1"]
+    # коды варианта отдаются в позиции — для чипа «ШК» в пикере
+    assert items[0]["barcodes"] == [seeded["code"]]
 
     # точное совпадение: обрезанный код ничего не находит
     r = manager_client.get(f"/balances/plannable?search={seeded['code'][:8]}&cargo_type=good")

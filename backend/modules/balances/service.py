@@ -522,6 +522,29 @@ def get_plannable_items(
         stock_params + params + [limit],
     ).fetchall()
 
+    def _vkey(pid, color, size) -> tuple:
+        return (str(pid), str(color) if color else None, str(size) if size else None)
+
+    barcodes_by_variant: dict[tuple, list[str]] = {}
+    pids = sorted({str(r["product_id"]) for r in rows})
+    if pids:
+        ph = ",".join("?" for _ in pids)
+        code_rows = connection.execute(
+            f"""
+            SELECT pb.product_id, pb.barcode, pv.color_id, pv.size_id
+            FROM product_barcodes pb
+            JOIN product_variants pv ON pv.id = pb.variant_id
+            WHERE COALESCE(pb.is_deleted, 0) = 0
+              AND pb.product_id IN ({ph})
+            ORDER BY pb.created_at
+            """,
+            pids,
+        ).fetchall()
+        for cr in code_rows:
+            barcodes_by_variant.setdefault(
+                _vkey(cr["product_id"], cr["color_id"], cr["size_id"]), []
+            ).append(str(cr["barcode"]))
+
     items = [
         PlannableItem(
             product_id=str(r["product_id"]),
@@ -543,6 +566,7 @@ def get_plannable_items(
             in_transit=0 if is_defect else int(r["in_transit"] or 0),
             items_per_box=int(r["items_per_box"]) if r["items_per_box"] is not None else None,
             boxes_per_pallet=int(r["boxes_per_pallet"]) if r["boxes_per_pallet"] is not None else None,
+            barcodes=barcodes_by_variant.get(_vkey(r["product_id"], r["color_id"], r["size_id"]), []),
         )
         for r in rows
     ]
