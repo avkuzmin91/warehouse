@@ -158,7 +158,7 @@ def test_delete_barcode_removes_from_lookup(manager_client, warehouse_client, pr
     assert _add_barcode(manager_client, pid, code1).status_code == 200
 
 
-def test_products_search_by_barcode_exact(manager_client, product_with_variant):
+def test_products_search_by_barcode_substring(manager_client, product_with_variant):
     pid = product_with_variant["product_id"]
     code = f"463{uuid.uuid4().hex[:10]}"
     assert _add_barcode(manager_client, pid, code).status_code == 200
@@ -167,7 +167,7 @@ def test_products_search_by_barcode_exact(manager_client, product_with_variant):
     assert r.status_code == 200, r.text
     assert [i["id"] for i in r.json()["items"]] == [pid]
 
-    # поиск по ШК — точное совпадение: обрезанный код товара не находит
-    r = manager_client.get(f"/products?search={code[:8]}")
+    # поиск по ШК — по вхождению: обрывка кода достаточно
+    r = manager_client.get(f"/products?search={code[3:10]}")
     assert r.status_code == 200
-    assert pid not in [i["id"] for i in r.json()["items"]]
+    assert pid in [i["id"] for i in r.json()["items"]]

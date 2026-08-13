@@ -33,7 +33,7 @@ from config import (
     MAX_UPLOAD_BYTES,
     UPLOADS_DIR,
 )
-from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql
+from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql, like_substring_param
 from utils import now_iso as _now, validate_business_date
 from modules.auth.service import get_current_document_creator, get_current_manager
 from security import can_view_costs, ensure_cost_access
@@ -206,7 +206,7 @@ def dispatches_summary(
                 " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
                 f" AND {barcode_variant_exists_sql('dl.product_id', 'dl.color_id', 'dl.size_id')}))"
             )
-            params += [s, s, s, search.strip()]
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM dispatch_lines dl"
@@ -267,7 +267,7 @@ def list_dispatch_lines(
                 "(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?"
                 f" OR {barcode_variant_exists_sql('l.product_id', 'l.color_id', 'l.size_id')})"
             )
-            params += [s, s, s, search.strip()]
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             s = ci_like_substring_param(sku)
             conds.append("(fold_ci(COALESCE(NULLIF(p.sku, ''), l.product_sku)) LIKE ? OR fold_ci(l.product_name) LIKE ?)")

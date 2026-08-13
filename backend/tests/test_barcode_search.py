@@ -1,7 +1,8 @@
 """Поиск по штрих-коду варианта: пикер остатков, списки остатков/упаковки/отгрузки, lookup товаров.
 
 Сценарий: клиент присылает товар с непонятным названием и ШК — сотрудник ищет
-позицию по коду. Совпадение точное и с точностью до варианта (цвет×размер).
+позицию по коду. Совпадение по вхождению (можно обрывком кода) и с точностью
+до варианта (цвет×размер).
 """
 from __future__ import annotations
 
@@ -94,10 +95,12 @@ def test_plannable_picker_barcode_narrows_to_variant(manager_client, seeded):
     # коды варианта отдаются в позиции — для чипа «ШК» в пикере
     assert items[0]["barcodes"] == [seeded["code"]]
 
-    # точное совпадение: обрезанный код ничего не находит
+    # поиск по вхождению: обрывка кода достаточно, вариант тот же
     r = manager_client.get(f"/balances/plannable?search={seeded['code'][:8]}&cargo_type=good")
     assert r.status_code == 200
-    assert r.json()["items"] == []
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["color_id"] == seeded["color1"]
 
 
 def test_balances_search_by_barcode(manager_client, seeded):

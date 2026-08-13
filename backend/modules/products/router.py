@@ -16,7 +16,7 @@ from config import (
     UPLOADS_DIR,
     MAX_UPLOAD_BYTES,
 )
-from dbconn import get_connection
+from dbconn import get_connection, like_substring_param
 from modules.auth.service import (
     get_current_admin,
     get_current_manager,
@@ -106,16 +106,15 @@ def list_products(
     if search is not None and str(search).strip():
         term = str(search).strip()
         like = _ci_substring_like_param(term)
-        # Штрих-код ищется точным совпадением: сканер/буфер отдаёт код целиком.
         conds.append(
             "(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?"
             " OR EXISTS ("
             "   SELECT 1 FROM product_barcodes pb"
-            "   WHERE pb.product_id = p.id AND pb.barcode = ?"
+            "   WHERE pb.product_id = p.id AND pb.barcode LIKE ?"
             "     AND COALESCE(pb.is_deleted, 0) = 0"
             " ))"
         )
-        params.extend([like, like, term])
+        params.extend([like, like, like_substring_param(term)])
     if name is not None and str(name).strip():
         conds.append("fold_ci(p.name) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))

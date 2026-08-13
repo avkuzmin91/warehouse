@@ -118,12 +118,12 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
     return () => ctrl.abort()
   }, [search, clientId, cargoType, isDefect, isDispatch, dispatchGood])
 
-  // Совпавший с поисковым запросом код показывается в строке сразу, без наведения —
-  // подтверждение «нашлось именно по этому ШК» после сканирования.
+  // Совпавший с поисковым запросом код (по вхождению) показывается в строке сразу,
+  // без наведения — подтверждение «нашлось именно по этому ШК» после сканирования.
   function matchedBarcode(item: PlannableItem): string | null {
     const q = search.trim()
     if (!q) return null
-    return (item.barcodes ?? []).find((b) => b === q) ?? null
+    return (item.barcodes ?? []).find((b) => b.includes(q)) ?? null
   }
 
   // Главная цифра позиции: для отгрузки — свободный остаток (минус резерв), иначе склад/брак.
@@ -451,15 +451,15 @@ function BarcodeChip({ barcodes, matched }: { barcodes: string[]; matched: strin
   if (barcodes.length === 0) return null
   if (matched) {
     return (
-      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', borderRadius: 4, padding: '0 5px', fontSize: 11.5, verticalAlign: 'text-bottom' }}>
-        <Icon name="barcode" size={12} />{matched}
+      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-accent-bg)', color: 'var(--c-accent)', borderRadius: 4, padding: '1px 6px', fontSize: 11.5, fontWeight: 500, verticalAlign: 'text-bottom' }}>
+        <Icon name="barcode" size={13} />{matched}
       </span>
     )
   }
   return (
     <Tooltip content={barcodes.join(' · ')} maxWidth={280}>
-      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--c-border)', borderRadius: 4, padding: '0 5px', fontSize: 11, color: 'var(--c-text-subtle)', verticalAlign: 'text-bottom' }}>
-        <Icon name="barcode" size={12} />{barcodes.length > 1 ? barcodes.length : ''}
+      <span style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-bg-sunken)', borderRadius: 4, padding: '1px 6px', fontSize: 11, fontWeight: 500, color: 'var(--c-text-subtle)', verticalAlign: 'text-bottom', cursor: 'default' }}>
+        <Icon name="barcode" size={13} />ШК{barcodes.length > 1 ? ` ${barcodes.length}` : ''}
       </span>
     </Tooltip>
   )

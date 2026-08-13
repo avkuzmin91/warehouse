@@ -5,7 +5,7 @@ from typing import Any, Mapping
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from dbconn import ci_like_substring_param, get_connection
+from dbconn import ci_like_substring_param, get_connection, like_substring_param
 from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.dictionaries.schemas import ClientStoreItem, DictionaryBaseItem
 
@@ -223,16 +223,15 @@ def lookup_products(
         params.append(client_id.strip())
     if search and search.strip():
         like = ci_like_substring_param(search)
-        # Штрих-код ищется точным совпадением: сканер/буфер отдаёт код целиком.
         conds.append(
             "(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?"
             " OR EXISTS ("
             "   SELECT 1 FROM product_barcodes pb"
-            "   WHERE pb.product_id = p.id AND pb.barcode = ?"
+            "   WHERE pb.product_id = p.id AND pb.barcode LIKE ?"
             "     AND COALESCE(pb.is_deleted, 0) = 0"
             " ))"
         )
-        params.extend([like, like, search.strip()])
+        params.extend([like, like, like_substring_param(search)])
     where_sql = " AND ".join(conds)
     # Без limit — полная выдача (веб-frontend зовёт без параметров). Клиент,
     # которому нужен признак усечения, запрашивает limit = N+1 и сравнивает длину.

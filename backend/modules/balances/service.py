@@ -34,7 +34,7 @@ from config import (
     STOCK_EVENT_WRITE_OFF_UNDO,
     WRITEOFF_REASON_OTHER,
 )
-from dbconn import barcode_variant_exists_sql, ci_like_substring_param
+from dbconn import barcode_variant_exists_sql, ci_like_substring_param, like_substring_param
 from modules.balances.schemas import (
     BalanceGroupItem,
     BalanceGroupedResponse,
@@ -129,7 +129,7 @@ def _position_agg_query(client_id: str | None, search: str | None) -> tuple[str,
             " OR u.size_id IN (SELECT id FROM sizes WHERE fold_ci(name) LIKE ?)"
             f" OR {barcode_variant_exists_sql('u.product_id', 'u.color_id', 'u.size_id')})"
         )
-        line_params += [s, s, s, s, s, s, search.strip()]
+        line_params += [s, s, s, s, s, s, like_substring_param(search)]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полный GROUP BY журнала: client_id — ключ группировки и
@@ -486,7 +486,7 @@ def get_plannable_items(
             "(fold_ci(p.product_name) LIKE ? OR fold_ci(p.product_sku) LIKE ? OR fold_ci(prod.sku) LIKE ? OR fold_ci(prod.name) LIKE ?"
             f" OR {barcode_variant_exists_sql('p.product_id', 'p.color_id', 'p.size_id')})"
         )
-        params += [s, s, s, s, search.strip()]
+        params += [s, s, s, s, like_substring_param(search)]
     if is_defect:
         conds.append("(p.storage_defect > 0 OR p.ready_defect > 0)")
     elif cargo_type == DISPATCH_CARGO_GOOD_UNPACKED:
@@ -650,7 +650,7 @@ def get_balances_by_zone(
             " OR u.size_id IN (SELECT id FROM sizes WHERE fold_ci(name) LIKE ?)"
             f" OR {barcode_variant_exists_sql('u.product_id', 'u.color_id', 'u.size_id')})"
         )
-        line_params += [s, s, s, s, s, s, search.strip()]
+        line_params += [s, s, s, s, s, s, like_substring_param(search)]
     pos_where = ("WHERE " + " AND ".join(pos_conds)) if pos_conds else ""
 
     # Пушдаун клиента в полные GROUP BY журнала (gain/lose): client_id — ключ

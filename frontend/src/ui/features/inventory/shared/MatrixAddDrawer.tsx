@@ -95,13 +95,13 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
 
   const existing = useMemo(() => new Set(existingKeys), [existingKeys])
 
-  // Точное совпадение запроса с ШК товара: клиент часто присылает «непонятное
-  // название + штрих-код», и код — единственный надёжный ключ поиска.
+  // Поиск по ШК — по вхождению: клиент часто присылает «непонятное название +
+  // штрих-код» (иногда обрывком), и код — единственный надёжный ключ поиска.
   const barcodeHit = useMemo(() => {
     const raw = filter.trim()
     if (!raw) return null
     for (const p of products) {
-      const b = (p.barcodes ?? []).find((x) => x.barcode === raw)
+      const b = (p.barcodes ?? []).find((x) => x.barcode.includes(raw))
       if (b) return { productId: p.id, colorId: b.color_id, sizeId: b.size_id }
     }
     return null
@@ -113,7 +113,7 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
     if (!q) return products
     return products.filter((p) =>
       foldCiSearch(`${p.name} ${p.sku}`).includes(q)
-      || (p.barcodes ?? []).some((b) => b.barcode === raw))
+      || (p.barcodes ?? []).some((b) => b.barcode.includes(raw)))
   }, [products, filter])
 
   // Код нашёлся — сразу отмечаем товар и грузим сетку: ячейка нужного

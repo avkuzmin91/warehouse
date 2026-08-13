@@ -37,7 +37,7 @@ from config import (
     SHIPMENT_STATUSES_ALL,
     UPLOADS_DIR,
 )
-from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql
+from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql, like_substring_param
 from utils import now_iso as _now, validate_business_date
 from modules.auth.service import (
     get_current_admin,
@@ -287,7 +287,7 @@ def shipments_summary(
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
                 f" AND {barcode_variant_exists_sql('sl.product_id', 'sl.color_id', 'sl.size_id')}))"
             )
-            params += [s, s, s, search.strip()]
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
@@ -371,7 +371,7 @@ def list_shipments(
                 " WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted,0)=0"
                 f" AND {barcode_variant_exists_sql('sl.product_id', 'sl.color_id', 'sl.size_id')}))"
             )
-            params += [s, s, s, search.strip()]
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             conds.append(
                 "EXISTS (SELECT 1 FROM shipment_lines sl"
@@ -530,7 +530,7 @@ def list_shipment_lines(
                 "(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?"
                 f" OR {barcode_variant_exists_sql('l.product_id', 'l.color_id', 'l.size_id')})"
             )
-            params += [s, s, s, search.strip()]
+            params += [s, s, s, like_substring_param(search)]
         if sku:
             s = ci_like_substring_param(sku)
             conds.append("(fold_ci(COALESCE(NULLIF(p.sku, ''), l.product_sku)) LIKE ? OR fold_ci(l.product_name) LIKE ?)")
