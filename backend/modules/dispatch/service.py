@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -12,7 +12,9 @@ from config import (
     DISPATCH_CARGO_GOOD_UNPACKED,
     DISPATCH_CARGO_TYPES,
     DISPATCH_OP_ADVANCE,
+    DISPATCH_OP_CLOSE_SHORT,
     DISPATCH_OP_PREPARE,
+    DISPATCH_OP_PRIORITY_UPDATE,
     DISPATCH_OP_RETURN,
     DISPATCH_RETURNABLE_STATUSES,
     DISPATCH_STATUS_AWAITING_PACKING,
@@ -22,6 +24,7 @@ from config import (
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_SHIPPED,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
     DISPATCH_TRIP_SELECTABLE_STATUSES,
@@ -1070,6 +1073,132 @@ def dispatch_fully_shipped(connection, doc_id: str) -> bool:
     return True
 
 
+def dispatch_shortfall(connection, doc_id: str) -> tuple[int, int]:
+    """(отгружено, план) по документу — база сообщения о недовозе."""
+    row = connection.execute(
+        "SELECT COALESCE(SUM(shipped_qty), 0) AS shipped, COALESCE(SUM(qty), 0) AS plan "
+        "FROM dispatch_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    return (int(row["shipped"] or 0), int(row["plan"] or 0)) if row else (0, 0)
+
+
+def _has_pending_outbound_trip(connection, doc_id: str) -> str | None:
+    """Номер привязанного рейса, который ещё может увезти остаток (черновик / в пути / погрузка)."""
+    row = connection.execute(
+        "SELECT t.trip_number FROM trip_lines tl "
+        "JOIN trip_docs t ON t.id = tl.trip_id AND COALESCE(t.is_deleted, 0) = 0 "
+        "WHERE tl.dispatch_doc_id = ? AND COALESCE(tl.is_deleted, 0) = 0 "
+        "AND t.status IN (?,?,?) LIMIT 1",
+        (doc_id, TRIP_STATUS_DRAFT, TRIP_STATUS_AWAITING_ARRIVAL, TRIP_STATUS_UNLOADING),
+    ).fetchone()
+    return str(row["trip_number"]) if row else None
+
+
+def dispatch_shortage_final(connection, doc_id: str) -> bool:
+    """True, если отгрузка уехала не полностью и ждёт решения менеджера.
+
+    Условия: статус «Частично отгружено», есть недовоз (план > отгруженного) и нет
+    привязанного активного рейса — увозить сейчас нечем. В отличие от приёмки
+    (`receipt_shortage_final`) НЕ требуем, чтобы план был разложен по рейсам целиком:
+    нераспределённый остаток на исходящей стороне — это и есть недовоз (товар лежит
+    на складе, а клиент его не берёт), а не ожидание поставщика.
+    """
+    row = connection.execute(
+        "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    if not row or str(row["status"]) != DISPATCH_STATUS_PARTIALLY_SHIPPED:
+        return False
+    shipped, plan = dispatch_shortfall(connection, doc_id)
+    if plan - shipped <= 0:
+        return False
+    return _has_pending_outbound_trip(connection, doc_id) is None
+
+
+def list_stuck_partial_dispatches(connection, *, idle_days: int = 7) -> list[dict]:
+    """Частично отгруженные без активного рейса дольше `idle_days` — кандидаты на close-short.
+
+    Источник задачи менеджеру «Закрыть с недовозом». Порог по времени обязателен:
+    сразу после выезда рейса «Частично отгружено» без нового рейса — нормальное
+    состояние (остаток поедет следующим рейсом через день-два), и задача была бы
+    шумом. Задача появляется, когда документ действительно завис.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(days=idle_days)).isoformat()
+    rows = connection.execute(
+        "SELECT id, doc_number, updated_at, created_at FROM dispatch_docs "
+        "WHERE COALESCE(is_deleted, 0) = 0 AND status = ? "
+        "AND COALESCE(updated_at, created_at) < ? ORDER BY COALESCE(updated_at, created_at)",
+        (DISPATCH_STATUS_PARTIALLY_SHIPPED, cutoff),
+    ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        doc_id = str(r["id"])
+        if not dispatch_shortage_final(connection, doc_id):
+            continue
+        out.append({
+            "id": doc_id,
+            "doc_number": str(r["doc_number"]),
+            "since": r["updated_at"] or r["created_at"],
+        })
+    return out
+
+
+def close_dispatch_short(connection, doc_id: str, user_id: str) -> str:
+    """«Закрыть с недовозом»: Частично отгружено → Отгружено, остаток больше не поедет.
+
+    Сток не трогаем: неувезённое лежит в «Готов к отгрузке»/«Упаковано» — легальных
+    корзинах, и после выхода документа из резервирующих статусов остаток снова доступен
+    другим отгрузкам (физический вывоз из зоны отгрузки — обычным перемещением). План
+    строк не переписываем: заявленное клиентом количество остаётся в документе, недовоз
+    считается как qty − shipped_qty, а `closed_short_at` отличает закрытый недовоз от
+    полностью уехавшей отгрузки (по нему счёт считается по факту). Без commit.
+    """
+    row = connection.execute(
+        "SELECT status, cargo_type, priority_rank FROM dispatch_docs "
+        "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if str(row["status"]) != DISPATCH_STATUS_PARTIALLY_SHIPPED:
+        raise HTTPException(
+            status_code=400,
+            detail="Закрыть с недовозом можно только частично отгруженный документ",
+        )
+    trip_number = _has_pending_outbound_trip(connection, doc_id)
+    if trip_number:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Остаток распределён в рейс {trip_number} — сначала отвяжите отгрузку от рейса",
+        )
+    shipped, plan = dispatch_shortfall(connection, doc_id)
+    if plan - shipped <= 0:
+        raise HTTPException(status_code=400, detail="Нет недовоза: отгружен весь план")
+
+    now = _now()
+    connection.execute(
+        "UPDATE dispatch_docs SET status = ?, priority_rank = NULL, "
+        "closed_short_at = ?, closed_short_by = ?, updated_at = ? WHERE id = ?",
+        (DISPATCH_STATUS_SHIPPED, now, user_id, now, doc_id),
+    )
+    if row.get("priority_rank") is not None:
+        connection.execute(
+            "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, DISPATCH_OP_PRIORITY_UPDATE,
+             "Приоритет снят: отгрузка завершена", now, user_id),
+        )
+    verb = "Возвращено" if normalize_cargo_type(row["cargo_type"]) == DISPATCH_CARGO_DEFECT else "Отгружено"
+    connection.execute(
+        "INSERT INTO dispatch_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, DISPATCH_OP_CLOSE_SHORT,
+         f"{DISPATCH_STATUS_LABELS[DISPATCH_STATUS_PARTIALLY_SHIPPED]} → "
+         f"{DISPATCH_STATUS_LABELS[DISPATCH_STATUS_SHIPPED]} "
+         f"(закрыто с недовозом: {verb.lower()} {shipped} из {plan} шт.)", now, user_id),
+    )
+    return DISPATCH_STATUS_SHIPPED
+
+
 def _dispatch_priority_order(alias: str = "d") -> str:
     return (
         f"CASE WHEN {alias}.priority_rank IS NULL THEN 1 ELSE 0 END, "
@@ -1201,6 +1330,7 @@ def list_dispatches_aggregated(
             "sku_count": int(r["sku_count"] or 0),
             "total_qty": int(r["total_qty"] or 0),
             "total_shipped_qty": int(r["total_shipped_qty"] or 0),
+            "closed_short": r.get("closed_short_at") is not None,
             "created_at": str(r["created_at"]),
             "created_by_name": r.get("created_by_name"),
         }
@@ -1320,6 +1450,8 @@ def get_dispatch_detail(connection, doc_id: str, *, show_costs: bool = True) -> 
         "status": str(row["status"]),
         "status_label": DISPATCH_STATUS_LABELS.get(str(row["status"]), str(row["status"])),
         "invoiced": dispatch_is_invoiced(connection, doc_id),
+        "closed_short_at": row.get("closed_short_at"),
+        "can_close_short": dispatch_shortage_final(connection, doc_id),
         "trips": trips,
         "created_at": str(row["created_at"]),
         "created_by": row["created_by"],

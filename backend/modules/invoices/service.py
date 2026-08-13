@@ -131,6 +131,16 @@ def next_invoice_number(connection) -> str:
     return f"INV-{n:04d}"
 
 
+# Количество строки отгрузки к тарификации: план, а у закрытых с недовозом
+# (`closed_short_at`) — фактически уехавшее, иначе клиент заплатит за неувезённое.
+# Факт берём только по явной отметке недовоза: у остальных отгружен весь план, а у
+# документов, миграированных из shipments (0065), shipped_qty недостоверен. `d` —
+# алиас dispatch_docs, `sl` — dispatch_lines.
+_BILLABLE_QTY_SQL = (
+    "CASE WHEN d.closed_short_at IS NOT NULL THEN COALESCE(sl.shipped_qty, 0) ELSE sl.qty END"
+)
+
+
 def attach_shipments(
     connection,
     *,
@@ -648,7 +658,7 @@ def list_uninvoiced_shipments(
                d.destination, d.ship_date, d.created_at,
                (SELECT COUNT(DISTINCT sl.product_id) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS sku_count,
-               (SELECT COALESCE(SUM(sl.qty), 0) FROM dispatch_lines sl
+               (SELECT COALESCE(SUM({_BILLABLE_QTY_SQL}), 0) FROM dispatch_lines sl
                 WHERE sl.doc_id = d.id AND COALESCE(sl.is_deleted, 0) = 0) AS total_qty
         FROM dispatch_docs d
         WHERE {where}
@@ -689,11 +699,13 @@ def _products_preview_map(connection, doc_ids: list[str], *, top_n: int) -> dict
     placeholders = ",".join("?" for _ in ids)
     rows = connection.execute(
         f"""
-        SELECT doc_id, product_id, MAX(product_name) AS name, SUM(qty) AS qty
-        FROM dispatch_lines
-        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
-        GROUP BY doc_id, product_id
-        ORDER BY doc_id, SUM(qty) DESC, MAX(product_name)
+        SELECT sl.doc_id, sl.product_id, MAX(sl.product_name) AS name,
+               SUM({_BILLABLE_QTY_SQL}) AS qty
+        FROM dispatch_lines sl
+        JOIN dispatch_docs d ON d.id = sl.doc_id
+        WHERE sl.doc_id IN ({placeholders}) AND COALESCE(sl.is_deleted, 0) = 0
+        GROUP BY sl.doc_id, sl.product_id
+        ORDER BY sl.doc_id, SUM({_BILLABLE_QTY_SQL}) DESC, MAX(sl.product_name)
         """,
         ids,
     ).fetchall()
@@ -717,11 +729,13 @@ def aggregate_shipment_contents(connection, shipment_ids: list[str]) -> dict:
     placeholders = ",".join("?" for _ in ids)
     rows = connection.execute(
         f"""
-        SELECT product_id, MAX(product_name) AS name, MAX(product_sku) AS sku, SUM(qty) AS qty
-        FROM dispatch_lines
-        WHERE doc_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
-        GROUP BY product_id
-        ORDER BY SUM(qty) DESC, MAX(product_name)
+        SELECT sl.product_id, MAX(sl.product_name) AS name, MAX(sl.product_sku) AS sku,
+               SUM({_BILLABLE_QTY_SQL}) AS qty
+        FROM dispatch_lines sl
+        JOIN dispatch_docs d ON d.id = sl.doc_id
+        WHERE sl.doc_id IN ({placeholders}) AND COALESCE(sl.is_deleted, 0) = 0
+        GROUP BY sl.product_id
+        ORDER BY SUM({_BILLABLE_QTY_SQL}) DESC, MAX(sl.product_name)
         """,
         ids,
     ).fetchall()
@@ -899,7 +913,7 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
     today = business_today().isoformat()
     placeholders = ",".join("?" for _ in ids)
     docs = connection.execute(
-        f"SELECT id, cargo_type, client_id, actual_ship_date, ship_date "
+        f"SELECT id, cargo_type, client_id, actual_ship_date, ship_date, closed_short_at "
         f"FROM dispatch_docs WHERE id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0",
         ids,
     ).fetchall()
@@ -916,8 +930,12 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         client_id = doc["client_id"]
         quality = str(doc["cargo_type"] or "good")
         day = str(doc["actual_ship_date"] or doc["ship_date"] or today)[:10]
+        # Закрытая с недовозом отгрузка тарифицируется по факту: план в строках остался
+        # заявленным клиентом, но уехало меньше и больше не поедет.
+        billed_short = doc["closed_short_at"] is not None
         lines = connection.execute(
-            "SELECT product_id, qty, COALESCE(pallets_qty, 0) AS pallets_qty, "
+            "SELECT product_id, qty, COALESCE(shipped_qty, 0) AS shipped_qty, "
+            "COALESCE(pallets_qty, 0) AS pallets_qty, "
             "COALESCE(boxes_qty, 0) AS boxes_qty FROM dispatch_lines "
             "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0",
             (doc_id,),
@@ -927,7 +945,7 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
         for line in lines:
             pallets_total += int(line["pallets_qty"] or 0)
             boxes_total += int(line["boxes_qty"] or 0)
-            qty = int(line["qty"] or 0)
+            qty = int(line["shipped_qty"] or 0) if billed_short else int(line["qty"] or 0)
             if qty <= 0:
                 continue
             price = None

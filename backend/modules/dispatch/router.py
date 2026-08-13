@@ -27,6 +27,7 @@ from config import (
     DISPATCH_STATUS_DRAFT,
     DISPATCH_STATUS_LABELS,
     DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_SHIPPED,
     DISPATCH_STATUSES_ALL,
     DISPATCH_TERMINAL_STATUSES,
     MAX_UPLOAD_BYTES,
@@ -61,6 +62,7 @@ from modules.dispatch.service import (
     check_lines_have_pallets,
     check_lines_have_ready,
     check_lines_have_sku,
+    close_dispatch_short,
     dispatch_alloc_remaining,
     find_duplicate_dispatches,
     dispatch_trip_allocations,
@@ -803,6 +805,33 @@ def finish_dispatch_preparation(
         if not proceed:
             return stored
         next_status = prepare_to_ready(conn, doc_id, body.lines, uid)
+        result = {"message": next_status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/dispatches/{doc_id}/close-short")
+def close_dispatch_short_endpoint(
+    doc_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
+    """Частично отгружено → Отгружено: менеджер закрывает отгрузку с недовозом.
+
+    Применяется, когда рейс увёз меньше плана и остаток больше не поедет: иначе документ
+    висит в «Частично отгружено», держит резерв на неувезённое и не попадает в счёт.
+    Остаток остаётся на складе (см. close_dispatch_short), в счёт документ идёт по факту.
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "dispatch_close_short",
+            response={"message": DISPATCH_STATUS_SHIPPED},
+        )
+        if not proceed:
+            return stored
+        next_status = close_dispatch_short(conn, doc_id, uid)
         result = {"message": next_status}
         finish_idempotent(conn, x_request_id, result)
         conn.commit()

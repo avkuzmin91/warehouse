@@ -561,6 +561,7 @@ DISPATCH_OP_LINE_DELETE     = "line_delete"
 DISPATCH_OP_ADVANCE         = "advance"
 DISPATCH_OP_PREPARE         = "prepare"
 DISPATCH_OP_SHIP            = "ship"
+DISPATCH_OP_CLOSE_SHORT     = "close_short"
 DISPATCH_OP_CANCEL          = "cancel"
 DISPATCH_OP_RETURN          = "return_to_draft"
 
@@ -1108,6 +1109,7 @@ CABINET_DISPATCH_VISIBLE_STATUSES: frozenset[str] = frozenset({
 
 CABINET_DISPATCH_OPS_VISIBLE: frozenset[str] = frozenset({
     DISPATCH_OP_SHIP,
+    DISPATCH_OP_CLOSE_SHORT,
     DISPATCH_OP_CANCEL,
 })
 

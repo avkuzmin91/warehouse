@@ -5,6 +5,7 @@ import {
   getDispatch,
   advanceDispatch,
   cancelDispatch,
+  closeDispatchShort,
   returnDispatchToDraft,
   updateDispatch,
   addDispatchLine,
@@ -165,6 +166,20 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
     await act(() => returnDispatchToDraft(docId))
   }
 
+  async function handleCloseShort() {
+    if (!doc) return
+    const plan = doc.lines.reduce((s, l) => s + l.qty, 0)
+    const shipped = doc.lines.reduce((s, l) => s + l.shipped_qty, 0)
+    const ok = await confirm({
+      title: 'Закрыть с недовозом?',
+      body: `Отгрузка ${doc.doc_number} будет завершена: уехало ${shipped} из ${plan} шт., недовоз ${plan - shipped} шт. больше не поедет. `
+        + 'Неувезённый товар останется на складе и станет доступен другим отгрузкам, в счёт отгрузка пойдёт по факту.',
+      confirmLabel: 'Закрыть с недовозом',
+    })
+    if (!ok) return
+    await act(() => closeDispatchShort(docId))
+  }
+
   async function handleAddLine(item: PlannableItem, qty: number) {
     await act(async () => {
       await addDispatchLine(docId, {
@@ -318,6 +333,15 @@ export function DispatchDetailFeature({ docId }: { docId: string }) {
         <button className="btn" disabled={acting} onClick={() => void handleSaveDraft()}>
           <Icon name="save" size={14} />{isDraft ? 'Сохранить черновик' : 'Сохранить изменения'}
         </button>
+      )}
+      {canEditPlanning && isPartially && doc.can_close_short && (
+        <PrimaryAction
+          icon="check"
+          label="Закрыть с недовозом"
+          hint="остаток больше не поедет — отгрузка завершится по факту"
+          disabled={acting}
+          onClick={() => void handleCloseShort()}
+        />
       )}
       {canEditPlanning && isDraft && (
         <PrimaryAction

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 
 from config import (
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
@@ -15,6 +16,7 @@ from config import (
     TRIP_STATUS_COSTING,
     TRIP_STATUS_UNLOADING,
 )
+from modules.dispatch.service import list_stuck_partial_dispatches
 from modules.receipts.service import list_shortage_receipts
 
 ROLE_WAREHOUSE = "warehouse_manager"
@@ -184,6 +186,20 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_id": r["id"],
                 "doc_number": r["doc_number"],
                 "status": RECEIPT_STATUS_PARTIALLY_RECEIVED,
+                "role": ROLE_MANAGER,
+                "since": r["since"],
+            })
+
+        # Отгрузка увезена не полностью и давно без рейса — менеджер решает: заказать
+        # рейс на остаток или закрыть с недовозом.
+        for r in list_stuck_partial_dispatches(connection):
+            tasks.append({
+                "kind": "dispatch_close_short",
+                "title": f"Закрыть {r['doc_number']} с недовозом",
+                "doc_type": "dispatch",
+                "doc_id": r["id"],
+                "doc_number": r["doc_number"],
+                "status": DISPATCH_STATUS_PARTIALLY_SHIPPED,
                 "role": ROLE_MANAGER,
                 "since": r["since"],
             })

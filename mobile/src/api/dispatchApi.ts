@@ -31,6 +31,8 @@ export type DispatchListItem = {
   sku_count: number
   total_qty: number
   total_shipped_qty: number
+  /** Завершена с недовозом: уехало меньше плана, остаток не поедет. */
+  closed_short: boolean
 }
 
 export type DispatchListResponse = { items: DispatchListItem[]; total: number; page: number; limit: number }
@@ -130,6 +132,10 @@ export type DispatchDetail = {
   lines: DispatchLine[]
   ops: DispatchOp[]
   total_qty: number
+  /** Отгрузка закрыта с недовозом: остаток больше не поедет, в счёт идёт факт. */
+  closed_short_at: string | null
+  /** Частично отгружено, активного рейса нет — можно закрыть с недовозом. */
+  can_close_short: boolean
 }
 
 export function getDispatch(id: string, signal?: AbortSignal): Promise<DispatchDetail> {
@@ -225,6 +231,12 @@ export function updateDispatchPriority(id: string, priorityRank: number | null) 
     method: 'PATCH',
     body: JSON.stringify({ priority_rank: priorityRank }),
   })
+}
+
+// «Закрыть с недовозом» (Частично отгружено → Отгружено): остаток больше не поедет.
+// Блокируется привязкой к активному рейсу — сначала отвязать.
+export function closeDispatchShort(id: string) {
+  return request<{ message: string }>(`/dispatches/${id}/close-short`, { method: 'POST' })
 }
 
 // Аннулировать можно, пока ничего не уехало (draft/preparing/awaiting_trip); из

@@ -3,6 +3,7 @@ import { useNav } from '../../nav/NavContext'
 import { useAuth } from '../../auth/AuthContext'
 import {
   cancelDispatch,
+  closeDispatchShort,
   returnDispatchToDraft,
   dispatchPriorityLabel,
   dispatchPriorityTone,
@@ -48,6 +49,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   const [reservedMap, setReservedMap] = useState<Record<string, number>>({})
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [confirmReturn, setConfirmReturn] = useState(false)
+  const [confirmShort, setConfirmShort] = useState(false)
   const [priorityOpen, setPriorityOpen] = useState(false)
   const [packLine, setPackLine] = useState<DispatchLine | null>(null)
   const [saving, setSaving] = useState(false)
@@ -93,6 +95,7 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
     setActionErr('')
     setConfirmCancel(false)
     setConfirmReturn(false)
+    setConfirmShort(false)
     try {
       await fn()
       load()
@@ -111,6 +114,8 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
   // Короба/палеты менеджер правит на любом статусе, кроме аннулированной (зеркало веба).
   const packEditable = canEdit && !!doc && doc.status !== 'cancelled'
   const priorityTone = doc ? dispatchPriorityTone(doc.priority_rank) : ''
+  const planTotal = doc ? doc.lines.reduce((s, l) => s + l.qty, 0) : 0
+  const shippedTotal = doc ? doc.lines.reduce((s, l) => s + l.shipped_qty, 0) : 0
 
   return (
     <div className="screen">
@@ -140,6 +145,11 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
                   )}
                 </span>
               </div>
+              {doc.closed_short_at && (
+                <div className="kv"><span className="k">Недовоз</span>
+                  <span className="v mono">{planTotal - shippedTotal} шт (закрыта с недовозом)</span>
+                </div>
+              )}
               <div className="kv"><span className="k">Отгрузка (план)</span><span className="v">{fmtDate(doc.ship_date)}</span></div>
               <div className="kv"><span className="k">Отгрузка (факт)</span><span className="v">{fmtDate(doc.actual_ship_date)}</span></div>
               {doc.logistics_cost != null && (
@@ -201,8 +211,21 @@ export function DispatchDetailScreen({ docId }: { docId: string }) {
               <div className="alert" style={{ marginTop: 16 }}><Icon name="alert" size={15} />{actionErr}</div>
             )}
 
-            {canEdit && (cancellable || returnable) && (
+            {canEdit && (cancellable || returnable || doc.can_close_short) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+                {doc.can_close_short && (
+                  <ConfirmAction
+                    label={<><Icon name="check" size={16} /> Закрыть с недовозом</>}
+                    prompt={`Уехало ${shippedTotal} из ${planTotal} шт. Недовоз ${planTotal - shippedTotal} шт. больше не поедет: `
+                      + 'отгрузка завершится, товар останется на складе, в счёт пойдёт факт.'}
+                    confirmLabel="Да, закрыть"
+                    saving={saving}
+                    open={confirmShort}
+                    onOpen={() => setConfirmShort(true)}
+                    onClose={() => setConfirmShort(false)}
+                    onConfirm={() => void runAction(() => closeDispatchShort(doc.id))}
+                  />
+                )}
                 {returnable && (
                   <ConfirmAction
                     label={<><Icon name="arrowLeft" size={16} /> Вернуть на корректировку</>}
