@@ -41,7 +41,7 @@ from config import (
     TRIP_STATUS_DRAFT,
     TRIP_STATUS_UNLOADING,
 )
-from dbconn import ci_like_substring_param
+from dbconn import barcode_variant_exists_sql, ci_like_substring_param
 from utils import next_doc_number as _next_doc_number, now_iso as _now
 
 
@@ -1272,8 +1272,13 @@ def list_dispatches_aggregated(
         conds.append("d.client_id = ?"); params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        conds.append("(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?)")
-        params += [s, s, s]
+        conds.append(
+            "(fold_ci(d.doc_number) LIKE ? OR fold_ci(d.client_name) LIKE ? OR fold_ci(d.destination) LIKE ?"
+            " OR EXISTS (SELECT 1 FROM dispatch_lines dl"
+            " WHERE dl.doc_id = d.id AND COALESCE(dl.is_deleted,0)=0"
+            f" AND {barcode_variant_exists_sql('dl.product_id', 'dl.color_id', 'dl.size_id')}))"
+        )
+        params += [s, s, s, search.strip()]
     if sku:
         conds.append(
             "EXISTS (SELECT 1 FROM dispatch_lines dl"

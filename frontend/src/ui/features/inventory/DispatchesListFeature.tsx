@@ -150,7 +150,7 @@ export function DispatchesListFeature() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
-              placeholder="Номер, клиент, назначение…"
+              placeholder="Номер, клиент, назначение или ШК…"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />

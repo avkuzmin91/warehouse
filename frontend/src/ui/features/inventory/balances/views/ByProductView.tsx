@@ -130,7 +130,7 @@ export function ByProductView() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
-              placeholder="Товар, SKU, цвет, размер…"
+              placeholder="Товар, SKU, цвет, размер или ШК…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />

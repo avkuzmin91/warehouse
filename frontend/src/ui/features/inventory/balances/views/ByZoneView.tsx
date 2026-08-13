@@ -321,7 +321,7 @@ export function ByZoneView() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
-              placeholder="Товар, SKU…"
+              placeholder="Товар, SKU или ШК…"
               value={search}
               onChange={(e) => changeSearch(e.target.value)}
             />

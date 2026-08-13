@@ -258,6 +258,12 @@ export type InventoryProductTypeLookup = {
   requires_size: boolean
 }
 
+export type InventoryProductBarcode = {
+  barcode: string
+  color_id: string | null
+  size_id: string | null
+}
+
 export type InventoryProductLookup = {
   id: string
   name: string
@@ -269,5 +275,6 @@ export type InventoryProductLookup = {
   supplier_name: string | null
   requires_color: boolean
   requires_size: boolean
+  barcodes?: InventoryProductBarcode[]
 }
 

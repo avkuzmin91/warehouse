@@ -95,11 +95,35 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
 
   const existing = useMemo(() => new Set(existingKeys), [existingKeys])
 
-  const filtered = useMemo(() => {
-    const q = foldCiSearch(filter.trim())
-    if (!q) return products
-    return products.filter((p) => foldCiSearch(`${p.name} ${p.sku}`).includes(q))
+  // Точное совпадение запроса с ШК товара: клиент часто присылает «непонятное
+  // название + штрих-код», и код — единственный надёжный ключ поиска.
+  const barcodeHit = useMemo(() => {
+    const raw = filter.trim()
+    if (!raw) return null
+    for (const p of products) {
+      const b = (p.barcodes ?? []).find((x) => x.barcode === raw)
+      if (b) return { productId: p.id, colorId: b.color_id, sizeId: b.size_id }
+    }
+    return null
   }, [products, filter])
+
+  const filtered = useMemo(() => {
+    const raw = filter.trim()
+    const q = foldCiSearch(raw)
+    if (!q) return products
+    return products.filter((p) =>
+      foldCiSearch(`${p.name} ${p.sku}`).includes(q)
+      || (p.barcodes ?? []).some((b) => b.barcode === raw))
+  }, [products, filter])
+
+  // Код нашёлся — сразу отмечаем товар и грузим сетку: ячейка нужного
+  // цвето-размера подсветится, останется проставить количество.
+  useEffect(() => {
+    if (!barcodeHit) return
+    setChecked((m) => (m[barcodeHit.productId] ? m : { ...m, [barcodeHit.productId]: true }))
+    ensureVariants(barcodeHit.productId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [barcodeHit])
 
   function ensureVariants(productId: string) {
     if (variantsByProduct[productId] || loadingIds[productId]) return
@@ -208,7 +232,7 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
 
       <input
         className="input sm"
-        placeholder="Поиск товара по названию или SKU…"
+        placeholder="Поиск товара по названию, SKU или ШК…"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         style={{ width: '100%', marginBottom: 12 }}
@@ -275,6 +299,7 @@ export function MatrixAddDrawer({ open, clientId, existingKeys = [], title = 'Д
                         qty={qtyByProduct[p.id] ?? {}}
                         isExisting={(c, s) => existing.has(existKey(p.id, c, s))}
                         onCell={(c, s, raw) => setCell(p.id, c, s, raw)}
+                        highlightKey={barcodeHit && barcodeHit.productId === p.id ? cellKey(barcodeHit.colorId, barcodeHit.sizeId) : null}
                       />
                     )}
                   </div>
@@ -299,12 +324,15 @@ function ProductMatrix({
   qty,
   isExisting,
   onCell,
+  highlightKey = null,
 }: {
   productId: string
   variants: ProductVariantPair[]
   qty: Record<string, number>
   isExisting: (colorId: string | null, sizeId: string | null) => boolean
   onCell: (colorId: string | null, sizeId: string | null, raw: string) => void
+  /** Ячейка варианта, которому принадлежит найденный по поиску ШК. */
+  highlightKey?: string | null
 }) {
   const { colorAxis, sizeAxis, validSet, hasColor, hasSize } = useMemo(() => axesFromVariants(variants), [variants])
   const singleCell = !hasColor && !hasSize
@@ -323,7 +351,7 @@ function ProductMatrix({
           placeholder="0"
           value={qty[k] ? String(qty[k]) : ''}
           onChange={(e) => onCell(null, null, e.target.value)}
-          style={{ width: 120 }}
+          style={{ width: 120, ...(highlightKey === k ? { borderColor: 'var(--c-accent)', boxShadow: '0 0 0 2px var(--c-accent-bg)' } : {}) }}
         />
       </div>
     )
@@ -362,7 +390,7 @@ function ProductMatrix({
                         value={qty[k] ? String(qty[k]) : ''}
                         placeholder="0"
                         onChange={(e) => onCell(c.id, s.id, e.target.value)}
-                        style={cellInputStyle(!!qty[k])}
+                        style={cellInputStyle(!!qty[k], highlightKey === k)}
                       />
                     )}
                   </td>
@@ -398,18 +426,19 @@ const rowHeadStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-function cellInputStyle(filled: boolean): React.CSSProperties {
+function cellInputStyle(filled: boolean, highlight = false): React.CSSProperties {
   return {
     width: 44,
     height: 30,
     textAlign: 'center',
     padding: '0 4px',
-    border: '1px solid var(--c-border)',
+    border: `1px solid ${highlight ? 'var(--c-accent)' : 'var(--c-border)'}`,
     borderRadius: 'var(--r-sm)',
     background: 'var(--c-bg-elev)',
     fontFamily: 'var(--font-num)',
     fontVariantNumeric: 'tabular-nums',
     fontSize: 13,
     color: filled ? 'var(--c-text)' : 'var(--c-text-subtle)',
+    ...(highlight ? { boxShadow: '0 0 0 2px var(--c-accent-bg)' } : {}),
   }
 }

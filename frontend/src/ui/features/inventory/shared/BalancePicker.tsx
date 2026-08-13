@@ -215,7 +215,7 @@ export function BalancePicker({ clientId, cargoType, source = 'pack', onAdd, onA
               <input
                 className="input"
                 style={{ paddingLeft: 32 }}
-                placeholder="SKU, название, цвет, размер…"
+                placeholder="SKU, название, цвет, размер или ШК…"
                 value={search}
                 autoFocus
                 onChange={(e) => setSearch(e.target.value)}

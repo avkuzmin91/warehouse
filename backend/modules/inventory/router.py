@@ -22,6 +22,12 @@ class InventoryProductTypeLookup(BaseModel):
     requires_size: bool
 
 
+class InventoryProductBarcode(BaseModel):
+    barcode: str
+    color_id: str | None = None
+    size_id: str | None = None
+
+
 class InventoryProductLookup(BaseModel):
     id: str
     name: str
@@ -33,6 +39,7 @@ class InventoryProductLookup(BaseModel):
     supplier_name: str | None = None
     requires_color: bool
     requires_size: bool
+    barcodes: list[InventoryProductBarcode] = []
 
 
 class ProductVariantPair(BaseModel):
@@ -216,8 +223,16 @@ def lookup_products(
         params.append(client_id.strip())
     if search and search.strip():
         like = ci_like_substring_param(search)
-        conds.append("(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?)")
-        params.extend([like, like])
+        # Штрих-код ищется точным совпадением: сканер/буфер отдаёт код целиком.
+        conds.append(
+            "(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?"
+            " OR EXISTS ("
+            "   SELECT 1 FROM product_barcodes pb"
+            "   WHERE pb.product_id = p.id AND pb.barcode = ?"
+            "     AND COALESCE(pb.is_deleted, 0) = 0"
+            " ))"
+        )
+        params.extend([like, like, search.strip()])
     where_sql = " AND ".join(conds)
     # Без limit — полная выдача (веб-frontend зовёт без параметров). Клиент,
     # которому нужен признак усечения, запрашивает limit = N+1 и сравнивает длину.
@@ -244,6 +259,32 @@ def lookup_products(
             """,
             params,
         ).fetchall()
+        # ШК с координатами варианта — чтобы клиент мог найти товар по коду
+        # и сразу подсветить нужный цвето-размер. LEFT JOIN: код без варианта
+        # (легаси) всё равно ищется, просто без подсветки ячейки.
+        barcodes_by_product: dict[str, list[InventoryProductBarcode]] = {}
+        ids = [str(row["id"]) for row in rows]
+        if ids:
+            ph = ",".join("?" for _ in ids)
+            code_rows = connection.execute(
+                f"""
+                SELECT pb.product_id, pb.barcode, pv.color_id, pv.size_id
+                FROM product_barcodes pb
+                LEFT JOIN product_variants pv ON pv.id = pb.variant_id
+                WHERE COALESCE(pb.is_deleted, 0) = 0
+                  AND pb.product_id IN ({ph})
+                ORDER BY pb.created_at
+                """,
+                ids,
+            ).fetchall()
+            for cr in code_rows:
+                barcodes_by_product.setdefault(str(cr["product_id"]), []).append(
+                    InventoryProductBarcode(
+                        barcode=str(cr["barcode"]),
+                        color_id=str(cr["color_id"]) if cr["color_id"] else None,
+                        size_id=str(cr["size_id"]) if cr["size_id"] else None,
+                    )
+                )
     return [
         InventoryProductLookup(
             id=str(row["id"]),
@@ -256,6 +297,7 @@ def lookup_products(
             supplier_name=str(row["supplier_name"]) if row["supplier_name"] else None,
             requires_color=bool(row["requires_color"]),
             requires_size=bool(row["requires_size"]),
+            barcodes=barcodes_by_product.get(str(row["id"]), []),
         )
         for row in rows
     ]
