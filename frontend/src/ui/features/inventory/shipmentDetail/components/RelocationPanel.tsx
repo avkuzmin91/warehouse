@@ -11,7 +11,8 @@ import { LineIdentityCell } from '../../../inventory/shared/LineIdentityCell'
 import { useToast } from '../../../../feedback/Toast'
 
 type Row = { zoneId: string; qty: number }
-type LineAlloc = { good: Row[]; defect: Row[] }
+// touched* — строку правили руками: мастер-раскладка её больше не перезаписывает.
+type LineAlloc = { good: Row[]; defect: Row[]; touchedGood: boolean; touchedDefect: boolean }
 type Kind = 'good' | 'defect'
 
 type Props = {
@@ -44,17 +45,53 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
   const [allocs, setAllocs] = useState<Record<string, LineAlloc>>(() => {
     const next: Record<string, LineAlloc> = {}
     for (const l of packedLines) {
-      next[l.id] = { good: initRows(l.packed_pending_good), defect: initRows(l.packed_pending_defect) }
+      next[l.id] = {
+        good: initRows(l.packed_pending_good),
+        defect: initRows(l.packed_pending_defect),
+        touchedGood: false,
+        touchedDefect: false,
+      }
     }
     return next
   })
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [masterGood, setMasterGood] = useState('')
+  const [masterDefect, setMasterDefect] = useState('')
   const [saving, setSaving] = useState(false)
 
   const zoneOpts: ComboboxOption[] = zoneOptions.map((z) => ({ value: z.id, label: z.name }))
   const zoneName = (id: string) => zoneOptions.find((z) => z.id === id)?.name ?? null
 
+  const hasGood = packedLines.some((l) => l.packed_pending_good > 0)
+  const hasDefect = packedLines.some((l) => l.packed_pending_defect > 0)
+
+  // Мастер-раскладка: место применяется ко всем строкам, кроме правленных вручную.
+  function applyMaster(kind: Kind, zoneId: string) {
+    if (kind === 'good') setMasterGood(zoneId)
+    else setMasterDefect(zoneId)
+    if (!zoneId) return
+    setAllocs((prev) => {
+      const next = { ...prev }
+      for (const l of packedLines) {
+        const pending = kind === 'good' ? l.packed_pending_good : l.packed_pending_defect
+        const st = next[l.id]
+        const touched = kind === 'good' ? st.touchedGood : st.touchedDefect
+        if (pending <= 0 || touched) continue
+        next[l.id] = { ...st, [kind]: [{ zoneId, qty: pending }] }
+      }
+      return next
+    })
+  }
+
   function setRows(lineId: string, kind: Kind, rows: Row[]) {
-    setAllocs((prev) => ({ ...prev, [lineId]: { ...prev[lineId], [kind]: rows } }))
+    setAllocs((prev) => ({
+      ...prev,
+      [lineId]: {
+        ...prev[lineId],
+        [kind]: rows,
+        ...(kind === 'good' ? { touchedGood: true } : { touchedDefect: true }),
+      },
+    }))
   }
   function setRow(lineId: string, kind: Kind, i: number, patch: Partial<Row>) {
     const rows = allocs[lineId][kind].map((r, idx) => (idx === i ? { ...r, ...patch } : r))
@@ -69,9 +106,35 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
     setRows(lineId, kind, rows.filter((_, idx) => idx !== i))
   }
 
+  // Возврат строки к общей раскладке: снова следует мастер-местам.
+  function resetLine(lineId: string) {
+    const l = packedLines.find((x) => x.id === lineId)
+    if (!l) return
+    setAllocs((prev) => ({
+      ...prev,
+      [lineId]: {
+        good: l.packed_pending_good > 0 ? [{ zoneId: masterGood, qty: l.packed_pending_good }] : [],
+        defect: l.packed_pending_defect > 0 ? [{ zoneId: masterDefect, qty: l.packed_pending_defect }] : [],
+        touchedGood: false,
+        touchedDefect: false,
+      },
+    }))
+  }
+
   function sumRows(rows: Row[]): number {
     return rows.reduce((s, r) => s + (r.qty > 0 ? r.qty : 0), 0)
   }
+  function placedSum(rows: Row[]): number {
+    return rows.reduce((s, r) => s + (r.zoneId && r.qty > 0 ? r.qty : 0), 0)
+  }
+
+  function lineComplete(l: ShipmentLine): boolean {
+    const a = allocs[l.id]
+    return placedSum(a.good) === l.packed_pending_good && placedSum(a.defect) === l.packed_pending_defect
+  }
+
+  const completeCount = packedLines.filter(lineComplete).length
+  const touchedCount = packedLines.filter((l) => allocs[l.id].touchedGood || allocs[l.id].touchedDefect).length
 
   const [showReasons, setShowReasons] = useState(false)
 
@@ -157,38 +220,138 @@ function RelocationEditor({ docId, lines, zoneOptions, canEdit, onDone }: Omit<P
               Кладовщик указывает местоположения для годного и брака, затем жмёт «Готово к рейсу».
             </div>
           )}
-          {packedLines.map((line) => (
-            <div
-              key={line.id}
-              style={{ border: '1px solid var(--c-border)', borderRadius: 'var(--r-lg)', padding: 12, background: 'var(--c-bg-elev)' }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                {line.packed_pending_good > 0 && (
-                  <KindBlock
-                    title="Годный" tone="var(--c-success)" target={line.packed_pending_good}
-                    rows={allocs[line.id].good} options={zoneOpts} disabled={!canEdit || saving}
-                    onRow={(i, patch) => setRow(line.id, 'good', i, patch)}
-                    onAdd={() => addRow(line.id, 'good')}
-                    onRemove={(i) => removeRow(line.id, 'good', i)}
-                    sum={sumRows(allocs[line.id].good)}
-                  />
-                )}
-                {line.packed_pending_defect > 0 && (
-                  <KindBlock
-                    title="Брак" tone="var(--c-danger)" target={line.packed_pending_defect}
-                    rows={allocs[line.id].defect} options={zoneOpts} disabled={!canEdit || saving}
-                    onRow={(i, patch) => setRow(line.id, 'defect', i, patch)}
-                    onAdd={() => addRow(line.id, 'defect')}
-                    onRemove={(i) => removeRow(line.id, 'defect', i)}
-                    sum={sumRows(allocs[line.id].defect)}
-                  />
-                )}
-              </div>
+
+          <div style={{
+            border: '1px solid var(--c-border)', borderRadius: 'var(--r-lg)', padding: 12,
+            background: 'var(--c-bg-sunken)', display: 'flex', flexDirection: 'column', gap: 10,
+          }}>
+            <div style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>
+              Быстрая раскладка — место применится ко всем строкам сразу. Строки, размеченные вручную, не затрагиваются.
             </div>
-          ))}
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              {hasGood && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 240 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-success)', whiteSpace: 'nowrap' }}>Весь годный</span>
+                  <Icon name="arrowRight" size={13} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Combobox
+                      value={masterGood || null}
+                      placeholder="Выберите место"
+                      options={zoneOpts}
+                      onChange={(v) => applyMaster('good', String(v ?? ''))}
+                      disabled={!canEdit || saving}
+                      clearable
+                    />
+                  </div>
+                </div>
+              )}
+              {hasDefect && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 240 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-danger)', whiteSpace: 'nowrap' }}>Весь брак</span>
+                  <Icon name="arrowRight" size={13} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Combobox
+                      value={masterDefect || null}
+                      placeholder="Выберите место"
+                      options={zoneOpts}
+                      onChange={(v) => applyMaster('defect', String(v ?? ''))}
+                      disabled={!canEdit || saving}
+                      clearable
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: completeCount === packedLines.length ? 'var(--c-success)' : 'var(--c-text-subtle)' }}>
+              Разложено {completeCount} из {packedLines.length} строк
+              {touchedCount > 0 && ` · вручную: ${touchedCount}`}
+            </div>
+          </div>
+
+          {packedLines.map((line) => {
+            const a = allocs[line.id]
+            const isTouched = a.touchedGood || a.touchedDefect
+            const isExpanded = !!expanded[line.id]
+            const complete = lineComplete(line)
+            return (
+              <div
+                key={line.id}
+                style={{
+                  border: `1px solid ${isTouched ? 'var(--c-accent)' : 'var(--c-border)'}`,
+                  borderRadius: 'var(--r-lg)',
+                  background: 'var(--c-bg-elev)',
+                }}
+              >
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', cursor: 'pointer' }}
+                  onClick={() => setExpanded((prev) => ({ ...prev, [line.id]: !isExpanded }))}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
+                  </div>
+                  {!isExpanded && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, fontSize: 12 }}>
+                      {isTouched && (
+                        <span style={{ color: 'var(--c-accent)' }}>вручную</span>
+                      )}
+                      {!complete && (
+                        <span style={{ color: 'var(--c-warning)' }}>не разложено</span>
+                      )}
+                      {(['good', 'defect'] as const).map((kind) => {
+                        const rows = a[kind].filter((r) => r.zoneId && r.qty > 0)
+                        if (rows.length === 0) return null
+                        const tone = kind === 'good' ? 'var(--c-success)' : 'var(--c-danger)'
+                        return (
+                          <span key={kind} style={{ color: tone, whiteSpace: 'nowrap' }}>
+                            {rows.map((r) => `${r.qty} шт → ${zoneName(r.zoneId) ?? '?'}`).join(' · ')}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <Icon name={isExpanded ? 'chevUp' : 'chevDown'} size={13} style={{ color: 'var(--c-text-subtle)', flexShrink: 0 }} />
+                </div>
+
+                {isExpanded && (
+                  <div style={{ padding: '0 12px 12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      {line.packed_pending_good > 0 && (
+                        <KindBlock
+                          title="Годный" tone="var(--c-success)" target={line.packed_pending_good}
+                          rows={a.good} options={zoneOpts} disabled={!canEdit || saving}
+                          onRow={(i, patch) => setRow(line.id, 'good', i, patch)}
+                          onAdd={() => addRow(line.id, 'good')}
+                          onRemove={(i) => removeRow(line.id, 'good', i)}
+                          sum={sumRows(a.good)}
+                        />
+                      )}
+                      {line.packed_pending_defect > 0 && (
+                        <KindBlock
+                          title="Брак" tone="var(--c-danger)" target={line.packed_pending_defect}
+                          rows={a.defect} options={zoneOpts} disabled={!canEdit || saving}
+                          onRow={(i, patch) => setRow(line.id, 'defect', i, patch)}
+                          onAdd={() => addRow(line.id, 'defect')}
+                          onRemove={(i) => removeRow(line.id, 'defect', i)}
+                          sum={sumRows(a.defect)}
+                        />
+                      )}
+                    </div>
+                    {isTouched && canEdit && (
+                      <button
+                        className="btn ghost sm"
+                        style={{ marginTop: 10 }}
+                        disabled={saving}
+                        title="Снять ручную разметку — строка снова следует быстрой раскладке"
+                        onClick={() => resetLine(line.id)}
+                      >
+                        <Icon name="refresh" size={12} />Вернуть к общей раскладке
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </PhaseBlock>
