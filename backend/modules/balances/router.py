@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from config import INV_Q_DEFECT, INV_Q_GOOD
 from dbconn import get_connection
 from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import get_current_manager, get_current_shipment_viewer, get_current_stock_operator
@@ -37,6 +38,14 @@ from modules.balances.service import (
 from utils import validate_business_date
 
 router = APIRouter(tags=["balances"])
+
+
+def _validate_slice_quality(quality: str | None) -> str | None:
+    """Срез оборота по качеству: значение инлайнится в SQL, поэтому только словарь."""
+    q = (quality or "").strip() or None
+    if q and q not in (INV_Q_GOOD, INV_Q_DEFECT):
+        raise HTTPException(status_code=400, detail="Некорректное качество")
+    return q
 
 
 @router.get("/balances", response_model=BalanceListResponse)
@@ -241,6 +250,7 @@ def stock_turnover(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     only_moved: bool = Query(False),
+    quality: str | None = Query(None),
     user=Depends(get_current_shipment_viewer),
 ):
     """Оборот запаса: остаток на начало → приход/отгрузка/списание → остаток на конец."""
@@ -248,6 +258,7 @@ def stock_turnover(
     d_to = validate_business_date(date_to, field_ru="Дата по")
     if d_from and d_to and d_from > d_to:
         raise HTTPException(status_code=400, detail="Дата «с» позже даты «по»")
+    q = _validate_slice_quality(quality)
     with get_connection() as conn:
         return get_turnover(
             conn,
@@ -258,6 +269,7 @@ def stock_turnover(
             date_from=d_from,
             date_to=d_to,
             only_moved=only_moved,
+            quality=q,
         )
 
 
@@ -269,11 +281,13 @@ def stock_history(
     size_id: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    quality: str | None = Query(None),
     user=Depends(get_current_shipment_viewer),
 ):
     """Хронология событий позиции: как остаток пришёл к текущему значению."""
     d_from = validate_business_date(date_from, field_ru="Дата с")
     d_to = validate_business_date(date_to, field_ru="Дата по")
+    q = _validate_slice_quality(quality)
     with get_connection() as conn:
         return get_stock_history(
             conn,
@@ -283,6 +297,7 @@ def stock_history(
             size_id=(size_id or "").strip() or None,
             date_from=d_from,
             date_to=d_to,
+            quality=q,
         )
 
 

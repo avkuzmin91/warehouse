@@ -326,6 +326,11 @@ STOCK_EVENT_SHIPMENT         = "shipment"          # отгрузка клиен
 STOCK_EVENT_SHIPMENT_RETURN  = "shipment_return"   # возврат отгрузки при отмене рейса
 STOCK_EVENT_WRITE_OFF        = "write_off"         # списание (… → written_off)
 STOCK_EVENT_WRITE_OFF_UNDO   = "write_off_undo"    # откат списания
+# Переводы между качествами общий остаток позиции не меняют, поэтому значимы
+# только для оборота-среза по одному качеству (фильтр quality); без фильтра эти
+# виды в ведомости не встречаются.
+STOCK_EVENT_DEFECT_IN        = "defect_in"         # перевод в брак (good → defect)
+STOCK_EVENT_DEFECT_OUT       = "defect_out"        # возврат в годный (defect → good)
 
 STOCK_EVENT_LABELS: dict[str, str] = {
     STOCK_EVENT_RECEIPT:         "Поступление",
@@ -335,9 +340,13 @@ STOCK_EVENT_LABELS: dict[str, str] = {
     STOCK_EVENT_SHIPMENT_RETURN: "Возврат отгрузки",
     STOCK_EVENT_WRITE_OFF:       "Списание",
     STOCK_EVENT_WRITE_OFF_UNDO:  "Откат списания",
+    STOCK_EVENT_DEFECT_IN:       "Перевод в брак",
+    STOCK_EVENT_DEFECT_OUT:      "Возврат в годный",
 }
 
 # События с плюсом к остатку; остальные из STOCK_EVENT_LABELS — с минусом.
+# Знак defect_in/defect_out зависит от среза качества (перевод в брак — приход
+# для среза «брак», расход для среза «годный»), сюда они не входят.
 STOCK_EVENT_INCOMING: tuple[str, ...] = (
     STOCK_EVENT_RECEIPT,
     STOCK_EVENT_STOCK_ENTRY,

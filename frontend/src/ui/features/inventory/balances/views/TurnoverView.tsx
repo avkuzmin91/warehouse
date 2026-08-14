@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import { getStockTurnover } from '../../../../../api/balancesApi'
-import type { TurnoverItem } from '../../../../../api/balancesApi'
+import { getStockTurnover, INV_QUALITY_LABELS } from '../../../../../api/balancesApi'
+import type { InvQuality, TurnoverItem } from '../../../../../api/balancesApi'
 import { useApi } from '../../../../../hooks/useApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useFilterParam, usePageParam, useFilterParamsActions } from '../../../../../hooks/useFilterParams'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
-import { FiltersBar, FilterChip, FilterCombobox } from '../../../../data/FiltersBar'
+import { FiltersBar, FilterChip, FilterCombobox, FilterSelect } from '../../../../data/FiltersBar'
 import { DateRange } from '../../../../data/DateRange'
 import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
@@ -35,10 +35,17 @@ export function TurnoverView() {
   const [dateFrom, setDateFrom] = useFilterParam('from', '')
   const [dateTo, setDateTo] = useFilterParam('to', '')
   const [onlyMoved, setOnlyMoved] = useFilterParam('moved', '')
+  const [qualityFilter, setQualityFilter] = useFilterParam('quality', '')
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
   const { clients } = useLookups()
   const [selected, setSelected] = useState<TurnoverItem | null>(null)
+
+  // Срез по качеству: переводы годный ↔ брак видны отдельными колонками.
+  const quality = (qualityFilter === 'good' || qualityFilter === 'defect')
+    ? (qualityFilter as InvQuality)
+    : undefined
+  const sliceDefect = quality === 'defect'
 
   const { data, loading } = useApi(
     (signal) => getStockTurnover({
@@ -49,8 +56,9 @@ export function TurnoverView() {
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       only_moved: onlyMoved === '1' || undefined,
+      quality,
     }, signal),
-    [page, search, clientId, dateFrom, dateTo, onlyMoved],
+    [page, search, clientId, dateFrom, dateTo, onlyMoved, quality],
   )
 
   const items = data?.items ?? []
@@ -92,21 +100,31 @@ export function TurnoverView() {
             onToChange={(v) => setDateTo(v)}
             onClear={() => setMany({ from: '', to: '' })}
           />
+          <FilterSelect
+            label="Качество"
+            value={qualityFilter}
+            options={[
+              { value: '', label: 'Любое качество' },
+              { value: 'good', label: INV_QUALITY_LABELS.good },
+              { value: 'defect', label: INV_QUALITY_LABELS.defect },
+            ]}
+            onChange={(v) => setQualityFilter(v)}
+          />
           <FilterChip
             label="Только с движением"
             active={onlyMoved === '1'}
             onClick={() => setOnlyMoved(onlyMoved === '1' ? '' : '1')}
             onClear={() => setOnlyMoved('')}
           />
-          {(search || clientId || dateFrom || dateTo || onlyMoved) && (
-            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', from: '', to: '', moved: '' })}>
+          {(search || clientId || dateFrom || dateTo || onlyMoved || qualityFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', from: '', to: '', moved: '', quality: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
         </FiltersBar>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(5, 1fr)' }}>
+      <div className="kpi-grid" style={{ marginBottom: 20, gridTemplateColumns: `repeat(${quality ? 7 : 5}, 1fr)` }}>
         <KPI label={dateFrom ? `Остаток на ${dateFrom.split('-').reverse().join('.')}` : 'Остаток на начало'} value={kpi(totals?.opening)} unit="шт" />
         <KPI
           label="Приход"
@@ -114,6 +132,12 @@ export function TurnoverView() {
           valueColor="var(--c-success)"
           unit="шт"
         />
+        {quality && (
+          <>
+            <KPI label="В брак" value={kpi(totals?.defect_in)} valueColor="var(--c-warning)" unit="шт" />
+            <KPI label="Из брака" value={kpi(totals?.defect_out)} valueColor="var(--c-success)" unit="шт" />
+          </>
+        )}
         <KPI label="Отгружено" value={kpi(totals?.shipped)} valueColor="var(--c-accent)" unit="шт" />
         <KPI label="Списано" value={kpi(totals?.written_off)} valueColor="var(--c-warning)" unit="шт" />
         <KPI
@@ -130,6 +154,12 @@ export function TurnoverView() {
             <th>Клиент</th>
             <th style={{ textAlign: 'right', width: 110 }}>На начало</th>
             <th style={{ textAlign: 'right', width: 110 }}>Приход</th>
+            {quality && (
+              <>
+                <th style={{ textAlign: 'right', width: 100 }}>В брак</th>
+                <th style={{ textAlign: 'right', width: 100 }}>Из брака</th>
+              </>
+            )}
             <th style={{ textAlign: 'right', width: 110 }}>Отгружено</th>
             <th style={{ textAlign: 'right', width: 100 }}>Списано</th>
             <th style={{ textAlign: 'right', width: 110 }}>Коррект.</th>
@@ -138,10 +168,10 @@ export function TurnoverView() {
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={8} />
+            <SkeletonRows rows={8} cols={quality ? 10 : 8} />
           ) : items.length === 0 ? (
             <tr>
-              <td colSpan={8}>
+              <td colSpan={quality ? 10 : 8}>
                 <EmptyState title="Движений нет" sub="За выбранный период приход и расход по товарам не зафиксированы" />
               </td>
             </tr>
@@ -169,6 +199,12 @@ export function TurnoverView() {
                     <div className="t-sub" style={{ fontSize: 11 }}>заведено {num(item.stock_entry)}</div>
                   )}
                 </Td>
+                {quality && (
+                  <>
+                    <QtyCell value={item.defect_in} color="var(--c-warning)" prefix={sliceDefect ? '+' : '−'} />
+                    <QtyCell value={item.defect_out} color="var(--c-success)" prefix={sliceDefect ? '−' : '+'} />
+                  </>
+                )}
                 <QtyCell value={item.shipped} color="var(--c-accent)" prefix="−" />
                 <QtyCell value={item.written_off} color="var(--c-warning)" prefix="−" />
                 <QtyCell value={item.adjustments} color="var(--c-text-muted)" prefix={item.adjustments < 0 ? '−' : '+'} />
@@ -186,6 +222,7 @@ export function TurnoverView() {
         item={selected}
         dateFrom={dateFrom || undefined}
         dateTo={dateTo || undefined}
+        quality={quality}
         onClose={() => setSelected(null)}
       />
     </>

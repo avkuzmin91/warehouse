@@ -275,6 +275,8 @@ class TurnoverTotals(BaseModel):
     stock_entry: int = 0
     shipped: int = 0
     written_off: int = 0
+    defect_in: int = 0
+    defect_out: int = 0
     adjustments: int = 0
     closing: int = 0
 
@@ -282,7 +284,10 @@ class TurnoverTotals(BaseModel):
 class TurnoverItem(BaseModel):
     """Строка оборотной ведомости по позиции.
 
-    Инвариант: closing = opening + receipt + stock_entry + adjustments − shipped − written_off.
+    Инвариант: closing = opening + receipt + stock_entry + adjustments − shipped − written_off
+    ± переводы качества. defect_in/defect_out заполняются только при фильтре по качеству
+    (перевод в брак: приход для среза «брак», расход для среза «годный»); без фильтра
+    они равны 0 — общий остаток позиции переводы не меняют.
     """
     product_id: str
     product_name: str | None
@@ -298,6 +303,8 @@ class TurnoverItem(BaseModel):
     stock_entry: int
     shipped: int
     written_off: int
+    defect_in: int = 0
+    defect_out: int = 0
     # Корректировки приёмки: со знаком (обычно отрицательные).
     adjustments: int
     closing: int
