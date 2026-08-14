@@ -5,7 +5,7 @@ import {
   WRITEOFF_REASON_LABELS,
   INV_QUALITY_LABELS,
 } from '../../../../api/balancesApi'
-import type { StockHistoryEvent, TurnoverItem, WriteOffReason } from '../../../../api/balancesApi'
+import type { InvQuality, StockHistoryEvent, TurnoverItem, WriteOffReason } from '../../../../api/balancesApi'
 import { useApi } from '../../../../hooks/useApi'
 import { Drawer } from '../../../feedback/Drawer'
 import { Icon } from '../../../primitives/Icon'
@@ -91,11 +91,13 @@ interface Props {
   item: TurnoverItem | null
   dateFrom?: string
   dateTo?: string
+  /** Срез оборота по качеству: история и остатки считаются только по нему. */
+  quality?: InvQuality
   onClose: () => void
 }
 
 /** Хронология значимых событий позиции: как остаток пришёл к текущему значению. */
-export function PositionHistoryDrawer({ item, dateFrom, dateTo, onClose }: Props) {
+export function PositionHistoryDrawer({ item, dateFrom, dateTo, quality, onClose }: Props) {
   const { data, loading, error } = useApi(
     (signal) => (item
       ? getStockHistory({
@@ -105,14 +107,18 @@ export function PositionHistoryDrawer({ item, dateFrom, dateTo, onClose }: Props
         size_id: item.size_id,
         date_from: dateFrom,
         date_to: dateTo,
+        quality,
       }, signal)
       : Promise.resolve(null)),
-    [item?.product_id, item?.client_id, item?.color_id, item?.size_id, dateFrom, dateTo],
+    [item?.product_id, item?.client_id, item?.color_id, item?.size_id, dateFrom, dateTo, quality],
   )
 
   if (!item) return null
 
-  const subtitle = [item.product_sku, item.color_name, item.size_name, item.client_name]
+  const subtitle = [
+    item.product_sku, item.color_name, item.size_name, item.client_name,
+    quality && `Только ${INV_QUALITY_LABELS[quality].toLowerCase()}`,
+  ]
     .filter(Boolean)
     .join(' · ')
 

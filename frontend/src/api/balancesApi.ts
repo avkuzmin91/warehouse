@@ -440,7 +440,9 @@ export function undoWriteOff(relocationId: string) {
 
 // --- Оборот запаса: приход → расход → остаток ---
 
-/** Событие, меняющее общий остаток позиции (внутренние перемещения сюда не входят). */
+/** Событие, меняющее общий остаток позиции (внутренние перемещения сюда не входят).
+ *  defect_in/defect_out встречаются только в срезе по качеству: общий остаток
+ *  переводы годный ↔ брак не меняют, а остаток среза — да. */
 export type StockEventKind =
   | 'receipt'
   | 'stock_entry'
@@ -449,6 +451,8 @@ export type StockEventKind =
   | 'shipment_return'
   | 'write_off'
   | 'write_off_undo'
+  | 'defect_in'
+  | 'defect_out'
 
 export const STOCK_EVENT_LABELS: Record<StockEventKind, string> = {
   receipt:         'Поступление',
@@ -458,6 +462,8 @@ export const STOCK_EVENT_LABELS: Record<StockEventKind, string> = {
   shipment_return: 'Возврат отгрузки',
   write_off:       'Списание',
   write_off_undo:  'Откат списания',
+  defect_in:       'Перевод в брак',
+  defect_out:      'Возврат в годный',
 }
 
 /** Строка оборотной ведомости: closing = opening + receipt + stock_entry + adjustments − shipped − written_off. */
@@ -476,6 +482,9 @@ export type TurnoverItem = {
   stock_entry:  number
   shipped:      number
   written_off:  number
+  /** Переводы качества; ненулевые только при фильтре quality. */
+  defect_in:    number
+  defect_out:   number
   /** Корректировки приёмки со знаком (обычно отрицательные). */
   adjustments:  number
   closing:      number
@@ -487,6 +496,8 @@ export type TurnoverTotals = {
   stock_entry: number
   shipped:     number
   written_off: number
+  defect_in:   number
+  defect_out:  number
   adjustments: number
   closing:     number
 }
@@ -509,6 +520,7 @@ export type TurnoverParams = {
   date_from?:   string
   date_to?:     string
   only_moved?:  boolean
+  quality?:     InvQuality
 }
 
 export function getStockTurnover(params: TurnoverParams = {}, signal?: AbortSignal) {
@@ -520,6 +532,7 @@ export function getStockTurnover(params: TurnoverParams = {}, signal?: AbortSign
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
   if (params.only_moved) sp.set('only_moved', 'true')
+  if (params.quality) sp.set('quality', params.quality)
   const q = sp.toString()
   return request<TurnoverListResponse>(`/balances/turnover${q ? `?${q}` : ''}`, { signal })
 }
@@ -571,6 +584,7 @@ export type StockHistoryParams = {
   size_id?:   string | null
   date_from?: string
   date_to?:   string
+  quality?:   InvQuality
 }
 
 export function getStockHistory(params: StockHistoryParams, signal?: AbortSignal) {
@@ -581,5 +595,6 @@ export function getStockHistory(params: StockHistoryParams, signal?: AbortSignal
   if (params.size_id) sp.set('size_id', params.size_id)
   if (params.date_from) sp.set('date_from', params.date_from)
   if (params.date_to) sp.set('date_to', params.date_to)
+  if (params.quality) sp.set('quality', params.quality)
   return request<StockHistoryResponse>(`/balances/turnover/history?${sp.toString()}`, { signal })
 }

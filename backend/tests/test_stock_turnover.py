@@ -64,6 +64,7 @@ def _days_ago_iso(days: int) -> str:
 def _move(
     conn, client_id: str, product_ids, qty: int, *,
     from_op: str, to_op: str, quality: str = "good",
+    from_quality: str | None = None, to_quality: str | None = None,
     created_at: str | None = None, receipt_line_id: str | None = None,
     dispatch_line_id: str | None = None, reason: str | None = None,
     comment: str | None = None,
@@ -77,7 +78,8 @@ def _move(
             receipt_line_id, dispatch_line_id, reason, comment, created_at)
            VALUES (?, ?, 'Turnover Product', 'TRN-SKU', ?, 'Red', ?, NULL,
                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (mid, pid, color_id, size_id, client_id, from_op, to_op, quality, quality, qty,
+        (mid, pid, color_id, size_id, client_id, from_op, to_op,
+         from_quality or quality, to_quality or quality, qty,
          receipt_line_id, dispatch_line_id, reason, comment,
          created_at or datetime.now(UTC).isoformat()),
     )
@@ -253,6 +255,82 @@ def test_turnover_bad_period_rejected(shift_supervisor_client, client_id):
     assert "позже" in res.json()["detail"]
 
 
+# ── срез по качеству ─────────────────────────────────────────────────────────
+
+def _quality_scenario(conn, client_id, product_ids) -> None:
+    """Приёмка годного и брака, переводы качества, отгрузка и списание брака."""
+    _, _, line_id = _receipt_line(conn, client_id, product_ids, 110)
+    _move(conn, client_id, product_ids, 100, from_op="intake", to_op="storage", receipt_line_id=line_id)
+    _move(conn, client_id, product_ids, 10, from_op="intake", to_op="storage",
+          quality="defect", receipt_line_id=line_id)
+    # Переводы качества: общий остаток не меняют, остатки срезов — да.
+    _move(conn, client_id, product_ids, 20, from_op="storage", to_op="storage",
+          from_quality="good", to_quality="defect")
+    _move(conn, client_id, product_ids, 2, from_op="storage", to_op="storage",
+          from_quality="defect", to_quality="good")
+    # Внутренний маршрут брака без смены качества — невидим и в срезе.
+    _move(conn, client_id, product_ids, 8, from_op="storage", to_op="ready", quality="defect")
+    _move(conn, client_id, product_ids, 5, from_op="ready", to_op="shipped", quality="defect")
+    _move(conn, client_id, product_ids, 3, from_op="storage", to_op="written_off",
+          quality="defect", reason="damage")
+
+
+def test_turnover_quality_slice_defect(shift_supervisor_client, client_id, product_ids):
+    """Срез «брак»: приёмка в брак, переводы качества и расход брака — отдельными колонками."""
+    pid, _, _ = product_ids
+    with get_connection() as conn:
+        _quality_scenario(conn, client_id, product_ids)
+        conn.commit()
+
+    row = _find(
+        shift_supervisor_client.get(
+            "/balances/turnover", params={"client_id": client_id, "quality": "defect"}
+        ).json()["items"],
+        pid,
+    )
+    assert row["receipt"] == 10
+    assert row["defect_in"] == 20
+    assert row["defect_out"] == 2
+    assert row["shipped"] == 5
+    assert row["written_off"] == 3
+    assert row["closing"] == 10 + 20 - 2 - 5 - 3
+
+
+def test_turnover_quality_slices_sum_to_total(shift_supervisor_client, client_id, product_ids):
+    """Годный + брак = общий оборот; без фильтра переводы качества невидимы."""
+    pid, _, _ = product_ids
+    with get_connection() as conn:
+        _quality_scenario(conn, client_id, product_ids)
+        conn.commit()
+
+    def _slice(quality: str | None) -> dict:
+        params = {"client_id": client_id}
+        if quality:
+            params["quality"] = quality
+        return _find(
+            shift_supervisor_client.get("/balances/turnover", params=params).json()["items"], pid
+        )
+
+    good, defect, total = _slice("good"), _slice("defect"), _slice(None)
+    assert good["receipt"] == 100
+    assert good["defect_in"] == 20
+    assert good["defect_out"] == 2
+    assert good["closing"] == 100 - 20 + 2
+    assert good["closing"] + defect["closing"] == total["closing"] == 102
+    assert good["receipt"] + defect["receipt"] == total["receipt"] == 110
+    # Без фильтра переводы качества в ведомость не попадают.
+    assert total["defect_in"] == 0
+    assert total["defect_out"] == 0
+
+
+def test_turnover_quality_invalid_rejected(shift_supervisor_client, client_id):
+    res = shift_supervisor_client.get(
+        "/balances/turnover", params={"client_id": client_id, "quality": "broken"}
+    )
+    assert res.status_code == 400
+    assert "качество" in res.json()["detail"].lower()
+
+
 # ── хронология позиции ────────────────────────────────────────────────────────
 
 def test_history_running_balance_and_docs(shift_supervisor_client, client_id, product_ids):
@@ -299,3 +377,30 @@ def test_history_excludes_internal_moves(shift_supervisor_client, client_id, pro
     assert len(body["events"]) == 1
     assert body["events"][0]["kind"] == "stock_entry"
     assert body["closing"] == 40
+
+
+def test_history_quality_slice(shift_supervisor_client, client_id, product_ids):
+    """История среза «брак»: переводы качества — события, годный приход не виден."""
+    pid, color_id, _ = product_ids
+    with get_connection() as conn:
+        _, _, line_id = _receipt_line(conn, client_id, product_ids, 110)
+        _move(conn, client_id, product_ids, 100, from_op="intake", to_op="storage",
+              receipt_line_id=line_id, created_at=_days_ago_iso(10))
+        _move(conn, client_id, product_ids, 10, from_op="intake", to_op="storage",
+              quality="defect", receipt_line_id=line_id, created_at=_days_ago_iso(9))
+        _move(conn, client_id, product_ids, 20, from_op="storage", to_op="storage",
+              from_quality="good", to_quality="defect", created_at=_days_ago_iso(7))
+        _move(conn, client_id, product_ids, 2, from_op="storage", to_op="storage",
+              from_quality="defect", to_quality="good", created_at=_days_ago_iso(5))
+        _move(conn, client_id, product_ids, 5, from_op="ready", to_op="shipped",
+              quality="defect", created_at=_days_ago_iso(2))
+        conn.commit()
+
+    body = shift_supervisor_client.get(
+        "/balances/turnover/history",
+        params={"product_id": pid, "client_id": client_id, "color_id": color_id, "quality": "defect"},
+    ).json()
+    assert [e["kind"] for e in body["events"]] == ["receipt", "defect_in", "defect_out", "shipment"]
+    assert [e["delta"] for e in body["events"]] == [10, 20, -2, -5]
+    assert [e["balance_after"] for e in body["events"]] == [10, 30, 28, 23]
+    assert body["closing"] == 23

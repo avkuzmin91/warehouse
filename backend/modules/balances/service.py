@@ -25,6 +25,8 @@ from config import (
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     SHIPMENT_CARGO_DEFECT,
+    STOCK_EVENT_DEFECT_IN,
+    STOCK_EVENT_DEFECT_OUT,
     STOCK_EVENT_INCOMING,
     STOCK_EVENT_RECEIPT,
     STOCK_EVENT_RECEIPT_ADJUST,
@@ -1595,25 +1597,71 @@ def list_zone_relocations(
 # суткам, как и все склады́ские отчёты (см. business_today в modules/timesheet).
 _MSK_DAY_SQL = "((zr.created_at)::timestamptz AT TIME ZONE 'Europe/Moscow')::date::text"
 
-_SIGNIFICANT_SQL = (
-    f"(zr.from_op = '{INV_OP_INTAKE}' OR zr.to_op = '{INV_OP_INTAKE}'"
-    f" OR zr.from_op IN ({_SINKS_SQL}) OR zr.to_op IN ({_SINKS_SQL}))"
-)
+def _check_slice_quality(quality: str | None) -> None:
+    """Значения качества инлайнятся в SQL — пропускаем только известные константы."""
+    if quality is not None and quality not in (INV_Q_GOOD, INV_Q_DEFECT):
+        raise ValueError(f"Неизвестное качество среза: {quality!r}")
 
-# Классификация значимого движения. Порядок ветвей важен: приход и корректировка
-# приёмки различаются только направлением по оси intake.
-_EVENT_KIND_SQL = f"""CASE
+
+def _significant_sql(quality: str | None) -> str:
+    """Условие «движение меняет остаток»: всей позиции либо её среза по качеству.
+
+    Для среза значимы ещё и переводы между качествами: общий остаток они не
+    меняют, но остаток среза — да (перевод в брак = расход годного и приход брака).
+    """
+    _check_slice_quality(quality)
+    if not quality:
+        return (
+            f"(zr.from_op = '{INV_OP_INTAKE}' OR zr.to_op = '{INV_OP_INTAKE}'"
+            f" OR zr.from_op IN ({_SINKS_SQL}) OR zr.to_op IN ({_SINKS_SQL}))"
+        )
+    return (
+        f"((zr.from_op = '{INV_OP_INTAKE}' AND zr.to_quality = '{quality}')"
+        f" OR (zr.to_op = '{INV_OP_INTAKE}' AND zr.from_quality = '{quality}')"
+        f" OR (zr.to_op IN ({_SINKS_SQL}) AND zr.from_quality = '{quality}')"
+        f" OR (zr.from_op IN ({_SINKS_SQL}) AND zr.to_quality = '{quality}')"
+        f" OR (zr.from_op NOT IN ('{INV_OP_INTAKE}', {_SINKS_SQL})"
+        f" AND zr.to_op NOT IN ('{INV_OP_INTAKE}', {_SINKS_SQL})"
+        f" AND zr.from_quality <> zr.to_quality))"
+    )
+
+
+def _event_kind_sql(quality: str | None) -> str:
+    """Классификация значимого движения. Порядок ветвей важен: приход и корректировка
+    приёмки различаются только направлением по оси intake; переводы качества
+    классифицируются последними — до них доходят только внутренние движения."""
+    _check_slice_quality(quality)
+    base = f"""CASE
         WHEN zr.from_op = '{INV_OP_INTAKE}' AND zr.receipt_line_id IS NOT NULL THEN '{STOCK_EVENT_RECEIPT}'
         WHEN zr.from_op = '{INV_OP_INTAKE}' THEN '{STOCK_EVENT_STOCK_ENTRY}'
         WHEN zr.to_op   = '{INV_OP_INTAKE}' THEN '{STOCK_EVENT_RECEIPT_ADJUST}'
         WHEN zr.to_op   = '{INV_OP_SHIPPED}' THEN '{STOCK_EVENT_SHIPMENT}'
         WHEN zr.from_op = '{INV_OP_SHIPPED}' THEN '{STOCK_EVENT_SHIPMENT_RETURN}'
-        WHEN zr.to_op   = '{INV_OP_WRITTEN_OFF}' THEN '{STOCK_EVENT_WRITE_OFF}'
+        WHEN zr.to_op   = '{INV_OP_WRITTEN_OFF}' THEN '{STOCK_EVENT_WRITE_OFF}'"""
+    if not quality:
+        return base + f"""
         ELSE '{STOCK_EVENT_WRITE_OFF_UNDO}'
     END"""
+    return base + f"""
+        WHEN zr.from_op = '{INV_OP_WRITTEN_OFF}' THEN '{STOCK_EVENT_WRITE_OFF_UNDO}'
+        WHEN zr.to_quality = '{INV_Q_DEFECT}' THEN '{STOCK_EVENT_DEFECT_IN}'
+        ELSE '{STOCK_EVENT_DEFECT_OUT}'
+    END"""
 
-_INCOMING_SQL = ", ".join(f"'{k}'" for k in STOCK_EVENT_INCOMING)
-_DELTA_SQL = f"CASE WHEN kind IN ({_INCOMING_SQL}) THEN qty ELSE -qty END"
+
+def _incoming_kinds(quality: str | None) -> tuple[str, ...]:
+    """Виды событий с плюсом к остатку (позиции либо среза по качеству)."""
+    if quality == INV_Q_DEFECT:
+        return STOCK_EVENT_INCOMING + (STOCK_EVENT_DEFECT_IN,)
+    if quality == INV_Q_GOOD:
+        return STOCK_EVENT_INCOMING + (STOCK_EVENT_DEFECT_OUT,)
+    return STOCK_EVENT_INCOMING
+
+
+def _delta_sql(quality: str | None) -> str:
+    _check_slice_quality(quality)
+    incoming = ", ".join(f"'{k}'" for k in _incoming_kinds(quality))
+    return f"CASE WHEN kind IN ({incoming}) THEN qty ELSE -qty END"
 
 TURNOVER_HISTORY_LIMIT = 2000
 
@@ -1652,13 +1700,18 @@ def get_turnover(
     date_from: str | None,
     date_to: str | None,
     only_moved: bool,
+    quality: str | None = None,
 ) -> "TurnoverListResponse":
-    """Оборотная ведомость по позициям: остаток на начало → приход/расход → остаток на конец."""
+    """Оборотная ведомость по позициям: остаток на начало → приход/расход → остаток на конец.
+
+    С фильтром quality считается оборот среза (только годный или только брак):
+    переводы между качествами становятся видимыми колонками defect_in/defect_out.
+    """
     from modules.balances.schemas import TurnoverItem, TurnoverListResponse, TurnoverTotals
 
     before, in_period, upto, date_params = _period_exprs(date_from, date_to)
 
-    ev_conds = [_SIGNIFICANT_SQL]
+    ev_conds = [_significant_sql(quality)]
     ev_params: list = []
     if client_id:
         ev_conds.append("zr.client_id = ?")
@@ -1667,6 +1720,10 @@ def get_turnover(
     def _sum(kind: str) -> str:
         return f"COALESCE(SUM(qty) FILTER (WHERE in_period AND kind = '{kind}'), 0)"
 
+    moved_expr = (
+        "(a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off)"
+        " + ABS(a.adjustments) + a.defect_in + a.defect_out)"
+    )
     out_conds: list[str] = []
     out_params: list = []
     if search:
@@ -1677,12 +1734,9 @@ def get_turnover(
         )
         out_params += [s, s]
     if only_moved:
-        out_conds.append("(a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off) + ABS(a.adjustments)) > 0")
+        out_conds.append(f"{moved_expr} > 0")
     else:
-        out_conds.append(
-            "(a.opening <> 0 OR a.closing <> 0"
-            " OR (a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off) + ABS(a.adjustments)) > 0)"
-        )
+        out_conds.append(f"(a.opening <> 0 OR a.closing <> 0 OR {moved_expr} > 0)")
     out_where = "WHERE " + " AND ".join(out_conds)
 
     offset = (page - 1) * limit
@@ -1691,12 +1745,12 @@ def get_turnover(
         WITH ev AS (
             SELECT zr.product_id, zr.client_id, zr.color_id, zr.size_id,
                    zr.product_name, zr.product_sku, zr.client_name, zr.color_name, zr.size_name,
-                   zr.qty, {_MSK_DAY_SQL} AS day, {_EVENT_KIND_SQL} AS kind
+                   zr.qty, {_MSK_DAY_SQL} AS day, {_event_kind_sql(quality)} AS kind
             FROM zone_relocations zr
             WHERE {" AND ".join(ev_conds)}
         ),
         marked AS (
-            SELECT ev.*, {_DELTA_SQL} AS delta,
+            SELECT ev.*, {_delta_sql(quality)} AS delta,
                    ({before}) AS before_period, ({in_period}) AS in_period, ({upto}) AS upto_period
             FROM ev
         ),
@@ -1710,6 +1764,8 @@ def get_turnover(
                    {_sum(STOCK_EVENT_STOCK_ENTRY)} AS stock_entry,
                    {_sum(STOCK_EVENT_SHIPMENT)} - {_sum(STOCK_EVENT_SHIPMENT_RETURN)} AS shipped,
                    {_sum(STOCK_EVENT_WRITE_OFF)} - {_sum(STOCK_EVENT_WRITE_OFF_UNDO)} AS written_off,
+                   {_sum(STOCK_EVENT_DEFECT_IN)}  AS defect_in,
+                   {_sum(STOCK_EVENT_DEFECT_OUT)} AS defect_out,
                    -{_sum(STOCK_EVENT_RECEIPT_ADJUST)} AS adjustments,
                    COALESCE(SUM(delta) FILTER (WHERE upto_period), 0) AS closing
             FROM marked
@@ -1722,13 +1778,15 @@ def get_turnover(
                COALESCE(lco.name, a.color_name)  AS color_name,
                COALESCE(lsz.name, a.size_name)   AS size_name,
                a.opening, a.receipt, a.stock_entry, a.shipped, a.written_off,
-               a.adjustments, a.closing,
+               a.defect_in, a.defect_out, a.adjustments, a.closing,
                COUNT(*) OVER()             AS _total,
                SUM(a.opening)     OVER()   AS _t_opening,
                SUM(a.receipt)     OVER()   AS _t_receipt,
                SUM(a.stock_entry) OVER()   AS _t_stock_entry,
                SUM(a.shipped)     OVER()   AS _t_shipped,
                SUM(a.written_off) OVER()   AS _t_written_off,
+               SUM(a.defect_in)   OVER()   AS _t_defect_in,
+               SUM(a.defect_out)  OVER()   AS _t_defect_out,
                SUM(a.adjustments) OVER()   AS _t_adjustments,
                SUM(a.closing)     OVER()   AS _t_closing
         FROM agg a
@@ -1737,7 +1795,7 @@ def get_turnover(
         LEFT JOIN colors   lco  ON lco.id  = a.color_id
         LEFT JOIN sizes    lsz  ON lsz.id  = a.size_id
         {out_where}
-        ORDER BY (a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off)) DESC,
+        ORDER BY (a.receipt + a.stock_entry + ABS(a.shipped) + ABS(a.written_off) + a.defect_in + a.defect_out) DESC,
                  a.closing DESC, product_name, color_name, size_name
         LIMIT ? OFFSET ?
         """,
@@ -1751,6 +1809,8 @@ def get_turnover(
         stock_entry=int(rows[0]["_t_stock_entry"] or 0),
         shipped=int(rows[0]["_t_shipped"] or 0),
         written_off=int(rows[0]["_t_written_off"] or 0),
+        defect_in=int(rows[0]["_t_defect_in"] or 0),
+        defect_out=int(rows[0]["_t_defect_out"] or 0),
         adjustments=int(rows[0]["_t_adjustments"] or 0),
         closing=int(rows[0]["_t_closing"] or 0),
     ) if rows else TurnoverTotals()
@@ -1771,6 +1831,8 @@ def get_turnover(
             stock_entry=int(row["stock_entry"] or 0),
             shipped=int(row["shipped"] or 0),
             written_off=int(row["written_off"] or 0),
+            defect_in=int(row["defect_in"] or 0),
+            defect_out=int(row["defect_out"] or 0),
             adjustments=int(row["adjustments"] or 0),
             closing=int(row["closing"] or 0),
         )
@@ -1791,12 +1853,14 @@ def get_stock_history(
     size_id: str | None,
     date_from: str | None,
     date_to: str | None,
+    quality: str | None = None,
 ) -> "StockHistoryResponse":
     """Хронология значимых событий позиции с накопительным остатком после каждого.
 
     Остаток считается «назад от итога»: закрытие позиции известно суммой всех дельт,
     поэтому усечение длинной истории (TURNOVER_HISTORY_LIMIT последних событий)
     не ломает накопительный расчёт — показанное окно всё равно сходится с текущим остатком.
+    С фильтром quality история и остатки считаются по срезу качества.
     """
     from modules.balances.schemas import StockHistoryEvent, StockHistoryResponse
 
@@ -1808,11 +1872,11 @@ def get_stock_history(
 
     totals = connection.execute(
         f"""
-        SELECT COALESCE(SUM({_DELTA_SQL}), 0) AS closing, COUNT(*) AS cnt
+        SELECT COALESCE(SUM({_delta_sql(quality)}), 0) AS closing, COUNT(*) AS cnt
         FROM (
-            SELECT zr.qty, {_EVENT_KIND_SQL} AS kind
+            SELECT zr.qty, {_event_kind_sql(quality)} AS kind
             FROM zone_relocations zr
-            WHERE {_SIGNIFICANT_SQL} AND {pos_where}
+            WHERE {_significant_sql(quality)} AND {pos_where}
         ) e
         """,
         pos_params,
@@ -1833,7 +1897,7 @@ def get_stock_history(
         f"""
         SELECT zr.id, zr.created_at, zr.qty, zr.reason, zr.comment,
                zr.from_quality, zr.to_quality, zr.from_zone_name, zr.to_zone_name,
-               zr.trip_id, {_EVENT_KIND_SQL} AS kind,
+               zr.trip_id, {_event_kind_sql(quality)} AS kind,
                COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email,
                rd.id AS receipt_id, rd.doc_number AS receipt_number,
                dd.id AS dispatch_id, dd.doc_number AS dispatch_number,
@@ -1845,7 +1909,7 @@ def get_stock_history(
         LEFT JOIN dispatch_lines dl ON dl.id = zr.dispatch_line_id
         LEFT JOIN dispatch_docs dd  ON dd.id = dl.doc_id
         LEFT JOIN trip_docs t       ON t.id  = zr.trip_id
-        WHERE {_SIGNIFICANT_SQL} AND {pos_where}{date_conds}
+        WHERE {_significant_sql(quality)} AND {pos_where}{date_conds}
         ORDER BY zr.created_at DESC, zr.id DESC
         LIMIT ?
         """,
@@ -1871,8 +1935,9 @@ def get_stock_history(
     ).fetchone()
 
     ordered = list(reversed(rows))
+    incoming = _incoming_kinds(quality)
     deltas = [
-        int(r["qty"] or 0) if str(r["kind"]) in STOCK_EVENT_INCOMING else -int(r["qty"] or 0)
+        int(r["qty"] or 0) if str(r["kind"]) in incoming else -int(r["qty"] or 0)
         for r in ordered
     ]
     # Хвост истории мог быть отрезан фильтром дат — «остаток после» тогда считается
@@ -1881,11 +1946,11 @@ def get_stock_history(
     if date_to:
         tail_row = connection.execute(
             f"""
-            SELECT COALESCE(SUM({_DELTA_SQL}), 0) AS d
+            SELECT COALESCE(SUM({_delta_sql(quality)}), 0) AS d
             FROM (
-                SELECT zr.qty, {_EVENT_KIND_SQL} AS kind
+                SELECT zr.qty, {_event_kind_sql(quality)} AS kind
                 FROM zone_relocations zr
-                WHERE {_SIGNIFICANT_SQL} AND {pos_where} AND {_MSK_DAY_SQL} > ?
+                WHERE {_significant_sql(quality)} AND {pos_where} AND {_MSK_DAY_SQL} > ?
             ) e
             """,
             pos_params + [date_to],
