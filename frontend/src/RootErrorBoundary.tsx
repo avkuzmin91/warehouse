@@ -2,7 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 type Props = { children: ReactNode }
 
-type State = { error: Error | null }
+type State = { error: Error | null; reloading: boolean }
 
 const CHUNK_RELOAD_KEY = 'wms:chunk-reload-attempted'
 
@@ -20,11 +20,11 @@ function isDynamicImportError(error: Error): boolean {
 
 /** Ловит необработанные ошибки рендера, чтобы не оставлять пустой #root. */
 export class RootErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  state: State = { error: null, reloading: false }
   private clearReloadMarkerTimer: number | undefined
 
   static getDerivedStateFromError(error: Error): State {
-    return { error }
+    return { error, reloading: false }
   }
 
   componentDidMount() {
@@ -37,6 +37,7 @@ export class RootErrorBoundary extends Component<Props, State> {
     console.error(error, info.componentStack)
     if (isDynamicImportError(error) && sessionStorage.getItem(CHUNK_RELOAD_KEY) !== '1') {
       sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+      this.setState({ reloading: true })
       window.location.reload()
     }
   }
@@ -48,7 +49,9 @@ export class RootErrorBoundary extends Component<Props, State> {
   }
 
   render() {
-    if (this.state.error) {
+    const { error, reloading } = this.state
+    if (error) {
+      const stale = isDynamicImportError(error)
       return (
         <div
           className="app-error-fallback"
@@ -63,11 +66,32 @@ export class RootErrorBoundary extends Component<Props, State> {
             background: '#f6f4fb',
           }}
         >
-          <h1 style={{ fontSize: '1.35rem', margin: '0 0 12px' }}>Ошибка загрузки интерфейса</h1>
+          <h1 style={{ fontSize: '1.35rem', margin: '0 0 12px' }}>
+            {stale ? 'Вышла новая версия приложения' : 'Ошибка загрузки интерфейса'}
+          </h1>
           <p style={{ margin: '0 0 16px', lineHeight: 1.5 }}>
-            Обновите страницу. Если после обновления снова пусто — откройте консоль браузера (F12) и
-            пришлите текст ошибки разработчику.
+            {reloading
+              ? 'Обновляем страницу…'
+              : stale
+                ? 'Вкладка была открыта на старой версии, часть файлов интерфейса больше не доступна. Обновите страницу — несохранённые данные формы при этом потеряются.'
+                : 'Обновите страницу. Если после обновления снова пусто — откройте консоль браузера (F12) и пришлите текст ошибки разработчику.'}
           </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{
+              margin: '0 0 16px',
+              padding: '9px 16px',
+              borderRadius: 10,
+              border: '1px solid #4b2ea8',
+              background: '#4b2ea8',
+              color: '#fff',
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Обновить страницу
+          </button>
           <pre
             style={{
               margin: 0,
@@ -79,7 +103,7 @@ export class RootErrorBoundary extends Component<Props, State> {
               fontSize: 13,
             }}
           >
-            {this.state.error.message}
+            {error.message}
           </pre>
         </div>
       )
