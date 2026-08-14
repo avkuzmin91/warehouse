@@ -14,9 +14,7 @@ import type { IconName } from '../../../../primitives/Icon'
 export const RC_META: Record<ReceiptStatus, { role: ProcessRole | null; icon: IconName; sub: string }> = {
   draft:     { role: 'manager',   icon: 'edit',     sub: 'состав и план поступления' },
   planned:   { role: 'manager',   icon: 'clock',    sub: 'ожидание приёмки рейсом' },
-  on_intake: { role: 'warehouse', icon: 'forklift', sub: 'приёмка' },
   partially_received: { role: 'warehouse', icon: 'forklift', sub: 'часть принята рейсами, остаток ждёт следующих' },
-  on_review: { role: 'warehouse', icon: 'box',      sub: '' },
   done:      { role: null,        icon: 'check',    sub: 'товар встал на остатки годным' },
   cancelled: { role: null,        icon: 'x',        sub: '' },
 }
@@ -54,14 +52,8 @@ export function buildReceiptSteps(
   ops: ReceiptOp[] = [],
   opts: { awaitingTrip?: boolean; tripNumber?: string | null } = {},
 ): ProcessStep[] {
-  // Легаси-статусы вне маршрута: on_review → завершённое, on_intake → шаг приёмки
-  // рейсом (partially_received). «Частично принято» — собственный активный шаг.
-  const effStatus: ReceiptStatus =
-    status === 'on_review' ? 'done'
-    : status === 'on_intake' ? 'partially_received'
-    : status
-  const isDone = effStatus === 'done'
-  const curIdx = effStatus === 'cancelled' ? 1 : RECEIPT_STATUS_ORDER.indexOf(effStatus)
+  const isDone = status === 'done'
+  const curIdx = status === 'cancelled' ? 1 : RECEIPT_STATUS_ORDER.indexOf(status)
   const ts = getStepTimestamps(ops)
   return RECEIPT_STATUS_ORDER.map((s, i) => {
     const state: ProcessStep['state'] = isDone || i < curIdx ? 'done' : i === curIdx ? 'active' : 'future'

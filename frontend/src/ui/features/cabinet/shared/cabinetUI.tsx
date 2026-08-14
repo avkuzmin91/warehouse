@@ -12,13 +12,11 @@ export interface TrackState {
 
 export function cabinetReceiptTrack(status: CabinetReceiptStatus): TrackState | null {
   if (status === 'cancelled') return null
-  const steps = ['Ожидается', 'Приёмка', 'Проверка', 'Принято']
+  const steps = ['Ожидается', 'Приёмка', 'Принято']
   const idx: Record<Exclude<CabinetReceiptStatus, 'cancelled'>, number> = {
     planned: 0,
-    on_intake: 1,
     partially_received: 1,
-    on_review: 2,
-    done: 3,
+    done: 2,
   }
   return { steps, activeIdx: idx[status] }
 }

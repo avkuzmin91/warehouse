@@ -10,11 +10,11 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
     RECEIPT_STATUS_CANCELLED,
-    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PLANNED,
     SHIPMENT_STATUS_CANCELLED,
     SHIPMENT_STATUS_PACKING,
 )
+from modules.timesheet.service import business_today
 
 
 def _arrivals_on(connection, day: date) -> dict:
@@ -82,10 +82,10 @@ def _defect_qty_on(connection, day: date) -> int:
     """Брака выявлено за день: нетто-конвертации качества в defect (перемещения не считаются)."""
     start, end = _local_day_utc_range(day)
     row = connection.execute(
-        """
+        f"""
         SELECT COALESCE(SUM(CASE
-                   WHEN to_quality = 'defect'   AND COALESCE(from_quality,'') <> 'defect' THEN qty
-                   WHEN from_quality = 'defect' AND COALESCE(to_quality,'')   <> 'defect' THEN -qty
+                   WHEN to_quality = '{INV_Q_DEFECT}'   AND COALESCE(from_quality,'') <> '{INV_Q_DEFECT}' THEN qty
+                   WHEN from_quality = '{INV_Q_DEFECT}' AND COALESCE(to_quality,'')   <> '{INV_Q_DEFECT}' THEN -qty
                    ELSE 0 END), 0) AS total
         FROM zone_relocations
         WHERE created_at >= ? AND created_at < ?
@@ -146,11 +146,11 @@ def _count_operational_receipts(connection, *, today: date, overdue_only: bool =
         SELECT COUNT(*) AS cnt
         FROM receipt_docs d
         WHERE COALESCE(d.is_deleted, 0) = 0
-          AND d.status IN (?, ?)
+          AND d.status = ?
           AND d.arrival_date IS NOT NULL
           AND d.arrival_date {'<' if overdue_only else '<='} ?
         """,
-        (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, today.isoformat()),
+        (RECEIPT_STATUS_PLANNED, today.isoformat()),
     ).fetchone()
     return int(row["cnt"] if row else 0)
 
@@ -171,7 +171,7 @@ def _count_operational_shipments(connection, *, today: date, overdue_only: bool 
 
 
 def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, today: date | None = None) -> dict:
-    today = today or date.today()
+    today = today or business_today()
     receipt_total = _count_operational_receipts(connection, today=today)
     shipment_total = _count_operational_shipments(connection, today=today)
     overdue_total = (
@@ -189,14 +189,14 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
         LEFT JOIN clients cl ON cl.id = d.client_id
         LEFT JOIN receipt_lines l ON l.doc_id = d.id
         WHERE COALESCE(d.is_deleted, 0) = 0
-          AND d.status IN (?, ?)
+          AND d.status = ?
           AND d.arrival_date IS NOT NULL
           AND d.arrival_date <= ?
         GROUP BY d.id, cl.name
         ORDER BY d.arrival_date ASC, d.created_at ASC, d.doc_number ASC
         LIMIT ?
         """,
-        (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, today.isoformat(), receipts_limit),
+        (RECEIPT_STATUS_PLANNED, today.isoformat(), receipts_limit),
     ).fetchall()
     receipts = [
         {
@@ -212,7 +212,7 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
             "total_qty": int(r["total_qty"] or 0),
             "progress_qty": int(r["progress_qty"] or 0),
             "overdue": bool(r["arrival_date"] and str(r["arrival_date"]) < today.isoformat()),
-            "priority": _priority(r["arrival_date"], today, active=str(r["status"]) == RECEIPT_STATUS_ON_INTAKE),
+            "priority": _priority(r["arrival_date"], today),
             "exception": None,
         }
         for r in receipt_rows

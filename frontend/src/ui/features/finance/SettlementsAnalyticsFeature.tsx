@@ -153,6 +153,11 @@ export function SettlementsAnalyticsFeature() {
         onToChange={setToRaw}
         onClear={() => setMany({ from: null, to: null })}
       />
+      {(hasCustom || period !== DEFAULT_PERIOD || hasFilter) && (
+        <button className="btn ghost sm" onClick={() => setMany({ days: null, from: null, to: null, client: null, carrier: null })}>
+          <Icon name="x" size={12} />Сбросить
+        </button>
+      )}
       {isAdmin && (
         <button className="btn" onClick={exportCsv} disabled={!ar || !ap}>
           <Icon name="download" size={14} />Выгрузить

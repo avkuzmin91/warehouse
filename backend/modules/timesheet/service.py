@@ -3,7 +3,8 @@
 
 Деньги — в копейках (INTEGER). Часы за день = (уход − приход) − 1 ч обед.
 Расчётная неделя — Суббота → Пятница (день выплат — пятница). Заработок считается
-по ставке, действовавшей в конкретный день (effective-dated employee_rates).
+по ставке, действовавшей в конкретный день (effective-dated employee_rates), с
+повышающими коэффициентами за переработку (см. `split_shift_hours`).
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ from config import (
     TIMESHEET_DAY_PLANNED,
     TIMESHEET_DAY_WORKED,
     TIMESHEET_LUNCH_HOURS,
+    TIMESHEET_OVERTIME_EFFECTIVE_FROM,
+    TIMESHEET_OVERTIME_THRESHOLD_HOURS,
+    TIMESHEET_OVERTIME_TIER1_HOURS,
+    TIMESHEET_OVERTIME_TIER1_MULT,
+    TIMESHEET_OVERTIME_TIER2_MULT,
 )
 from dbconn import ci_like_substring_param
 from modules.production_calendar.service import load_overrides, working_days_of_month
@@ -50,6 +56,52 @@ def _to_min(t: str | None) -> int | None:
         return None
 
 
+def shift_gross_hours(
+    start: str | None,
+    end: str | None,
+    *,
+    end_next_day: bool = False,
+) -> float:
+    """Время НА СМЕНЕ = уход − приход, без вычета обеда. По нему считается порог
+    переработки: «был на смене больше 12 часов»."""
+    a, b = _to_min(start), _to_min(end)
+    if a is None or b is None:
+        return 0.0
+    if end_next_day:
+        b += 24 * 60
+    return max(0.0, round((b - a) / 60.0, 2))
+
+
+def split_shift_hours(
+    start: str | None,
+    end: str | None,
+    *,
+    lunch: bool = True,
+    end_next_day: bool = False,
+) -> tuple[float, float, float]:
+    """Часы за день, разложенные на (базовые, ×1.3, ×1.5).
+
+    Порог и нарезка бэндов — по времени на смене (gross), обед вычитается из
+    базовой части: смена 08:00–21:00 (13 ч на смене) = 11 ч базовых + 1 ч ×1.3.
+    Так шкала непрерывна на границе порога, а формулировка правила («был на смене
+    больше 12 часов») сохраняется буквально.
+
+    `lunch=False` — вышел без обеда, час не вычитаем (и короткий день не обнуляем,
+    ведь обнуление существует только чтобы вычет обеда не уходил в минус)."""
+    gross = shift_gross_hours(start, end, end_next_day=end_next_day)
+    if gross <= 0:
+        return 0.0, 0.0, 0.0
+    base_gross = min(gross, TIMESHEET_OVERTIME_THRESHOLD_HOURS)
+    over = max(0.0, gross - TIMESHEET_OVERTIME_THRESHOLD_HOURS)
+    tier1 = min(over, TIMESHEET_OVERTIME_TIER1_HOURS)
+    tier2 = over - tier1
+    if lunch:
+        base = base_gross - TIMESHEET_LUNCH_HOURS if base_gross > TIMESHEET_LUNCH_HOURS else 0.0
+    else:
+        base = base_gross
+    return round(base, 2), round(tier1, 2), round(tier2, 2)
+
+
 def day_hours(
     start: str | None,
     end: str | None,
@@ -57,25 +109,16 @@ def day_hours(
     lunch: bool = True,
     end_next_day: bool = False,
 ) -> float:
-    """Часы за день = (уход − приход) − 1 ч обед.
+    """Часы за день = (уход − приход) − 1 ч обед. Оплачиваемое время без учёта
+    повышающих коэффициентов — то, что показывается в табеле как «часы»."""
+    base, t1, t2 = split_shift_hours(start, end, lunch=lunch, end_next_day=end_next_day)
+    return round(base + t1 + t2, 2)
 
-    `end_next_day` — смена закончилась на следующий день (08:00 → 02:00): к уходу
-    добавляем +24 ч. `lunch=False` — вышел без обеда, час не вычитаем (и короткий
-    день не обнуляем, ведь обнуление существует только чтобы вычет обеда не уходил
-    в минус). На коротком дне с обедом зачёт 0, а не минус (как в дизайне)."""
-    a, b = _to_min(start), _to_min(end)
-    if a is None or b is None:
-        return 0.0
-    if end_next_day:
-        b += 24 * 60
-    gross = (b - a) / 60.0
-    if gross <= 0:
-        return 0.0
-    if not lunch:
-        net = gross
-    else:
-        net = gross - TIMESHEET_LUNCH_HOURS if gross > TIMESHEET_LUNCH_HOURS else 0.0
-    return max(0.0, round(net, 2))
+
+def overtime_applies(day_iso: str) -> bool:
+    """Правило переработки действует с даты вступления: закрытые прошлые недели и
+    P&L прошлых месяцев пересчитываться не должны."""
+    return str(day_iso)[:10] >= TIMESHEET_OVERTIME_EFFECTIVE_FROM
 
 
 # ── Неделя Сб → Пт ───────────────────────────────────────────────────────────
@@ -240,15 +283,46 @@ def day_status(entry: dict | None, day_iso: str, today_iso: str) -> str:
     return TIMESHEET_DAY_OFF
 
 
-def entry_hours(entry: dict | None) -> float:
+def entry_split(entry: dict | None) -> tuple[float, float, float]:
+    """Часы записи табеля, разложенные на (базовые, ×1.3, ×1.5)."""
     if entry and _has_fact(entry):
-        return day_hours(
+        return split_shift_hours(
             entry["actual_start"],
             entry["actual_end"],
             lunch=int(entry.get("no_lunch") or 0) == 0,
             end_next_day=int(entry.get("end_next_day") or 0) == 1,
         )
-    return 0.0
+    return 0.0, 0.0, 0.0
+
+
+def entry_hours(entry: dict | None) -> float:
+    base, t1, t2 = entry_split(entry)
+    return round(base + t1 + t2, 2)
+
+
+def entry_overtime_hours(entry: dict | None, day_iso: str) -> float:
+    if not overtime_applies(day_iso):
+        return 0.0
+    _, t1, t2 = entry_split(entry)
+    return round(t1 + t2, 2)
+
+
+def entry_earned(entry: dict | None, rate: int | None, day_iso: str) -> tuple[int, float, int]:
+    """(заработок в копейках, часы переработки, доплата за переработку в копейках).
+
+    Округление одно, в конце: сумма считается от взвешенных часов, а не по каждому
+    бэнду отдельно — иначе копейки разъезжаются с итогом. Доплата — разница с
+    обычным расчётом «часы × ставка», её показывает UI отдельной строкой."""
+    base, t1, t2 = entry_split(entry)
+    hours = base + t1 + t2
+    if rate is None or hours <= 0:
+        return 0, 0.0, 0
+    flat = round(hours * rate)
+    if not overtime_applies(day_iso) or (t1 + t2) <= 0:
+        return flat, 0.0, 0
+    weighted = base + t1 * TIMESHEET_OVERTIME_TIER1_MULT + t2 * TIMESHEET_OVERTIME_TIER2_MULT
+    earned = round(weighted * rate)
+    return earned, round(t1 + t2, 2), earned - flat
 
 
 # ── Загрузчики ────────────────────────────────────────────────────────────────
@@ -359,6 +433,8 @@ def week_stats(
 ) -> dict:
     hours = 0.0
     earned = 0
+    overtime_hours = 0.0
+    overtime_pay = 0
     worked_days = 0
     absent = 0
     noplan = 0
@@ -372,7 +448,12 @@ def week_stats(
             worked_days += 1
             r = rate_on(rates_desc, day_iso)
             if r is not None:
-                earned += round(h * r)
+                e, oth, otp = entry_earned(entry, r, day_iso)
+                earned += e
+                overtime_pay += otp
+            else:
+                oth = entry_overtime_hours(entry, day_iso)
+            overtime_hours += oth
         if st == TIMESHEET_DAY_ABSENT:
             absent += 1
         if st == TIMESHEET_DAY_NOPLAN:
@@ -390,6 +471,8 @@ def week_stats(
     return {
         "hours": round(hours, 1),
         "earned": earned,
+        "overtime_hours": round(overtime_hours, 1),
+        "overtime_pay": overtime_pay,
         "worked_days": worked_days,
         "absent": absent,
         "noplan": noplan,
@@ -443,12 +526,12 @@ def daily_payroll_accruals_split(connection, date_from: str, date_to: str) -> di
         for (emp_id, day_iso), entry in entries.items():
             if comp.get(emp_id) != EMPLOYEE_COMP_HOURLY:
                 continue
-            h = entry_hours(entry)
-            if h <= 0:
-                continue
             r = rate_on(rates.get(emp_id), day_iso)
-            if r:
-                timesheet[day_iso] = timesheet.get(day_iso, 0) + round(h * r)
+            if not r:
+                continue
+            amt, _, _ = entry_earned(entry, r, day_iso)
+            if amt:
+                timesheet[day_iso] = timesheet.get(day_iso, 0) + amt
 
     # Окладники: дневная доля оклада, размазанная по РАБОЧИМ дням месяца
     # (производственный календарь, дефолт 6/1), остаток — на первые рабочие дни,
@@ -536,13 +619,10 @@ def daily_payroll_by_employee(connection, day_iso: str) -> dict[str, list[dict]]
         for (emp_id, di), entry in entries.items():
             if di != day or comp.get(emp_id) != EMPLOYEE_COMP_HOURLY:
                 continue
-            h = entry_hours(entry)
-            if h <= 0:
-                continue
             r = rate_on(rates.get(emp_id), day)
             if not r:
                 continue
-            amt = round(h * r)
+            amt, _, _ = entry_earned(entry, r, day)
             if amt:
                 timesheet.append({"employee_id": emp_id, "full_name": names.get(emp_id, "—"),
                                   "position": positions.get(emp_id), "amount": amt})
@@ -616,6 +696,8 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
     tot_hours = 0.0
     tot_earned = 0
     tot_absent = 0
+    tot_ot_hours = 0.0
+    tot_ot_pay = 0
 
     for e in employees:
         cells: list[dict] = []
@@ -637,6 +719,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
                 "no_lunch": bool(int(entry.get("no_lunch") or 0)) if entry else False,
                 "end_next_day": bool(int(entry.get("end_next_day") or 0)) if entry else False,
                 "hours": round(h, 1),
+                "overtime_hours": entry_overtime_hours(entry, day_iso),
                 "note": entry.get("note") if entry else None,
             }
             cells.append(cell)
@@ -644,6 +727,8 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
         tot_hours += s["hours"]
         tot_earned += s["earned"]
         tot_absent += s["absent"]
+        tot_ot_hours += s["overtime_hours"]
+        tot_ot_pay += s["overtime_pay"]
         row = {
             "employee_id": e["id"],
             "full_name": e["full_name"],
@@ -653,6 +738,8 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
             "worked_days": s["worked_days"],
             "absent": s["absent"],
             "earned": s["earned"] if with_money else None,
+            "overtime_hours": s["overtime_hours"],
+            "overtime_pay": s["overtime_pay"] if with_money else None,
             "fact_locked": e["id"] in settled,
             "archived": e["status"] != EMPLOYEE_STATUS_ACTIVE,
         }
@@ -670,6 +757,8 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
             "hours": round(tot_hours, 1),
             "earned": tot_earned if with_money else None,
             "absent": tot_absent,
+            "overtime_hours": round(tot_ot_hours, 1),
+            "overtime_pay": tot_ot_pay if with_money else None,
             "per_day": [round(x, 1) for x in per_day],
             "employees": len(employees),
         },
@@ -693,7 +782,8 @@ def build_payroll(connection, sat: date) -> dict:
     payments = load_payments_period(connection, sat.isoformat(), fri.isoformat())
 
     rows: list[dict] = []
-    t_earned = t_adv = t_pay = 0
+    t_earned = t_adv = t_pay = t_ot_pay = 0
+    t_ot_hours = 0.0
     with_hours = 0
     left = 0
     for e in employees:
@@ -706,6 +796,8 @@ def build_payroll(connection, sat: date) -> dict:
         t_earned += s["earned"]
         t_adv += s["advances"]
         t_pay += s["to_pay"]
+        t_ot_hours += s["overtime_hours"]
+        t_ot_pay += s["overtime_pay"]
         if s["hours"] > 0:
             with_hours += 1
             if not s["settled"]:
@@ -717,6 +809,8 @@ def build_payroll(connection, sat: date) -> dict:
             "rate_kopecks": cur,
             "hours": s["hours"],
             "earned": s["earned"],
+            "overtime_hours": s["overtime_hours"],
+            "overtime_pay": s["overtime_pay"],
             "advances": s["advances"],
             "to_pay": s["to_pay"],
             "overpaid": s["overpaid"],
@@ -733,6 +827,8 @@ def build_payroll(connection, sat: date) -> dict:
             "earned": t_earned,
             "advances": t_adv,
             "to_pay": t_pay,
+            "overtime_hours": round(t_ot_hours, 1),
+            "overtime_pay": t_ot_pay,
             "employees": with_hours,
             "left": left,
         },
@@ -800,14 +896,17 @@ def build_attendance(connection, employee_id: str, hired_on: str | None) -> dict
     cells: list[dict] = []
     shifts = noplan = absent = 0
     hours = 0.0
+    overtime = 0.0
     for d in days:
         day_iso = d.isoformat()
         entry = entries.get((employee_id, day_iso))
         st = _att_status(entry, day_iso, today_iso, hired)
         h = entry_hours(entry)
+        oth = entry_overtime_hours(entry, day_iso)
         if st in (TIMESHEET_DAY_WORKED, TIMESHEET_DAY_NOPLAN):
             shifts += 1
             hours += h
+            overtime += oth
         if st == TIMESHEET_DAY_NOPLAN:
             noplan += 1
         if st == TIMESHEET_DAY_ABSENT:
@@ -818,6 +917,7 @@ def build_attendance(connection, employee_id: str, hired_on: str | None) -> dict
             "weekend": is_weekend(d),
             "status": st,
             "hours": round(h, 1),
+            "overtime_hours": oth,
             "late_minutes": late_minutes(entry) if st == TIMESHEET_DAY_WORKED else 0,
         })
 
@@ -829,6 +929,7 @@ def build_attendance(connection, employee_id: str, hired_on: str | None) -> dict
             "noplan": noplan,
             "absent": absent,
             "hours": round(hours, 1),
+            "overtime_hours": round(overtime, 1),
         },
         "alltime": attendance_alltime(connection, employee_id, today_iso),
     }

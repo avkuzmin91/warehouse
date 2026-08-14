@@ -2,7 +2,7 @@ import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
@@ -10,9 +10,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
   packed:            'Упакован',
-  awaiting_trip:     'Ожидает рейс',
-  partially_shipped: 'Частично отгружено',
-  shipped:           'Завершён',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -23,9 +20,6 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
   packed:            'Упакован',
-  awaiting_trip:     'Готов к рейсу',
-  partially_shipped: 'Частично отгружено',
-  shipped:           'Завершён',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -36,9 +30,6 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   on_packing:        'info',
   relocating:        'info',
   packed:            'success',
-  awaiting_trip:     'warning',
-  partially_shipped: 'warning',
-  shipped:           'success',
   completed_no_goods: 'warning',
   cancelled:         'danger',
 }

@@ -39,6 +39,7 @@ from config import (
     SHIPMENT_TRANSITIONS_DEFECT,
 )
 from dbconn import ci_like_substring_param
+from modules.timesheet.service import business_today
 from utils import next_doc_number as _next_doc_number, now_iso as _now
 
 
@@ -87,7 +88,7 @@ def find_duplicate_shipments(connection, *, client_id, cargo_type, ship_date, li
     if ship:
         docs = connection.execute(
             "SELECT id, doc_number, status, created_at, created_by FROM shipment_docs "
-            "WHERE client_id = ? AND COALESCE(cargo_type, 'good') = ? AND ship_date = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            f"WHERE client_id = ? AND COALESCE(cargo_type, '{SHIPMENT_CARGO_GOOD}') = ? AND ship_date = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
             "ORDER BY created_at DESC",
             (client_id, cargo_type, ship, SHIPMENT_STATUS_CANCELLED),
         ).fetchall()
@@ -95,7 +96,7 @@ def find_duplicate_shipments(connection, *, client_id, cargo_type, ship_date, li
         today = _moscow_day(_now())
         rows = connection.execute(
             "SELECT id, doc_number, status, created_at, created_by FROM shipment_docs "
-            "WHERE client_id = ? AND COALESCE(cargo_type, 'good') = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
+            f"WHERE client_id = ? AND COALESCE(cargo_type, '{SHIPMENT_CARGO_GOOD}') = ? AND status != ? AND COALESCE(is_deleted,0)=0 "
             "ORDER BY created_at DESC",
             (client_id, cargo_type, SHIPMENT_STATUS_CANCELLED),
         ).fetchall()
@@ -306,7 +307,7 @@ def _move_one_to_packing(
 
 
 def _move_items_to_packing(connection, doc_id: str, items, user_id: str) -> int:
-    """Передача / подвоз on_review → «Зона упаковки». items — [(line_id, [(qty, from_zone_id)])].
+    """Передача / подвоз товара в «Зону упаковки». items — [(line_id, [(qty, from_zone_id)])].
 
     Доступно в статусах «В плане» (первичная передача) и «На упаковке» (подвоз, чтобы
     добить план годным при браке). from_zone_id=None означает FIFO по местам.
@@ -2171,8 +2172,6 @@ def _finalize_repack(connection, doc_id: str, user_id: str) -> None:
         )
         return
 
-    from modules.timesheet.service import business_today
-
     entry_id = str(uuid4())
     comment_bits = [f"Переупаковка по вине клиента, задача {doc['doc_number']}: {doc['repack_reason']}"]
     comment_bits.append(
@@ -2267,7 +2266,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
     if next_status == SHIPMENT_STATUS_RELOCATING:
         connection.execute(
             "UPDATE shipment_docs SET status=?, actual_ship_date=COALESCE(actual_ship_date, ?), updated_at=? WHERE id=?",
-            (next_status, date.today().isoformat(), now, doc_id),
+            (next_status, business_today().isoformat(), now, doc_id),
         )
     else:
         connection.execute(

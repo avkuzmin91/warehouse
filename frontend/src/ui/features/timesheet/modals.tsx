@@ -88,10 +88,12 @@ export function AdvanceModal({
 // ── Рассчитать за неделю ──────────────────────────────────────────────────────
 
 export function SettleModal({
-  employeeId, employeeName, weekLabel, weekStart, weekEnd, earned, advances, toPay, hours, rate, onClose, onSaved,
+  employeeId, employeeName, weekLabel, weekStart, weekEnd, earned, advances, toPay, hours, rate,
+  overtimePay = 0, onClose, onSaved,
 }: {
   employeeId: string; employeeName: string; weekLabel: string; weekStart: string; weekEnd: string
   earned: number; advances: number; toPay: number; hours: number; rate: number | null
+  overtimePay?: number | null
   onClose: () => void; onSaved: () => void
 }) {
   const toast = useToast()
@@ -120,6 +122,11 @@ export function SettleModal({
           <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Заработано</div>
           <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 3 }}>{fmtMoney(earned)}</div>
           <div style={{ fontSize: 10.5, color: 'var(--c-text-faint)', marginTop: 1 }}>{fmtHours(hours)}{rate != null ? ` × ${fmtRate(rate)}` : ''}</div>
+          {!!overtimePay && (
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-warning)', marginTop: 1 }}>
+              вкл. переработку {fmtMoneyShort(overtimePay)} ₽
+            </div>
+          )}
         </div>
         <div style={{ padding: '12px 14px', background: 'var(--c-bg-elev)' }}>
           <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Выдано (авансы)</div>

@@ -9,10 +9,12 @@ interface DrawerProps {
   width?: number
   footer?: ReactNode
   closeOnBackdrop?: boolean
+  /** false — контент без внутренних отступов и скролла: children сами управляют раскладкой (шапка/список/футер). */
+  padded?: boolean
   children: ReactNode
 }
 
-export function Drawer({ open, onClose, title, subtitle, width = 480, footer, closeOnBackdrop = false, children }: DrawerProps) {
+export function Drawer({ open, onClose, title, subtitle, width = 480, footer, closeOnBackdrop = false, padded = true, children }: DrawerProps) {
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -30,7 +32,7 @@ export function Drawer({ open, onClose, title, subtitle, width = 480, footer, cl
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 60,
-        background: 'rgba(20,20,15,0.28)',
+        background: 'var(--c-overlay)',
         display: 'flex', alignItems: 'stretch', justifyContent: 'flex-end',
         backdropFilter: 'blur(2px)',
       }}
@@ -62,7 +64,9 @@ export function Drawer({ open, onClose, title, subtitle, width = 480, footer, cl
             </button>
           </div>
         )}
-        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'visible', padding: '18px 20px' }}>
+        <div style={padded
+          ? { flex: 1, overflowY: 'auto', overflowX: 'visible', padding: '18px 20px' }
+          : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {children}
         </div>
         {footer && (

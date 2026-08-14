@@ -8,9 +8,7 @@ import type { DuplicateCheckResponse } from './domainTypes'
 export type ReceiptStatus =
   | 'draft'
   | 'planned'
-  | 'on_intake'
   | 'partially_received'
-  | 'on_review'
   | 'done'
   | 'cancelled'
 
@@ -385,9 +383,7 @@ export function expectRedelivery(docId: string) {
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
-  on_intake: 'На приёмке',
   partially_received: 'Частично принято',
-  on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
 }
@@ -395,16 +391,13 @@ export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
 export const RECEIPT_STEP_DONE_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создан',
   planned: 'Запланирован',
-  on_intake: 'Принят',
   partially_received: 'Принято рейсом',
-  on_review: 'Проверен',
   done: 'Завершён',
   cancelled: 'Аннулирован',
 }
 
 // Один линейный путь поступления: приёмка идёт рейсом, поэтому маршрут —
-// Создание → В плане → Частично принято → Завершён. on_intake/on_review — легаси,
-// в маршрут не входят (старые документы отображаются корректно).
+// Создание → В плане → Частично принято → Завершён.
 export const RECEIPT_STATUS_ORDER: ReceiptStatus[] = [
   'draft', 'planned', 'partially_received', 'done',
 ]
@@ -437,9 +430,7 @@ export function receiptStatusTone(status: ReceiptStatus) {
   const map: Record<ReceiptStatus, string> = {
     draft: '',
     planned: 'info',
-    on_intake: 'warning',
     partially_received: 'warning',
-    on_review: 'warning',
     done: 'success',
     cancelled: 'danger',
   }
@@ -448,7 +439,6 @@ export function receiptStatusTone(status: ReceiptStatus) {
 
 export function receiptQcStatus(item: ReceiptListItem): { label: string; tone: string } {
   if (item.status === 'done') return { label: 'Принято', tone: 'success' }
-  if (item.status === 'on_intake') return { label: 'Приёмка', tone: 'warning' }
   return { label: 'Не начата', tone: '' }
 }
 

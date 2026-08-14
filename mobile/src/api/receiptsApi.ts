@@ -4,9 +4,7 @@ import { request } from './http'
 export type ReceiptStatus =
   | 'draft'
   | 'planned'
-  | 'on_intake'
   | 'partially_received'
-  | 'on_review'
   | 'done'
   | 'cancelled'
 
@@ -147,9 +145,7 @@ export function getReceipts(params: ReceiptListParams = {}, signal?: AbortSignal
 export const RECEIPT_STATUS_LABELS: Record<ReceiptStatus, string> = {
   draft: 'Создание',
   planned: 'В плане',
-  on_intake: 'На приёмке',
   partially_received: 'Частично принято',
-  on_review: 'На проверке',
   done: 'Завершён',
   cancelled: 'Аннулирован',
 }
@@ -158,9 +154,7 @@ export function receiptStatusTone(status: ReceiptStatus): string {
   const map: Record<ReceiptStatus, string> = {
     draft: '',
     planned: 'info',
-    on_intake: 'warning',
     partially_received: 'warning',
-    on_review: 'warning',
     done: 'success',
     cancelled: 'danger',
   }

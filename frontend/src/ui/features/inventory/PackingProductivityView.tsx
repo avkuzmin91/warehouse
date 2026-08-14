@@ -170,6 +170,11 @@ export function PackingProductivityView() {
             onToChange={(v) => setDateTo(v)}
             onClear={() => setMany({ from: defFrom, to: defTo })}
           />
+          {(search || clientId || dateFrom !== defFrom || dateTo !== defTo) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', from: defFrom, to: defTo })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
           <button
             className="btn ghost sm icon"
             title="Обновить"

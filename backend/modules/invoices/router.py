@@ -1330,6 +1330,7 @@ def cancel_invoice(
 async def upload_invoice_file(
     invoice_id: str,
     file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_finance),
 ):
     if not file.filename:
@@ -1344,6 +1345,9 @@ async def upload_invoice_file(
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "invoice_file_upload")
+        if not proceed:
+            return stored
         doc = conn.execute(
             "SELECT status FROM invoice_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (invoice_id,),
@@ -1371,8 +1375,10 @@ async def upload_invoice_file(
             "VALUES (?,?,?,?,?,?)",
             (str(uuid4()), invoice_id, INVOICE_OP_DOC_UPDATE, f"Прикреплён файл {file.filename}", now, uid),
         )
+        result = {"message": file_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": file_id}
+    return result
 
 
 @router.delete("/invoices/{invoice_id}/files/{file_id}")

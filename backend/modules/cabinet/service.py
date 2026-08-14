@@ -11,6 +11,7 @@ from config import (
     CABINET_DISPATCH_VISIBLE_STATUSES,
     CABINET_RECEIPT_OPS_VISIBLE,
     CABINET_RECEIPT_VISIBLE_STATUSES,
+    DISPATCH_CARGO_GOOD,
     DISPATCH_CARGO_TYPES,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
@@ -21,7 +22,6 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
     PRODUCT_LIST_SORT_COLUMNS,
-    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     TRIP_STATUS_CANCELLED,
@@ -504,7 +504,7 @@ def list_cabinet_shipments(
         conds.append(cond)
         params.extend(status_params)
     if cargo_type in DISPATCH_CARGO_TYPES:
-        conds.append("COALESCE(d.cargo_type, 'good') = ?")
+        conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') = ?")
         params.append(cargo_type)
     if search and search.strip():
         s = ci_like_substring_param(search)
@@ -533,7 +533,7 @@ def list_cabinet_shipments(
     offset = (page - 1) * limit
     rows = connection.execute(
         f"""
-        SELECT d.id, d.doc_number, COALESCE(d.cargo_type, 'good') AS cargo_type,
+        SELECT d.id, d.doc_number, COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') AS cargo_type,
                d.ship_date, d.actual_ship_date,
                d.status, d.created_at,
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.store_name) FILTER (WHERE l.is_deleted = 0), NULL) AS store_names,
@@ -587,7 +587,7 @@ def list_cabinet_shipment_lines(
     conds.append(cond)
     params.extend(status_params)
     if cargo_type in DISPATCH_CARGO_TYPES:
-        conds.append("COALESCE(d.cargo_type, 'good') = ?")
+        conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') = ?")
         params.append(cargo_type)
     if search and search.strip():
         s = ci_like_substring_param(search)
@@ -611,7 +611,7 @@ def list_cabinet_shipment_lines(
     offset = (page - 1) * limit
     rows = connection.execute(
         f"""
-        SELECT l.doc_id, d.doc_number, COALESCE(d.cargo_type, 'good') AS cargo_type,
+        SELECT l.doc_id, d.doc_number, COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') AS cargo_type,
                d.status, d.ship_date,
                l.product_name, l.product_sku, l.color_name, l.size_name,
                l.qty, l.shipped_qty, l.site_url, l.store_name
@@ -781,7 +781,7 @@ def cabinet_summary(connection, *, client_id: str) -> CabinetSummaryResponse:
         client_id=client_id,
         page=1,
         limit=5,
-        statuses=[RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_PARTIALLY_RECEIVED],
+        statuses=[RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_PARTIALLY_RECEIVED],
         order="upcoming",
     ).items
     active_shipments = list_cabinet_shipments(

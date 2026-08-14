@@ -259,8 +259,8 @@ export function PackingTasksFeature() {
             ]}
             onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || skuFilter || dateFrom || dateTo || statusFilter || cargoFilter) && (
-            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '', cargo: '' })}>
+          {(search || clientId || skuFilter || dateFrom || dateTo || statusFilter || cargoFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', sku: '', from: '', to: '', status: '', cargo: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

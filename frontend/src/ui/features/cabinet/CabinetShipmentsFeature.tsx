@@ -128,8 +128,8 @@ export function CabinetShipmentsFeature() {
             options={CARGO_OPTIONS}
             onChange={(v) => setCargoFilter(v)}
           />
-          {(statusFilter || cargoFilter || dateFrom || dateTo) && (
-            <button className="btn ghost sm" onClick={() => setMany({ status: '', cargo: '', from: '', to: '' })}>
+          {(search || statusFilter || cargoFilter || dateFrom || dateTo) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', status: '', cargo: '', from: '', to: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

@@ -21,6 +21,26 @@ export function setSessionExpiredHandler(fn: (() => void) | null): void {
 type RequestOptions = RequestInit & {
   /** Не пытаться обновить сессию на 401 (для самого refresh / logout). */
   skipRefresh?: boolean
+  /**
+   * Защита от дублей при обрыве сети. По умолчанию ВКЛЮЧЕНА для write-методов
+   * (POST/PUT/PATCH/DELETE) — создание документов и команды. Две линии обороны:
+   *  1) single-flight — одновременные одинаковые запросы (повторные тапы, пока
+   *     первый «висит») схлопываются в один fetch;
+   *  2) стабильный `X-Request-Id` — если идентичный запрос только что оборвался,
+   *     повтор уходит с тем же ключом, и бэкенд (idempotency_keys) не выполняет
+   *     операцию повторно (двойной документ / двойная оплата), даже если первый
+   *     запрос на самом деле дошёл.
+   *
+   * Явно переданный заголовок `X-Request-Id` имеет приоритет над автоматическим.
+   * Передать `false`, чтобы выключить для конкретного запроса.
+   */
+  idempotent?: boolean
+}
+
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+function isWriteRequest(init: RequestOptions | undefined): boolean {
+  return WRITE_METHODS.has((init?.method ?? 'GET').toUpperCase())
 }
 
 function apiPathWithoutQuery(path: string): string {
@@ -193,7 +213,7 @@ async function tryRefreshSession(): Promise<boolean> {
   }
 }
 
-export async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+async function executeRequest<T>(path: string, init?: RequestOptions): Promise<T> {
   let headers = buildHeaders(path, init, true)
   let response = await doFetch(path, init, headers)
 
@@ -218,6 +238,89 @@ export async function request<T>(path: string, init?: RequestOptions): Promise<T
   }
   if (response.status === 204) return undefined as T
   return readJsonBody<T>(response)
+}
+
+// Дедупликация идемпотентных write-запросов (перенос web-реализации из
+// frontend/src/api/http.ts). Ключ = метод + путь + тело: одинаковая форма создаёт
+// одинаковый ключ. Окно — сколько держим id оборвавшегося запроса для
+// переиспользования на ретрае (после него повтор считается новым документом).
+const IDEMPOTENCY_WINDOW_MS = 60_000
+
+type IdempotencyEntry = {
+  requestId: string
+  /** Промис незавершённого запроса — к нему присоединяются параллельные тапы. */
+  promise?: Promise<unknown>
+  /** Когда идентичный запрос оборвался; в пределах окна повтор переиспользует id. */
+  failedAt?: number
+}
+
+const idempotencyEntries = new Map<string, IdempotencyEntry>()
+
+function idempotencyKey(path: string, init: RequestOptions): string {
+  const method = (init.method ?? 'GET').toUpperCase()
+  const body = typeof init.body === 'string' ? init.body : ''
+  return `${method} ${path} ${body}`
+}
+
+function pruneIdempotencyEntries(now: number): void {
+  for (const [key, entry] of idempotencyEntries) {
+    if (!entry.promise && entry.failedAt != null && now - entry.failedAt >= IDEMPOTENCY_WINDOW_MS) {
+      idempotencyEntries.delete(key)
+    }
+  }
+}
+
+/** Явно переданный вызывающим кодом X-Request-Id (например, через requestIdHeaders). */
+function explicitRequestId(init: RequestOptions): string | null {
+  const headers = init.headers as Record<string, string> | undefined
+  if (!headers) return null
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === 'x-request-id' && headers[key]) return headers[key]
+  }
+  return null
+}
+
+async function idempotentRequest<T>(path: string, init: RequestOptions): Promise<T> {
+  const now = Date.now()
+  pruneIdempotencyEntries(now)
+
+  const key = idempotencyKey(path, init)
+  const existing = idempotencyEntries.get(key)
+
+  // Запрос с такой же формой уже летит — присоединяемся, второго fetch не делаем.
+  if (existing?.promise) {
+    return existing.promise as Promise<T>
+  }
+
+  // Явный id вызывающего кода приоритетнее; иначе недавний идентичный запрос
+  // оборвался → ретрай с тем же X-Request-Id (бэкенд не задвоит), либо новый id.
+  const explicit = explicitRequestId(init)
+  const reuse = existing?.failedAt != null && now - existing.failedAt < IDEMPOTENCY_WINDOW_MS
+  const requestId = explicit ?? (reuse && existing ? existing.requestId : newRequestId())
+
+  const headers = explicit
+    ? (init.headers as Record<string, string>)
+    : { ...(init.headers as Record<string, string> | undefined), 'X-Request-Id': requestId }
+  const promise = executeRequest<T>(path, { ...init, headers })
+  idempotencyEntries.set(key, { requestId, promise })
+
+  try {
+    const result = await promise
+    // Успех — забываем ключ: следующий идентичный запрос создаст новый документ.
+    idempotencyEntries.delete(key)
+    return result
+  } catch (err) {
+    // Ошибка (в т.ч. обрыв сети) — держим id в окне ретрая для переиспользования.
+    idempotencyEntries.set(key, { requestId, failedAt: Date.now() })
+    throw err
+  }
+}
+
+export function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  // Идемпотентность по умолчанию для write-методов; явный idempotent имеет приоритет.
+  const idempotent = init?.idempotent ?? isWriteRequest(init)
+  if (idempotent) return idempotentRequest<T>(path, init as RequestOptions)
+  return executeRequest<T>(path, init)
 }
 
 /** Скачивание защищённого файла (/uploads/*) с Bearer-авторизацией: тот же
@@ -255,8 +358,7 @@ export async function requestBlob(path: string, signal?: AbortSignal): Promise<B
   }
 }
 
-/** Как request, но тело — FormData (multipart): Content-Type не задаём, его ставит браузер с boundary. */
-export async function requestForm<T>(path: string, init: RequestOptions): Promise<T> {
+async function executeFormRequest<T>(path: string, init: RequestOptions): Promise<T> {
   let headers = buildHeaders(path, init, false)
   let response = await doFetch(path, init, headers)
 
@@ -280,4 +382,61 @@ export async function requestForm<T>(path: string, init: RequestOptions): Promis
   }
   if (response.status === 204) return undefined as T
   return readJsonBody<T>(response)
+}
+
+// FormData не сериализуется в строку, поэтому ключ дедупликации multipart-загрузок
+// собирается из формы запроса: метод + путь + поля (строки — значением, файлы —
+// имя/размер/lastModified). Ретрай той же загрузки строит тот же ключ → переиспользует
+// X-Request-Id, и бэкенд не задваивает вложение.
+function formIdempotencyKey(path: string, init: RequestOptions): string {
+  const method = (init.method ?? 'GET').toUpperCase()
+  const parts: string[] = []
+  if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+    for (const [name, value] of init.body.entries()) {
+      if (typeof value === 'string') parts.push(`${name}=${value}`)
+      else parts.push(`${name}=file:${value.name}:${value.size}:${value.lastModified}`)
+    }
+  }
+  return `${method} ${path} form:${parts.join('&')}`
+}
+
+// Та же семантика, что idempotentRequest (single-flight + окно ретрая), но ключ —
+// по форме multipart-тела и без принудительного Content-Type: application/json.
+async function idempotentFormRequest<T>(path: string, init: RequestOptions): Promise<T> {
+  const now = Date.now()
+  pruneIdempotencyEntries(now)
+
+  const key = formIdempotencyKey(path, init)
+  const existing = idempotencyEntries.get(key)
+
+  if (existing?.promise) {
+    return existing.promise as Promise<T>
+  }
+
+  const explicit = explicitRequestId(init)
+  const reuse = existing?.failedAt != null && now - existing.failedAt < IDEMPOTENCY_WINDOW_MS
+  const requestId = explicit ?? (reuse && existing ? existing.requestId : newRequestId())
+
+  const headers = explicit
+    ? (init.headers as Record<string, string>)
+    : { ...(init.headers as Record<string, string> | undefined), 'X-Request-Id': requestId }
+  const promise = executeFormRequest<T>(path, { ...init, headers })
+  idempotencyEntries.set(key, { requestId, promise })
+
+  try {
+    const result = await promise
+    idempotencyEntries.delete(key)
+    return result
+  } catch (err) {
+    idempotencyEntries.set(key, { requestId, failedAt: Date.now() })
+    throw err
+  }
+}
+
+/** Как request, но тело — FormData (multipart): Content-Type не задаём, его ставит браузер с boundary. */
+export function requestForm<T>(path: string, init: RequestOptions): Promise<T> {
+  // Идемпотентность по умолчанию для write-методов; явный idempotent имеет приоритет.
+  const idempotent = init.idempotent ?? isWriteRequest(init)
+  if (idempotent) return idempotentFormRequest<T>(path, init)
+  return executeFormRequest<T>(path, init)
 }

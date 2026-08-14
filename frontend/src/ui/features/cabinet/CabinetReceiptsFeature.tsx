@@ -116,8 +116,8 @@ export function CabinetReceiptsFeature() {
             options={STATUS_OPTIONS}
             onChange={(v) => setStatusFilter(v)}
           />
-          {(statusFilter || dateFrom || dateTo) && (
-            <button className="btn ghost sm" onClick={() => setMany({ status: '', from: '', to: '' })}>
+          {(search || statusFilter || dateFrom || dateTo) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', status: '', from: '', to: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

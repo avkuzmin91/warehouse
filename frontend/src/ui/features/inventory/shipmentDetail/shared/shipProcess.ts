@@ -16,10 +16,6 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
   packed:        { role: null,         icon: 'check',    sub: 'товар упакован и разложен' },
-  // Легаси-статусы (исторические документы): в новом маршруте упаковки не используются.
-  awaiting_trip: { role: 'manager',    icon: 'clock',    sub: 'привязка и отправка рейса' },
-  partially_shipped: { role: 'manager', icon: 'truckOut', sub: 'часть уехала, остаток ждёт рейс' },
-  shipped:       { role: null,         icon: 'truckOut', sub: 'списан при отправке рейса' },
   completed_no_goods: { role: null,    icon: 'check',    sub: 'завершено без отгрузки: весь товар брак' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
@@ -67,16 +63,13 @@ const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null;
 export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], cargoType: ShipmentCargoType = 'good'): ProcessStep[] {
   const order = cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
   // «Завершено без отгрузки» (весь товар брак) — терминал: маршрут пройден целиком.
-  // Легаси-статусы рейса (shipped/partially/awaiting_trip) для исторических документов
-  // считаем пройденным маршрутом — задача упаковки в них уже завершена.
-  const isShipped = status === 'shipped' || status === 'completed_no_goods'
-    || status === 'partially_shipped' || status === 'awaiting_trip'
+  const isShipped = status === 'completed_no_goods'
   const isCancelled = status === 'cancelled'
   const railStatus: ShipmentStatus = status
   const curIdx = order.indexOf(railStatus)
   const ts = getStepTimestamps(ops)
-  // У аннулированного «текущего» шага нет: отмену можно сделать с разных этапов
-  // (вплоть до «Ожидает рейс»). Показываем реально пройденный путь по отметкам
+  // У аннулированного «текущего» шага нет: отмену можно сделать с разных этапов.
+  // Показываем реально пройденный путь по отметкам
   // журнала как done, без активного шага — иначе линия выглядит как «сейчас в плане».
   const reachedIdx = isCancelled
     ? order.reduce((max, s, i) => (ts[s] != null ? i : max), 0)

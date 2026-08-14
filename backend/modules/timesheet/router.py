@@ -4,7 +4,7 @@ import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from config import (
     EMPLOYEE_COMP_FIXED,
@@ -27,6 +27,7 @@ from config import (
     TIMESHEET_OP_PLAN_SET,
 )
 from dbconn import get_connection
+from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import get_current_user
 from modules.expenses.service import record_payroll_expense, reverse_payroll_expense
 from security import (
@@ -72,7 +73,9 @@ from .service import (
     current_rate,
     current_salary,
     day_status,
+    entry_earned,
     entry_hours,
+    entry_split,
     fmt_date_ru,
     is_fact_locked,
     list_employees,
@@ -80,9 +83,12 @@ from .service import (
     load_rates,
     load_salaries,
     now_iso,
+    overtime_applies,
     parse_week_param,
+    rate_on,
     settled_employee_ids,
     settled_ids_for_date,
+    shift_gross_hours,
     week_days,
     week_start_for,
     week_stats,
@@ -450,6 +456,8 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
             hours=s["hours"],
             worked_days=s["worked_days"],
             absent=s["absent"],
+            overtime_hours=s["overtime_hours"],
+            overtime_pay=s["overtime_pay"] if with_money else None,
             earned=s["earned"] if with_money else None,
             advances=s["advances"] if with_money else None,
             to_pay=s["to_pay"] if with_money else None,
@@ -638,6 +646,8 @@ def get_entry(
         ).fetchone()
         entry = dict(row) if row else None
         fact_locked = is_fact_locked(conn, employee_id, work_date)
+        money = _money_visible(user, emp.get("comp_type"))
+        rate = rate_on(load_rates(conn, [employee_id]).get(employee_id), work_date) if money else None
         ops: list[EntryOpItem] = []
         if entry:
             op_rows = conn.execute(
@@ -654,6 +664,10 @@ def get_entry(
                 )
                 for r in op_rows
             ]
+    base_h, ot1_h, ot2_h = entry_split(entry)
+    if not overtime_applies(work_date):  # старые дни считались без бэндов — не рисуем их и в карточке
+        base_h, ot1_h, ot2_h = round(base_h + ot1_h + ot2_h, 2), 0.0, 0.0
+    earned, _, ot_pay = entry_earned(entry, rate, work_date)
     return EntryDetailResponse(
         employee_id=employee_id,
         employee_name=str(emp["full_name"]),
@@ -668,6 +682,17 @@ def get_entry(
         end_next_day=bool(entry.get("end_next_day")) if entry else False,
         status=day_status(entry, work_date, today_iso),
         hours=entry_hours(entry),
+        shift_hours=shift_gross_hours(
+            entry.get("actual_start") if entry else None,
+            entry.get("actual_end") if entry else None,
+            end_next_day=bool(entry.get("end_next_day")) if entry else False,
+        ),
+        base_hours=base_h,
+        overtime_tier1_hours=ot1_h,
+        overtime_tier2_hours=ot2_h,
+        rate_kopecks=rate,
+        earned=earned if rate is not None else None,
+        overtime_pay=ot_pay if rate is not None else None,
         note=entry.get("note") if entry else None,
         fact_locked=fact_locked,
         ops=ops,
@@ -987,7 +1012,11 @@ def get_payroll(week: str | None = Query(None), user=Depends(_get_payroll)):
 
 
 @router.post("/timesheet/payments")
-def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
+def add_payment(
+    body: PaymentCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_payroll),
+):
     kind = str(body.kind or "").strip()
     if kind not in (PAYROLL_KIND_SETTLEMENT, PAYROLL_KIND_ADVANCE):
         raise HTTPException(status_code=400, detail="Тип выплаты: расчёт или аванс")
@@ -998,6 +1027,11 @@ def add_payment(body: PaymentCreate, user=Depends(_get_payroll)):
     paid_on = _clean(body.paid_on) or business_today().isoformat()
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "payroll_payment_add", response={"message": "ok"}
+        )
+        if not proceed:
+            return stored
         _emp_or_404(conn, body.employee_id)
         _record_payment(
             conn,
@@ -1037,12 +1071,19 @@ def cancel_payment(payment_id: str, user=Depends(_get_payroll)):
 
 
 @router.post("/timesheet/payroll/settle-all")
-def settle_all(body: SettleAllRequest, user=Depends(_get_payroll)):
+def settle_all(
+    body: SettleAllRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_payroll),
+):
     sat = parse_week_param(body.week)
     uid = str(user["id"])
     today_iso = business_today().isoformat()
     settled = 0
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "payroll_settle_all")
+        if not proceed:
+            return stored
         data = build_payroll(conn, sat)
         period_start, period_end = data["week_start"], data["week_end"]
         for r in data["rows"]:
@@ -1060,5 +1101,7 @@ def settle_all(body: SettleAllRequest, user=Depends(_get_payroll)):
                 uid=uid,
             )
             settled += 1
+        result = {"message": str(settled)}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": str(settled)}
+    return result

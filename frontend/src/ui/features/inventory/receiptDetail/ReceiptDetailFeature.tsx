@@ -21,7 +21,6 @@ interface Props {
  * - draft    → DraftView   (редактирование черновика)
  * - planned  → PlannedView (план поступления, ожидание рейса)
  * - partially_received / done → ReviewView (итог приёмки рейсами, закрытие недопоставки)
- * Приёмка идёт в рейсе (карточная приёмка убрана), поэтому on_intake в новом потоке нет.
  */
 export function ReceiptDetailFeature({ docId }: Props) {
   const confirm = useConfirm()
@@ -154,7 +153,7 @@ export function ReceiptDetailFeature({ docId }: Props) {
     )
   }
 
-  // partially_received / done (и легаси on_intake/on_review) — через ReviewView
+  // partially_received / done — через ReviewView
   return (
     <ReviewView
       detail={detail}

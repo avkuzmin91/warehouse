@@ -164,6 +164,14 @@ export function LogisticsAnalyticsFeature() {
         onChange={(v) => setClientId(v)}
         placeholder="Поиск клиента…"
       />
+      {(hasCustom || period !== DEFAULT_PERIOD || direction || vehicleTypeId || carrierId || clientId) && (
+        <button
+          className="btn ghost sm"
+          onClick={() => setMany({ days: null, from: null, to: null, dir: null, vt: null, carrier: null, client: null })}
+        >
+          <Icon name="x" size={12} />Сбросить
+        </button>
+      )}
     </div>
   )
 

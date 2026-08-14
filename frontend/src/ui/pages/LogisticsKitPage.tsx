@@ -137,8 +137,8 @@ export function LogisticsKitPage() {
 
       <Section title="ReceiptCard">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 560 }}>
-          <ReceiptCard r={{ number: 'WH-00231', client: 'ООО «Мангуст»', sku: 5, qty: 270, status: 'on_intake' }} />
-          <ReceiptCard r={{ number: 'WH-00235', client: 'ООО «СпортЛайн»', sku: 8, qty: 412, status: 'on_review' }} />
+          <ReceiptCard r={{ number: 'WH-00231', client: 'ООО «Мангуст»', sku: 5, qty: 270, status: 'partially_received' }} />
+          <ReceiptCard r={{ number: 'WH-00235', client: 'ООО «СпортЛайн»', sku: 8, qty: 412, status: 'done' }} />
           <ReceiptCard r={{ number: 'WH-00238', client: 'ООО «Текстиль-Юг»', sku: 4, qty: 190, status: 'planned', eta: '03 июн' }} removable onRemove={() => {}} />
         </div>
       </Section>

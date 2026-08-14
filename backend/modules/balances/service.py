@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from config import (
+    DISPATCH_CARGO_DEFECT,
+    DISPATCH_CARGO_GOOD,
     DISPATCH_CARGO_GOOD_UNPACKED,
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
@@ -20,7 +22,6 @@ from config import (
     INV_Q_GOOD,
     INV_QUALITY_LABELS,
     RECEIPT_STATUS_DONE,
-    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     SHIPMENT_CARGO_DEFECT,
@@ -47,10 +48,10 @@ from modules.balances.schemas import (
     PlannableListResponse,
 )
 
-# Поступления, товар которых ещё «в пути»: заявлен (planned) либо рейс пришёл и идёт
-# приёмка (on_intake). Принятое уже лежит в storage (попадает в storage_good), поэтому
-# «в пути» = planned − accepted; on_review/done/cancelled — не в пути.
-_IN_TRANSIT_STATUSES = (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE)
+# Поступления, товар которых ещё «в пути»: заявлен (planned). Принятое уже лежит
+# в storage (попадает в storage_good), поэтому «в пути» = planned − accepted;
+# partially_received/done/cancelled — не в пути.
+_IN_TRANSIT_STATUSES = (RECEIPT_STATUS_PLANNED,)
 _IN_TRANSIT_STATUS_SQL = ", ".join(f"'{s}'" for s in _IN_TRANSIT_STATUSES)
 
 # Модель остатков на двух осях — чистый replay журнала zone_relocations:
@@ -67,8 +68,8 @@ _IN_TRANSIT_STATUS_SQL = ", ".join(f"'{s}'" for s in _IN_TRANSIT_STATUSES)
 # Инвариант: остаток меняется ⇔ есть запись в журнале.
 #
 # Остатки — чисто журнальные: товар появляется в выдаче только после проведённого
-# прихода (intake → storage). Незавершённая приёмка (документ в on_intake) в остатки
-# не попадает — пока кладовщик считает, журнальной записи ещё нет.
+# прихода (intake → storage). Незавершённая приёмка в остатки не попадает — пока
+# кладовщик считает, журнальной записи ещё нет.
 
 _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_STORAGE, INV_Q_GOOD),
@@ -394,7 +395,7 @@ def get_plannable_items(
     """Позиции, доступные для планирования отгрузки: остаток на складе + товар в пути.
 
     Объединяет журнальный остаток `storage` (good/defect) с заявленным, но ещё не
-    приехавшим товаром (`planned − accepted` по поступлениям planned/on_intake).
+    приехавшим товаром (`planned − accepted` по поступлениям planned).
     Видимость: для годного груза — есть годный остаток в любой корзине (включая `packing`:
     отгрузка такой позиции паркуется в «Ожидание упаковки» и продолжается по готовности)
     ИЛИ что-то в пути; для брака — есть остаток брака на хранении (брак в пути не считаем —
@@ -1078,7 +1079,7 @@ def ready_available_for_dispatch(
     саму проверяемую отгрузку.
     """
     if reserved_specs is None:
-        cargo = SHIPMENT_CARGO_DEFECT if quality == INV_Q_DEFECT else "good"
+        cargo = DISPATCH_CARGO_DEFECT if quality == INV_Q_DEFECT else DISPATCH_CARGO_GOOD
         reserved_specs = [(cargo, (
             DISPATCH_STATUS_PREPARING, DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
         ))]
@@ -1093,7 +1094,7 @@ def ready_available_for_dispatch(
     spec_params: list = []
     for spec_cargo, statuses in reserved_specs:
         status_ph = ",".join("?" for _ in statuses)
-        spec_conds.append(f"(COALESCE(dd.cargo_type, 'good') = ? AND dd.status IN ({status_ph}))")
+        spec_conds.append(f"(COALESCE(dd.cargo_type, '{DISPATCH_CARGO_GOOD}') = ? AND dd.status IN ({status_ph}))")
         spec_params += [spec_cargo, *statuses]
     conds = [
         "dl.product_id = ?",

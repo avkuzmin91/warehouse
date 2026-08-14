@@ -5,7 +5,7 @@ import { useApi } from '../../../hooks/useApi'
 import { useToast } from '../../feedback/Toast'
 import { useConfirm } from '../../feedback/ConfirmDialog'
 import { fmtDateLong } from '../../../utils/format'
-import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtRate, fmtSalary } from './shared'
+import { EmpAvatar, Badge, PayTypeBadge, fmtMoney, fmtHours, fmtOvertimeHours, fmtRate, fmtSalary } from './shared'
 import { AdvanceModal, SettleModal, RateModal, SalaryModal, EditEmployeeModal } from './modals'
 import { getEmployee, archiveEmployee, restoreEmployee, cancelPayment, deleteEmployeeRate, deleteEmployeeSalary, DAY_STATUS_LABELS, type EmployeeDetail, type PayHistoryItem, type AttendanceBlock, type AttendanceStatus } from '../../../api/timesheetApi'
 
@@ -42,7 +42,7 @@ function PayTimeline({ items, canDelete, onDelete }: { items: PayTimelineItem[];
         return (
           <div key={r.id} style={{ display: 'flex', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 22 }}>
-              <div style={{ width: 22, height: 22, borderRadius: 99, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: r.current ? 'var(--c-accent)' : 'var(--c-bg-elev)', border: r.current ? '1.5px solid var(--c-accent)' : '1.5px solid var(--c-border-strong)', color: r.current ? '#fff' : 'var(--c-text-faint)' }}>
+              <div style={{ width: 22, height: 22, borderRadius: 99, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: r.current ? 'var(--c-accent)' : 'var(--c-bg-elev)', border: r.current ? '1.5px solid var(--c-accent)' : '1.5px solid var(--c-border-strong)', color: r.current ? 'var(--c-accent-contrast)' : 'var(--c-text-faint)' }}>
                 <Icon name={r.current ? 'ruble' : 'history'} size={11} />
               </div>
               {!last && <div style={{ width: 2, flex: 1, minHeight: 22, background: 'var(--c-border)' }} />}
@@ -120,7 +120,7 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
             const dim = c.status === 'prehire' || c.status === 'future' || c.status === 'planned'
             const label = DAY_STATUS_LABELS[c.status as never] ?? ''
             const late = c.status === 'worked' && c.late_minutes > 0
-            const title = `${c.date}: ${label}${c.hours ? ` · ${c.hours} ч` : ''}${late ? ` · опоздание ${fmtLate(c.late_minutes)}` : ''}`
+            const title = `${c.date}: ${label}${c.hours ? ` · ${c.hours} ч` : ''}${c.overtime_hours > 0 ? ` · переработка ${fmtOvertimeHours(c.overtime_hours)}` : ''}${late ? ` · опоздание ${fmtLate(c.late_minutes)}` : ''}`
             const bg = late ? 'color-mix(in oklab, var(--c-warning) 18%, var(--c-bg-elev))' : t.bg
             const numCol = late ? 'var(--c-warning)' : t.fg
             return (
@@ -131,6 +131,9 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
                   borderStyle: dim ? 'dashed' : 'solid',
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, opacity: dim ? 0.5 : 1 }}>
                 <span style={{ position: 'absolute', top: 3, left: 5, fontSize: 9, fontWeight: 600, color: 'var(--c-text-faint)' }}>{c.dom}</span>
+                {c.overtime_hours > 0 && (
+                  <Icon name="zap" size={9} style={{ position: 'absolute', top: 3, right: 4, color: 'var(--c-warning)' }} />
+                )}
                 {c.status === 'absent'
                   ? <Icon name="x" size={16} style={{ color: t.fg }} />
                   : c.status === 'worked' || c.status === 'noplan'
@@ -142,8 +145,8 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
                 {late && (
                   <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 18,
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3,
-                    background: 'var(--c-warning)', color: '#fff', fontSize: 11.5, fontWeight: 700, lineHeight: 1 }}>
-                    <Icon name="clock" size={11} style={{ color: '#fff' }} />{fmtLate(c.late_minutes)}
+                    background: 'var(--c-warning)', color: 'var(--c-accent-contrast)', fontSize: 11.5, fontWeight: 700, lineHeight: 1 }}>
+                    <Icon name="clock" size={11} style={{ color: 'var(--c-accent-contrast)' }} />{fmtLate(c.late_minutes)}
                   </span>
                 )}
               </div>
@@ -157,8 +160,8 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
             </span>
           ))}
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '0 5px', height: 16, borderRadius: 4, background: 'var(--c-warning)', color: '#fff', fontSize: 10.5, fontWeight: 700 }}>
-              <Icon name="clock" size={9} style={{ color: '#fff' }} />15 м
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '0 5px', height: 16, borderRadius: 4, background: 'var(--c-warning)', color: 'var(--c-accent-contrast)', fontSize: 10.5, fontWeight: 700 }}>
+              <Icon name="clock" size={9} style={{ color: 'var(--c-accent-contrast)' }} />15 м
             </span>опоздание
           </span>
         </div>
@@ -168,7 +171,10 @@ function AttendancePanel({ att, hiredLabel }: { att: AttendanceBlock; hiredLabel
         <SumCell label="Смен" value={String(stats.shifts)} />
         <SumCell label="Внеплановых" value={String(stats.noplan)} tone={stats.noplan ? 'accent' : undefined} />
         <SumCell label="Прогулов" value={String(stats.absent)} tone={stats.absent ? 'danger' : undefined} />
-        <SumCell label="Отработано" value={`${stats.hours} ч`} />
+        <SumCell
+          label={stats.overtime_hours > 0 ? `Отработано · ⚡ ${fmtOvertimeHours(stats.overtime_hours)}` : 'Отработано'}
+          value={`${stats.hours} ч`}
+        />
       </div>
 
       <div style={{ borderTop: '1px solid var(--c-border)', background: 'var(--c-bg-sunken)', padding: '11px 14px' }}>
@@ -305,9 +311,17 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
             }
           >
             <div style={{ display: 'grid', gridTemplateColumns: showMoney ? 'repeat(4, 1fr)' : 'repeat(2, 1fr)' }}>
-              <SumCell label="Отработано" value={fmtHours(w.hours)} />
+              <SumCell
+                label={w.overtime_hours > 0 ? `Отработано · ⚡ ${fmtOvertimeHours(w.overtime_hours)}` : 'Отработано'}
+                value={fmtHours(w.hours)}
+              />
               <SumCell label="Смен" value={`${w.worked_days}${w.absent ? ` · ${w.absent} невых.` : ''}`} tone={w.absent ? 'danger' : undefined} />
-              {showMoney && <SumCell label="Заработано" value={fmtMoney(w.earned)} />}
+              {showMoney && (
+                <SumCell
+                  label={w.overtime_pay ? `Заработано · вкл. ${fmtMoney(w.overtime_pay)} переработки` : 'Заработано'}
+                  value={fmtMoney(w.earned)}
+                />
+              )}
               {showMoney && <SumCell label="К выдаче" value={fmtMoney(w.to_pay)} big tone="accent" />}
             </div>
           </Panel>
@@ -396,7 +410,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
           employeeId={empId} employeeName={e.full_name}
           weekLabel={e.week_label} weekStart={e.week_start} weekEnd={e.week_end}
           earned={w.earned ?? 0} advances={w.advances ?? 0} toPay={w.to_pay ?? 0}
-          hours={w.hours} rate={e.rate_kopecks}
+          hours={w.hours} rate={e.rate_kopecks} overtimePay={w.overtime_pay}
           onClose={() => setSettleOpen(false)} onSaved={reload}
         />
       )}

@@ -13,7 +13,14 @@ export function useDictionaryRoute(): [DictionaryTypeId, (id: DictionaryTypeId) 
 
   const setActive = useCallback(
     (id: DictionaryTypeId) => {
-      setSearchParams({ type: id }, { replace: true })
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('type', id)
+          return next
+        },
+        { replace: true },
+      )
     },
     [setSearchParams],
   )

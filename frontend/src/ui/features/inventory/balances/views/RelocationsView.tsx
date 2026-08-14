@@ -3,7 +3,7 @@ import { getZoneRelocations, undoWriteOff, INV_OP_LABELS, INV_QUALITY_LABELS, WR
 import type { WriteOffReason } from '../../../../../api/balancesApi'
 import type { ZoneRelocationItem } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
-import { useFilterParam, usePageParam } from '../../../../../hooks/useFilterParams'
+import { useFilterParam, usePageParam, useFilterParamsActions } from '../../../../../hooks/useFilterParams'
 import { useCurrentUser } from '../../../../../hooks/useCurrentUser'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
@@ -58,6 +58,7 @@ export function RelocationsView() {
   const [search, setSearch] = useFilterParam('search', '')
   const [clientId, setClientId] = useFilterParam('client', '')
   const [undoing, setUndoing] = useState<string | null>(null)
+  const { setMany } = useFilterParamsActions()
   const { clients } = useLookups()
   const { user } = useCurrentUser()
   const confirm = useConfirm()
@@ -130,8 +131,8 @@ export function RelocationsView() {
             onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
-          {clientId && (
-            <button className="btn ghost sm" onClick={() => setClientId('')}>
+          {(search || clientId) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

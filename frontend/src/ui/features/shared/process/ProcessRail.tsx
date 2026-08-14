@@ -43,7 +43,7 @@ export function ProcessRail({ steps }: { steps: ProcessStep[] }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: future ? 'var(--c-bg-elev)' : dotColor,
                 border: future ? '1.5px dashed var(--c-border-strong)' : `1.5px solid ${dotColor}`,
-                color: future ? 'var(--c-text-faint)' : '#fff',
+                color: future ? 'var(--c-text-faint)' : 'var(--c-accent-contrast)',
                 boxShadow: active ? `0 0 0 4px color-mix(in oklab, ${dotColor} 16%, transparent)` : 'none',
               }}>
                 {done ? <Icon name="check" size={11} /> : <Icon name={step.icon} size={11} />}

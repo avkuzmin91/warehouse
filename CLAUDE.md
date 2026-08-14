@@ -50,8 +50,8 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 |---|---|
 | `auth`, `users` | JWT + refresh-сессии (cookie `wms_rt`, мобильный режим `X-Client: mobile`), rate-limit; учётные записи |
 | `dictionaries` | справочники (clients, colors, sizes, warehouses, carriers, positions, own_warehouses, ...) |
-| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_barcodes` с `variant_id`; этикетки — `product_barcode_files`), фото |
-| `receipts` | поступления `WH-xxxxx`; приёмка идёт через рейс (разгрузка) |
+| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_barcodes` с `variant_id`; этикетки — `product_barcode_files`), фото; смена цвета/размера варианта — журнал `variant_identity_changes` |
+| `receipts` | поступления `WH-xxxxx`; приёмка идёт через рейс (разгрузка); QC-статусы строк — `RECEIPT_LINE_QC_STATUS_*` |
 | `shipments` | «Задача упаковки» склада; терминальный исход — `packed` |
 | `dispatch` | «Отгрузка» клиенту `DSP-xxxx`; дробление по рейсам через `trip_alloc` |
 | `logistics` | рейсы (trips) inbound/outbound, привязка документов, расходы рейса |
@@ -61,14 +61,17 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 | `tasks` | карточки-задания «Мои задачи» |
 | `dashboard` | сводка главного экрана |
 | `cabinet` | личный кабинет клиента, `/cabinet/*` (read-only, изоляция по `client_id`) |
-| `invoices` | счета; **суммы в копейках INTEGER** |
+| `invoices` | счета; **суммы в копейках INTEGER**; скидки — `invoice_discounts` |
 | `expenses` | единый реестр расходов: хозрасходы / логистика / аренда / ЗП (аренда и ЗП — admin-only) |
 | `recurring_expenses` | шаблоны регулярных расходов, авто-начисление в `_accrual_loop` |
 | `pnl` | «Доходы и расходы» (P&L), `/pnl/*` |
-| `timesheet` | табель (неделя Сб→Пт), ставки effective-dated, выплаты |
+| `timesheet` | табель (неделя Сб→Пт), ставки effective-dated, выплаты; переработка — свыше 12 ч **на смене** (порог по gross, обед вычитается из базовой части): первые 4 ч ×1.3, дальше ×1.5, с даты `TIMESHEET_OVERTIME_EFFECTIVE_FROM`. Заработок за день считать только через `entry_earned` — тем же расчётом живут пятничный расчёт и дневные начисления P&L |
 | `production_calendar`, `warehouse_rent` | произв. календарь (6/1); ставки аренды складов effective-dated |
 | `pricing`, `pallet_pricing`, `box_pricing` | клиентские тарифы: логистика, палеты, короба (все effective-dated) |
 | `storage_pricing` | платное хранение остатков: тариф клиента (единица/ставка/`free_days`, effective-dated), ежедневные начисления `storage_charges` в `_accrual_loop`, отчёт «Хранение»; в счёт — `invoice_storage_charges`, в P&L — источник `storage` |
+| `extra_income` | доп. доходы: реестр + словарь категорий, **суммы в копейках INTEGER**, привязка к счетам через `invoice_extra_income` |
+| `marketplaces` | интеграция с маркетплейсами (FBS Ozon/WB): аккаунты `mp_accounts`, товары/связки `mp_products`/`mp_product_links`, заказы `mp_orders`/`mp_order_lines`, журнал синка `mp_sync_log`, магазины клиентов `client_stores`; HTTP-клиенты площадок — `clients.py` (четвёртый файл модуля, осознанное исключение) |
+| `push` | FCM push-уведомления («Новая задача»): `/push/register`, `/push/unregister`, токены `push_tokens` |
 | `inventory` | вспомогательные lookup'ы инвентаря (исторически только router.py) |
 
 ---
@@ -93,7 +96,7 @@ with get_connection() as conn:
     conn.commit()
 ```
 
-- Boolean — это `INTEGER 0/1`, **не** `TRUE`/`FALSE`. Канонический фильтр soft-delete: `COALESCE(is_deleted, 0) = 0`.
+- Boolean — это `INTEGER 0/1`, **не** `TRUE`/`FALSE`. Канонический фильтр soft-delete: `COALESCE(is_deleted, 0) = 0` — в новом коде только он. В старом коде встречается голый `is_deleted = 0`: для baseline-таблиц с `is_deleted NOT NULL DEFAULT 0` это безопасно, но в новые запросы не копировать.
 - Идентификаторы — `str(uuid4())`.
 - Timestamps — `datetime.now(UTC).isoformat()` (строка ISO 8601).
 
@@ -127,9 +130,9 @@ with get_connection() as conn:
 
 Полные перечни — в [backend/config.py](backend/config.py), здесь — для ориентира:
 
-- **Receipts:** ручной переход только `draft → planned`; дальше поступление двигает **рейс** (приёмка в разгрузке): `planned → partially_received → done`, плюс `cancelled`. `on_intake` / `on_review` — легаси, в новом потоке не используются.
-- **Shipments («Задача упаковки», годный груз):** `draft → packing → on_packing → relocating → packed`, плюс `completed_no_goods` (весь товар оказался браком — завершение без рейса) и `cancelled`. **`packed` — терминал**: дальше товар возит домен dispatch. `awaiting_trip` / `partially_shipped` / `shipped` — легаси, документы в них больше не переводятся. Брак-отгрузка минует упаковку: `draft → relocating → awaiting_trip`. Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
-- **Dispatch («Отгрузка» клиенту):** `draft → preparing → awaiting_trip → (partially_shipped) → shipped`, плюс `cancelled`. Переходы в `partially_shipped`/`shipped` делает выезд привязанного рейса, не ручной advance. Единственное ручное исключение — `POST /dispatches/{id}/close-short` («Закрыть с недовозом»): `partially_shipped → shipped`, когда остаток больше не поедет. План строк не переписывается, недовоз = Σ(`qty` − `shipped_qty`), отметка — `dispatch_docs.closed_short_at`; по ней счёт тарифицируется по факту. Сток не двигается: неувезённое остаётся в `ready`/`packed` и после выхода из резервирующих статусов доступно другим отгрузкам.
+- **Receipts:** ручной переход только `draft → planned`; дальше поступление двигает **рейс** (приёмка в разгрузке): `planned → partially_received → done`, плюс `cancelled`.
+- **Shipments («Задача упаковки», годный груз):** `draft → packing → on_packing → relocating → packed`, плюс `completed_no_goods` (весь товар оказался браком — завершение без рейса) и `cancelled`. **`packed` — терминал**: дальше товар возит домен dispatch. Брак-отгрузка минует упаковку: `draft → relocating → packed` (раскладку делает `finish_defect_relocation`). Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
+- **Dispatch («Отгрузка» клиенту):** `draft → (awaiting_packing) → preparing → awaiting_trip → (partially_shipped) → shipped`, плюс `cancelled`. `awaiting_packing` («Ожидание упаковки») — очередь, когда состав передан, но годного остатка ещё нет: как только спрос покрыт, фоновый цикл сам двигает в `preparing`; состав правится в `draft` **и** `awaiting_packing` (`DISPATCH_EDITABLE_STATUSES`). Типы груза — `good` / `good_unpacked` (годный со хранения, минуя упаковку) / `defect`. Переходы в `partially_shipped`/`shipped` делает выезд привязанного рейса, не ручной advance. Единственное ручное исключение — `POST /dispatches/{id}/close-short` («Закрыть с недовозом»): `partially_shipped → shipped`, когда остаток больше не поедет. План строк не переписывается, недовоз = Σ(`qty` − `shipped_qty`), отметка — `dispatch_docs.closed_short_at`; по ней счёт тарифицируется по факту. Сток не двигается: неувезённое остаётся в `ready`/`packed` и после выхода из резервирующих статусов доступно другим отгрузкам.
 - **Trips:** `draft → awaiting_arrival → unloading → costing → closed`, плюс `cancelled`. Направления `inbound` / `outbound` (лексика статусов различается, коды общие).
 - **Invoices:** `draft → issued → partially_paid → closed`, плюс `cancelled`.
 
@@ -258,7 +261,7 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
     uid = str(user["id"])
     with get_connection() as conn:
         doc_row = conn.execute(
-            "SELECT * FROM receipt_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+            "SELECT * FROM receipt_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
         ).fetchone()
         if not doc_row:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -281,14 +284,14 @@ def update_receipt(doc_id: str, payload: ReceiptDocUpdate, user=Depends(_get_man
 |---|---|---|
 | `ui/pages/` | route layer — рендерит фичу + читает URL-state | прямые fetch, бизнес-`useEffect`, бизнес-`useState` |
 | `ui/features/<domain>/` | вся бизнес-логика, состояния, API-вызовы | — |
-| `ui/features/shared/process/` | общие компоненты процессных карточек: `ProcessRail`, `PhaseBlock`, `RoleChip`, `DocHeader`, `PrimaryAction` — использовать, не дублировать | — |
+| `ui/features/shared/process/` | общие компоненты процессных карточек: `ProcessRail`, `PhaseBlock`, `RoleChip`, `DocHeader`, `PrimaryAction`, `InitiatorLine` — использовать, не дублировать | — |
 | `ui/primitives/` | чистые UI-атомы (Button, Badge, Card, Input, Icon, Tooltip, ...) | бизнес-логика, API |
 | `ui/data/` | сложные data-компоненты (Table, FiltersBar, Pagination, Combobox, DateRange, MultiSelect) | API, бизнес-логика |
-| `ui/layouts/` | композиция страницы (`ListPage`, `DetailPage`, `FormPage`, `AppLayout`, `AuthLayout`) | API |
+| `ui/layouts/` | композиция страницы (`ListPage`, `DetailPage`, `FormPage`, `AppLayout`, `AuthLayout`, `ClientCabinetLayout`) | API |
 | `ui/shell/` | `AppShell`, `Sidebar`, `Topbar`, `CommandPalette`, `Breadcrumbs` | прямые API |
 | `ui/feedback/` | `ConfirmDialog`, `Toast`, `Modal`, `Drawer` (провайдеры/обёртки) | бизнес-логика |
 | `ui/routes/` | `lazy()`-определения `<Route>` | — |
-| `hooks/` | reusable хуки: `useApi`, `useCurrentUser`, `useLookups`, `useFilterParam`, `usePageParam` | feature-логика (`useReceiptFlow` и т.п.) |
+| `hooks/` | reusable хуки: `useApi`, `useCurrentUser`, `useLookups`, `useFilterParam`, `usePageParam`, `useBackNav` | feature-логика (`useReceiptFlow` и т.п.) |
 | `api/` | `<domain>Api.ts` — типы + чистые fetch-функции через `request<T>` | React, JSX |
 | `utils/` | чистые функции: `fmtDate`, `foldCiSearch`, `balanceKey`, `breadcrumbLabels` | React, API |
 | `auth/` | session helpers: `sessionError`, `tabSync`, `redirectToAuth` | UI |
@@ -417,8 +420,8 @@ ui/features/inventory/
     ReceiptDetailFeature.tsx      # загрузка + роутинг по статусу
     views/
       DraftView.tsx               # status = draft
-      PlannedView.tsx             # status = planned | on_intake
-      ReviewView.tsx              # status = on_review | done
+      PlannedView.tsx             # status = planned
+      ReviewView.tsx              # status = partially_received | done
     components/
       AddLineDrawer.tsx
       OpEntry.tsx
@@ -430,7 +433,7 @@ ui/features/inventory/
 
 ```tsx
 if (detail.doc.status === 'draft') return <DraftView {...props} />
-if (detail.doc.status === 'planned' || detail.doc.status === 'on_intake') return <PlannedView {...props} />
+if (detail.doc.status === 'planned') return <PlannedView {...props} />
 return <ReviewView {...props} />
 ```
 
@@ -479,7 +482,7 @@ export const inventoryRoutes = [
 ]
 ```
 
-URL-конвенции inventory: `/receipts`, `/shipments`, `/balances` — **без** суффикса `-v2`.
+URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` — **без** суффикса `-v2`. Список задач упаковки живёт на `/inventory/packing` (+ `/inventory/packing/productivity`); `/inventory/shipments` — редирект туда, карточки задач — на `/inventory/shipments/new` и `/inventory/shipments/:docId`. Области роутов: `admin`, `auth`, `cabinet`, `finance`, `inventory`, `logistics`, `marketplaces`, `timesheet`.
 
 ---
 
@@ -508,7 +511,7 @@ URL-конвенции inventory: `/receipts`, `/shipments`, `/balances` — **�
 
 ## 6a. Сквозные инварианты
 
-- **Идемпотентность записи:** frontend `http.ts` шлёт `X-Request-Id` на каждый write по умолчанию; backend хранит ключи в `idempotency_keys` — повтор при обрыве связи не задваивает операцию. Новые write-эндпоинты получают это бесплатно, не ломать.
+- **Идемпотентность записи:** `http.ts` (frontend и mobile) шлёт `X-Request-Id` на каждый write по умолчанию; backend хранит ключи в `idempotency_keys` — повтор при обрыве связи не задваивает операцию. Заголовок с клиента приходит бесплатно, но захват ключа на backend — **opt-in**: эндпоинт явно зовёт `begin_idempotent`/`finish_idempotent` из `backend/idempotency.py` (образец — `POST /balances/relocations`). Любой новый write, задваивание которого опасно (деньги, сток, журнальные записи), обязан это делать.
 - **Таймзона:** бизнес-логика склада живёт по **Europe/Moscow** (`business_today` в `modules/timesheet/service.py`); `created_at` хранится в UTC, бакетировать по UTC; фронт пиннит МСК. Не использовать локальную дату сервера (`date.today()`) для бизнес-дат.
 - **Деньги:** счета, расходы, ставки табеля — **копейки INTEGER** (не float). Прочие стоимости проекта — REAL, это осознанное различие.
 - **Effective-dated справочники:** тарифы (логистика/палеты/короба), ставки сотрудников, оклады, аренда — версии со сроком действия; текущая = последняя с `effective_from <= дата`.
@@ -567,7 +570,7 @@ URL-конвенции inventory: `/receipts`, `/shipments`, `/balances` — **�
 
 - Backend: `cd backend && pytest` (минимум — затронутый модуль). Нужны env: `DATABASE_URL` (живая PostgreSQL) и `JWT_SECRET` (≥32 символов), иначе тесты скипаются/падают на импорте. Прогон сам создаёт одноразовую БД (`<dbname>_test_<hex>` + alembic upgrade head) и удаляет её в конце — общая dev-БД не затрагивается, `pytest -n` безопасен; `TEST_DB_ISOLATION=0` отключает (гонять прямо в `DATABASE_URL`).
 - Frontend: type-check / `npm run build` и `npm test` (vitest, чистые утилиты) в `frontend/`.
-- Mobile: `cd mobile && npm test` и сборка при затронутом mobile-коде. В `mobile/src/api/parity.test.ts` — parity-тест с `frontend/src/api`: добавил статус/label в один api-слой — тест напомнит про второй.
+- Mobile: `cd mobile && npm test` и сборка при затронутом mobile-коде. В `mobile/src/api/parity.test.ts` — parity-тест с `frontend/src/api`: добавил статус/label в один api-слой — тест напомнит про второй. Слепая зона теста: сверяются только **одноимённые** union-типы и `*_LABELS`; object-типы, названные в слоях по-разному (`ShipmentMassMoveLine` ↔ `MassMoveLine`), вне сверки — их паритет проверять руками.
 - Миграции: `cd backend && alembic upgrade head` на dev-БД.
 
 Если проверка не запускалась — в ответе явно указать **почему** (например, «нет dev-окружения для запуска БД, ручная проверка нужна»). Те же проверки гоняет job `ci` в GitHub Actions перед каждым деплоем — локально красный тест значит красный деплой.

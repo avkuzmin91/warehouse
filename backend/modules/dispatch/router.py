@@ -56,6 +56,8 @@ from modules.dispatch.schemas import (
     DispatchReturnToDraftPayload,
     DispatchReservationItem,
     DispatchReservationsResponse,
+    DispatchTripAllocRemainingResponse,
+    DispatchesSummaryResponse,
 )
 from modules.dispatch.service import (
     check_lines_have_boxes,
@@ -181,7 +183,7 @@ def list_dispatches(
     )
 
 
-@router.get("/dispatches/summary")
+@router.get("/dispatches/summary", response_model=DispatchesSummaryResponse)
 def dispatches_summary(
     client_id: str | None = Query(None),
     search:    str | None = Query(None),
@@ -195,7 +197,7 @@ def dispatches_summary(
         conds = ["d.is_deleted = 0"]
         params: list = []
         if cargo_type in DISPATCH_CARGO_TYPES:
-            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+            conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') = ?"); params.append(cargo_type)
         if client_id:
             conds.append("d.client_id = ?"); params.append(client_id.strip())
         if search:
@@ -250,7 +252,7 @@ def list_dispatch_lines(
         conds = ["d.is_deleted = 0", "COALESCE(l.is_deleted, 0) = 0"]
         params: list = []
         if cargo_type in DISPATCH_CARGO_TYPES:
-            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+            conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') = ?"); params.append(cargo_type)
         if status:
             requested = [s.strip() for s in status.split(",") if s.strip()]
             allowed = [s for s in requested if s in DISPATCH_STATUSES_ALL]
@@ -349,7 +351,7 @@ def dispatch_reservations(
     return DispatchReservationsResponse(items=[DispatchReservationItem(**it) for it in items])
 
 
-@router.get("/dispatches/{doc_id}/trip-alloc-remaining")
+@router.get("/dispatches/{doc_id}/trip-alloc-remaining", response_model=DispatchTripAllocRemainingResponse)
 def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
     """Остаток к распределению по строкам отгрузки для привязки к рейсу."""
     with get_connection() as conn:
@@ -659,6 +661,7 @@ async def upload_dispatch_line_file(
     doc_id: str,
     line_id: str,
     file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_manager),
 ):
     """Менеджер прикрепляет файл (zip, pdf, jpeg) к строке отгрузки.
@@ -678,6 +681,9 @@ async def upload_dispatch_line_file(
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "dispatch_line_file_upload")
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status FROM dispatch_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
         ).fetchone()
@@ -705,8 +711,10 @@ async def upload_dispatch_line_file(
             "VALUES (?,?,?,?,?,?,?,?)",
             (file_id, line_id, doc_id, file.filename, url, file.content_type or None, now, uid),
         )
+        result = {"message": file_id}
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
-    return {"message": file_id}
+    return result
 
 
 @router.delete("/dispatches/{doc_id}/lines/{line_id}/files/{file_id}")

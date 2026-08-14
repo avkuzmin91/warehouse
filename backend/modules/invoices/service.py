@@ -29,6 +29,7 @@ from config import (
     aging_bucket_key,
 )
 from dbconn import ci_like_substring_param
+from modules.timesheet.service import business_today
 from utils import now_iso as _now
 
 
@@ -57,7 +58,7 @@ def is_overdue(status: str, due_date) -> bool:
     return (
         status in INVOICE_ACTIVE_STATUSES
         and bool(due_date)
-        and str(due_date) < date.today().isoformat()
+        and str(due_date) < business_today().isoformat()
     )
 
 
@@ -71,7 +72,7 @@ def is_due_reached(status: str, due_date) -> bool:
     return (
         status in INVOICE_ACTIVE_STATUSES
         and bool(due_date)
-        and str(due_date) <= date.today().isoformat()
+        and str(due_date) <= business_today().isoformat()
     )
 
 
@@ -545,7 +546,7 @@ def list_invoices_aggregated(
     search: str | None,
     overdue: bool,
 ) -> tuple[list[dict], int]:
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     conds = ["COALESCE(d.is_deleted, 0) = 0"]
     params: list = []
     status_filter_applied = False
@@ -896,7 +897,6 @@ def suggested_amount_for_dispatches(connection, dispatch_ids: list[str]) -> dict
     from modules.box_pricing.service import box_price_for_event
     from modules.pallet_pricing.service import pallet_price_for_event
     from modules.pricing.service import price_for_event
-    from modules.timesheet.service import business_today
 
     ids: list[str] = []
     for raw in dispatch_ids:
@@ -1003,7 +1003,7 @@ def alerts_counts(connection, *, client_id: str | None = None) -> dict[str, int]
     if cid is None and cached is not None and (now_mono - float(_alerts_cache["at"])) < _ALERTS_TTL_SEC:
         return dict(cached)  # type: ignore[arg-type]
 
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     active = list(INVOICE_ACTIVE_STATUSES)
     placeholders = ",".join("?" for _ in active)
     conds = f"COALESCE(is_deleted, 0) = 0 AND status IN ({placeholders})"

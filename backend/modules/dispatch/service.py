@@ -256,7 +256,7 @@ def reserved_by_variant(connection, *, client_id: str | None, cargo_type: str | 
     spec_params: list = []
     for spec_cargo, statuses in specs:
         status_ph = ",".join("?" for _ in statuses)
-        spec_conds.append(f"(COALESCE(dd.cargo_type, 'good') = ? AND dd.status IN ({status_ph}))")
+        spec_conds.append(f"(COALESCE(dd.cargo_type, '{DISPATCH_CARGO_GOOD}') = ? AND dd.status IN ({status_ph}))")
         spec_params += [spec_cargo, *statuses]
     rows = connection.execute(
         f"""SELECT dl.product_id, dl.color_id, dl.size_id,
@@ -1241,7 +1241,7 @@ def list_dispatches_aggregated(
             else [DISPATCH_CARGO_GOOD, DISPATCH_CARGO_GOOD_UNPACKED]
         )
         family_ph = ",".join("?" for _ in family)
-        conds.append(f"COALESCE(d.cargo_type, 'good') IN ({family_ph})"); params.extend(family)
+        conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') IN ({family_ph})"); params.extend(family)
         selectable = list(DISPATCH_TRIP_SELECTABLE_STATUSES)
         placeholders = ",".join("?" for _ in selectable)
         conds.append(f"d.status IN ({placeholders})"); params.extend(selectable)
@@ -1253,7 +1253,7 @@ def list_dispatches_aggregated(
         use_priority_order = True
         status_filter_applied = True
     elif cargo_type in DISPATCH_CARGO_TYPES:
-        conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+        conds.append(f"COALESCE(d.cargo_type, '{DISPATCH_CARGO_GOOD}') = ?"); params.append(cargo_type)
 
     if status:
         requested = [s.strip() for s in status.split(",") if s.strip()]

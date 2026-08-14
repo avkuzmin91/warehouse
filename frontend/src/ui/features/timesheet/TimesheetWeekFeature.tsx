@@ -5,8 +5,8 @@ import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
 import {
-  EmpIdentity, MiniStat, WeekNavigator, CELL_TONE,
-  fmtHours, fmtMoney, addDays,
+  EmpIdentity, MiniStat, OvertimeChip, WeekNavigator, CELL_TONE,
+  fmtHours, fmtMoney, fmtMoneyShort, fmtOvertimeHours, addDays,
 } from './shared'
 import { DayCardDrawer } from './DayCardDrawer'
 import { DayFactDrawer } from './DayFactDrawer'
@@ -48,8 +48,16 @@ function DayCellView({ cell, day, onClick }: { cell: WeekCell; day: WeekDayMeta;
             <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: st === 'noplan' ? 'var(--c-warning)' : 'var(--c-text)' }}>
               {cell.actual_start}–{cell.actual_end}
             </span>
-            <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: st === 'noplan' ? 'var(--c-warning)' : 'var(--c-success)', background: st === 'noplan' ? 'var(--c-warning-bg)' : 'var(--c-success-bg)', padding: '0 5px', borderRadius: 4, flexShrink: 0 }}>
-              {cell.hours.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+              {cell.overtime_hours > 0 && (
+                <OvertimeChip
+                  hours={cell.overtime_hours}
+                  title={`Переработка ${fmtOvertimeHours(cell.overtime_hours)} сверх 12 ч на смене`}
+                />
+              )}
+              <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: st === 'noplan' ? 'var(--c-warning)' : 'var(--c-success)', background: st === 'noplan' ? 'var(--c-warning-bg)' : 'var(--c-success-bg)', padding: '0 5px', borderRadius: 4 }}>
+                {cell.hours.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+              </span>
             </span>
           </div>
         )}
@@ -115,6 +123,14 @@ export function TimesheetWeekFeature() {
             <MiniStat icon="users" label="Сотрудников" value={String(data.totals.employees)} />
             <MiniStat icon="timer" label="Отработано за неделю" value={fmtHours(data.totals.hours)} />
             <MiniStat icon="userX" label="Невыходов" value={String(data.totals.absent)} tone={data.totals.absent ? 'danger' : undefined} />
+            <MiniStat
+              icon="zap"
+              label="Переработка"
+              value={data.totals.overtime_hours > 0
+                ? `${fmtOvertimeHours(data.totals.overtime_hours)}${showMoney && data.totals.overtime_pay ? ` · +${fmtMoneyShort(data.totals.overtime_pay)} ₽` : ''}`
+                : 'нет'}
+              muted={data.totals.overtime_hours === 0}
+            />
             {showMoney
               ? <MiniStat icon="wallet" label="Заработано за неделю" value={fmtMoney(data.totals.earned)} tone="accent" />
               : <MiniStat icon="lock" label="Суммы" value="скрыты для роли" muted />}
@@ -171,6 +187,12 @@ export function TimesheetWeekFeature() {
                         {showMoney
                           ? <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-accent-text)' }}>{fmtMoney(row.earned)}</span>
                           : <span style={{ fontSize: 10.5, color: 'var(--c-text-subtle)' }}>{row.worked_days} смен</span>}
+                        {row.overtime_hours > 0 && (
+                          <span style={{ fontSize: 10, color: 'var(--c-warning)', fontWeight: 600 }}>
+                            в т.ч. ⚡ {fmtOvertimeHours(row.overtime_hours)}
+                            {showMoney && row.overtime_pay ? ` · +${fmtMoneyShort(row.overtime_pay)} ₽` : ''}
+                          </span>
+                        )}
                         {row.absent > 0 && <span style={{ fontSize: 10, color: 'var(--c-danger)' }}>{row.absent} невыход{row.absent > 1 ? 'а' : ''}</span>}
                         {row.fact_locked && (
                           <span style={{ fontSize: 10, color: 'var(--c-text-subtle)', display: 'inline-flex', alignItems: 'center', gap: 3 }} title="По этой неделе проведён расчёт — факт не изменить">
@@ -202,7 +224,7 @@ export function TimesheetWeekFeature() {
           </div>
 
           <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="coffee" size={12} />Часы за день = (уход − приход) − 1 ч обед. «Внести факт за день» или клик по дню недели — быстрый ввод по всем сразу; клик по ячейке — карточка дня с журналом.
+            <Icon name="coffee" size={12} />Часы за день = (уход − приход) − 1 ч обед. Свыше 12 ч на смене — переработка: первые 4 ч по ставке +30%, дальше +50%. «Внести факт за день» или клик по дню недели — быстрый ввод по всем сразу; клик по ячейке — карточка дня с журналом.
           </div>
         </>
       )}

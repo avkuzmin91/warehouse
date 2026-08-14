@@ -342,7 +342,7 @@ def test_operational_plan_lists_seeded_docs(admin_client, client_id):
     day = _unique_past_day()
 
     receipt_id = _seed_planned_receipt(admin_client, client_id, day, planned_qty=4)
-    # Черновик в план не попадает (только planned / on_intake).
+    # Черновик в план не попадает (только planned).
     draft = admin_client.post("/receipts", json=_receipt_payload(client_id, day, 2))
     assert draft.status_code == 200, draft.text
     draft_id = draft.json()["message"]

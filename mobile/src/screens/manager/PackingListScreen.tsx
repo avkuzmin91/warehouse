@@ -15,9 +15,6 @@ const STATUS_TONE: Record<string, string> = {
   packing: 'info',
   on_packing: 'warning',
   relocating: 'warning',
-  awaiting_trip: 'warning',
-  partially_shipped: 'warning',
-  shipped: 'success',
   completed_no_goods: 'success',
   cancelled: 'danger',
 }

@@ -15,8 +15,6 @@ from config import (
     RECEIPT_OP_PLAN_FIX,
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
-    RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
@@ -27,14 +25,13 @@ from config import (
     TRIP_STATUS_UNLOADING,
 )
 from dbconn import ci_like_substring_param
+from modules.timesheet.service import business_today
 from utils import next_doc_number as _next_doc_number, now_iso as _now
 
 
 
 # Статусы, в которых поступление может «просрочиться» (план есть, приёмка не завершена).
-_OVERDUE_STATUSES_SQL = ", ".join(
-    f"'{s}'" for s in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW)
-)
+_OVERDUE_STATUSES_SQL = f"'{RECEIPT_STATUS_PLANNED}'"
 
 
 def receipt_is_invoiced(connection, doc_id: str) -> bool:
@@ -232,8 +229,7 @@ def list_receipts_aggregated(
     Возвращает (total, rows). Каждый row содержит агрегаты sku_count, total_planned,
     total_accepted, total_defect, вычисленные одним SQL.
     """
-    from datetime import date as _date
-    today = _date.today().isoformat()
+    today = business_today().isoformat()
 
     conds = ["d.is_deleted = 0"]
     params: list = []
@@ -395,8 +391,7 @@ def list_receipt_lines(
     statuses_all: frozenset[str],
 ) -> tuple[int, list[dict]]:
     """Плоский список позиций поступлений (разрез «По товарам»): одна строка = строка документа."""
-    from datetime import date as _date
-    today = _date.today().isoformat()
+    today = business_today().isoformat()
 
     conds = ["d.is_deleted = 0", "l.is_deleted = 0"]
     params: list = []

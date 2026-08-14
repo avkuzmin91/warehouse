@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from dbconn import get_connection
-from idempotency import begin_idempotent
+from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import get_current_manager, get_current_shipment_viewer, get_current_stock_operator
 from modules.balances.schemas import (
     BalanceGroupedResponse,
@@ -163,32 +163,73 @@ def create_relocation(
 
 
 @router.post("/balances/write-offs")
-def create_write_off_op(payload: WriteOffCreate, user=Depends(get_current_stock_operator)):
+def create_write_off_op(
+    payload: WriteOffCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    uid = str(user["id"])
     with get_connection() as conn:
-        create_write_off(conn, payload, str(user["id"]))
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "balance_write_off", response={"message": "ok"}
+        )
+        if not proceed:
+            return stored
+        create_write_off(conn, payload, uid)
     return {"message": "ok"}
 
 
 @router.post("/balances/write-offs/{relocation_id}/undo")
-def undo_write_off_op(relocation_id: str, user=Depends(get_current_stock_operator)):
+def undo_write_off_op(
+    relocation_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    uid = str(user["id"])
     with get_connection() as conn:
-        reverse_write_off(conn, relocation_id, str(user["id"]))
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "balance_write_off_undo", response={"message": "ok"}
+        )
+        if not proceed:
+            return stored
+        reverse_write_off(conn, relocation_id, uid)
     return {"message": "ok"}
 
 
 @router.post("/balances/quality-changes")
-def create_quality_change_op(payload: QualityChangeCreate, user=Depends(get_current_stock_operator)):
+def create_quality_change_op(
+    payload: QualityChangeCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    uid = str(user["id"])
     with get_connection() as conn:
-        create_quality_change(conn, payload, str(user["id"]))
+        proceed, stored = begin_idempotent(
+            conn, x_request_id, uid, "balance_quality_change", response={"message": "ok"}
+        )
+        if not proceed:
+            return stored
+        create_quality_change(conn, payload, uid)
     return {"message": "ok"}
 
 
 @router.post("/balances/stock-entry")
-def create_stock_entry_op(payload: StockEntryCreate, user=Depends(get_current_manager)):
+def create_stock_entry_op(
+    payload: StockEntryCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
     """Историческое заведение остатков (то, что лежало до системы) — без документа."""
+    uid = str(user["id"])
     with get_connection() as conn:
-        n = create_stock_entry(conn, payload, str(user["id"]))
-    return {"message": str(n)}
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "balance_stock_entry")
+        if not proceed:
+            return stored
+        n = create_stock_entry(conn, payload, uid)
+        result = {"message": str(n)}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.get("/balances/turnover", response_model=TurnoverListResponse)

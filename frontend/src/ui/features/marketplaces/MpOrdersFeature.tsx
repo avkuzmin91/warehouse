@@ -22,7 +22,7 @@ import { EmptyState } from '../../primitives/EmptyState'
 import { fmtDateTime } from '../../../utils/format'
 import { useApi } from '../../../hooks/useApi'
 import { useLookups } from '../../../hooks/useLookups'
-import { useFilterParam, usePageParam } from '../../../hooks/useFilterParams'
+import { useFilterParam, usePageParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 
 const PAGE_SIZE = 25
 
@@ -52,6 +52,7 @@ export function MpOrdersFeature() {
   const [accountId, setAccountId] = useFilterParam('account', '')
   const [statusFilter, setStatusFilter] = useFilterParam('status', '')
   const [page, setPage] = usePageParam()
+  const { setMany } = useFilterParamsActions()
 
   const [searchInput, setSearchInput] = useState(search)
   useEffect(() => { setSearchInput(search) }, [search])
@@ -122,6 +123,11 @@ export function MpOrdersFeature() {
             onChange={setAccountId}
           />
           <FilterSelect label="Статус" value={statusFilter} options={STATUS_OPTIONS} onChange={setStatusFilter} />
+          {(search || clientId || marketplace || accountId || statusFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', mp: '', account: '', status: '' })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
           {summary && (
             <div className="row gap-8" style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
               <span>Ждёт сборки: <b style={{ color: 'var(--c-text)' }}>{summary.by_status.new ?? 0}</b></span>

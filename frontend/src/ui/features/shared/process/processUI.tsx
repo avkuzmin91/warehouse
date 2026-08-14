@@ -59,7 +59,7 @@ export function ChecklistPanel({ items, title = 'Готовность' }: { item
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             {c.ok ? (
               <span style={{
-                width: 16, height: 16, borderRadius: 99, background: 'var(--c-success)', color: '#fff',
+                width: 16, height: 16, borderRadius: 99, background: 'var(--c-success)', color: 'var(--c-accent-contrast)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
               }}>
                 <Icon name="check" size={10} />

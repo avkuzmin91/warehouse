@@ -26,7 +26,7 @@ export function CandidateReceiptRow({ item, checked, onToggle }: {
         width: 18, height: 18, borderRadius: 5, flexShrink: 0,
         border: `1.5px solid ${checked ? 'var(--c-accent)' : 'var(--c-border-strong)'}`,
         background: checked ? 'var(--c-accent)' : 'var(--c-bg-elev)',
-        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'var(--c-accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         {checked && <Icon name="check" size={12} />}
       </span>

@@ -14,7 +14,7 @@ type Props = {
   docId: string
   doc: ShipmentDetail
   isPacked: boolean
-  isLegacyTerminal: boolean
+  isCompletedNoGoods: boolean
   isDefectCargo: boolean
   info: InfoPhaseProps
   composition: CompositionPhaseProps
@@ -23,9 +23,9 @@ type Props = {
   onLinesChanged: () => Promise<void>
 }
 
-/** packed / легаси-терминальные (awaiting_trip, partially_shipped, shipped, completed_no_goods) / cancelled — read-only. */
+/** packed / completed_no_goods / cancelled — read-only. */
 export function FinalView({
-  docId, doc, isPacked, isLegacyTerminal, isDefectCargo, info, composition, packing, zoneOptions, onLinesChanged,
+  docId, doc, isPacked, isCompletedNoGoods, isDefectCargo, info, composition, packing, zoneOptions, onLinesChanged,
 }: Props) {
   const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
   const packedGood = doc.lines.reduce((s, l) => s + l.packed_good, 0)
@@ -41,9 +41,9 @@ export function FinalView({
         </Alert>
       )}
 
-      {isLegacyTerminal && (
+      {isCompletedNoGoods && (
         <Alert tone="warning" style={{ marginBottom: 16 }}>
-          Документ из прежней схемы движения. Задача упаковки по нему завершена; доступен только просмотр.
+          Задача завершена без отгрузки: весь товар оказался браком. Доступен только просмотр.
         </Alert>
       )}
 
@@ -61,7 +61,7 @@ export function FinalView({
             />
           )}
 
-          {(isPacked || isLegacyTerminal) && (
+          {(isPacked || isCompletedNoGoods) && (
             <RelocationPanel
               docId={docId}
               lines={doc.lines}
@@ -94,7 +94,7 @@ export function FinalView({
             </Panel>
           )}
 
-          {isLegacyTerminal && (
+          {isCompletedNoGoods && (
             <Panel icon="chart" title="Итог">
               <div style={{ padding: '0 2px' }}>
                 <ReadRow label="План" mono>{planTotal} шт</ReadRow>

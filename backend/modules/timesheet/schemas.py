@@ -94,6 +94,8 @@ class EmployeeWeekSummary(BaseModel):
     hours:       float
     worked_days: int
     absent:      int
+    overtime_hours: float = 0.0
+    overtime_pay:   int | None = None                 # доплата за переработку (менеджер)
     earned:      int | None = None
     advances:    int | None = None
     to_pay:      int | None = None
@@ -107,6 +109,7 @@ class AttendanceDay(BaseModel):
     weekend:      bool
     status:       str
     hours:        float
+    overtime_hours: float = 0.0
     late_minutes: int = 0
 
 
@@ -115,6 +118,7 @@ class AttendanceStats(BaseModel):
     noplan: int
     absent: int
     hours:  float
+    overtime_hours: float = 0.0
 
 
 class AttendanceAllTime(BaseModel):
@@ -178,6 +182,7 @@ class WeekCell(BaseModel):
     no_lunch:      bool = False
     end_next_day:  bool = False
     hours:         float
+    overtime_hours: float = 0.0
     note:          str | None = None
 
 
@@ -190,6 +195,8 @@ class WeekRow(BaseModel):
     worked_days: int
     absent:      int
     earned:      int | None = None
+    overtime_hours: float = 0.0
+    overtime_pay:   int | None = None                 # доплата за переработку (менеджер)
     fact_locked: bool = False                         # неделя закрыта расчётом — факт не менять
     archived:    bool = False                          # сотрудник в архиве — строка осталась за историю недели
 
@@ -198,6 +205,8 @@ class WeekTotals(BaseModel):
     hours:     float
     earned:    int | None = None
     absent:    int
+    overtime_hours: float = 0.0
+    overtime_pay:   int | None = None
     per_day:   list[float]
     employees: int
 
@@ -238,6 +247,13 @@ class EntryDetailResponse(BaseModel):
     end_next_day:  bool = False
     status:        str
     hours:         float
+    shift_hours:   float = 0.0                        # время на смене (без вычета обеда)
+    base_hours:    float = 0.0                        # оплачиваемые часы до порога переработки
+    overtime_tier1_hours: float = 0.0                 # первые часы сверх порога (×1.3)
+    overtime_tier2_hours: float = 0.0                 # дальнейшие часы (×1.5)
+    rate_kopecks:  int | None = None                  # ставка дня (менеджер)
+    earned:        int | None = None                  # заработок за день (менеджер)
+    overtime_pay:  int | None = None                  # доплата за переработку (менеджер)
     note:          str | None = None
     fact_locked:   bool = False                       # неделя закрыта расчётом — факт не менять
     ops:           list[EntryOpItem] = []
@@ -298,6 +314,8 @@ class PayrollRow(BaseModel):
     rate_kopecks: int | None = None
     hours:        float
     earned:       int
+    overtime_hours: float = 0.0
+    overtime_pay:   int = 0
     advances:     int
     to_pay:       int
     overpaid:     int
@@ -309,6 +327,8 @@ class PayrollTotals(BaseModel):
     earned:    int
     advances:  int
     to_pay:    int
+    overtime_hours: float = 0.0
+    overtime_pay:   int = 0
     employees: int
     left:      int
 

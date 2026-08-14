@@ -4,7 +4,7 @@ import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
-import { EmpIdentity, Badge, WeekNavigator, fmtHours, fmtMoney, fmtMoneyShort, fmtRate, addDays } from './shared'
+import { EmpIdentity, Badge, OvertimeChip, WeekNavigator, fmtHours, fmtMoney, fmtMoneyShort, fmtOvertimeHours, fmtRate, addDays } from './shared'
 import { SettleModal } from './modals'
 import { getPayroll, type PayrollResponse, type PayrollRow } from '../../../api/timesheetApi'
 
@@ -51,7 +51,14 @@ export function TimesheetPayrollFeature() {
       {data && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr) 1fr', gap: 12, marginBottom: 14 }}>
-            <BigNum icon="timer" label="Заработано за неделю" value={fmtMoney(data.totals.earned)} sub="по часам × ставка" />
+            <BigNum
+              icon="timer"
+              label="Заработано за неделю"
+              value={fmtMoney(data.totals.earned)}
+              sub={data.totals.overtime_pay
+                ? `по часам × ставка, вкл. переработку ${fmtMoneyShort(data.totals.overtime_pay)} ₽ (${fmtOvertimeHours(data.totals.overtime_hours)})`
+                : 'по часам × ставка'}
+            />
             <BigNum icon="banknote" label="Выдано (авансы)" value={fmtMoney(data.totals.advances)} sub="авансы среди недели" tone="warning" />
             <BigNum icon="wallet" label="Осталось выдать" value={fmtMoney(data.totals.to_pay)} sub="заработано − авансы − выплачено" tone="accent" big />
             <BigNum icon="userCheck" label="Осталось рассчитать" value={`${data.totals.left} из ${data.totals.employees}`} sub={`${data.totals.employees - data.totals.left} уже закрыто`} />
@@ -76,8 +83,22 @@ export function TimesheetPayrollFeature() {
                     <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${r.employee_id}`)}>
                       <EmpIdentity name={r.full_name} archived={r.archived} subtitle={<>{r.position} · {fmtRate(r.rate_kopecks)}</>} />
                     </td>
-                    <td className="num">{fmtHours(r.hours)}</td>
-                    <td className="num" style={{ fontWeight: 500 }}>{fmtMoney(r.earned)}</td>
+                    <td className="num">
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                        <span>{fmtHours(r.hours)}</span>
+                        {r.overtime_hours > 0 && (
+                          <OvertimeChip hours={r.overtime_hours} title={`Переработка ${fmtOvertimeHours(r.overtime_hours)} сверх 12 ч на смене`} />
+                        )}
+                      </div>
+                    </td>
+                    <td className="num" style={{ fontWeight: 500 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                        <span>{fmtMoney(r.earned)}</span>
+                        {r.overtime_pay > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--c-warning)' }}>вкл. переработку {fmtMoneyShort(r.overtime_pay)} ₽</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="num">
                       {r.advances ? <span style={{ color: 'var(--c-warning)', fontWeight: 500 }}>−{fmtMoneyShort(r.advances)} ₽</span> : <span style={{ color: 'var(--c-text-faint)' }}>—</span>}
                     </td>
@@ -106,7 +127,7 @@ export function TimesheetPayrollFeature() {
                   <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 600 }}>{fmtHours(data.rows.reduce((a, r) => a + r.hours, 0))}</td>
                   <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 700 }}>{fmtMoney(data.totals.earned)}</td>
                   <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 600, color: 'var(--c-warning)' }}>−{fmtMoneyShort(data.totals.advances)} ₽</td>
-                  <td className="num" style={{ background: 'var(--c-accent)', color: '#fff' }}><span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(data.totals.to_pay)}</span></td>
+                  <td className="num" style={{ background: 'var(--c-accent)', color: 'var(--c-accent-contrast)' }}><span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(data.totals.to_pay)}</span></td>
                   <td colSpan={2} style={{ background: 'var(--c-bg-active)', textAlign: 'right', paddingRight: 14, fontSize: 12, color: 'var(--c-text-muted)' }}>
                     ещё не рассчитано: <b style={{ color: 'var(--c-text)' }}>{data.totals.left}</b>
                   </td>
@@ -134,6 +155,7 @@ export function TimesheetPayrollFeature() {
           toPay={settle.to_pay}
           hours={settle.hours}
           rate={settle.rate_kopecks}
+          overtimePay={settle.overtime_pay}
           onClose={() => setSettle(null)}
           onSaved={reload}
         />

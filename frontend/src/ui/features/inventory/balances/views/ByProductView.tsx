@@ -5,7 +5,7 @@ import {
 } from '../../../../../api/balancesApi'
 import type { BalanceGroupItem, BalanceSummary } from '../../../../../api/balancesApi'
 import { useLookups } from '../../../../../hooks/useLookups'
-import { useFilterParam, usePageParam } from '../../../../../hooks/useFilterParams'
+import { useFilterParam, usePageParam, useFilterParamsActions } from '../../../../../hooks/useFilterParams'
 import { foldCiSearch } from '../../../../../utils/foldCiSearch'
 import { Table, Td } from '../../../../data/Table'
 import { Pagination } from '../../../../data/Pagination'
@@ -34,6 +34,7 @@ export function ByProductView() {
   // Матрица цвет×размер — режим разворота по умолчанию; здесь ключи групп,
   // переключённых пользователем обратно на список.
   const [listKeys, setListKeys] = useState<Set<string>>(new Set())
+  const { setMany } = useFilterParamsActions()
   const { clients } = useLookups()
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -116,6 +117,13 @@ export function ByProductView() {
     })
   }
 
+  const hasFilters = !!search || !!clientId || !onlyPositive || hasDefect
+  const resetFilters = () => {
+    setOnlyPositive(true)
+    setHasDefect(false)
+    setMany({ search: null, client: null })
+  }
+
   const kpiVal = (n: number | undefined) => (summary ? (n ?? 0).toLocaleString('ru-RU') : '—')
   const defectQty = summary
     ? summary.storage_defect + summary.packing_defect + summary.packed_defect + summary.ready_defect
@@ -162,8 +170,8 @@ export function ByProductView() {
             onClick={() => { setHasDefect(!hasDefect); setPage(1) }}
             onClear={() => { setHasDefect(false); setPage(1) }}
           />
-          {(clientId) && (
-            <button className="btn ghost sm" onClick={() => setClientId('')}>
+          {hasFilters && (
+            <button className="btn ghost sm" onClick={resetFilters}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

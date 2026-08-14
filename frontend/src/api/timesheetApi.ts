@@ -52,6 +52,8 @@ export type EmployeeWeekSummary = {
   hours: number
   worked_days: number
   absent: number
+  overtime_hours: number
+  overtime_pay: number | null
   earned: number | null
   advances: number | null
   to_pay: number | null
@@ -65,9 +67,10 @@ export type AttendanceDay = {
   weekend: boolean
   status: AttendanceStatus
   hours: number
+  overtime_hours: number
   late_minutes: number
 }
-export type AttendanceStats = { shifts: number; noplan: number; absent: number; hours: number }
+export type AttendanceStats = { shifts: number; noplan: number; absent: number; hours: number; overtime_hours: number }
 export type AttendanceAllTime = { shifts: number; noplan: number; absent: number }
 export type AttendanceBlock = {
   range_label: string
@@ -121,6 +124,7 @@ export type WeekCell = {
   no_lunch: boolean
   end_next_day: boolean
   hours: number
+  overtime_hours: number
   note: string | null
 }
 export type WeekRow = {
@@ -132,6 +136,8 @@ export type WeekRow = {
   worked_days: number
   absent: number
   earned: number | null
+  overtime_hours: number
+  overtime_pay: number | null
   fact_locked: boolean
   archived: boolean
 }
@@ -139,6 +145,8 @@ export type WeekTotals = {
   hours: number
   earned: number | null
   absent: number
+  overtime_hours: number
+  overtime_pay: number | null
   per_day: number[]
   employees: number
 }
@@ -175,6 +183,13 @@ export type EntryDetail = {
   end_next_day: boolean
   status: DayStatus
   hours: number
+  shift_hours: number
+  base_hours: number
+  overtime_tier1_hours: number
+  overtime_tier2_hours: number
+  rate_kopecks: number | null
+  earned: number | null
+  overtime_pay: number | null
   note: string | null
   fact_locked: boolean
   ops: EntryOpItem[]
@@ -211,6 +226,8 @@ export type PayrollRow = {
   rate_kopecks: number | null
   hours: number
   earned: number
+  overtime_hours: number
+  overtime_pay: number
   advances: number
   to_pay: number
   overpaid: number
@@ -221,6 +238,8 @@ export type PayrollTotals = {
   earned: number
   advances: number
   to_pay: number
+  overtime_hours: number
+  overtime_pay: number
   employees: number
   left: number
 }
@@ -333,8 +352,10 @@ export function deleteEmployeeSalary(id: string, salaryId: string) {
 }
 
 export function getTimesheetWeek(week: string | undefined, signal?: AbortSignal) {
-  const q = week ? `?week=${encodeURIComponent(week)}` : ''
-  return request<WeekResponse>(`/timesheet/week${q}`, { signal })
+  const sp = new URLSearchParams()
+  if (week) sp.set('week', week)
+  const q = sp.toString()
+  return request<WeekResponse>(`/timesheet/week${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getEntry(employeeId: string, date: string, signal?: AbortSignal) {
@@ -376,8 +397,10 @@ export function bulkPlan(payload: {
 }
 
 export function getPayroll(week: string | undefined, signal?: AbortSignal) {
-  const q = week ? `?week=${encodeURIComponent(week)}` : ''
-  return request<PayrollResponse>(`/timesheet/payroll${q}`, { signal })
+  const sp = new URLSearchParams()
+  if (week) sp.set('week', week)
+  const q = sp.toString()
+  return request<PayrollResponse>(`/timesheet/payroll${q ? `?${q}` : ''}`, { signal })
 }
 
 export function addPayment(payload: PaymentCreatePayload) {

@@ -18,11 +18,10 @@ export type ExpandableReceiptData = {
 }
 
 const STATUS_RU: Record<string, string> = {
-  planned: 'В плане', on_intake: 'На приёмке', partially_received: 'Частично принято',
-  on_review: 'На проверке', done: 'Поступил',
+  planned: 'В плане', partially_received: 'Частично принято', done: 'Поступил',
 }
 const STATUS_TONE: Record<string, BadgeTone> = {
-  planned: '', on_intake: 'info', partially_received: 'warning', on_review: 'warning', done: 'success',
+  planned: '', partially_received: 'warning', done: 'success',
 }
 
 function LinesBody({ docId }: { docId: string }) {

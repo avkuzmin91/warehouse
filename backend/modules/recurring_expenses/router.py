@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from dbconn import get_connection
+from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import get_current_manager
 from modules.expenses.service import resolve_payment_source
 from modules.timesheet.service import business_today
@@ -95,7 +96,11 @@ def list_recurring_outstanding(user=Depends(_get_finance)):
 
 
 @router.post("/recurring-expenses/pay", response_model=RecurringPayResponse)
-def pay_recurring(body: RecurringPayRequest, user=Depends(_get_finance)):
+def pay_recurring(
+    body: RecurringPayRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_finance),
+):
     """Оплата по шаблону одной суммой: распределяется по его начислениям от ранних к
     поздним, последнее может закрыться частично. Сумма не больше суммарного остатка."""
     uid = str(user["id"])
@@ -104,11 +109,15 @@ def pay_recurring(body: RecurringPayRequest, user=Depends(_get_finance)):
         raise HTTPException(status_code=400, detail="Выберите расход")
     paid_on = _validate_date(body.paid_on) if body.paid_on else business_today().isoformat()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "recurring_expense_pay")
+        if not proceed:
+            return RecurringPayResponse(**stored)
         src_name = resolve_payment_source(conn, (body.payment_source_id or "").strip())
         result = pay_recurring_fifo(
             conn, template_id=template_id, amount=int(body.amount), paid_on=paid_on,
             payment_source_id=(body.payment_source_id or "").strip(), src_name=src_name, uid=uid,
         )
+        finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return RecurringPayResponse(**result)
 

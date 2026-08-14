@@ -147,7 +147,7 @@ function dtfChipStyle(active: boolean): CSSProperties {
     padding: '3px 9px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
     border: `1px solid ${active ? 'var(--c-accent)' : 'var(--c-border-strong)'}`,
     background: active ? 'var(--c-accent)' : 'var(--c-bg-elev)',
-    color: active ? '#fff' : 'var(--c-text-muted)',
+    color: active ? 'var(--c-accent-contrast)' : 'var(--c-text-muted)',
     fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', lineHeight: 1.4,
   }
 }

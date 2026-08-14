@@ -17,6 +17,7 @@ from config import (
 )
 from modules.dispatch.service import list_stuck_partial_dispatches
 from modules.receipts.service import list_shortage_receipts
+from modules.timesheet.service import business_today
 
 ROLE_WAREHOUSE = "warehouse_manager"
 ROLE_MANAGER = "manager"
@@ -94,7 +95,7 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         #   «На упаковке»              → начальник смены разбивает годный/брак;
         #   «Перемещение»              → кладовщик раскладывает по местам к рейсу;
         #   «Перемещение» (брак, +срок наступил) → кладовщик готовит брак к отгрузке.
-        today_date = date.today()
+        today_date = business_today()
         today = today_date.isoformat()
         shipment_rows = connection.execute(
             "SELECT id, doc_number, status, cargo_type, ship_date, priority_rank, updated_at, created_at FROM shipment_docs "

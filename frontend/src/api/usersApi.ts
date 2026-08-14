@@ -1,8 +1,8 @@
 import { request } from './http'
 import type { UserListItem } from './domainTypes'
 
-export function getUsers() {
-  return request<UserListItem[]>('/users')
+export function getUsers(signal?: AbortSignal) {
+  return request<UserListItem[]>('/users', { signal })
 }
 
 export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head' | 'client') {

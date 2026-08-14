@@ -43,8 +43,6 @@ const STATUS_SUB: Record<string, string> = {
   awaiting_arrival: 'Ожидает прибытия',
   unloading: 'Идёт разгрузка',
   costing: 'Уточнение стоимости',
-  on_intake: 'Принят',
-  on_review: 'На проверке',
   packing: 'В плане',
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
@@ -101,9 +99,6 @@ function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean
   }
   if (role === 'manager') {
     return task.kind === 'trip_cost' || task.kind === 'receipt_close_short'
-  }
-  if (role === 'warehouse_manager' && task.doc_type === 'receipt' && task.status === 'on_review') {
-    return false
   }
   return true
 }
