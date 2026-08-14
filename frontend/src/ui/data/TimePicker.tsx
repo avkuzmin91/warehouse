@@ -101,7 +101,8 @@ export function TimePicker({ value, onChange, disabled, invalid, step = 15, widt
   const select = (v: string) => { onChange(v); setOpen(false); setQuery('') }
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') { setOpen(false); setQuery('') }
+    // stopPropagation: Escape закрывает только выпадашку, не Drawer/Modal вокруг.
+    if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); setQuery('') }
     if (e.key === 'Enter') { e.preventDefault(); if (suggestion) select(suggestion); else if (options[0]) select(options[0]) }
   }
 

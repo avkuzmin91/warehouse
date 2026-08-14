@@ -329,7 +329,7 @@ function PlanCell({
                 <Icon name="x" size={11} />
               </button>
               <button title="Изменить часы" onClick={(ev) => { ev.stopPropagation(); editing ? onClose() : onOpen() }}
-                style={{ width: 17, height: 17, borderRadius: 5, border: 0, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: editing ? 'var(--c-accent)' : 'var(--c-bg-elev)', color: editing ? '#fff' : 'var(--c-accent)', boxShadow: 'var(--sh-1)' }}>
+                style={{ width: 17, height: 17, borderRadius: 5, border: 0, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: editing ? 'var(--c-accent)' : 'var(--c-bg-elev)', color: editing ? 'var(--c-accent-contrast)' : 'var(--c-accent)', boxShadow: 'var(--sh-1)' }}>
                 <Icon name="edit" size={10} />
               </button>
             </div>

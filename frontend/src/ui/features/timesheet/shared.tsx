@@ -44,6 +44,56 @@ export function calcDayHours(
   return Math.max(0, gross > 1 ? gross - 1 : 0)
 }
 
+/** Переработка: порог по времени НА СМЕНЕ (без вычета обеда), обед вычитается из
+ * базовой части. Повторяет backend split_shift_hours / TIMESHEET_OVERTIME_*. */
+export const OVERTIME_THRESHOLD_HOURS = 12
+export const OVERTIME_TIER1_HOURS = 4
+export const OVERTIME_TIER1_MULT = 1.3
+export const OVERTIME_TIER2_MULT = 1.5
+/** Правило действует с этой даты — раньше дни считались без повышающих коэффициентов. */
+export const OVERTIME_EFFECTIVE_FROM = '2026-08-08'
+
+/** Часы переработки по факту дня (превью до сохранения): [часы ×1.3, часы ×1.5]. */
+export function calcOvertimeHours(
+  start: string | null,
+  end: string | null,
+  workDate: string,
+  opts?: { endNextDay?: boolean },
+): [number, number] {
+  if (!start || !end || workDate < OVERTIME_EFFECTIVE_FROM) return [0, 0]
+  const toMin = (t: string): number => {
+    const [h, m] = t.split(':').map(Number)
+    return h * 60 + m
+  }
+  let b = toMin(end)
+  if (opts?.endNextDay) b += 24 * 60
+  const gross = (b - toMin(start)) / 60
+  const over = Math.max(0, gross - OVERTIME_THRESHOLD_HOURS)
+  const tier1 = Math.min(over, OVERTIME_TIER1_HOURS)
+  return [Math.round(tier1 * 100) / 100, Math.round((over - tier1) * 100) / 100]
+}
+
+/** «6 ч» — часы переработки без хвоста «,0» у целых. */
+export function fmtOvertimeHours(h: number): string {
+  return `${h.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ч`
+}
+
+/** Чип переработки: ⚡ + часы. Жёлтый — переработка всегда исключение, её видно. */
+export function OvertimeChip({ hours, title }: { hours: number; title?: string }) {
+  return (
+    <span
+      title={title ?? `Переработка ${fmtOvertimeHours(hours)}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0,
+        fontSize: 10, fontWeight: 700, lineHeight: '15px', padding: '0 4px', borderRadius: 4,
+        color: 'var(--c-warning)', background: 'var(--c-warning-bg)',
+      }}
+    >
+      <Icon name="zap" size={9} />{hours.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}
+    </span>
+  )
+}
+
 /** ISO-дата + смещение в днях → ISO. */
 export function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00')
@@ -182,7 +232,7 @@ export function ModalShell({
   onClose: () => void; footer: React.ReactNode; children: React.ReactNode
 }) {
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(20,20,15,0.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--c-overlay)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: '100%', maxHeight: '90vh', overflow: 'auto', background: 'var(--c-bg-elev)', borderRadius: 'var(--r-xl)', boxShadow: 'var(--sh-3)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '16px 18px 14px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', gap: 12 }}>
           {lead}

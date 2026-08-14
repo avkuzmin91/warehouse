@@ -15,7 +15,9 @@ from dbconn import get_connection
 from modules.timesheet.service import (
     day_hours,
     day_status,
+    entry_earned,
     rate_on,
+    split_shift_hours,
     week_start_for,
     week_stats,
 )
@@ -53,6 +55,80 @@ def test_day_hours_end_next_day():
     assert day_hours("08:00", "02:00", lunch=False, end_next_day=True) == 18.0
     # без флага уход ≤ приход → 0 (нельзя случайно посчитать ночную как дневную)
     assert day_hours("08:00", "02:00") == 0.0
+
+
+# ── Юнит: переработка (порог по времени на смене) ─────────────────────────────
+
+def _ot_entry(start: str, end: str, **kw) -> dict:
+    return {"planned_start": "08:00", "planned_end": "20:00",
+            "actual_start": start, "actual_end": end, "is_absent": 0, "not_called": 0, **kw}
+
+
+def test_split_no_overtime_up_to_threshold():
+    assert split_shift_hours("08:00", "20:00") == (11.0, 0.0, 0.0)   # ровно 12 ч на смене
+    assert split_shift_hours("08:00", "16:00") == (7.0, 0.0, 0.0)
+
+
+def test_split_tier1_after_threshold():
+    # 13 ч на смене: 12 базовых (−1 ч обед = 11 оплачиваемых) + 1 ч ×1.3
+    assert split_shift_hours("08:00", "21:00") == (11.0, 1.0, 0.0)
+    assert split_shift_hours("08:00", "00:00", end_next_day=True) == (11.0, 4.0, 0.0)  # ровно 16 ч
+
+
+def test_split_tier2_after_16_hours():
+    # 18 ч на смене: 11 оплачиваемых базовых + 4 ч ×1.3 + 2 ч ×1.5
+    assert split_shift_hours("08:00", "02:00", end_next_day=True) == (11.0, 4.0, 2.0)
+
+
+def test_split_no_lunch_keeps_bands():
+    assert split_shift_hours("08:00", "21:00", lunch=False) == (12.0, 1.0, 0.0)
+
+
+def test_day_hours_equals_sum_of_bands():
+    for args, kw in (
+        (("08:00", "21:00"), {}),
+        (("08:00", "02:00"), {"end_next_day": True}),
+        (("08:00", "20:30"), {"lunch": False}),
+        (("08:00", "08:30"), {}),
+    ):
+        assert day_hours(*args, **kw) == round(sum(split_shift_hours(*args, **kw)), 2)
+
+
+def test_entry_earned_applies_overtime_multipliers():
+    # Ставка 350 ₽/ч, ночная смена 18 ч на смене (17 оплачиваемых часов).
+    earned, ot_hours, ot_pay = entry_earned(
+        _ot_entry("08:00", "02:00", end_next_day=1), 35000, "2026-08-10"
+    )
+    assert earned == round(35000 * (11 + 4 * 1.3 + 2 * 1.5))   # 6 720 ₽
+    assert ot_hours == 6.0
+    assert ot_pay == earned - round(17 * 35000)                # доплата = 770 ₽
+
+
+def test_entry_earned_before_effective_date_is_flat():
+    # До даты вступления правила день считается по-старому — закрытые недели не поедут.
+    earned, ot_hours, ot_pay = entry_earned(
+        _ot_entry("08:00", "02:00", end_next_day=1), 35000, "2026-08-07"
+    )
+    assert (earned, ot_hours, ot_pay) == (round(17 * 35000), 0.0, 0)
+
+
+def test_entry_earned_without_overtime_unchanged():
+    assert entry_earned(_ot_entry("08:00", "20:00"), 35000, "2026-08-10") == (385000, 0.0, 0)
+    assert entry_earned(_ot_entry("08:00", "20:00"), None, "2026-08-10") == (0, 0.0, 0)
+
+
+def test_week_stats_aggregates_overtime():
+    days = [date(2026, 8, 8) + timedelta(days=i) for i in range(7)]
+    entries = {
+        ("emp", "2026-08-10"): _ot_entry("08:00", "21:00"),           # +1 ч ×1.3
+        ("emp", "2026-08-11"): _ot_entry("08:00", "20:00"),           # без переработки
+    }
+    rates = [{"rate_kopecks": 35000, "effective_from": "2026-01-01"}]
+    s = week_stats("emp", days, entries, rates, "2026-08-14")
+    assert s["hours"] == 23.0                                          # 12 + 11
+    assert s["overtime_hours"] == 1.0
+    assert s["overtime_pay"] == round(35000 * 0.3)
+    assert s["earned"] == round(35000 * (11 + 1.3)) + round(35000 * 11)
 
 
 # ── Юнит: расчётная неделя Сб → Пт ────────────────────────────────────────────
