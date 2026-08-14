@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
 from psycopg import IntegrityError
 
 from config import (
@@ -17,6 +17,7 @@ from config import (
     MAX_UPLOAD_BYTES,
 )
 from dbconn import get_connection, like_substring_param
+from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import (
     get_current_admin,
     get_current_manager,
@@ -251,21 +252,30 @@ def get_product(item_id: str, admin=Depends(get_current_admin), include_deleted:
 
 
 @router.post("/products/upload-image", response_model=ProductUploadImageResponse)
-async def upload_product_image(image: UploadFile = File(...), admin=Depends(get_current_admin)):
-    _ = admin
+async def upload_product_image(
+    image: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    admin=Depends(get_current_admin),
+):
     if not image.filename:
         raise HTTPException(status_code=400, detail="Файл не выбран")
     ext = _product_image_extension(image.content_type, image.filename)
     if not ext:
         raise HTTPException(status_code=400, detail="Допустимы изображения: jpg, png, heic")
-    filename = f"{uuid4()}{ext}"
-    file_path = UPLOADS_DIR / filename
     data = await image.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
-    tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
-    tmp_path.write_bytes(data)
-    tmp_path.rename(file_path)
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, str(admin["id"]), "product_image_upload")
+        if not proceed:
+            return ProductUploadImageResponse(**stored)
+        filename = f"{uuid4()}{ext}"
+        file_path = UPLOADS_DIR / filename
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        tmp_path.write_bytes(data)
+        tmp_path.rename(file_path)
+        finish_idempotent(conn, x_request_id, {"url": f"/uploads/{filename}"})
+        conn.commit()
     return ProductUploadImageResponse(url=f"/uploads/{filename}")
 
 
@@ -273,6 +283,7 @@ async def upload_product_image(image: UploadFile = File(...), admin=Depends(get_
 async def create_product(
     meta: str = Form(...),
     images: list[UploadFile] = File(default=[]),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(get_current_manager),
 ):
     try:
@@ -299,6 +310,12 @@ async def create_product(
 
     inner = parsed.product
     with get_connection() as connection:
+        proceed, stored = begin_idempotent(
+            connection, x_request_id, str(user["id"]), "product_create",
+            response={"message": "Создано"},
+        )
+        if not proceed:
+            return MessageResponse(**stored)
         tid = _require_active_product_type(connection, inner.type_id)
         requires_color, requires_size = _product_type_flags(connection, tid)
         if requires_color and not parsed.colors:
@@ -846,6 +863,7 @@ async def add_product_barcode_file(
     item_id: str,
     barcode_id: str,
     file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     admin=Depends(get_current_admin),
 ):
     """Этикетка кода: PDF или фото ШК в карточке товара."""
@@ -858,6 +876,11 @@ async def add_product_barcode_file(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="Файл слишком большой (максимум 10 МБ)")
     with get_connection() as connection:
+        proceed, stored = begin_idempotent(
+            connection, x_request_id, str(admin["id"]), "product_barcode_file_upload"
+        )
+        if not proceed:
+            return MessageResponse(**stored)
         bc = connection.execute(
             "SELECT id FROM product_barcodes WHERE id = ? AND product_id = ? AND COALESCE(is_deleted, 0) = 0",
             (barcode_id, item_id),
@@ -876,6 +899,7 @@ async def add_product_barcode_file(
             (file_id, item_id, barcode_id, file.filename, f"/uploads/{saved_filename}",
              file.content_type or None, _now(), str(admin["id"])),
         )
+        finish_idempotent(connection, x_request_id, {"message": file_id})
         connection.commit()
     return MessageResponse(message=file_id)
 

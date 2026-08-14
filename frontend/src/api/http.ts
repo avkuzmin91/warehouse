@@ -282,7 +282,7 @@ export function request<T>(path: string, init?: RequestOptions): Promise<T> {
   return executeRequest<T>(path, init)
 }
 
-export async function requestForm<T>(path: string, init?: RequestOptions): Promise<T> {
+async function executeFormRequest<T>(path: string, init?: RequestOptions): Promise<T> {
   const headers = buildAuthHeaders(path, init, false)
   const response = await doFetch(path, init, headers)
   if (!init?.skipUnauthorizedHandler) {
@@ -293,6 +293,73 @@ export async function requestForm<T>(path: string, init?: RequestOptions): Promi
     throw new Error(formatApiErrorDetail(body, response.status))
   }
   return response.json() as Promise<T>
+}
+
+// FormData не сериализуется в строку, поэтому ключ дедупликации multipart-загрузок
+// собирается из формы запроса: метод + путь + поля (строки — значением, файлы —
+// имя/размер/lastModified). Ретрай той же загрузки строит тот же ключ → переиспользует
+// X-Request-Id, и бэкенд не задваивает вложение.
+function formIdempotencyKey(path: string, init: RequestOptions): string {
+  const method = (init.method ?? 'GET').toUpperCase()
+  const parts: string[] = []
+  if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+    for (const [name, value] of init.body.entries()) {
+      if (typeof value === 'string') parts.push(`${name}=${value}`)
+      else parts.push(`${name}=file:${value.name}:${value.size}:${value.lastModified}`)
+    }
+  }
+  return `${method} ${path} form:${parts.join('&')}`
+}
+
+/** Явно переданный вызывающим кодом X-Request-Id. */
+function explicitFormRequestId(init: RequestOptions): string | null {
+  const headers = init.headers as Record<string, string> | undefined
+  if (!headers) return null
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === 'x-request-id' && headers[key]) return headers[key]
+  }
+  return null
+}
+
+// Та же семантика, что idempotentRequest (single-flight + окно ретрая), но ключ —
+// по форме multipart-тела и без принудительного Content-Type: application/json.
+async function idempotentFormRequest<T>(path: string, init: RequestOptions): Promise<T> {
+  const now = Date.now()
+  pruneIdempotencyEntries(now)
+
+  const key = formIdempotencyKey(path, init)
+  const existing = idempotencyEntries.get(key)
+
+  if (existing?.promise) {
+    return existing.promise as Promise<T>
+  }
+
+  const explicit = explicitFormRequestId(init)
+  const reuse = existing?.failedAt != null && now - existing.failedAt < IDEMPOTENCY_WINDOW_MS
+  const requestId = explicit ?? (reuse && existing ? existing.requestId : newRequestId())
+
+  const headers = explicit
+    ? (init.headers as Record<string, string>)
+    : { ...(init.headers as Record<string, string> | undefined), 'X-Request-Id': requestId }
+  changeBusy(1)
+  const promise = executeFormRequest<T>(path, { ...init, headers }).finally(() => changeBusy(-1))
+  idempotencyEntries.set(key, { requestId, promise })
+
+  try {
+    const result = await promise
+    idempotencyEntries.delete(key)
+    return result
+  } catch (err) {
+    idempotencyEntries.set(key, { requestId, failedAt: Date.now() })
+    throw err
+  }
+}
+
+export function requestForm<T>(path: string, init?: RequestOptions): Promise<T> {
+  // Идемпотентность по умолчанию для write-методов; явный idempotent имеет приоритет.
+  const idempotent = init?.idempotent ?? isWriteRequest(init)
+  if (idempotent) return idempotentFormRequest<T>(path, init as RequestOptions)
+  return executeFormRequest<T>(path, init)
 }
 
 // Тело ответа как Blob (для вложений: сервер отдаёт их с Content-Disposition: attachment,

@@ -677,6 +677,7 @@ def cancel_expense(
 async def upload_expense_file(
     expense_id: str,
     file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_finance),
 ):
     if not file.filename:
@@ -690,6 +691,9 @@ async def upload_expense_file(
 
     uid = str(user["id"])
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "expense_file_upload")
+        if not proceed:
+            return MessageResponse(**stored)
         row = conn.execute(
             "SELECT 1 FROM material_expenses WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
             (expense_id,),
@@ -711,6 +715,7 @@ async def upload_expense_file(
             (file_id, expense_id, file.filename, url, file.content_type or None, now_iso(), uid),
         )
         _journal(conn, expense_id, EXPENSE_OP_FILE_ADD, f"Прикреплён файл {file.filename}", uid)
+        finish_idempotent(conn, x_request_id, {"message": file_id})
         conn.commit()
     return MessageResponse(message=file_id)
 
