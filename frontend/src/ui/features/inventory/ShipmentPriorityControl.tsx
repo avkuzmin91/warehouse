@@ -77,7 +77,6 @@ export function ShipmentPriorityControl({ shipment, canEdit, onSaved }: Shipment
   const editable =
     canEdit &&
     canEditShipmentPriority(user) &&
-    shipment.status !== 'shipped' &&
     shipment.status !== 'cancelled'
 
   function toggle() {

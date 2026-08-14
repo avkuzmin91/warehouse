@@ -16,8 +16,6 @@ from config import (
     RECEIPT_STATUS_CANCELLED,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_DRAFT,
-    RECEIPT_STATUS_ON_INTAKE,
-    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     RECEIPT_STATUS_PLANNED,
     RECEIPT_STATUS_RU,
@@ -30,6 +28,7 @@ from config import (
 )
 from dbconn import get_connection, ci_like_substring_param
 from utils import now_iso as _now, validate_business_date
+from modules.timesheet.service import business_today
 from modules.auth.service import (
     get_current_document_creator,
     get_current_manager,
@@ -52,6 +51,8 @@ from modules.receipts.schemas import (
     ReceiptListItem,
     ReceiptListResponse,
     ReceiptOpResponse,
+    ReceiptTripAllocRemainingResponse,
+    ReceiptsSummaryResponse,
     TripRef,
 )
 from modules.receipts.service import (
@@ -207,7 +208,7 @@ def check_receipt_duplicate(
     return {"matches": matches}
 
 
-@router.get("/receipts/summary")
+@router.get("/receipts/summary", response_model=ReceiptsSummaryResponse)
 def receipts_summary(
     client_id: str | None = Query(None),
     search: str | None = Query(None),
@@ -216,8 +217,7 @@ def receipts_summary(
     date_to: str | None = Query(None),
     user=Depends(_get_manager),
 ):
-    from datetime import date as _date
-    today = _date.today().isoformat()
+    today = business_today().isoformat()
     with get_connection() as conn:
         conds = ["d.is_deleted = 0"]
         params: list = []
@@ -248,12 +248,16 @@ def receipts_summary(
             params,
         ).fetchall()
     total = len(rows)
-    active = sum(1 for r in rows if r["status"] in ("on_intake", "on_review"))
-    done = sum(1 for r in rows if r["status"] in ("done", "cancelled"))
-    drafts = sum(1 for r in rows if r["status"] == "planned")
+    active_statuses = (
+        RECEIPT_STATUS_PLANNED,
+        RECEIPT_STATUS_PARTIALLY_RECEIVED,
+    )
+    active = sum(1 for r in rows if r["status"] in active_statuses)
+    done = sum(1 for r in rows if r["status"] in (RECEIPT_STATUS_DONE, RECEIPT_STATUS_CANCELLED))
+    drafts = sum(1 for r in rows if r["status"] == RECEIPT_STATUS_DRAFT)
     overdue = sum(
         1 for r in rows
-        if r["status"] in ("planned", "on_intake", "on_review")
+        if r["status"] in active_statuses
         and r["arrival_date"] and str(r["arrival_date"]) < today
     )
     return {"all": total, "active": active, "done": done, "drafts": drafts, "overdue": overdue}
@@ -354,7 +358,7 @@ def list_receipt_lines_view(
     return ReceiptLinesResponse(items=items, total=total, page=page, limit=limit)
 
 
-@router.get("/receipts/{doc_id}/trip-alloc-remaining")
+@router.get("/receipts/{doc_id}/trip-alloc-remaining", response_model=ReceiptTripAllocRemainingResponse)
 def receipt_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
     """Остаток к распределению по строкам поступления для привязки к рейсу.
 
@@ -693,11 +697,11 @@ def update_receipt_line(doc_id: str, line_id: str, payload: ReceiptLineUpdate, u
         status = str(doc_row["status"])
         if payload.planned_qty is not None and status not in (RECEIPT_STATUS_DRAFT, RECEIPT_STATUS_PLANNED):
             raise HTTPException(status_code=400, detail="Изменить количество можно только в статусе 'Создание' или 'В плане'")
-        if payload.accepted_qty is not None and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
+        if payload.accepted_qty is not None and status != RECEIPT_STATUS_PLANNED:
+            raise HTTPException(status_code=400, detail="Изменить принятое количество можно только в статусе 'В плане'")
         _zone_fields = {"storage_zone_id", "storage_zone_name"}
-        if (_zone_fields & set(provided_fields)) and status not in (RECEIPT_STATUS_PLANNED, RECEIPT_STATUS_ON_INTAKE, RECEIPT_STATUS_ON_REVIEW):
-            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане', 'На приёмке' или 'На проверке'")
+        if (_zone_fields & set(provided_fields)) and status != RECEIPT_STATUS_PLANNED:
+            raise HTTPException(status_code=400, detail="Изменить место хранения можно только в статусе 'В плане'")
         line_row = conn.execute(
             "SELECT id, planned_qty, accepted_qty, storage_zone_name "
             "FROM receipt_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",

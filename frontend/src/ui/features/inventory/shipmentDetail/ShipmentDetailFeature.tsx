@@ -185,9 +185,7 @@ export function ShipmentDetailFeature() {
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
   const isPacked = status === 'packed'
-  // Легаси-статусы рейса (исторические документы) — только read-only вид.
-  const isLegacyTerminal = status === 'awaiting_trip' || status === 'partially_shipped'
-    || status === 'shipped' || status === 'completed_no_goods'
+  const isCompletedNoGoods = status === 'completed_no_goods'
   // Состав и план менеджер правит до передачи на упаковку (черновик, «В плане»).
   const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
@@ -197,7 +195,7 @@ export function ShipmentDetailFeature() {
   // Изменения журналируются, команда упаковки получает пуш.
   const canCorrectOnPacking = canEditPlanning && isOnPacking
   const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
-  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isLegacyTerminal
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isCompletedNoGoods
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
@@ -1042,7 +1040,7 @@ export function ShipmentDetailFeature() {
           docId={docId!}
           doc={doc}
           isPacked={isPacked}
-          isLegacyTerminal={isLegacyTerminal}
+          isCompletedNoGoods={isCompletedNoGoods}
           isDefectCargo={isDefectCargo}
           info={infoProps}
           composition={compositionProps}

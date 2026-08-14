@@ -82,18 +82,14 @@ RECORD_ACTUALITY_NO_ID = "00000000-0000-4000-8000-000000000002"
 
 RECEIPT_STATUS_DRAFT             = "draft"
 RECEIPT_STATUS_PLANNED           = "planned"
-RECEIPT_STATUS_ON_INTAKE         = "on_intake"
 RECEIPT_STATUS_PARTIALLY_RECEIVED = "partially_received"
-RECEIPT_STATUS_ON_REVIEW         = "on_review"
 RECEIPT_STATUS_DONE              = "done"
 RECEIPT_STATUS_CANCELLED         = "cancelled"
 
 RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
     RECEIPT_STATUS_DRAFT,
     RECEIPT_STATUS_PLANNED,
-    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
-    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
 })
@@ -101,9 +97,7 @@ RECEIPT_STATUSES_ALL: frozenset[str] = frozenset({
 RECEIPT_STATUS_LABELS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:              "Создание",
     RECEIPT_STATUS_PLANNED:            "В плане",
-    RECEIPT_STATUS_ON_INTAKE:          "На приёмке",
     RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
-    RECEIPT_STATUS_ON_REVIEW:          "На проверке",
     RECEIPT_STATUS_DONE:               "Завершён",
     RECEIPT_STATUS_CANCELLED:          "Аннулирован",
 }
@@ -112,15 +106,12 @@ RECEIPT_STATUS_TRANSITIONS: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:     RECEIPT_STATUS_PLANNED,
     # Дальше поступление двигает только рейс: приёмка идёт в разгрузке рейса
     # (planned → partially_received → done), отдельной карточной приёмки больше нет.
-    # on_intake / on_review — легаси-статусы, в новом потоке не используются.
 }
 
 RECEIPT_STATUS_RU: dict[str, str] = {
     RECEIPT_STATUS_DRAFT:             "Создание",
     RECEIPT_STATUS_PLANNED:           "В плане",
-    RECEIPT_STATUS_ON_INTAKE:         "На приёмке",
     RECEIPT_STATUS_PARTIALLY_RECEIVED: "Частично принято",
-    RECEIPT_STATUS_ON_REVIEW:         "На проверке",
     RECEIPT_STATUS_DONE:              "Завершён",
     RECEIPT_STATUS_CANCELLED:         "Аннулирован",
 }
@@ -154,14 +145,9 @@ SHIPMENT_STATUS_RELOCATING        = "relocating"
 # и готов к отгрузке. Дальше его возит отдельный домен dispatch (привязка к рейсу
 # и списание — там), задача упаковки на этом завершается.
 SHIPMENT_STATUS_PACKED            = "packed"
-# Легаси-статусы: документы в них больше не переводятся (их роль перешла к dispatch),
-# но константы нужны cabinet и исторической миграции данных.
-SHIPMENT_STATUS_AWAITING_TRIP     = "awaiting_trip"
-SHIPMENT_STATUS_PARTIALLY_SHIPPED = "partially_shipped"
-SHIPMENT_STATUS_SHIPPED           = "shipped"
 # Завершено без отгрузки: после упаковки годного 0 (весь товар оказался браком),
-# рейс не нужен. Терминальный исход, отдельный от `shipped` — иначе попадёт в
-# кандидаты на счёт (финансы берут строго `shipped`) и в метрику реальных отгрузок.
+# рейс не нужен. Терминальный исход, отдельный от `packed` — иначе попадёт в
+# кандидаты на счёт и в метрику реальных отгрузок.
 SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
@@ -171,9 +157,6 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_AWAITING_TRIP,
-    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
-    SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
@@ -181,7 +164,6 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_SHIPPED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 })
@@ -192,9 +174,6 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
     SHIPMENT_STATUS_PACKED:            "Упакован",
-    SHIPMENT_STATUS_AWAITING_TRIP:     "Ожидает рейс",
-    SHIPMENT_STATUS_PARTIALLY_SHIPPED: "Частично отгружено",
-    SHIPMENT_STATUS_SHIPPED:           "Завершён",
     SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
@@ -259,7 +238,7 @@ SHIPMENT_CARGO_GOOD   = "good"
 SHIPMENT_CARGO_DEFECT = "defect"
 
 # Брак-отгрузка минует упаковку: draft → relocating «Перемещение» (задача кладовщику
-# подготовить брак). relocating → awaiting_trip делает отдельный эндпоинт
+# подготовить брак). relocating → packed делает отдельный эндпоинт
 # finish_defect_relocation: кладовщик выбирает места-источники, брак переезжает
 # storage/defect → ready/defect в «Зону отгрузки».
 SHIPMENT_TRANSITIONS_DEFECT: dict[str, str] = {
@@ -270,12 +249,10 @@ SHIPMENT_TRANSITION_ROLES_DEFECT: dict[str, frozenset[str]] = {
     SHIPMENT_STATUS_RELOCATING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head"}),
 }
 
-# До подготовки кладовщиком остатки не двигаются; из «Ожидает рейс» аннулирование
-# выполняет автовозврат брака из зоны отгрузки на исходные места.
+# До завершения раскладки кладовщиком остатки не двигаются — отмена безопасна.
 SHIPMENT_CANCELLABLE_STATUSES_DEFECT: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
     SHIPMENT_STATUS_RELOCATING,
-    SHIPMENT_STATUS_AWAITING_TRIP,
 })
 
 SHIPMENT_EDITABLE_LINE_STATUSES_DEFECT: frozenset[str] = frozenset({
@@ -978,6 +955,17 @@ TIMESHEET_DEFAULT_SHIFT_START = "08:00"
 TIMESHEET_DEFAULT_SHIFT_END   = "20:00"
 TIMESHEET_LUNCH_HOURS         = 1.0   # вычет обеда: часы за день = (уход − приход) − 1 ч
 
+# Переработка: порог считается по времени НА СМЕНЕ (уход − приход, без вычета обеда),
+# обед вычитается из базовой части. Часы сверх порога оплачиваются с повышающим
+# коэффициентом: первые TIER1_HOURS — TIER1_MULT, дальше — TIER2_MULT.
+# Правило применяется к дням начиная с EFFECTIVE_FROM (начало расчётной недели):
+# закрытые прошлые недели и P&L прошлых месяцев пересчитываться не должны.
+TIMESHEET_OVERTIME_THRESHOLD_HOURS = 12.0
+TIMESHEET_OVERTIME_TIER1_HOURS     = 4.0
+TIMESHEET_OVERTIME_TIER1_MULT      = 1.3
+TIMESHEET_OVERTIME_TIER2_MULT      = 1.5
+TIMESHEET_OVERTIME_EFFECTIVE_FROM  = "2026-08-08"
+
 # Статус сотрудника в справочнике
 EMPLOYEE_STATUS_ACTIVE   = "active"
 EMPLOYEE_STATUS_ARCHIVED = "archived"
@@ -1044,23 +1032,9 @@ PAYROLL_KIND_LABELS: dict[str, str] = {
 # Клиент не видит черновики: документ появляется в кабинете с момента планирования.
 CABINET_RECEIPT_VISIBLE_STATUSES: frozenset[str] = frozenset({
     RECEIPT_STATUS_PLANNED,
-    RECEIPT_STATUS_ON_INTAKE,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
-    RECEIPT_STATUS_ON_REVIEW,
     RECEIPT_STATUS_DONE,
     RECEIPT_STATUS_CANCELLED,
-})
-
-CABINET_SHIPMENT_VISIBLE_STATUSES: frozenset[str] = frozenset({
-    SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_ON_PACKING,
-    SHIPMENT_STATUS_RELOCATING,
-    SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_AWAITING_TRIP,
-    SHIPMENT_STATUS_PARTIALLY_SHIPPED,
-    SHIPMENT_STATUS_SHIPPED,
-    SHIPMENT_STATUS_COMPLETED_NO_GOODS,
-    SHIPMENT_STATUS_CANCELLED,
 })
 
 # Журналы: клиенту отдаются только бизнес-события с готовыми русскими комментариями.
@@ -1071,13 +1045,6 @@ CABINET_RECEIPT_OPS_VISIBLE: frozenset[str] = frozenset({
     RECEIPT_OP_ARRIVAL_FIX,
     RECEIPT_OP_RECEIVING_CORRECTION,
     RECEIPT_OP_CANCEL,
-})
-
-CABINET_SHIPMENT_OPS_VISIBLE: frozenset[str] = frozenset({
-    SHIPMENT_OP_PACK,
-    SHIPMENT_OP_PACK_CORRECTION,
-    SHIPMENT_OP_SHIP,
-    "cancel",
 })
 
 # Клиентская отгрузка = домен dispatch. Клиент видит её с момента передачи в

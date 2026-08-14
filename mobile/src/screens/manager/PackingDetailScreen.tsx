@@ -28,16 +28,15 @@ import { fmtDate } from '../../utils/format'
 
 const STATUS_TONE: Record<string, string> = {
   draft: '', packing: 'info', on_packing: 'warning', relocating: 'warning',
-  awaiting_trip: 'warning', partially_shipped: 'warning', shipped: 'success',
   completed_no_goods: 'success', cancelled: 'danger',
 }
 
 // Зеркала гейтов бэка (config.py): где документ ещё можно аннулировать / вернуть на
 // упаковку / поменять приоритет. Финальную проверку всегда делает сервер.
 const CANCELLABLE_GOOD = new Set<ShipmentStatus>(['draft', 'packing', 'on_packing'])
-const CANCELLABLE_DEFECT = new Set<ShipmentStatus>(['draft', 'relocating', 'awaiting_trip'])
+const CANCELLABLE_DEFECT = new Set<ShipmentStatus>(['draft', 'relocating'])
 const RETURN_TO_PACKING = new Set<ShipmentStatus>(['relocating', 'packed'])
-const PRIORITY_FINAL = new Set<ShipmentStatus>(['shipped', 'partially_shipped', 'completed_no_goods', 'cancelled'])
+const PRIORITY_FINAL = new Set<ShipmentStatus>(['completed_no_goods', 'cancelled'])
 
 export function PackingDetailScreen({ docId }: { docId: string }) {
   const { back, openPackingEdit } = useNav()

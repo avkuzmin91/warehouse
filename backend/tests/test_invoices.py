@@ -722,7 +722,7 @@ def test_receipt_cannot_be_in_two_invoices(admin_client, client_id):
 def test_only_done_receipts_allowed(admin_client, client_id):
     rec = _done_receipt(client_id, logistics_cost=500)
     with get_connection() as conn:
-        conn.execute("UPDATE receipt_docs SET status = 'on_review' WHERE id = ?", (rec,))
+        conn.execute("UPDATE receipt_docs SET status = 'planned' WHERE id = ?", (rec,))
         conn.commit()
     iid = _draft_invoice(admin_client, client_id, total_amount=1000)
     bad = admin_client.post(f"/invoices/{iid}/receipts", json={"receipt_ids": [rec]})

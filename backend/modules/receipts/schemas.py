@@ -250,3 +250,37 @@ class DuplicateMatch(BaseModel):
 
 class DuplicateCheckResponse(BaseModel):
     matches: list[DuplicateMatch] = []
+
+
+class ReceiptsSummaryResponse(BaseModel):
+    all: int
+    active: int
+    done: int
+    drafts: int
+    overdue: int
+
+
+class TripAllocationEntry(BaseModel):
+    trip_number: str
+    trip_status: str
+    direction: str | None = None
+    destination: str | None = None
+    qty: int
+    allocated_by: str | None = None
+    allocated_at: str | None = None
+
+
+class ReceiptTripAllocLine(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    color: str | None = None
+    variant: str | None = None
+    planned_qty: int
+    accepted_qty: int
+    remaining: int
+    allocations: list[TripAllocationEntry] = []
+
+
+class ReceiptTripAllocRemainingResponse(BaseModel):
+    lines: list[ReceiptTripAllocLine] = []

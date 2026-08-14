@@ -7,9 +7,6 @@ export type ShipmentStatus =
   | 'on_packing'
   | 'relocating'
   | 'packed'
-  | 'awaiting_trip'
-  | 'partially_shipped'
-  | 'shipped'
   | 'completed_no_goods'
   | 'cancelled'
 
@@ -262,7 +259,7 @@ export function updateShipmentPriority(id: string, priorityRank: number | null) 
 }
 
 // Аннулирование: годный — до передачи на упаковку включительно (в «На упаковке» — пока
-// ничего не упаковано), брак — draft/relocating/awaiting_trip (гейты бэка).
+// ничего не упаковано), брак — draft/relocating (гейты бэка).
 export function cancelShipment(id: string) {
   return request<{ message: string }>(`/shipments/${id}/cancel`, { method: 'POST' })
 }
@@ -293,7 +290,7 @@ export function returnShipmentToPacking(id: string, payload: ReturnToPackingPayl
 export type RelocateAllocation = { zone_id: string; zone_name: string | null; qty: number }
 export type RelocateLine = { line_id: string; good: RelocateAllocation[]; defect: RelocateAllocation[] }
 
-// relocating → awaiting_trip (раскладка годного/брака по местам).
+// relocating → packed (раскладка годного/брака по местам).
 export function finishRelocation(id: string, lines: RelocateLine[], requestId: string) {
   return request<{ message: string }>(`/shipments/${id}/finish-relocation`, {
     method: 'POST',
@@ -316,7 +313,7 @@ export function placePackedShipment(id: string, lines: RelocateLine[], requestId
 export type ShipmentDefectSourceAllocation = { zone_id: string; zone_name: string | null; qty: number }
 export type ShipmentDefectRelocateLine = { line_id: string; sources: ShipmentDefectSourceAllocation[] }
 
-// Брак-отгрузка: relocating → awaiting_trip. Брак собирается из мест хранения
+// Брак-отгрузка: relocating → packed. Брак собирается из мест хранения
 // (storage/defect) и переезжает в зону отгрузки. Ретрай безопасен: повтор после
 // смены статуса отклоняется серверным гейтом перехода.
 export function finishShipmentDefectRelocation(id: string, lines: ShipmentDefectRelocateLine[]) {
@@ -454,9 +451,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   packed: 'Упакован',
-  awaiting_trip: 'Ожидает рейс',
-  partially_shipped: 'Частично отгружено',
-  shipped: 'Завершён',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
 }

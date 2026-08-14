@@ -90,7 +90,7 @@ export function InvoiceRailPanel({ phase, overdue, dueReached = false, dueDate, 
                   border: st === 'future' || st === 'next' ? '1.5px dashed var(--c-border-strong)'
                     : st === 'cancelled' ? '1.5px solid var(--c-danger)' : `1.5px solid ${dotColor}`,
                   color: st === 'future' || st === 'next' ? 'var(--c-text-faint)'
-                    : st === 'cancelled' ? 'var(--c-danger)' : '#fff',
+                    : st === 'cancelled' ? 'var(--c-danger)' : 'var(--c-accent-contrast)',
                   boxShadow: st === 'active' ? `0 0 0 4px color-mix(in oklab, ${dotColor} 16%, transparent)` : 'none',
                 }}>
                   {st === 'done' ? <Icon name="check" size={11} />

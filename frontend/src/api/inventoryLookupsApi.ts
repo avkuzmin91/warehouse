@@ -6,8 +6,10 @@ export function getInventoryClients(signal?: AbortSignal) {
 }
 
 export function getInventoryClientStores(clientId: string | null | undefined, signal?: AbortSignal) {
-  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
-  return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q}`, { signal })
+  const sp = new URLSearchParams()
+  if (clientId) sp.set('client_id', clientId)
+  const q = sp.toString()
+  return request<ClientStoreItem[]>(`/inventory/lookups/client-stores${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getInventoryColors(signal?: AbortSignal) {
@@ -16,10 +18,9 @@ export function getInventoryColors(signal?: AbortSignal) {
 
 // Ключ — product_id (а не SKU): товары «ожидают SKU» имеют пустой SKU.
 export function getInventoryColorsForProduct(productId: string, signal?: AbortSignal) {
-  return request<DictionaryItem[]>(
-    `/inventory/lookups/colors-for-sku?product_id=${encodeURIComponent(productId)}`,
-    { signal },
-  )
+  const sp = new URLSearchParams()
+  sp.set('product_id', productId)
+  return request<DictionaryItem[]>(`/inventory/lookups/colors-for-sku?${sp.toString()}`, { signal })
 }
 
 export function getInventorySizesForProductAndColor(productId: string, colorId: string, signal?: AbortSignal) {
@@ -57,8 +58,10 @@ export function getInventoryProductTypes(signal?: AbortSignal) {
 }
 
 export function getInventoryProducts(clientId?: string | null, signal?: AbortSignal) {
-  const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : ''
-  return request<InventoryProductLookup[]>(`/inventory/lookups/products${q}`, { signal })
+  const sp = new URLSearchParams()
+  if (clientId) sp.set('client_id', clientId)
+  const q = sp.toString()
+  return request<InventoryProductLookup[]>(`/inventory/lookups/products${q ? `?${q}` : ''}`, { signal })
 }
 
 export function getInventoryWarehouses(signal?: AbortSignal) {

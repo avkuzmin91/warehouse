@@ -385,7 +385,7 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   }
 
   // SKU/шт/прибытие для уже привязанных поступлений берём из кандидатов «В плане»
-  // (после разгрузки они уходят в on_intake и в кандидатах их нет — сабтайтл сократится).
+  // (после разгрузки они уходят в partially_received/done и в кандидатах их нет — сабтайтл сократится).
   const enrich: ReceiptEnrich = {}
   for (const a of available) enrich[a.id] = { sku: a.sku_count, qty: a.total_planned, eta: fmtDay(a.arrival_date) }
 

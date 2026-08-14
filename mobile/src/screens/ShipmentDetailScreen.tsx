@@ -294,7 +294,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     void runAction(() => finishRelocation(shipmentId, lines, requestIdFor('finish')), 'finish')
   }
 
-  // Брак-отгрузка: собрать брак из мест хранения → зона отгрузки (relocating → awaiting_trip).
+  // Брак-отгрузка: собрать брак из мест хранения → зона отгрузки (relocating → packed).
   function handleFinishDefectPreparation() {
     if (!doc) return
     const reasons: string[] = []

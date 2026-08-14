@@ -417,7 +417,7 @@ def test_storage_remainder_after_move_to_packing(admin_client, client_id, produc
 
 
 def test_unfinished_receipt_not_in_balances(admin_client, client_id, product_ids):
-    """Незавершённая приёмка (on_intake) не попадает в остатки.
+    """Незавершённая приёмка не попадает в остатки.
 
     Остаток чисто журнальный: пока приёмка не проведена (нет движения
     intake → storage), товар в выдаче остатков не появляется."""
@@ -426,7 +426,7 @@ def test_unfinished_receipt_not_in_balances(admin_client, client_id, product_ids
     qty = 17
 
     with get_connection() as conn:
-        doc_id = _insert_receipt(conn, client_id, "on_intake")
+        doc_id = _insert_receipt(conn, client_id, "partially_received")
         line_id = _insert_receipt_line(conn, doc_id, pid, color_id, size_id, planned_qty=qty, accepted_qty=qty)
         conn.execute("UPDATE receipt_lines SET storage_zone_id = ? WHERE id = ?", (zone, line_id))
         conn.commit()

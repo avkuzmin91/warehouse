@@ -28,9 +28,7 @@ import { MOSCOW_TZ, moscowNowIso, parseMoscow, variantTitle } from '../utils/for
 
 const RECEIPT_STATUS: Record<string, { label: string; tone: string }> = {
   planned: { label: 'В плане', tone: '' },
-  on_intake: { label: 'На приёмке', tone: 'info' },
   partially_received: { label: 'Частично принято', tone: 'warning' },
-  on_review: { label: 'На проверке', tone: 'warning' },
   done: { label: 'Поступил', tone: 'success' },
 }
 const DISPATCH_STATUS: Record<string, { label: string; tone: string }> = {

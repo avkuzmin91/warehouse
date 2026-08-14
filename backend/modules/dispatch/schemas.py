@@ -259,3 +259,38 @@ class DispatchDetailResponse(BaseModel):
     ops:              list[DispatchOpItem]
     sku_count:        int
     total_qty:        int
+
+
+class DispatchesSummaryResponse(BaseModel):
+    all: int
+    draft: int
+    awaiting_packing: int
+    preparing: int
+    awaiting: int
+    shipped: int
+
+
+class DispatchTripAllocationEntry(BaseModel):
+    trip_number: str
+    trip_status: str
+    direction: str | None = None
+    destination: str | None = None
+    qty: int
+    allocated_by: str | None = None
+    allocated_at: str | None = None
+
+
+class DispatchTripAllocLine(BaseModel):
+    line_id: str
+    product_sku: str | None = None
+    product_name: str | None = None
+    color: str | None = None
+    variant: str | None = None
+    qty: int
+    shipped_qty: int
+    remaining: int
+    allocations: list[DispatchTripAllocationEntry] = []
+
+
+class DispatchTripAllocRemainingResponse(BaseModel):
+    lines: list[DispatchTripAllocLine] = []

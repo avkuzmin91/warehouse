@@ -35,7 +35,7 @@ export function DuplicateWarnModal({
             className="btn"
             onClick={onProceed}
             disabled={busy}
-            style={{ background: 'var(--c-warning)', borderColor: 'var(--c-warning)', color: '#fff' }}
+            style={{ background: 'var(--c-warning)', borderColor: 'var(--c-warning)', color: 'var(--c-accent-contrast)' }}
           >
             Всё равно создать {entityAccusative}
           </button>

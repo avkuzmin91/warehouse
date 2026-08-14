@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import date
 from uuid import uuid4
 
 from pathlib import Path
@@ -114,6 +113,7 @@ from modules.shipments.service import (
 )
 from modules.products.service import assign_product_sku_if_missing
 from modules.push.service import notify_packing_correction
+from modules.timesheet.service import business_today
 from security import can_view_costs, ensure_cost_access, ensure_shipment_planning_access, ensure_shipment_priority_access
 
 router = APIRouter(tags=["shipments"])
@@ -306,7 +306,7 @@ def shipments_summary(
         rows = conn.execute(
             f"SELECT d.status, d.ship_date FROM shipment_docs d WHERE {where}", params
         ).fetchall()
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     return {
         "all":     len(rows),
         "done":    sum(1 for r in rows if r["status"] in SHIPMENT_TERMINAL_STATUSES),
@@ -340,7 +340,7 @@ def list_shipments(
         use_priority_order = overdue
         status_filter_applied = False
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
-            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+            conds.append(f"COALESCE(d.cargo_type, '{SHIPMENT_CARGO_GOOD}') = ?"); params.append(cargo_type)
         if status:
             # Поддерживаем как одно значение, так и CSV ("shipped,cancelled" — вкладка «Завершённые»).
             requested = [s.strip() for s in status.split(",") if s.strip()]
@@ -357,7 +357,7 @@ def list_shipments(
             ):
                 use_priority_order = True
         if overdue:
-            today = date.today().isoformat()
+            today = business_today().isoformat()
             conds.append("d.status = ?")
             params.append(SHIPMENT_STATUS_PACKING)
             conds.append("d.ship_date IS NOT NULL")
@@ -510,7 +510,7 @@ def list_shipment_lines(
         conds = ["d.is_deleted = 0", "l.is_deleted = 0"]
         params: list = []
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
-            conds.append("COALESCE(d.cargo_type, 'good') = ?"); params.append(cargo_type)
+            conds.append(f"COALESCE(d.cargo_type, '{SHIPMENT_CARGO_GOOD}') = ?"); params.append(cargo_type)
         if status:
             requested = [s.strip() for s in status.split(",") if s.strip()]
             allowed = [s for s in requested if s in SHIPMENT_STATUSES_ALL]
@@ -520,7 +520,7 @@ def list_shipment_lines(
                 placeholders = ",".join("?" for _ in allowed)
                 conds.append(f"d.status IN ({placeholders})"); params.extend(allowed)
         if overdue:
-            today = date.today().isoformat()
+            today = business_today().isoformat()
             conds.append("d.status = ?"); params.append(SHIPMENT_STATUS_PACKING)
             conds.append("d.ship_date IS NOT NULL")
             conds.append("d.ship_date < ?"); params.append(today)
@@ -1474,6 +1474,7 @@ async def upload_shipment_line_file(
     doc_id: str,
     line_id: str,
     file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_manager),
 ):
     if not file.filename:
@@ -1488,6 +1489,9 @@ async def upload_shipment_line_file(
     uid = str(user["id"])
     now = _now()
     with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_line_file_upload")
+        if not proceed:
+            return stored
         row = conn.execute(
             "SELECT status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
         ).fetchone()
@@ -1519,7 +1523,6 @@ async def upload_shipment_line_file(
             (file_id, line_id, doc_id, file.filename, url, file.content_type or None,
              json.dumps(codes) if codes else None, now, uid),
         )
-        conn.commit()
         # line_variant_id — вариант строки: нужен фронту для привязки кода к цвето-размеру.
         variant_id = resolve_line_variant_id(
             conn, str(line_row["product_id"]), line_row["color_id"], line_row["size_id"]
@@ -1527,7 +1530,10 @@ async def upload_shipment_line_file(
         barcodes = classify_barcodes_for_variant(
             conn, codes, product_id=str(line_row["product_id"]), variant_id=variant_id
         )
-    return {"message": file_id, "line_variant_id": variant_id, "barcodes": barcodes}
+        result = {"message": file_id, "line_variant_id": variant_id, "barcodes": barcodes}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/files/from-product")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
 
@@ -12,13 +12,14 @@ from modules.dashboard.schemas import (
     OperationalPlanResponse,
 )
 from modules.dashboard.service import day_stats, operational_plan
+from modules.timesheet.service import business_today
 
 router = APIRouter(tags=["dashboard"])
 
 
 @router.get("/dashboard/today", response_model=DashboardTodayResponse)
 def dashboard_today(user=Depends(get_current_dashboard_user)):
-    today = date.today()
+    today = business_today()
     with get_connection() as conn:
         today_stats = day_stats(conn, today)
         yesterday_stats = day_stats(conn, today - timedelta(days=1))

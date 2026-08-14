@@ -72,6 +72,11 @@ export function StorageReportFeature() {
             onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
+          {(clientId || hasCustom) && (
+            <button className="btn ghost sm" onClick={() => setMany({ client: null, from: null, to: null })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
           {data && (
             <div className="row gap-8" style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--c-text-subtle)' }}>
               <span>Всего: <b style={{ color: 'var(--c-text)' }}>{formatMoneyKopecks(data.total_amount_kop)}</b></span>

@@ -30,7 +30,7 @@ export function Modal({ open, onClose, title, subtitle, width = 480, footer, clo
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 60,
-        background: 'rgba(20,20,15,0.32)',
+        background: 'var(--c-overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         backdropFilter: 'blur(2px)',
         padding: 16,

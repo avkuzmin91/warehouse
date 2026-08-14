@@ -227,8 +227,8 @@ export function InventoryReceiptsListPage() {
             options={STATUS_OPTIONS}
             onChange={(v) => setStatusFilter(v)}
           />
-          {(clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
-            <button className="btn ghost sm" onClick={() => setMany({ client: '', sku: '', from: '', to: '', status: '' })}>
+          {(search || clientId || skuFilter || dateFrom || dateTo || statusFilter) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', sku: '', from: '', to: '', status: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -390,7 +390,7 @@ export function InventoryReceiptsListPage() {
                       <Td>
                         {(() => {
                           const pct = item.total_planned > 0 ? Math.min(100, Math.floor(item.total_accepted_qty / item.total_planned * 100)) : 0
-                          const isActive = item.status === 'on_review' || item.status === 'partially_received' || item.status === 'done'
+                          const isActive = item.status === 'partially_received' || item.status === 'done'
                           if (!isActive) return <span style={{ color: 'var(--c-text-faint)', fontSize: 12 }}>—</span>
                           return (
                             <div style={{ minWidth: 120 }}>

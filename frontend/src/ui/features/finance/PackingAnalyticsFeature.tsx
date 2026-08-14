@@ -95,6 +95,11 @@ export function PackingAnalyticsFeature() {
         onChange={(v) => setClientId(v)}
         placeholder="Поиск клиента…"
       />
+      {(hasCustom || period !== DEFAULT_PERIOD || clientId) && (
+        <button className="btn ghost sm" onClick={() => setMany({ days: null, from: null, to: null, client: null })}>
+          <Icon name="x" size={12} />Сбросить
+        </button>
+      )}
     </div>
   )
 

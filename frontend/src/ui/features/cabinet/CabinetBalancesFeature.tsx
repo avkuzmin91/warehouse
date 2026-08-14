@@ -7,7 +7,7 @@ import {
 import type { InvQuality, WriteOffReason } from '../../../api/balancesApi'
 import { foldCiSearch } from '../../../utils/foldCiSearch'
 import { useApi } from '../../../hooks/useApi'
-import { useFilterParam, usePageParam } from '../../../hooks/useFilterParams'
+import { useFilterParam, usePageParam, useFilterParamsActions } from '../../../hooks/useFilterParams'
 import { FiltersBar, FilterChip } from '../../data/FiltersBar'
 import { Pagination } from '../../data/Pagination'
 import { Table, Td } from '../../data/Table'
@@ -32,8 +32,10 @@ export function CabinetBalancesFeature() {
   const [stockMode, setStockMode] = useFilterParam('stock', 'positive')
   const [defectMode, setDefectMode] = useFilterParam('defect', '')
   const [page, setPage] = usePageParam()
+  const { setMany } = useFilterParamsActions()
   const onlyPositive = stockMode !== 'all'
   const hasDefect = defectMode === '1'
+  const hasFilters = !!search || !onlyPositive || hasDefect
 
   // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
   // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
@@ -177,6 +179,11 @@ export function CabinetBalancesFeature() {
             onClick={() => setDefectMode(hasDefect ? '' : '1')}
             onClear={() => setDefectMode('')}
           />
+          {hasFilters && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', stock: '', defect: '' })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
         </FiltersBar>
       }
     >

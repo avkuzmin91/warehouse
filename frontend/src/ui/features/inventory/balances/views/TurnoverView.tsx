@@ -98,8 +98,8 @@ export function TurnoverView() {
             onClick={() => setOnlyMoved(onlyMoved === '1' ? '' : '1')}
             onClear={() => setOnlyMoved('')}
           />
-          {(clientId || dateFrom || dateTo) && (
-            <button className="btn ghost sm" onClick={() => setMany({ client: '', from: '', to: '' })}>
+          {(search || clientId || dateFrom || dateTo || onlyMoved) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', from: '', to: '', moved: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}

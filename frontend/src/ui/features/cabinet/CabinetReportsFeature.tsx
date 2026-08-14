@@ -74,6 +74,11 @@ export function CabinetReportsFeature() {
             onToChange={(v) => setDateTo(v)}
             onClear={() => setMany({ from: '', to: '' })}
           />
+          {(search || dateFrom || dateTo) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', from: '', to: '' })}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
         </FiltersBar>
       }
     >

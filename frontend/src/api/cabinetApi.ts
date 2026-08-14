@@ -4,7 +4,7 @@ import type { BalanceGroupedResponse, BalanceListResponse, BalanceSummary } from
 
 // --- Types ---
 
-export type CabinetReceiptStatus = 'planned' | 'on_intake' | 'partially_received' | 'on_review' | 'done' | 'cancelled'
+export type CabinetReceiptStatus = 'planned' | 'partially_received' | 'done' | 'cancelled'
 export type CabinetShipmentStatus = 'awaiting_trip' | 'partially_shipped' | 'shipped' | 'cancelled'
 export type CabinetCargoType = 'good' | 'good_unpacked' | 'defect'
 
@@ -374,14 +374,12 @@ export function getCabinetProductVariants(productId: string, signal?: AbortSigna
 // --- Labels & helpers (клиентская лексика статусов) ---
 
 export const CABINET_RECEIPT_STATUS_ORDER: CabinetReceiptStatus[] = [
-  'planned', 'on_intake', 'partially_received', 'on_review', 'done', 'cancelled',
+  'planned', 'partially_received', 'done', 'cancelled',
 ]
 
 export const CABINET_RECEIPT_STATUS_LABELS: Record<CabinetReceiptStatus, string> = {
   planned: 'Ожидается',
-  on_intake: 'Идёт приёмка',
   partially_received: 'Частично принято',
-  on_review: 'Проверка',
   done: 'Принято',
   cancelled: 'Аннулировано',
 }
@@ -389,9 +387,7 @@ export const CABINET_RECEIPT_STATUS_LABELS: Record<CabinetReceiptStatus, string>
 export function cabinetReceiptStatusTone(status: CabinetReceiptStatus): string {
   const map: Record<CabinetReceiptStatus, string> = {
     planned: 'info',
-    on_intake: 'warning',
     partially_received: 'warning',
-    on_review: 'warning',
     done: 'success',
     cancelled: 'danger',
   }
