@@ -449,9 +449,10 @@ export const PAYOUT_STATUS_LABELS: Record<PayoutStatus, string> = {
   overpaid: 'Переплата',
 }
 
+/** Цвет — только исключениям: частичный расчёт это норма, а не предупреждение. */
 export const PAYOUT_STATUS_TONE: Record<PayoutStatus, string> = {
   pending: '',
-  partial: 'warning',
+  partial: '',
   settled: 'success',
   overpaid: 'danger',
 }
