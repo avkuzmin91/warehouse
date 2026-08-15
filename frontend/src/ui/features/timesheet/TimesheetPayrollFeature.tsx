@@ -4,11 +4,9 @@ import { ListPage } from '../../layouts/ListPage'
 import { Icon } from '../../primitives/Icon'
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam } from '../../../hooks/useFilterParams'
-import { useToast } from '../../feedback/Toast'
-import { useConfirm } from '../../feedback/ConfirmDialog'
 import { EmpIdentity, Badge, OvertimeChip, WeekNavigator, fmtHours, fmtMoney, fmtMoneyShort, fmtOvertimeHours, fmtRate, addDays } from './shared'
 import { SettleModal } from './modals'
-import { getPayroll, settleAll, PAYOUT_STATUS_LABELS, PAYOUT_STATUS_TONE, type PayrollResponse, type PayrollRow } from '../../../api/timesheetApi'
+import { getPayroll, PAYOUT_STATUS_LABELS, PAYOUT_STATUS_TONE, type PayrollResponse, type PayrollRow } from '../../../api/timesheetApi'
 
 function BigNum({ icon, label, value, sub, tone, big, active, onClick }: {
   icon: string; label: string; value: string; sub?: React.ReactNode
@@ -36,7 +34,7 @@ function BigNum({ icon, label, value, sub, tone, big, active, onClick }: {
   )
 }
 
-/** Доля выданного от заработанного — чтобы частичный расчёт читался с одного взгляда. */
+/** Доля выданного от фонда недели. Только в итогах: построчно она у всех одна и та же. */
 function PaidBar({ paid, earned, tone }: { paid: number; earned: number; tone: string }) {
   const pct = earned > 0 ? Math.min(100, Math.round((paid / earned) * 100)) : 0
   return (
@@ -48,13 +46,10 @@ function PaidBar({ paid, earned, tone }: { paid: number; earned: number; tone: s
 
 export function TimesheetPayrollFeature() {
   const navigate = useNavigate()
-  const toast = useToast()
-  const confirm = useConfirm()
   const [week, setWeek] = useFilterParam('week', '')
   const [onlyLeft, setOnlyLeft] = useFilterParam('left', '')
   const [tick, setTick] = useState(0)
   const [settle, setSettle] = useState<PayrollRow | null>(null)
-  const [busyAll, setBusyAll] = useState(false)
 
   const { data, loading, error } = useApi<PayrollResponse>(
     (signal) => getPayroll(week || undefined, signal),
@@ -63,22 +58,6 @@ export function TimesheetPayrollFeature() {
   const reload = () => setTick((t) => t + 1)
 
   const rows = data ? (onlyLeft ? data.rows.filter((r) => r.to_pay > 0) : data.rows) : []
-
-  const settleRest = async () => {
-    if (!data || data.totals.left === 0) return
-    const ok = await confirm({
-      title: 'Доплатить всем?',
-      body: `По ${data.totals.left} сотрудникам будет проведена выплата на ${fmtMoney(data.totals.to_pay)} — остаток по каждому за неделю ${data.week_label}.`,
-      confirmLabel: 'Доплатить',
-    })
-    if (!ok) return
-    setBusyAll(true)
-    try {
-      const r = await settleAll(week || undefined)
-      toast(`Проведено выплат: ${r.message}`, 'success')
-      reload()
-    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusyAll(false) }
-  }
 
   return (
     <ListPage
@@ -143,18 +122,17 @@ export function TimesheetPayrollFeature() {
                   <th style={{ paddingLeft: 14 }}>Сотрудник</th>
                   <th style={{ width: 90, textAlign: 'right' }}>Часы</th>
                   <th style={{ width: 140, textAlign: 'right' }}>Заработано</th>
-                  <th style={{ width: 160, textAlign: 'right' }}>Выплата</th>
+                  <th style={{ width: 150, textAlign: 'right' }}>Выдано</th>
                   <th style={{ width: 150, textAlign: 'right', background: 'var(--c-accent-bg)', color: 'var(--c-accent-text)' }}>Осталось выдать</th>
                   <th style={{ width: 120 }}>Статус</th>
-                  <th style={{ width: 190, textAlign: 'right', paddingRight: 14 }}>Действие</th>
+                  <th style={{ width: 150, textAlign: 'right', paddingRight: 14 }}>Действие</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
                   const paid = r.advances + r.settlements
-                  const closed = r.to_pay === 0
                   return (
-                    <tr key={r.employee_id} style={closed ? { background: 'color-mix(in oklab, var(--c-success) 4%, transparent)' } : undefined}>
+                    <tr key={r.employee_id}>
                       <td className="emp-cell" style={{ paddingLeft: 14 }} title="Открыть карточку сотрудника" onClick={() => navigate(`/timesheet/employees/${r.employee_id}`)}>
                         <EmpIdentity name={r.full_name} archived={r.archived} subtitle={<>{r.position} · {fmtRate(r.rate_kopecks)}</>} />
                       </td>
@@ -177,23 +155,21 @@ export function TimesheetPayrollFeature() {
                       <td className="num">
                         {paid ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-                            <span style={{ color: closed ? 'var(--c-success)' : 'var(--c-warning)', fontWeight: 500 }}>
-                              {fmtMoneyShort(paid)} из {fmtMoneyShort(r.earned)}
-                            </span>
-                            <PaidBar paid={paid} earned={r.earned} tone={closed ? 'var(--c-success)' : 'var(--c-warning)'} />
-                            <span style={{ fontSize: 10, color: 'var(--c-text-faint)' }}>
-                              {r.advances ? `аванс ${fmtMoneyShort(r.advances)}` : ''}
-                              {r.advances && r.settlements ? ' · ' : ''}
-                              {r.settlements ? `расчёт ${fmtMoneyShort(r.settlements)}` : ''}
-                            </span>
+                            <span style={{ color: r.overpaid > 0 ? 'var(--c-danger)' : 'var(--c-text-muted)' }}>{fmtMoney(paid)}</span>
+                            {r.advances > 0 && r.settlements > 0 && (
+                              <span style={{ fontSize: 10, color: 'var(--c-text-faint)' }}>
+                                аванс {fmtMoneyShort(r.advances)} · расчёт {fmtMoneyShort(r.settlements)}
+                              </span>
+                            )}
                           </div>
                         ) : <span style={{ color: 'var(--c-text-faint)' }}>—</span>}
                       </td>
-                      <td className="num" style={{ background: closed ? 'color-mix(in oklab, var(--c-success) 7%, transparent)' : 'var(--c-accent-bg)' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                          <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: closed ? 'var(--c-success)' : 'var(--c-accent-text)' }}>{fmtMoney(r.to_pay)}</span>
-                          {r.overpaid > 0 && <span style={{ fontSize: 10, color: 'var(--c-danger)' }}>переплата {fmtMoneyShort(r.overpaid)} ₽</span>}
-                        </div>
+                      <td className="num" style={{ background: 'var(--c-accent-bg)' }}>
+                        {r.to_pay > 0
+                          ? <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-accent-text)' }}>{fmtMoney(r.to_pay)}</span>
+                          : r.overpaid > 0
+                            ? <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-danger)' }}>−{fmtMoneyShort(r.overpaid)} ₽</span>
+                            : <span style={{ color: 'var(--c-text-faint)' }}>—</span>}
                       </td>
                       <td>
                         <Badge tone={PAYOUT_STATUS_TONE[r.payout_status]} dot>{PAYOUT_STATUS_LABELS[r.payout_status]}</Badge>
@@ -203,7 +179,7 @@ export function TimesheetPayrollFeature() {
                           ? (
                             <button className="btn sm primary" onClick={() => setSettle(r)}>
                               <Icon name={r.settlements > 0 ? 'plus' : 'banknote'} size={13} />
-                              {r.settlements > 0 ? 'Доплатить' : 'Рассчитать'} {fmtMoney(r.to_pay)}
+                              {r.settlements > 0 ? 'Доплатить' : 'Рассчитать'}
                             </button>
                           )
                           : r.overpaid > 0
@@ -219,16 +195,12 @@ export function TimesheetPayrollFeature() {
                   <td style={{ paddingLeft: 14, fontWeight: 600, background: 'var(--c-bg-active)' }}>Итого по неделе</td>
                   <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 600 }}>{fmtHours(data.rows.reduce((a, r) => a + r.hours, 0))}</td>
                   <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 700 }}>{fmtMoney(data.totals.earned)}</td>
-                  <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 600, color: 'var(--c-warning)' }}>−{fmtMoneyShort(data.totals.paid)} ₽</td>
+                  <td className="num" style={{ background: 'var(--c-bg-active)', fontWeight: 600 }}>{fmtMoney(data.totals.paid)}</td>
                   <td className="num" style={{ background: 'var(--c-accent)', color: 'var(--c-accent-contrast)' }}><span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(data.totals.to_pay)}</span></td>
-                  <td colSpan={2} style={{ background: 'var(--c-bg-active)', textAlign: 'right', paddingRight: 14 }}>
+                  <td colSpan={2} style={{ background: 'var(--c-bg-active)', textAlign: 'right', paddingRight: 14, fontSize: 12, color: 'var(--c-text-muted)' }}>
                     {data.totals.left > 0
-                      ? (
-                        <button className="btn sm" disabled={busyAll} onClick={settleRest}>
-                          <Icon name="wallet" size={13} />Доплатить всем · {fmtMoney(data.totals.to_pay)}
-                        </button>
-                      )
-                      : <span style={{ fontSize: 12, color: 'var(--c-text-muted)' }}>неделя закрыта</span>}
+                      ? <>ждут выплаты: <b style={{ color: 'var(--c-text)' }}>{data.totals.left}</b></>
+                      : 'неделя закрыта'}
                   </td>
                 </tr>
               </tfoot>
