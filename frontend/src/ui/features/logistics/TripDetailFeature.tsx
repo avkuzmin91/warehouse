@@ -122,12 +122,13 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
       setArrival(d.doc.arrived_at ?? d.doc.eta ?? todayYmd())
       setUnloadStart(d.doc.unload_started_at ?? d.doc.arrived_at ?? '')
       setUnloadEnd(d.doc.unload_finished_at ?? '')
-      // Предзаполняем одну ячейку = вся аллокация рейса, без места. Место кладовщик
-      // выбирает вручную; при необходимости добавляет ещё ячейки (товар не влез).
+      // Предзаполняем одну ячейку = вся аллокация рейса; место — из прошлой приёмки
+      // строки (storage_zone_id), как в мобильном клиенте. Несуществующие/выключенные
+      // зоны вычищает эффект-санация ниже; кладовщик правит вручную или мастер-ячейкой.
       const placements: Record<string, ReceivePlacement[]> = {}
       for (const r of d.receipts) {
         for (const a of r.allocations) {
-          placements[a.line_id] = [{ qty: a.qty, zoneId: '' }]
+          placements[a.line_id] = [{ qty: a.qty, zoneId: a.storage_zone_id ?? '' }]
         }
       }
       setPlacementsByLine(placements)
@@ -139,6 +140,26 @@ export function TripDetailFeature({ tripId }: { tripId: string }) {
   }, [tripId])
 
   useEffect(() => { void load() }, [load])
+
+  // Санация предзаполненных ячеек: прошлое место строки могло быть удалено или
+  // выключено в справочнике — такое очищаем, чтобы не провести приход в мёртвую зону.
+  useEffect(() => {
+    if (unloadingZones.length === 0) return
+    const activeIds = new Set(unloadingZones.filter((z) => z.is_active && !z.is_deleted).map((z) => z.id))
+    setPlacementsByLine((prev) => {
+      let changed = false
+      const next: Record<string, ReceivePlacement[]> = {}
+      for (const [lineId, rows] of Object.entries(prev)) {
+        if (rows.some((p) => p.zoneId && !activeIds.has(p.zoneId))) {
+          changed = true
+          next[lineId] = rows.map((p) => (p.zoneId && !activeIds.has(p.zoneId) ? { ...p, zoneId: '' } : p))
+        } else {
+          next[lineId] = rows
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [unloadingZones, detail])
 
   useEffect(() => {
     if (!detail || !CAN_LINK.has(detail.doc.status)) return
