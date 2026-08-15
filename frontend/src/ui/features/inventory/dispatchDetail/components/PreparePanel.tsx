@@ -17,6 +17,7 @@ import { FilePreviewModal } from '../../shipmentDetail/components/FilePreviewMod
 import type { FilePreviewMeta } from '../../shipmentDetail/shared/types'
 import { resolvePublicUploadSrc } from '../../../../../api/constants'
 import { useToast } from '../../../../feedback/Toast'
+import { useConfirm } from '../../../../feedback/ConfirmDialog'
 import { balanceKey } from '../../../../../utils/balanceKey'
 import { fmtDateLong } from '../../../../../utils/format'
 
@@ -40,6 +41,7 @@ type Props = {
 
 export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUploadFile, onDeleteFile, onSavePallets, onSaveBoxes, onDone }: Props) {
   const toast = useToast()
+  const confirm = useConfirm()
   const isDefect = doc.cargo_type === 'defect'
   const isUnpacked = doc.cargo_type === 'good_unpacked'
   // Источник зависит от груза: годный кладовщик берёт из «Готов к отгрузке» (ready,
@@ -58,6 +60,8 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
     for (const l of lines) next[l.id] = [{ zoneId: '', qty: l.qty }]
     return next
   })
+  // Строку правили руками: автонабор её больше не перезаписывает.
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)
   const [showReasons, setShowReasons] = useState(false)
   const [filePreview, setFilePreview] = useState<{ filename: string; mimeType: string | null; url: string; meta: FilePreviewMeta } | null>(null)
@@ -138,13 +142,87 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
     return map
   }, [lines, zoneBalances])
 
+  // Автонабор: система сама раскладывает набор по ячейкам с товаром, по убыванию остатка
+  // (сначала самая полная — меньше точек обхода). Пул общий по (вариант × ячейка):
+  // строки одного варианта (например, на разные магазины) не берут один остаток дважды.
+  function computeAutoFill(prev: Record<string, Row[]>, keepTouched: boolean): Record<string, Row[]> {
+    const pool = new Map<string, number>()
+    for (const line of lines) {
+      for (const s of sourcesByLine.get(line.id) ?? []) {
+        pool.set(`${balanceKey(line)}|${s.id}`, s.available)
+      }
+    }
+    const next: Record<string, Row[]> = {}
+    if (keepTouched) {
+      for (const line of lines) {
+        if (!touched[line.id]) continue
+        next[line.id] = prev[line.id] ?? []
+        for (const r of next[line.id]) {
+          if (!r.zoneId || r.qty <= 0) continue
+          const k = `${balanceKey(line)}|${r.zoneId}`
+          pool.set(k, Math.max(0, (pool.get(k) ?? 0) - r.qty))
+        }
+      }
+    }
+    for (const line of lines) {
+      if (next[line.id]) continue
+      const sources = (sourcesByLine.get(line.id) ?? [])
+        .map((s) => ({ ...s, available: pool.get(`${balanceKey(line)}|${s.id}`) ?? 0 }))
+        .filter((s) => s.available > 0)
+        .sort((a, b) => b.available - a.available)
+      let rest = line.qty
+      const rows: Row[] = []
+      for (const s of sources) {
+        if (rest <= 0) break
+        const take = Math.min(s.available, rest)
+        rows.push({ zoneId: s.id, qty: take })
+        pool.set(`${balanceKey(line)}|${s.id}`, s.available - take)
+        rest -= take
+      }
+      // Недобор — пустая строка на остаток: видно, сколько не хватает, и есть куда выбрать ячейку.
+      if (rest > 0) rows.push({ zoneId: '', qty: rest })
+      next[line.id] = rows.length > 0 ? rows : [{ zoneId: '', qty: line.qty }]
+    }
+    return next
+  }
+
+  function runAutoFill(keepTouched: boolean) {
+    setAllocs((prev) => computeAutoFill(prev, keepTouched))
+    if (!keepTouched) setTouched({})
+  }
+
+  useEffect(() => {
+    if (loadingZones) return
+    runAutoFill(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingZones, sourcesByLine])
+
+  async function handleAutoFill() {
+    const touchedCount = lines.filter((l) => touched[l.id]).length
+    if (touchedCount > 0) {
+      const ok = await confirm({
+        title: 'Заполнить набор заново?',
+        body: `Автонабор заново заполнит все строки, включая ${touchedCount} изменённых вручную.`,
+        confirmLabel: 'Заполнить',
+      })
+      if (!ok) return
+    }
+    runAutoFill(false)
+  }
+
+  function markTouched(lineId: string) {
+    setTouched((prev) => (prev[lineId] ? prev : { ...prev, [lineId]: true }))
+  }
   function setRow(lineId: string, i: number, patch: Partial<Row>) {
+    markTouched(lineId)
     setAllocs((prev) => ({ ...prev, [lineId]: prev[lineId].map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }))
   }
   function addRow(lineId: string) {
+    markTouched(lineId)
     setAllocs((prev) => ({ ...prev, [lineId]: [...prev[lineId], { zoneId: '', qty: 0 }] }))
   }
   function removeRow(lineId: string, i: number) {
+    markTouched(lineId)
     setAllocs((prev) => prev[lineId].length <= 1
       ? prev
       : { ...prev, [lineId]: prev[lineId].filter((_, idx) => idx !== i) })
@@ -220,6 +298,7 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
   const boxesTotal = lines.reduce((s, l) => s + (l.boxes_qty ?? 0), 0)
   const palletsTotal = lines.reduce((s, l) => s + (l.pallets_qty ?? 0), 0)
   const pickedTotal = lines.reduce((s, l) => s + pickedRows(allocs[l.id] ?? []), 0)
+  const touchedTotal = lines.filter((l) => touched[l.id]).length
   const remainingTotal = Math.max(0, planTotal - pickedTotal)
   const doneCount = lines.filter((l) => pickedRows(allocs[l.id] ?? []) >= l.qty).length
   const pctTotal = planTotal > 0 ? Math.min(100, Math.round((pickedTotal / planTotal) * 100)) : 0
@@ -282,6 +361,7 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
                 <span className="mono" style={{ fontSize: 23, fontWeight: 600, color: ready ? 'var(--c-success)' : 'var(--c-text)' }}>{pickedTotal}</span>
                 <span style={{ fontSize: 13, color: 'var(--c-text-subtle)' }}>
                   из {planTotal} шт набрано · {doneCount} из {lines.length} строк готовы
+                  {touchedTotal > 0 && ` · вручную: ${touchedTotal}`}
                 </span>
               </div>
               <div className="prog" style={{ height: 8 }}>
@@ -290,14 +370,24 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
             </div>
             {canEdit && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
-                <button
-                  className="btn lg primary"
-                  style={{ height: 48, fontSize: 15, padding: '0 22px' }}
-                  disabled={saving}
-                  onClick={handlePrimary}
-                >
-                  <Icon name="check" size={18} />Отгрузка подготовлена
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    className="btn ghost"
+                    disabled={saving || loadingZones}
+                    title="Заполнить набор из ячеек с товаром автоматически"
+                    onClick={() => { void handleAutoFill() }}
+                  >
+                    <Icon name="sparkles" size={14} />Автонабор заново
+                  </button>
+                  <button
+                    className="btn lg primary"
+                    style={{ height: 48, fontSize: 15, padding: '0 22px' }}
+                    disabled={saving}
+                    onClick={handlePrimary}
+                  >
+                    <Icon name="check" size={18} />Отгрузка подготовлена
+                  </button>
+                </div>
                 <span style={{ fontSize: 11.5, color: ready ? 'var(--c-text-subtle)' : 'var(--c-warning)', textAlign: 'right' }}>
                   {ready
                     ? 'перейдёт в «Готов к отгрузке» — зону отгрузки'
@@ -362,6 +452,9 @@ export function PreparePanel({ doc, canEdit, canEditDocs, onUpdateLine, onUpload
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <LineIdentityCell name={line.product_name} sku={line.product_sku} color={line.color_name} size={line.size_name} productId={line.product_id} />
                     </div>
+                    {touched[line.id] && (
+                      <span style={{ fontSize: 11, color: 'var(--c-accent)', flexShrink: 0 }}>вручную</span>
+                    )}
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <div className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
                         <span style={{ color: done ? 'var(--c-success)' : 'var(--c-text)' }}>{picked}</span>
